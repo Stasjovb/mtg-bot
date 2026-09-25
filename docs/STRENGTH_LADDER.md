@@ -162,3 +162,29 @@ Tool validation only (NOT a result): 2026-09-23, commit 779a87b4,
 canonical_v2 via the registry) and played 12 games in ~20s with 0
 timeouts / 0 crashes. At that depth the ordering is noise; a 16-game
 `random` vs `heuristic` check at `--nodes 32` gave heuristic 12-4.
+
+### 2026-09-25 -- v9, v10, v11: three always-promote AlphaZero cycles from v8 (nodes 100 / samples 2)
+
+`ladder_runs/s2_v9/`, `s2_v10/`, `s2_v11/`, 200 games/pair each. Each cycle:
+1,500 NN-PIMC self-play games driven by the previous version, trained on the
+newest 6,000 shards (heuristic corpus displaced progressively), LR 3e-4,
+always-promote. Cycles 7-8 (v9, v10) also contained ~40% games from the Mac
+worker running pre-calibration code (quarantined afterwards); cycle 9 (v11)
+is desktop-only and clean.
+
+| version | Elo | 95% CI | vs heuristic | vs random | held-out value corr (calibrated) |
+|---|---:|---|---|---|---:|
+| v8 (warm start) | +267 | [+213, +343] | 47-152 (23.6%) | 165-35 (82.5%) | 0.35 |
+| v9 | +199 | [+150, +262] | 45-154 (22.6%) | 152-48 (76.0%) | 0.29 |
+| v10 | +185 | [+126, +239] | 49-151 (24.5%) | 149-51 (74.5%) | 0.26 |
+| v11 | +150 | [+103, +199] | 36-164 (18.0%) | 141-59 (70.5%) | 0.30 |
+
+Reading: monotone Elo decay as NN-play games replace heuristic games in the
+window. v11's trainer early-stopped at epoch 6 with best = epoch 1, and its
+calibrated corr (0.30) still does not beat the trivial life-differential
+baseline (0.34) -- the value head learns nothing beyond "who is ahead on
+life" from NN-play outcomes. Response: `current_best` reset to v8, the
+3,345 NN-play shards from cycles 7-9 moved to `iterate_data_s2_nnplay_v8_v10/`,
+and the schedule switched to `scripts/s2/run_mixed_cycles.sh` (1,500
+heuristic games + 1,500 v8-driven NN games per cycle, gated promotion
+`S2_ACCEPT=0.55`) so the window stays heuristic-majority.
