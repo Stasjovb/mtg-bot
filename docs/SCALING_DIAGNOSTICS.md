@@ -322,16 +322,33 @@ routings at 9 epochs on the same 1,000 shards:
 
 | arm | raw MSE | **cv MSE** | in-sample cal MSE | r raw | r cal | mean \|pred\| | T | train value loss, epoch 1 → 9 |
 |--|--|--|--|--|--|--|--|--|
-| base9 (0.1 / 1e-4, trunk) | 1.1212 | **0.8173** | 0.8084 | 0.391 | 0.438 | 0.878 | 7.34 | 0.200 → **0.015** |
+| **base9** (0.1 / 1e-4, trunk) | 1.1212 | **0.8173** | 0.8084 | 0.391 | **0.438** | 0.878 | 7.34 | 0.200 → **0.015** |
+| blind9 (0.1 / 1e-4, trunk_no_printing) | 1.0525 | 0.8784 | 0.8687 | 0.346 | 0.362 | 0.652 | 5.24 | 0.642 → 0.467 |
 
-Two things to read off the train-loss column: the shared-trunk value
-head drives its TRAINING loss to 0.015 — an order of magnitude past
-the rejected 6,000-shard run's 0.09 — which is memorisation in its
-purest observable form; and yet its held-out correlation *improved*
-over the 3-epoch fit (0.364 → 0.391 raw). Memorisation and
-generalisation are not competing for the same capacity here; the head
+The train-loss column is the memorisation channel, measured: the
+shared-trunk value head drives its TRAINING loss to 0.015 — an order
+of magnitude past the rejected 6,000-shard run's 0.09 — while the
+identity-blind head cannot get below 0.467, because the feature it
+would need is gone.
+
+**And the shared trunk still wins on the held-out numbers.** Its
+correlation *improved* with the extra epochs (0.364 → 0.391 raw,
+0.394 → 0.438 calibrated) even as it memorised harder, and its cv MSE
+(0.817) beats the blind head's (0.878). So the pre-registered guess
+that identity-blindness would pull ahead once the memorisation window
+opened is **FALSIFIED at matched regularisation**: memorisation and
+generalisation are not competing for the same capacity here. The head
 is learning something real AND recording the training games, and only
-the second one is what the raw MSE was punishing.
+the second one is what the raw MSE was punishing — which is exactly
+what calibration removes, for free, without giving up the first.
+
+The identity-blind head's value therefore is NOT "higher held-out
+quality at equal settings". It is (a) a much smaller calibration
+gap — its cv MSE tracks its in-sample MSE to within 0.010, against
+0.009-0.041 for the shared trunk, i.e. the temperature transfers
+across the corpus — and (b) a genuinely different operating point
+when paired with heavier regularisation, where at 3 epochs it was the
+only arm to clear the ceiling uncalibrated.
 
 ### What this changes about the gate
 
