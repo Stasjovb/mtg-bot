@@ -202,6 +202,16 @@ class WorkerState:
         self.stop_requested = False
         self.loop_thread: threading.Thread | None = None
         self.last_update: dict[str, Any] | None = None
+        # Crash-recovery telemetry (2026-09-25 BrokenProcessPool fix).
+        # A pool worker dying hard no longer kills the claim thread;
+        # these counters are how an operator sees that it happened.
+        # ``thread_recovery`` is keyed by claim-loop thread id (as a
+        # string, so the dict survives a JSON round-trip).
+        self.game_crashes = 0
+        self.pool_resets = 0
+        self.pool_generation = 0
+        self.last_crash_detail: str | None = None
+        self.thread_recovery: dict[str, dict[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Transitions
@@ -369,6 +379,47 @@ class WorkerState:
             return self.stop_requested
 
     # ------------------------------------------------------------------
+    # Crash-recovery counters
+    #
+    # Called from the claim loop per-thread bodies (see
+    # ``worker_daemon_claim_loop.StateCallbacks``). They deliberately
+    # do NOT touch ``last_progress_at``: a crash is not progress, and
+    # bumping it would hide a wedged daemon from the coordinator
+    # staleness check.
+
+    def _recovery_entry(self, thread_id: int) -> dict[str, int]:
+        """Caller must hold ``self._lock``."""
+        return self.thread_recovery.setdefault(
+            str(thread_id),
+            {"crashes": 0, "pool_resets": 0, "consecutive_crashes": 0},
+        )
+
+    def on_game_crash(self, thread_id: int, detail: str = "") -> None:
+        """A game died mid-play and was reported ``crashed``; the
+        claim thread survived and will keep claiming."""
+        with self._lock:
+            self.game_crashes += 1
+            entry = self._recovery_entry(thread_id)
+            entry["crashes"] += 1
+            entry["consecutive_crashes"] += 1
+            if detail:
+                self.last_crash_detail = detail[-2000:]
+
+    def on_pool_reset(self, thread_id: int, generation: int = 0) -> None:
+        """The runner process pool was actually rebuilt by this
+        thread (peers whose rebuild no-op-ed do not call this)."""
+        with self._lock:
+            self.pool_resets += 1
+            self.pool_generation = int(generation)
+            self._recovery_entry(thread_id)["pool_resets"] += 1
+
+    def on_thread_recovered(self, thread_id: int) -> None:
+        """A clean game cleared this thread consecutive-crash
+        streak."""
+        with self._lock:
+            self._recovery_entry(thread_id)["consecutive_crashes"] = 0
+
+    # ------------------------------------------------------------------
     # Snapshots
 
     def snapshot(self) -> dict[str, Any]:
@@ -391,6 +442,16 @@ class WorkerState:
                 "pool_size": self.pool_size,
                 "active_workers": self.active_workers,
                 "last_update": self.last_update,
+                "game_crashes": self.game_crashes,
+                "pool_resets": self.pool_resets,
+                "pool_generation": self.pool_generation,
+                "last_crash_detail": self.last_crash_detail,
+                # Copy the per-thread dicts so the caller can
+                # serialize them without racing a live update.
+                "thread_recovery": {
+                    tid: dict(entry)
+                    for tid, entry in self.thread_recovery.items()
+                },
             }
 
 
@@ -475,6 +536,7 @@ def create_app(
     retry_backoff_s: tuple[float, ...] | None = None,
     worker_id: str | None = None,
     n_workers: int = 0,
+    max_consecutive_crashes: int | None = None,
     deck_pool_path: str | None = None,
     nn_device: str | None = None,
     artifact_storage_uri: str = "null://",
@@ -526,6 +588,13 @@ def create_app(
         v2 contract is explicit on this — see ``docs/DISTRIBUTED_API_v2.md``
         "Worker-owned config" note. Default 0 = unset / decided by the
         runner (tests pass small explicit values).
+    max_consecutive_crashes:
+        How many CONSECUTIVE crashed games a single claim-loop thread
+        absorbs (report ``crashed`` + rebuild the process pool + keep
+        claiming) before it gives up and parks the daemon in ERROR.
+        ``None`` uses
+        :data:`~mtg_bot.worker_daemon_claim_loop.DEFAULT_MAX_CONSECUTIVE_CRASHES`
+        (5). Worker-owned config, from ``--max-consecutive-crashes``.
     deck_pool_path:
         Path to the deck pool JSON the production runner samples from.
         Same worker-owned-config principle as ``n_workers``: from the
@@ -641,6 +710,15 @@ def create_app(
     # like the pool size or the deck pool path are decided here.
     app.config["N_WORKERS"] = int(n_workers)
     app.config["DECK_POOL_PATH"] = deck_pool_path
+    # How many consecutive crashed games one claim-loop thread absorbs
+    # before parking the daemon in ERROR. Worker-owned config
+    # (``--max-consecutive-crashes``); see the claim loop module for
+    # the 2026-09-25 BrokenProcessPool incident this bounds.
+    app.config["MAX_CONSECUTIVE_CRASHES"] = int(
+        max_consecutive_crashes
+        if max_consecutive_crashes is not None
+        else _claim_loop.DEFAULT_MAX_CONSECUTIVE_CRASHES
+    )
     # Opt-in NN-eval device (default None == CPU, byte-identical to
     # the pre-flag behavior). Carried unresolved into the production
     # runner; resolved per-worker in NNPimcConfig.build().
@@ -697,6 +775,9 @@ def create_app(
             mark_stopping=state.mark_stopping,
             mark_idle=state.mark_idle,
             mark_error=state.mark_error,
+            on_game_crash=state.on_game_crash,
+            on_pool_reset=state.on_pool_reset,
+            on_thread_recovered=state.on_thread_recovered,
         )
 
     def _spawn_stub_runner(kind: str) -> None:
@@ -741,6 +822,12 @@ def create_app(
             nn_device=app.config.get("NN_DEVICE"),
             retry_backoff_s=effective_backoff,
             artifact_uploader=app.config["ARTIFACT_UPLOADER"],
+            max_consecutive_crashes=int(
+                app.config.get(
+                    "MAX_CONSECUTIVE_CRASHES",
+                    _claim_loop.DEFAULT_MAX_CONSECUTIVE_CRASHES,
+                )
+            ),
         )
         cbs = _state_callbacks()
         assert runner_factory is not None  # narrowed via caller
@@ -966,6 +1053,22 @@ def create_app(
             # self-update phase dict (``None`` on a fresh process).
             "git_commit": app.config.get("GIT_COMMIT"),
             "last_update": snap["last_update"],
+            # Crash-recovery telemetry. ``game_crashes`` counts games
+            # reported ``crashed`` that the claim thread survived;
+            # ``pool_resets`` counts ProcessPoolExecutor rebuilds after
+            # a hard subprocess death. ``thread_recovery`` breaks both
+            # down per claim-loop thread and carries the live
+            # consecutive-crash streak (the value that escalates to
+            # ERROR at ``max_consecutive_crashes``). All zero on a
+            # healthy worker.
+            "game_crashes": snap["game_crashes"],
+            "pool_resets": snap["pool_resets"],
+            "pool_generation": snap["pool_generation"],
+            "last_crash_detail": snap["last_crash_detail"],
+            "thread_recovery": snap["thread_recovery"],
+            "max_consecutive_crashes": app.config.get(
+                "MAX_CONSECUTIVE_CRASHES"
+            ),
             # Where this worker drops per-game artifacts. Exposed so
             # the launcher can refuse to dispatch a cycle to a worker
             # running the test-only ``null://`` default -- its games
@@ -1058,6 +1161,19 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
             "config — the orchestrator does NOT dictate this in the "
             "/v2/start_* request body any more (see DISTRIBUTED_API_v2). "
             "Default: cpu_count() - 2."
+        ),
+    )
+    parser.add_argument(
+        "--max-consecutive-crashes",
+        type=int,
+        default=_claim_loop.DEFAULT_MAX_CONSECUTIVE_CRASHES,
+        help=(
+            "Consecutive crashed games one claim-loop thread absorbs "
+            "before the daemon parks in ERROR. A single hard "
+            "subprocess death (BrokenProcessPool) is recovered by "
+            "rebuilding the pool and re-claiming; a run of them is "
+            "structural. WORKER-OWNED config. Default: "
+            f"{_claim_loop.DEFAULT_MAX_CONSECUTIVE_CRASHES}."
         ),
     )
     parser.add_argument(
@@ -1216,6 +1332,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
     app = create_app(
         weights_root=Path(args.weights_cache_root),
         n_workers=args.n_workers,
+        max_consecutive_crashes=args.max_consecutive_crashes,
         deck_pool_path=args.deck_pool_path,
         nn_device=resolved_nn_device,
         artifact_storage_uri=args.artifact_storage_uri,

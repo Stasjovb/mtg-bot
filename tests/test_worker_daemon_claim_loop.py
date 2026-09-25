@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -132,6 +133,9 @@ def _state_callbacks_for(state: worker_daemon.WorkerState) -> cl.StateCallbacks:
         mark_stopping=state.mark_stopping,
         mark_idle=state.mark_idle,
         mark_error=state.mark_error,
+        on_game_crash=state.on_game_crash,
+        on_pool_reset=state.on_pool_reset,
+        on_thread_recovered=state.on_thread_recovered,
     )
 
 
@@ -144,7 +148,12 @@ def _build_loop(
     play_one: Optional[Callable[[dict, str], cl.GameResult]] = None,
     weights_root: Path | None = None,
     retry_backoff_s: tuple[float, ...] = (0.0, 0.0, 0.0),
-) -> tuple[cl.ClaimLoopRunner, cl.CallableGameRunner]:
+    runner: Optional[cl.GameRunner] = None,
+    n_workers: int = 1,
+    max_consecutive_crashes: int = (
+        cl.DEFAULT_MAX_CONSECUTIVE_CRASHES
+    ),
+) -> tuple[cl.ClaimLoopRunner, cl.GameRunner]:
     """Wire a :class:`ClaimLoopRunner` against ``fake``."""
 
     if play_one is None:
@@ -157,16 +166,18 @@ def _build_loop(
                 npz_bytes=b"NPZBYTES",
             )
 
-    runner = cl.CallableGameRunner(play_one)
+    if runner is None:
+        runner = cl.CallableGameRunner(play_one)
     cfg = cl.ClaimLoopConfig(
         coordinator_url="http://fake-coord:5099",
         stage_id=stage_id,
         kind=kind,
-        n_workers=1,
+        n_workers=n_workers,
         worker_id="test-worker",
         weights_root=weights_root or Path("trained_weights_test"),
         shard_label="test-worker",
         retry_backoff_s=retry_backoff_s,
+        max_consecutive_crashes=max_consecutive_crashes,
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
         # NullUploader keeps these unit tests focused on the wire
@@ -177,7 +188,7 @@ def _build_loop(
     loop = cl.ClaimLoopRunner(cfg, cbs, runner)
     # Seed the daemon into SELF_PLAY_STARTING so mark_running's
     # transition lands at SELF_PLAY_RUNNING.
-    state.try_start(kind, stage_id, n_workers=1)
+    state.try_start(kind, stage_id, n_workers=n_workers)
     return loop, runner
 
 
@@ -1098,27 +1109,37 @@ def test_report_loop_404_treats_as_unknown_continues_loop():
 
 
 def test_claim_loop_runner_crash_reports_crashed_then_errors():
-    """A runner exception mid-game posts a 'crashed' meta then
-    re-raises -> daemon ends up in ERROR."""
+    """A runner exception mid-game posts a 'crashed' meta. With
+    ``max_consecutive_crashes=1`` the very first crash escalates, so
+    the daemon ends up in ERROR.
+
+    (The default is 5 -- see
+    ``test_claim_loop_survives_broken_process_pool`` for the
+    recover-and-keep-claiming path this used to preempt.)
+    """
     fake = FakeCoordinator(claims_queue=[_make_claim(0)])
     state = worker_daemon.WorkerState(start_delay_s=0.01)
 
     def play_one_raises(claim, shard_label):
         raise RuntimeError("simulated runner crash")
 
-    loop, _ = _build_loop(fake, state=state, play_one=play_one_raises)
+    loop, _ = _build_loop(
+        fake, state=state, play_one=play_one_raises,
+        max_consecutive_crashes=1,
+    )
     loop.run()
     snap = state.snapshot()
     assert snap["state"] == worker_daemon.State.ERROR
-    # Threaded claim loop wraps the underlying RuntimeError in a
-    # "claim loop thread <tid> crashed" envelope.
     assert state.error and "claim loop thread" in state.error
-    assert "simulated runner crash" in state.error
-    # The crash was reported to the coordinator before re-raise so
-    # the queue accounting stays sane. The drop-off protocol wraps
-    # per-game telemetry under ``meta``.
+    assert "consecutive game crashes" in state.error
+    # The crash was reported to the coordinator so the queue
+    # accounting stays sane. The drop-off protocol wraps per-game
+    # telemetry under ``meta``.
     assert len(fake.reports_received) == 1
-    assert fake.reports_received[0]["meta"]["outcome"] == "crashed"
+    meta = fake.reports_received[0]["meta"]
+    assert meta["outcome"] == "crashed"
+    # Crash forensics ride along on the report.
+    assert "simulated runner crash" in meta["traceback"]
 
 
 def test_claim_loop_fatal_4xx_on_claim_raises():
@@ -1404,9 +1425,11 @@ def test_claim_loop_bounded_join_fires_only_after_stop_requested(caplog):
 
 
 def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
-    """One thread crashing must mark the daemon ERROR and the peer
-    threads must exit on their next ``is_stop_requested()`` check
-    instead of plowing on against a dead daemon."""
+    """A thread that exhausts its crash budget must mark the daemon
+    ERROR and the peer threads must exit on their next
+    ``is_stop_requested()`` check instead of plowing on against a dead
+    daemon. ``max_consecutive_crashes=1`` makes the first crash the
+    escalating one."""
     import threading as _threading
 
     n_workers = 4
@@ -1445,6 +1468,9 @@ def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
         worker_id="test", weights_root=Path("trained_weights_test"),
         shard_label="test",
         retry_backoff_s=(0.0, 0.0, 0.0),
+        # One crash escalates -- this test is about the blast radius
+        # of an escalation, not about the recovery budget.
+        max_consecutive_crashes=1,
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
         artifact_uploader=NullUploader(),
@@ -1715,3 +1741,317 @@ def test_report_one_accepts_both_200_and_202_during_rollout():
     snap = state.snapshot()
     assert snap["state"] == worker_daemon.State.IDLE
     assert snap["games_done"] == 2
+
+
+# ---------------------------------------------------------------------------
+# BrokenProcessPool recovery
+#
+# 2026-09-25, cycles 8 and 9 (~one death per 1,200-1,500 games): a pool
+# subprocess died hard mid-game, ``BrokenProcessPool`` escaped
+# ``run_once`` -> ``_thread_body``, the claim thread died and the daemon
+# sat in ERROR for the rest of the stage until a human restarted the
+# scheduled task. The loop now reports the claim crashed, rebuilds the
+# (permanently unusable) pool and keeps claiming, escalating to ERROR
+# only after ``max_consecutive_crashes`` failures in a row.
+# ---------------------------------------------------------------------------
+
+
+class _FakePoolRunner(cl.GameRunner):
+    """Runner stub that owns a fake process pool.
+
+    ``crash_plan`` is consumed one entry per game: ``None`` plays a
+    clean game, an exception instance is raised instead. Pool
+    generation bookkeeping mirrors the production ``_PoolControls``
+    contract so the claim loop's dedup logic is exercised for real.
+    """
+
+    def __init__(self, crash_plan):
+        self._crash_plan = list(crash_plan)
+        self._lock = threading.Lock()
+        self.generation = 1
+        self.reset_calls: list[Optional[int]] = []
+        self.games_played = 0
+        self.setup_calls = 0
+        self.teardown_calls = 0
+
+    def setup(self, coordinator_url, weights_root, stage_kind, n_workers):
+        self.setup_calls += 1
+
+    def teardown(self):
+        self.teardown_calls += 1
+
+    def pool_generation(self) -> int:
+        with self._lock:
+            return self.generation
+
+    def reset_pool(self, generation=None) -> int:
+        with self._lock:
+            self.reset_calls.append(generation)
+            if generation is not None and generation != self.generation:
+                # A peer already rebuilt after the same death.
+                return self.generation
+            self.generation += 1
+            return self.generation
+
+    def play_one_game(self, claim, shard_label):
+        with self._lock:
+            planned = (
+                self._crash_plan.pop(0) if self._crash_plan else None
+            )
+            self.games_played += 1
+        if planned is not None:
+            raise planned
+        return cl.GameResult(
+            outcome="completed", winner=0, n_samples=5,
+            duration_s=0.001, npz_bytes=b"NPZ",
+        )
+
+
+def _broken_pool_error() -> BrokenProcessPool:
+    return BrokenProcessPool(
+        "A process in the process pool was terminated abruptly while "
+        "the future was running or pending."
+    )
+
+
+def test_claim_loop_survives_broken_process_pool():
+    """One BrokenProcessPool then a clean game: the claim thread
+    survives, the dead claim is reported ``crashed`` with its
+    traceback, the pool is rebuilt exactly once, the next claim is
+    played and reported, and the daemon drains to IDLE."""
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(0), _make_claim(1)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    runner = _FakePoolRunner([_broken_pool_error(), None])
+    loop, _ = _build_loop(fake, state=state, runner=runner)
+
+    loop.run()
+
+    snap = state.snapshot()
+    # The thread kept claiming and the stage drained normally.
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert state.error is None
+    # Both claims were consumed; the second one completed.
+    assert runner.games_played == 2
+    assert len(fake.reports_received) == 2
+    assert fake.reports_received[0]["meta"]["outcome"] == "crashed"
+    assert (
+        "BrokenProcessPool"
+        in fake.reports_received[0]["meta"]["traceback"]
+    )
+    assert fake.reports_received[1]["meta"]["outcome"] == "completed"
+    # Only the completed game credits games_done.
+    assert snap["games_done"] == 1
+    # The pool was rebuilt exactly once, and the loop handed us the
+    # generation it observed BEFORE the failing game.
+    assert runner.reset_calls == [1]
+    assert runner.pool_generation() == 2
+    # Counters surfaced for the heartbeat.
+    assert snap["game_crashes"] == 1
+    assert snap["pool_resets"] == 1
+    assert snap["pool_generation"] == 2
+    assert snap["thread_recovery"]["0"] == {
+        "crashes": 1, "pool_resets": 1, "consecutive_crashes": 0,
+    }
+
+
+def test_claim_loop_escalates_after_n_consecutive_crashes():
+    """``max_consecutive_crashes`` crashes in a row park the daemon in
+    ERROR instead of chewing through the rest of the queue."""
+    limit = 3
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(10)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    runner = _FakePoolRunner([_broken_pool_error() for _ in range(10)])
+    loop, _ = _build_loop(
+        fake, state=state, runner=runner,
+        max_consecutive_crashes=limit,
+    )
+
+    loop.run()
+
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.ERROR
+    assert state.error and "gave up after 3 consecutive" in state.error
+    # Stopped at the limit -- it did NOT burn the whole 10-claim queue.
+    assert runner.games_played == limit
+    assert len(fake.reports_received) == limit
+    assert snap["game_crashes"] == limit
+    assert snap["thread_recovery"]["0"]["consecutive_crashes"] == limit
+
+
+def test_claim_loop_crash_streak_resets_on_a_clean_game():
+    """A good game between crashes clears the streak, so a worker that
+    loses one subprocess every ~1,300 games never escalates."""
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(5)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    runner = _FakePoolRunner([
+        _broken_pool_error(), None,
+        _broken_pool_error(), None,
+        None,
+    ])
+    loop, _ = _build_loop(
+        fake, state=state, runner=runner, max_consecutive_crashes=2,
+    )
+
+    loop.run()
+
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 3
+    assert snap["game_crashes"] == 2
+    assert snap["pool_resets"] == 2
+    assert snap["thread_recovery"]["0"]["consecutive_crashes"] == 0
+
+
+def test_claim_loop_non_pool_crash_does_not_rebuild_the_pool():
+    """A game body that throws is NOT a dead pool -- report it crashed,
+    keep claiming, but don't churn the subprocesses."""
+    fake = FakeCoordinator(claims_queue=[_make_claim(0), _make_claim(1)])
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    runner = _FakePoolRunner([RuntimeError("game body blew up"), None])
+    loop, _ = _build_loop(fake, state=state, runner=runner)
+
+    loop.run()
+
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert fake.reports_received[0]["meta"]["outcome"] == "crashed"
+    assert runner.reset_calls == []
+    assert snap["game_crashes"] == 1
+    assert snap["pool_resets"] == 0
+
+
+def test_pool_rebuild_is_deduped_across_claim_threads():
+    """N threads tripping over the SAME dead pool must produce one
+    rebuild, not N. Each thread passes the generation it observed
+    before its game; the loser's stale generation no-ops."""
+    n_workers = 4
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(n_workers)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    start_together = threading.Barrier(n_workers, timeout=10.0)
+
+    class _SharedDeadPoolRunner(_FakePoolRunner):
+        def play_one_game(self, claim, shard_label):
+            # Every thread reads generation 1, then they all fail
+            # together -- exactly the production shape.
+            try:
+                start_together.wait()
+            except threading.BrokenBarrierError:  # pragma: no cover
+                pass
+            with self._lock:
+                self.games_played += 1
+            raise _broken_pool_error()
+
+    runner = _SharedDeadPoolRunner([])
+    loop, _ = _build_loop(
+        fake, state=state, runner=runner, n_workers=n_workers,
+        # High enough that nobody escalates on this one round.
+        max_consecutive_crashes=50,
+    )
+
+    loop.run()
+
+    # All four threads called reset with generation 1; exactly one
+    # rebuild happened.
+    assert len(runner.reset_calls) == n_workers
+    assert set(runner.reset_calls) == {1}
+    assert runner.pool_generation() == 2
+    snap = state.snapshot()
+    assert snap["pool_resets"] == 1
+    assert snap["game_crashes"] == n_workers
+
+
+def test_run_once_returns_crashed_without_raising():
+    """The unit-level contract: ``run_once`` absorbs the runner
+    exception and reports the status instead of propagating."""
+    fake = FakeCoordinator(claims_queue=[_make_claim(0)])
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    runner = _FakePoolRunner([_broken_pool_error()])
+    loop, _ = _build_loop(fake, state=state, runner=runner)
+
+    assert loop.run_once(7) == "crashed"
+    assert state.snapshot()["thread_recovery"]["7"]["crashes"] == 1
+
+
+def test_heartbeat_exposes_crash_and_pool_reset_counters(tmp_path):
+    """End-to-end: drive a stage through ``create_app`` whose runner
+    loses its pool once, then read the counters off
+    ``/v2/heartbeat``."""
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(0), _make_claim(1)]
+    )
+    runner = _FakePoolRunner([_broken_pool_error(), None])
+
+    def factory(kind, cfg, cbs):
+        cfg.http_get = fake.http_get
+        cfg.http_post_json = fake.http_post_json
+        cfg.artifact_uploader = NullUploader()
+        cfg.retry_backoff_s = (0.0,)
+        return runner
+
+    app = worker_daemon.create_app(
+        start_delay_s=0.01,
+        weights_root=tmp_path / "trained_weights",
+        runner_factory=factory,
+        n_workers=1,
+        max_consecutive_crashes=4,
+    )
+    app.testing = True
+    client = app.test_client()
+    resp = client.post(
+        "/v2/start_self_play",
+        json={
+            "stage_id": "hb_stage",
+            "coordinator_url": "http://coord:5099",
+        },
+    )
+    assert resp.status_code == 202
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if (
+            app.config["WORKER_STATE"].snapshot()["state"]
+            == worker_daemon.State.IDLE
+        ):
+            break
+        time.sleep(0.01)
+    else:  # pragma: no cover - timing guard
+        raise AssertionError("loop never drained")
+
+    hb = client.get("/v2/heartbeat").get_json()
+    assert hb["game_crashes"] == 1
+    assert hb["pool_resets"] == 1
+    assert hb["pool_generation"] == 2
+    assert hb["max_consecutive_crashes"] == 4
+    assert hb["thread_recovery"]["0"]["crashes"] == 1
+    assert hb["thread_recovery"]["0"]["pool_resets"] == 1
+    assert hb["thread_recovery"]["0"]["consecutive_crashes"] == 0
+    assert "BrokenProcessPool" in hb["last_crash_detail"]
+    # Recovered, so the daemon is still usable for the next stage.
+    assert hb["state"] == worker_daemon.State.IDLE
+    assert hb["error"] is None
+
+
+def test_heartbeat_counters_are_zero_on_a_healthy_worker(tmp_path):
+    app = worker_daemon.create_app(
+        start_delay_s=0.01, weights_root=tmp_path / "w",
+    )
+    app.testing = True
+    hb = app.test_client().get("/v2/heartbeat").get_json()
+    assert hb["game_crashes"] == 0
+    assert hb["pool_resets"] == 0
+    assert hb["pool_generation"] == 0
+    assert hb["thread_recovery"] == {}
+    assert hb["last_crash_detail"] is None
+    assert (
+        hb["max_consecutive_crashes"]
+        == cl.DEFAULT_MAX_CONSECUTIVE_CRASHES
+    )

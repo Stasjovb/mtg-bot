@@ -813,6 +813,131 @@ def _subprocess_play_eval(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Process-pool lifecycle
+# ---------------------------------------------------------------------------
+
+
+class _PoolControls:
+    """Owns one runner's :class:`ProcessPoolExecutor` across rebuilds.
+
+    Shared verbatim by the self-play and eval factories.
+
+    Why this exists: a ``ProcessPoolExecutor`` whose worker process
+    dies hard (the documented CPython-3.13 interpreter-corruption
+    class; seen twice on 2026-09-25 at roughly one death per
+    1,200-1,500 games) is *permanently* broken -- every later
+    ``submit()`` raises ``BrokenProcessPool`` immediately. The only
+    recovery is a fresh executor.
+
+    Concurrency: N claim-loop threads share one pool, so all N see the
+    same death within milliseconds. Each reads :meth:`generation`
+    BEFORE its game and passes that value to :meth:`reset`; the first
+    caller through rebuilds and bumps the generation, and the peers'
+    stale generations make their calls no-ops. Threads still blocked
+    on a future from the old executor fail over on their own next
+    iteration -- their future resolves (or raises) against the old
+    object, which nothing else references once we swap.
+    """
+
+    def __init__(
+        self,
+        state: dict[str, Any],
+        *,
+        enabled: bool,
+        emit: Callable[[str, dict], None],
+        label: str,
+    ) -> None:
+        self._state = state
+        self._enabled = bool(enabled)
+        self._emit = emit
+        self._label = label
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._max_workers = 1
+
+    def _new_pool(self) -> "concurrent.futures.ProcessPoolExecutor":
+        return concurrent.futures.ProcessPoolExecutor(
+            max_workers=self._max_workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+
+    def ensure(self, n_workers: int) -> None:
+        """Create the pool if this runner uses one and none is live."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._max_workers = max(1, int(n_workers))
+            if self._state.get("pool") is not None:
+                return
+            self._state["pool"] = self._new_pool()
+            self._generation += 1
+            self._emit(
+                "pool_created",
+                {
+                    "max_workers": self._max_workers,
+                    "mode": "subprocess",
+                    "generation": self._generation,
+                },
+            )
+
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def reset(self, generation: Optional[int] = None) -> int:
+        """Rebuild the pool. Returns the live generation.
+
+        A return value equal to the caller's ``generation`` means
+        nothing was rebuilt (pool-less runner, a peer already rebuilt,
+        or the runner is torn down).
+        """
+        with self._lock:
+            if not self._enabled:
+                return self._generation
+            if (
+                generation is not None
+                and int(generation) != self._generation
+            ):
+                # A peer thread already rebuilt after the same death.
+                return self._generation
+            old = self._state.get("pool")
+            if old is None:
+                # Torn down (or never set up) -- do NOT resurrect a
+                # pool behind teardown's back.
+                return self._generation
+            try:
+                old.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001 - best-effort reaping
+                log.exception(
+                    "[%s] shutdown of the broken pool raised", self._label,
+                )
+            self._state["pool"] = self._new_pool()
+            self._generation += 1
+            self._emit(
+                "pool_reset",
+                {
+                    "max_workers": self._max_workers,
+                    "mode": "subprocess",
+                    "generation": self._generation,
+                },
+            )
+            log.warning(
+                "[%s] rebuilt the subprocess pool (generation %d, "
+                "max_workers=%d)",
+                self._label, self._generation, self._max_workers,
+            )
+            return self._generation
+
+    def shutdown(self, *, wait: bool) -> None:
+        with self._lock:
+            pool = self._state.get("pool")
+            if pool is None:
+                return
+            pool.shutdown(wait=wait, cancel_futures=True)
+            self._state["pool"] = None
+
+
 def build_self_play_runner(
     coordinator_url: str,
     stage_id: str,
@@ -891,6 +1016,16 @@ def build_self_play_runner(
             except Exception:  # noqa: BLE001 - swallow logger failures
                 log.exception("[self_play_runner] log_event %s raised", name)
 
+    # Pool lifecycle (create / rebuild-after-death / shut down) lives
+    # in its own lock-guarded object so the claim loop can recover from
+    # a BrokenProcessPool without racing peer threads.
+    pool_controls = _PoolControls(
+        state,
+        enabled=use_subprocess_pool,
+        emit=_emit,
+        label="self_play_runner",
+    )
+
     def _ensure_deck_pool() -> None:
         if state["deck_pool"] is not None:
             return
@@ -957,13 +1092,7 @@ def build_self_play_runner(
         # authoritative — it reflects the daemon's current --n-workers)
         # rather than the factory-time ``n_workers`` arg, which was
         # captured before the daemon had a chance to override.
-        if use_subprocess_pool and state.get("pool") is None:
-            n = max(1, int(n_workers_at_setup))
-            state["pool"] = concurrent.futures.ProcessPoolExecutor(
-                max_workers=n,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-            _emit("pool_created", {"max_workers": n, "mode": "subprocess"})
+        pool_controls.ensure(n_workers_at_setup)
 
     def _play_one(claim: dict, shard_label: str) -> GameResult:
         # Subprocess path: submit to the PPE and decode the result.
@@ -1168,12 +1297,15 @@ def build_self_play_runner(
             # when the daemon process exits). ``cancel_futures=True``
             # drops any still-queued tasks; running tasks proceed
             # until they finish.
-            pool.shutdown(wait=False, cancel_futures=True)
-            state["pool"] = None
+            pool_controls.shutdown(wait=False)
         state["configs_by_version"].clear()
         state["deck_pool"] = None
 
-    return CallableGameRunner(_play_one, _setup, _teardown)
+    return CallableGameRunner(
+        _play_one, _setup, _teardown,
+        reset_pool_fn=pool_controls.reset,
+        pool_generation_fn=pool_controls.generation,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1233,6 +1365,15 @@ def build_eval_runner(
             except Exception:  # noqa: BLE001
                 log.exception("[eval_runner] log_event %s raised", name)
 
+    # Same pool lifecycle owner the self-play factory uses -- see
+    # :class:`_PoolControls` for the BrokenProcessPool recovery story.
+    pool_controls = _PoolControls(
+        state,
+        enabled=use_subprocess_pool,
+        emit=_emit,
+        label="eval_runner",
+    )
+
     def _ensure_deck_pool() -> None:
         if state["deck_pool"] is not None:
             return
@@ -1289,13 +1430,7 @@ def build_eval_runner(
                 "[eval_runner] setup called with kind=%s "
                 "(expected eval)", kind,
             )
-        if use_subprocess_pool and state.get("pool") is None:
-            n = max(1, int(n_workers_at_setup))
-            state["pool"] = concurrent.futures.ProcessPoolExecutor(
-                max_workers=n,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-            _emit("pool_created", {"max_workers": n, "mode": "subprocess"})
+        pool_controls.ensure(n_workers_at_setup)
 
     def _play_one(claim: dict, shard_label: str) -> GameResult:
         # Subprocess path: submit to the PPE and decode the result.
@@ -1446,11 +1581,12 @@ def build_eval_runner(
         )
 
     def _teardown() -> None:
-        pool = state.get("pool")
-        if pool is not None:
-            pool.shutdown(wait=True, cancel_futures=True)
-            state["pool"] = None
+        pool_controls.shutdown(wait=True)
         state["configs_by_version"].clear()
         state["deck_pool"] = None
 
-    return CallableGameRunner(_play_one, _setup, _teardown)
+    return CallableGameRunner(
+        _play_one, _setup, _teardown,
+        reset_pool_fn=pool_controls.reset,
+        pool_generation_fn=pool_controls.generation,
+    )
