@@ -536,3 +536,55 @@ def test_block_materializes_instead_of_holding_memmap_views() -> None:
         assert block.nbytes > 0
     finally:
         ds.close()
+
+
+# ---------------------------------------------------------------------
+# Real multi-process DataLoader (the invariant that actually ships)
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("persistent", [True, False])
+def test_multiprocess_dataloader_covers_epoch_exactly_once(
+    persistent,
+) -> None:
+    """The planning-layer tests above assert coverage analytically.
+    This one spawns real worker processes, because the thing that
+    would break it -- two workers disagreeing about the epoch's block
+    permutation -- only exists across process boundaries.
+
+    Also asserts the second epoch is a DIFFERENT order under both
+    persistent_workers settings: they reshuffle from different
+    sources (an in-worker counter vs torch's per-iterator base seed),
+    and only one of the two is live in each configuration.
+    """
+    ds = _make_dataset(n_rows=600)
+    try:
+        loader = DataLoader(
+            BlockShuffleDataset(ds, block_rows=37, window_blocks=2),
+            batch_size=16, shuffle=False,
+            collate_fn=structured_collate,
+            num_workers=2, persistent_workers=persistent,
+        )
+
+        def _epoch() -> list[int]:
+            out: list[int] = []
+            for batch in loader:
+                out.extend(batch["token_emb_ids"][:, 0, 0].tolist())
+            return out
+
+        first = _epoch()
+        second = _epoch()
+        assert sorted(first) == list(range(600)), (
+            "epoch 1 dropped or duplicated rows across workers"
+        )
+        assert sorted(second) == list(range(600)), (
+            "epoch 2 dropped or duplicated rows across workers"
+        )
+        assert first != second, "epoch 2 must reshuffle"
+        from mtg_bot.training.structured_dataset import (
+            shutdown_dataloader_workers,
+        )
+        shutdown_dataloader_workers(loader)
+        del loader
+    finally:
+        ds.close()
