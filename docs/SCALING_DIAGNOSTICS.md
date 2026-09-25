@@ -250,7 +250,8 @@ whatever keeps the tree shallow (empirically: PASS).
 
 Four 3-epoch fits, **identical 1,000-shard subset** (1,099,208 rows,
 109,932 held-out, `--seed 1`, `--lr 3e-4`, batch 256, restore-best),
-production trunk, RTX 5090. The life-differential baseline is
+production trunk, RTX 5090, driver
+`scripts/s2/value_head_sweep.sh`. The life-differential baseline is
 **r = 0.2998** on these rows. "cv MSE" is the cross-fitted calibrated
 MSE (temperature fit on one half of the held-out rows, scored on the
 other, both ways) — the number the gate now reads.
