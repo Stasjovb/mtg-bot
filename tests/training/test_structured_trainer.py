@@ -842,3 +842,150 @@ def test_global_life_diff_ignores_padded_global_tokens() -> None:
         global_type=1, viewer_idx=2, opp_idx=3,
     )
     assert out.tolist() == [0.0]
+
+
+# ---------------------------------------------------------------------
+# shuffle_mode wiring (see mtg_bot.training.block_shuffle)
+# ---------------------------------------------------------------------
+
+
+def test_train_structured_model_block_shuffle_runs(
+    tmp_path: Path,
+) -> None:
+    """``shuffle_mode='block'`` trains end-to-end and produces the
+    same history shape as the row-shuffle path."""
+    ds = _make_dataset(n_rows=24, seq_len=4)
+    weights = tmp_path / "w_block.pt"
+    history = train_structured_model(
+        ds,
+        weights_out_path=weights,
+        config=_tiny_cfg(),
+        epochs=1,
+        batch_size=4,
+        learning_rate=1e-2,
+        val_split=0.25,
+        device="cpu",
+        rng_seed=0,
+        shuffle_mode="block",
+        shuffle_block_rows=8,
+    )
+    assert isinstance(history, TrainingHistory)
+    assert weights.is_file()
+    assert len(history.train_losses) == 1
+    assert history.train_losses[0] == history.train_losses[0]  # not NaN
+    assert history.holdout_value_metrics is not None
+
+
+def test_block_shuffle_visits_every_train_row_once_per_epoch(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing equivalence: block mode changes ORDER, not the
+    row set. Counted through the real trainer by spying on the collate
+    the DataLoader calls."""
+    from mtg_bot.training import structured_dataset as sd_mod
+
+    ds = _make_dataset(n_rows=24, seq_len=4)
+    real_collate = sd_mod.structured_collate
+    sizes: dict[str, list[int]] = {"row": [], "block": []}
+
+    def _make_spy(mode: str):
+        def _spy(items):
+            sizes[mode].append(len(items))
+            return real_collate(items)
+        return _spy
+
+    for mode in ("row", "block"):
+        sd_mod.structured_collate = _make_spy(mode)
+        try:
+            train_structured_model(
+                ds,
+                weights_out_path=tmp_path / f"w_{mode}.pt",
+                config=_tiny_cfg(),
+                epochs=1,
+                batch_size=4,
+                learning_rate=1e-2,
+                val_split=0.0,
+                device="cpu",
+                rng_seed=0,
+                shuffle_mode=mode,
+                shuffle_block_rows=7,
+            )
+        finally:
+            sd_mod.structured_collate = real_collate
+    # val_split=0 -> every row is a train row in both modes, and the
+    # holdout re-score adds no batches (no val loader).
+    assert sum(sizes["row"]) == 24
+    assert sum(sizes["block"]) == 24
+
+
+def test_train_structured_model_rejects_bad_shuffle_mode(
+    tmp_path: Path,
+) -> None:
+    ds = _make_dataset(n_rows=8, seq_len=4)
+    with pytest.raises(ValueError, match="shuffle_mode must be one of"):
+        train_structured_model(
+            ds,
+            weights_out_path=tmp_path / "w.pt",
+            config=_tiny_cfg(),
+            epochs=1,
+            batch_size=4,
+            device="cpu",
+            shuffle_mode="sideways",
+        )
+
+
+def test_train_structured_model_rejects_bad_block_rows(
+    tmp_path: Path,
+) -> None:
+    ds = _make_dataset(n_rows=8, seq_len=4)
+    with pytest.raises(ValueError, match="shuffle_block_rows must be"):
+        train_structured_model(
+            ds,
+            weights_out_path=tmp_path / "w.pt",
+            config=_tiny_cfg(),
+            epochs=1,
+            batch_size=4,
+            device="cpu",
+            shuffle_block_rows=0,
+        )
+
+
+def test_block_mode_sorts_the_val_split(tmp_path: Path) -> None:
+    """Block mode also fixes the val loader's access pattern:
+    ``grouped_train_val_split`` returns a PERMUTATION and the val
+    loader reads it back with shuffle=False, so the eval pass was
+    seeking every epoch too."""
+    import torch.utils.data as tud
+
+    made: list[list[int]] = []
+    real_subset = tud.Subset
+
+    class _RecordingSubset(real_subset):
+        def __init__(self, dataset, indices):
+            made.append(list(indices))
+            super().__init__(dataset, indices)
+
+    ds = _make_dataset(n_rows=40, seq_len=4)
+    tud.Subset = _RecordingSubset
+    try:
+        train_structured_model(
+            ds,
+            weights_out_path=tmp_path / "w.pt",
+            config=_tiny_cfg(),
+            epochs=1,
+            batch_size=4,
+            device="cpu",
+            val_split=0.25,
+            rng_seed=3,
+            shuffle_mode="block",
+            shuffle_block_rows=8,
+        )
+    finally:
+        tud.Subset = real_subset
+    # Two Subsets are built: train then val. Block mode sorts val.
+    assert len(made) == 2
+    train_indices, val_indices = made
+    assert len(val_indices) > 1
+    assert val_indices == sorted(val_indices)
+    # Together they still cover every row exactly once.
+    assert sorted(train_indices + val_indices) == list(range(40))

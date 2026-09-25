@@ -74,6 +74,13 @@ def _default_per_game_eval() -> float:
     return _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
 
 
+# Late-imported so the form default tracks
+# ``block_shuffle.DEFAULT_BLOCK_ROWS`` automatically.
+def _default_shuffle_block_rows() -> int:
+    from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
+    return DEFAULT_BLOCK_ROWS
+
+
 def _format_file_size(n_bytes: int) -> str:
     """Render a byte count as a short human-readable suffix
     (``9.8 MB``, ``246 KB``). Used in the deck-pool dropdown labels
@@ -599,6 +606,32 @@ def build_iterate_schema(
                         "between forward/backward calls. Set to 0 for "
                         "smoke tests where multiprocessing fork is "
                         "finicky."
+                    ),
+                },
+                {
+                    "name": "train-shuffle-mode", "type": "choice",
+                    "choices": ["auto", "row", "block"],
+                    "default": "auto",
+                    "help": (
+                        "Train-split ordering. 'row' is the uniform "
+                        "shuffle: every batch is batch_size random "
+                        "slices into the flat memmap store, i.e. "
+                        "thousands of 4 KB page faults per batch once "
+                        "the store outgrows the page cache. 'block' "
+                        "streams shuffled contiguous blocks instead "
+                        "(same rows per epoch, different order). "
+                        "'auto' picks block once the store exceeds "
+                        "half of available RAM."
+                    ),
+                },
+                {
+                    "name": "train-shuffle-block-rows", "type": "int",
+                    "default": _default_shuffle_block_rows(),
+                    "help": (
+                        "Rows per contiguous block under "
+                        "train-shuffle-mode=block. Bigger = more "
+                        "sequential I/O and better within-block "
+                        "mixing, at more worker RAM."
                     ),
                 },
             ],
