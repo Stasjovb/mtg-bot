@@ -314,6 +314,25 @@ Readings:
    means this 3-epoch comparison *understates* it at the 9–20 epoch
    budgets the real runs use.
 
+### At the real epoch budget (9 epochs, same subset + seed)
+
+3 epochs is not where the rejected run lived — it trained for 9 with
+restore-best landing on epoch 3. Re-running the two value-head
+routings at 9 epochs on the same 1,000 shards:
+
+| arm | raw MSE | **cv MSE** | in-sample cal MSE | r raw | r cal | mean \|pred\| | T | train value loss, epoch 1 → 9 |
+|--|--|--|--|--|--|--|--|--|
+| base9 (0.1 / 1e-4, trunk) | 1.1212 | **0.8173** | 0.8084 | 0.391 | 0.438 | 0.878 | 7.34 | 0.200 → **0.015** |
+
+Two things to read off the train-loss column: the shared-trunk value
+head drives its TRAINING loss to 0.015 — an order of magnitude past
+the rejected 6,000-shard run's 0.09 — which is memorisation in its
+purest observable form; and yet its held-out correlation *improved*
+over the 3-epoch fit (0.364 → 0.391 raw). Memorisation and
+generalisation are not competing for the same capacity here; the head
+is learning something real AND recording the training games, and only
+the second one is what the raw MSE was punishing.
+
 ### What this changes about the gate
 
 `mtg_bot train` now fits the temperature on the held-out split and
