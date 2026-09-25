@@ -702,6 +702,7 @@ def test_train_config_dict_shape():
         architecture="shared",
         dropout=None,
         weight_decay=None,
+        value_head_input=None,
         keep_last_epoch=False,
         min_holdout_value_quality=None,
     )
@@ -716,6 +717,7 @@ def test_train_config_dict_shape():
     # when left at "defer to the trainer's default".
     assert out["dropout"] is None
     assert out["weight_decay"] is None
+    assert out["value_head_input"] is None
     assert out["keep_last_epoch"] is False
     assert out["min_holdout_value_quality"] is None
 
