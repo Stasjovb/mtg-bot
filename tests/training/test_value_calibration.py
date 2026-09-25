@@ -339,3 +339,61 @@ def test_compute_metrics_rejects_mismatched_logit_rows():
         compute_holdout_value_metrics(
             np.zeros(4), np.zeros(4), None, np.zeros(5),
         )
+
+
+def test_registry_set_value_calibration_rewrites_only_metadata(
+    tmp_path,
+):
+    """``mtg_bot calibrate-value``'s storage primitive: metadata in,
+    weights untouched."""
+    from mtg_bot.training.registry import ModelMetadata, Registry
+
+    weights = tmp_path / "weights.pt"
+    weights.write_bytes(b"not-really-a-checkpoint")
+    registry = Registry(tmp_path / "reg")
+    version = registry.register(
+        weights,
+        ModelMetadata(
+            version="", created_at="", feature_dim=51, hidden_sizes=[],
+            architecture="structured",
+            training_history={"train_losses": [1.0]},
+        ),
+    )
+    assert registry.load_metadata(version).value_calibration == {}
+
+    registry.set_value_calibration(
+        version,
+        {"method": CALIBRATION_LOGIT_TEMPERATURE, "temperature": 3.0},
+        holdout_metrics={"n_rows": 5},
+    )
+    reloaded = registry.load_metadata(version)
+    assert reloaded.value_calibration["temperature"] == 3.0
+    # Pre-existing history survives; the audit trail is additive.
+    assert reloaded.training_history["train_losses"] == [1.0]
+    assert reloaded.training_history[
+        "holdout_value_metrics_recalibrated"
+    ] == {"n_rows": 5}
+    assert (
+        registry.weights_path(version).read_bytes()
+        == b"not-really-a-checkpoint"
+    )
+
+
+def test_registry_metadata_round_trips_the_calibration(tmp_path):
+    import json
+
+    from mtg_bot.training.registry import ModelMetadata
+
+    meta = ModelMetadata(
+        version="v1", created_at="now", feature_dim=51, hidden_sizes=[],
+        value_calibration={"method": "logit_temperature", "temperature": 2.0},
+    )
+    back = ModelMetadata.from_dict(json.loads(json.dumps(meta.to_dict())))
+    assert back.value_calibration == meta.value_calibration
+    # An old metadata.json with no such key loads as the identity.
+    legacy = ModelMetadata.from_dict({
+        "version": "v0", "created_at": "then", "feature_dim": 51,
+        "hidden_sizes": [],
+    })
+    assert legacy.value_calibration == {}
+    assert "value_calibration" not in legacy.extra
