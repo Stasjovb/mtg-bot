@@ -203,3 +203,16 @@ v8 and v13 well inside each other's CIs (the heuristic anchor itself
 bounces +375..+470 across runs). Decisive comparison: one ladder run with
 `v8:v13`, `heuristic:v8`, `heuristic:v13` at 300 games/pair
 (`ladder_runs/s2_v8_vs_v13/`, results below when done).
+
+**Head-to-head (2026-09-26, `ladder_runs/s2_v8_vs_v13/`, 300 games/pair, one run, heuristic anchored at 0):**
+
+| pair | result |
+|---|---|
+| v8 vs v13 | 146-153-1 (dead even) |
+| heuristic vs v8 | 237-61-1 (v8 20.5%) |
+| heuristic vs v13 | 224-75-1 (v13 25.1%) |
+
+Elo: heuristic 0, v13 -202 [-245, -167], v8 -219 [-260, -187]. Doubling the
+imitation corpus (6k -> 12k games) bought ~+17 Elo, inside the CIs. v13 is
+`current_best` (tie-break: better value head, better vs heuristic), but the
+imitation route is at a plateau roughly 200 Elo below the teacher.
