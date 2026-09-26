@@ -552,6 +552,20 @@ def build_iterate_schema(
                     ),
                 },
                 {
+                    "name": "value-target", "type": "string",
+                    "default": "",
+                    "help": (
+                        "Structured-trunk only: what the VALUE head "
+                        "regresses. 'outcome' = the +/-1 game result; "
+                        "'root' = the search root value each row was "
+                        "recorded with (D6, 2026-09-26: 43% vs "
+                        "heuristic against 24.5% for outcome on the "
+                        "same corpus); 'blend:<w>' = w*root + "
+                        "(1-w)*outcome. Blank = trainer default "
+                        "(outcome)."
+                    ),
+                },
+                {
                     "name": "keep-last-epoch", "type": "bool",
                     "default": False,
                     "help": (

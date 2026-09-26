@@ -109,12 +109,14 @@ def test_train_next_forwards_gate_flags(
         weight_decay=2e-4,
         keep_last_epoch=True,
         min_holdout_value_quality=0.9,
+        value_target="root",
     )
     cmd = rec.train_calls[0]
     assert cmd[cmd.index("--dropout") + 1] == "0.2"
     assert cmd[cmd.index("--weight-decay") + 1] == "0.0002"
     assert "--keep-last-epoch" in cmd
     assert cmd[cmd.index("--min-holdout-value-quality") + 1] == "0.9"
+    assert cmd[cmd.index("--value-target") + 1] == "root"
 
 
 def test_train_next_omits_gate_flags_when_unset(
@@ -133,7 +135,7 @@ def test_train_next_omits_gate_flags_when_unset(
     cmd = rec.train_calls[0]
     for flag in (
         "--dropout", "--weight-decay", "--keep-last-epoch",
-        "--min-holdout-value-quality",
+        "--min-holdout-value-quality", "--value-target",
     ):
         assert flag not in cmd
 
@@ -155,11 +157,12 @@ def test_train_next_omits_gate_flags_for_flat_architecture(
         weight_decay=2e-4,
         keep_last_epoch=True,
         min_holdout_value_quality=0.9,
+        value_target="root",
     )
     cmd = rec.train_calls[0]
     for flag in (
         "--dropout", "--weight-decay", "--keep-last-epoch",
-        "--min-holdout-value-quality",
+        "--min-holdout-value-quality", "--value-target",
     ):
         assert flag not in cmd
 

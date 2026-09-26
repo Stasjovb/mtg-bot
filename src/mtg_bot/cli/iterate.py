@@ -324,6 +324,7 @@ def _train_config_dict(
         "dropout": args.dropout,
         "weight_decay": args.weight_decay,
         "value_head_input": args.value_head_input,
+        "value_target": getattr(args, "value_target", None),
         "keep_last_epoch": args.keep_last_epoch,
         "min_holdout_value_quality": args.min_holdout_value_quality,
     }
@@ -1124,6 +1125,7 @@ def _train_next(
     dropout: float | None = None,
     weight_decay: float | None = None,
     value_head_input: str | None = None,
+    value_target: str | None = None,
     keep_last_epoch: bool = False,
     min_holdout_value_quality: float | None = None,
 ) -> str:
@@ -1238,6 +1240,8 @@ def _train_next(
             cmd.extend(["--weight-decay", str(weight_decay)])
         if value_head_input is not None:
             cmd.extend(["--value-head-input", str(value_head_input)])
+        if value_target is not None:
+            cmd.extend(["--value-target", str(value_target)])
         if keep_last_epoch:
             cmd.append("--keep-last-epoch")
         if min_holdout_value_quality is not None:
@@ -1665,6 +1669,17 @@ def main(argv=None) -> None:  # pragma: no cover
             "'trunk_no_printing' hides the printing embeddings from "
             "the value head only. Blank defers to the trainer "
             "default (trunk)."
+        ),
+    )
+    parser.add_argument(
+        "--value-target", default=None,
+        help=(
+            "Structured-trunk only: what the value head regresses -- "
+            "'outcome' (+/-1 game result), 'root' (the search root value "
+            "each row was recorded with; D6 2026-09-26: 43%% vs heuristic "
+            "against 24.5%% for outcome on the same corpus), or "
+            "'blend:<w>'. Forwarded to train_nn.py as --value-target. "
+            "Blank defers to the trainer default (outcome)."
         ),
     )
     parser.add_argument(
@@ -2996,6 +3011,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 dropout=args.dropout,
                 weight_decay=args.weight_decay,
                 value_head_input=args.value_head_input,
+                value_target=args.value_target,
                 keep_last_epoch=args.keep_last_epoch,
                 min_holdout_value_quality=(
                     args.min_holdout_value_quality
