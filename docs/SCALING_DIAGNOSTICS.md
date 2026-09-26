@@ -447,10 +447,14 @@ games are mostly noise about the decision they are attached to.
 - `data_gen._play_one_game_recording` records, at every sample point,
   the visit-weighted mean root Q of the search
   (`_root_value_from_candidates`, from the acting player's view; the
-  non-active viewer row gets its negation). It rides in the structured
-  row dict as `root_value` and lands in the shard as a `(N,)` float32
-  `root_values` column (NaN = unknown: forced move, strategy without
-  `choose_with_full_stats`, pre-change shard).
+  non-active viewer row gets its negation). Sample points where no
+  search ran (forced moves -- ~88 % of recorded rows, measured on the
+  first batch-17 shards) carry the evaluator's **static value** at that
+  state instead (`_static_value`: the heuristic's static eval, or the
+  NN value head for NN self-play), so the column is dense. It rides in
+  the structured row dict as `root_value` and lands in the shard as a
+  `(N,)` float32 `root_values` column (NaN = unknown: strategy without
+  an evaluator, pre-change shard).
 - `structured_dataset` flat store v3 gains `root_values.npy` (NaN
   default; streamed from files that carry the column). `FLAT_STORE_VERSION`
   bump invalidates every cached store.

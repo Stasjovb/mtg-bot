@@ -180,6 +180,43 @@ def _root_value_from_candidates(
     return num / den
 
 
+def _static_evaluator_for(strategy: Any) -> Optional[Any]:
+    """The evaluator behind ``strategy``, for a no-search static value.
+
+    Resolution order: an explicit ``static_evaluator`` attribute; the
+    strategy's own ``evaluator`` (MCTS / ISMCTS); or, for PIMC, the
+    evaluator of one inner search built from ``inner_factory``. The
+    result is cached on the strategy so PIMC builds that inner search
+    at most once per game. ``None`` when the strategy carries no
+    evaluator (random / baseline strategies).
+    """
+    ev = getattr(strategy, "static_evaluator", None)
+    if ev is None:
+        ev = getattr(strategy, "evaluator", None)
+    if ev is None:
+        factory = getattr(strategy, "inner_factory", None)
+        if callable(factory):
+            ev = getattr(factory(), "evaluator", None)
+    if ev is not None:
+        try:
+            strategy.static_evaluator = ev
+        except AttributeError:  # __slots__ strategies: just don't cache
+            pass
+    return ev
+
+
+def _static_value(strategy: Any, state: Any, player_id: PlayerID) -> Optional[float]:
+    """``evaluator.evaluate(state, player_id)`` for the strategy's
+    evaluator, or ``None`` when it has none. Used for sample points
+    where no search ran (forced moves), so the dense value target
+    covers every recorded row rather than the ~12 % that were real
+    decisions (measured on batch 17, 2026-09-26)."""
+    ev = _static_evaluator_for(strategy)
+    if ev is None:
+        return None
+    return float(ev.evaluate(state, player_id))
+
+
 def _pad_and_stack_structured_rows(
     rows: list[dict[str, np.ndarray]],
     *,
@@ -1561,9 +1598,13 @@ def _play_one_game_recording(
                     active_policy = zero_policy
                     active_mask = zero_mask
                 # Dense value target: the search's root estimate for
-                # the actor; the non-active viewer row gets its
-                # negation (zero-sum). None -> NaN in the shard.
+                # the actor (searched sample points), else the
+                # evaluator's static value (forced moves -- the
+                # majority of sample points). The non-active viewer
+                # row gets its negation (zero-sum). None -> NaN.
                 root_value = _root_value_from_candidates(candidates)
+                if root_value is None:
+                    root_value = _static_value(strategy, adapter, active)
                 for viewer in (0, 1):
                     feats = extract_features(engine, viewer)
                     if viewer == active and visits:

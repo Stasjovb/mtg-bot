@@ -260,8 +260,11 @@ def test_real_heuristic_game_emits_nn_compatible_npz(tmp_path):
         assert rv.shape == (data["features"].shape[0],)
         assert rv.dtype == np.float32
         finite = np.isfinite(rv)
-        assert finite.any(), "no row carried a search root value"
-        assert np.all(np.abs(rv[finite]) <= 1.0 + 1e-6)
+        # Searched sample points carry the root Q; forced-move sample
+        # points carry the heuristic's static value -- so with a
+        # heuristic PIMC every recorded row has a value.
+        assert finite.all(), f"{(~finite).sum()} rows without a value"
+        assert np.all(np.abs(rv) <= 1.0 + 1e-6)
         # Scalar schema 2 width, as the claim asked for.
         assert data["structured_token_scalars"].shape[-1] == 29
         # Visit-count policy supervision actually landed.

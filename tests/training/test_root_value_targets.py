@@ -25,6 +25,8 @@ from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
 from mtg_bot.training.data_gen import (
     _pad_and_stack_structured_rows,
     _root_value_from_candidates,
+    _static_evaluator_for,
+    _static_value,
     save_dataset,
 )
 from mtg_bot.training.structured_dataset import (
@@ -116,6 +118,49 @@ def test_root_value_from_candidates_skips_unusable_entries():
     ]
     assert _root_value_from_candidates(cands) is None
     assert _root_value_from_candidates([]) is None
+
+
+class _Eval:
+    def __init__(self, v):
+        self.v = v
+        self.calls = []
+
+    def evaluate(self, state, player_id):
+        self.calls.append((state, player_id))
+        return self.v
+
+
+def test_static_value_uses_mcts_evaluator_directly():
+    class Strat:
+        evaluator = _Eval(0.3)
+    assert _static_value(Strat(), "state", 1) == pytest.approx(0.3)
+    assert Strat.evaluator.calls == [("state", 1)]
+
+
+def test_static_value_builds_one_pimc_inner_and_caches_it():
+    ev = _Eval(-0.6)
+    built = []
+
+    class Inner:
+        evaluator = ev
+
+    class Pimc:
+        def inner_factory(self):
+            built.append(1)
+            return Inner()
+
+    strat = Pimc()
+    assert _static_value(strat, "s", 0) == pytest.approx(-0.6)
+    assert _static_value(strat, "s", 0) == pytest.approx(-0.6)
+    assert len(built) == 1, "inner search should be built once"
+    assert strat.static_evaluator is ev
+
+
+def test_static_value_is_none_for_strategies_without_evaluator():
+    class RandomStrat:
+        pass
+    assert _static_evaluator_for(RandomStrat()) is None
+    assert _static_value(RandomStrat(), "s", 0) is None
 
 
 # ---------------------------------------------------------------------------
