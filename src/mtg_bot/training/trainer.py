@@ -805,6 +805,55 @@ def _structured_policy_loss(
     return weighted.sum() / denom
 
 
+def _parse_value_target(spec: str) -> tuple[str, float]:
+    """``"outcome"`` | ``"root"`` | ``"blend:<w>"`` -> ``(mode, w)``.
+
+    - ``outcome``: value head regresses the +/-1 game result (the
+      pre-2026-09-26 behaviour).
+    - ``root``: regresses the search root value recorded in the shard
+      (``root_values``; viewer perspective). Rows whose root value is
+      NaN (legacy shards, forced moves) fall back to the outcome.
+    - ``blend:<w>``: ``w * root + (1 - w) * outcome`` with the same
+      NaN fallback; ``w`` in ``[0, 1]``.
+    """
+    spec = (spec or "outcome").strip().lower()
+    if spec == "outcome":
+        return "outcome", 0.0
+    if spec == "root":
+        return "root", 1.0
+    if spec.startswith("blend:"):
+        try:
+            w = float(spec.split(":", 1)[1])
+        except ValueError as e:
+            raise ValueError(f"bad --value-target {spec!r}: {e}") from e
+        if not (0.0 <= w <= 1.0):
+            raise ValueError(
+                f"--value-target blend weight must be in [0, 1]; got {w}"
+            )
+        return "blend", w
+    raise ValueError(
+        f"unknown value_target {spec!r}; expected 'outcome', 'root' "
+        f"or 'blend:<w>'"
+    )
+
+
+def _value_target_tensor(
+    batch: dict[str, torch.Tensor], mode: str, w: float,
+) -> torch.Tensor:
+    """Resolve the per-row regression target for the value head."""
+    outcome = batch["outcome"]
+    if mode == "outcome":
+        return outcome
+    rv = batch.get("root_value")
+    if rv is None:
+        return outcome
+    rv = rv.to(outcome.dtype)
+    rv = torch.where(torch.isfinite(rv), rv, outcome)
+    if mode == "root":
+        return rv
+    return w * rv + (1.0 - w) * outcome
+
+
 def train_structured_model(
     dataset,
     *,
@@ -831,6 +880,7 @@ def train_structured_model(
     restore_best: bool = True,
     shuffle_mode: str = "auto",
     shuffle_block_rows: int = DEFAULT_BLOCK_ROWS,
+    value_target: str = "outcome",
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
@@ -1217,6 +1267,8 @@ def train_structured_model(
 
     _emit("running", current_epoch=0)
 
+    _vt_mode, _vt_w = _parse_value_target(value_target)
+
     def _run_one(
         batch: dict[str, torch.Tensor], *, train: bool,
     ) -> tuple[float, float, float]:
@@ -1241,7 +1293,9 @@ def train_structured_model(
             out = model(on_device)
             value_pred = out["value"]
             policy_logits = out["policy_logits"]
-            v_loss = mse(value_pred, on_device["outcome"])
+            v_loss = mse(
+                value_pred, _value_target_tensor(on_device, _vt_mode, _vt_w),
+            )
             has_pol = on_device["has_policy"].float()
             # If no row in this batch has supervision, the masked-CE
             # denominator is 1 (clamped) and per-row weights are zero,

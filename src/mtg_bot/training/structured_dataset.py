@@ -127,7 +127,7 @@ _STRUCT_NPZ_KEYS = (
 MEMMAP_DIR_PREFIX = "mtg_bot_structured_dataset_"
 """Prefix of every flat-store directory this module creates in %TEMP%."""
 
-FLAT_STORE_VERSION = 2
+FLAT_STORE_VERSION = 3
 """Bump when the on-disk flat-store layout changes. Part of the
 persistent-cache key so an old cache can never be mistaken for a new
 one.
@@ -163,6 +163,7 @@ FLAT_STORE_DTYPES: dict[str, np.dtype] = {
     "token_scalars_flat.npy": np.dtype(TOKEN_SCALARS_DTYPE),
     "row_offsets.npy": np.dtype(np.int64),
     "outcomes.npy": np.dtype(np.float32),
+    "root_values.npy": np.dtype(np.float32),
     "policy_targets.npy": np.dtype(np.float32),
     "action_masks.npy": np.dtype(np.bool_),
     "has_policy.npy": np.dtype(np.bool_),
@@ -268,6 +269,7 @@ _ARRAY_FILES: tuple[tuple[str, str], ...] = (
     ("_token_scalars_flat", "token_scalars_flat.npy"),
     ("_row_offsets", "row_offsets.npy"),
     ("_outcomes", "outcomes.npy"),
+    ("_root_values", "root_values.npy"),
     ("_policy_targets", "policy_targets.npy"),
     ("_action_masks", "action_masks.npy"),
     ("_has_policy", "has_policy.npy"),
@@ -879,6 +881,7 @@ class StructuredDataset(Dataset):
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
         group_ids: Optional[np.ndarray] = None,
+        root_values: Optional[np.ndarray] = None,
     ) -> None:
         # **Memmap-backed storage.** Write each flat array to a
         # ``.npy`` file in a temp directory, then ``mmap_mode='r'``
@@ -945,6 +948,21 @@ class StructuredDataset(Dataset):
             memmap_dir / "outcomes.npy",
             np.ascontiguousarray(outcomes, dtype=np.float32),
         )
+        # Search root value per row; NaN = unknown (see data_gen).
+        if root_values is None:
+            root_values_arr = np.full(
+                (int(np.shape(outcomes)[0]),), np.nan, dtype=np.float32,
+            )
+        else:
+            root_values_arr = np.ascontiguousarray(
+                root_values, dtype=np.float32,
+            )
+            if root_values_arr.shape != np.shape(outcomes):
+                raise ValueError(
+                    f"root_values shape {root_values_arr.shape} != "
+                    f"outcomes shape {np.shape(outcomes)}"
+                )
+        np.save(memmap_dir / "root_values.npy", root_values_arr)
         np.save(
             memmap_dir / "policy_targets.npy",
             np.ascontiguousarray(policy_targets, dtype=np.float32),
@@ -1119,6 +1137,9 @@ class StructuredDataset(Dataset):
         outcome = torch.tensor(
             float(self._outcomes[idx]), dtype=torch.float32,
         )
+        root_value = torch.tensor(
+            float(self._root_values[idx]), dtype=torch.float32,
+        )
         policy_target = torch.from_numpy(
             np.array(self._policy_targets[idx]),
         )
@@ -1134,6 +1155,7 @@ class StructuredDataset(Dataset):
             "token_scalars": sca,
             "attention_mask": am,
             "outcome": outcome,
+            "root_value": root_value,
             "policy_target": policy_target,
             "action_mask": action_mask,
             "has_policy": has_policy,
@@ -1297,6 +1319,7 @@ def structured_collate(
         (batch_size, action_vocab), dtype=torch.bool,
     )
     has_policy = torch.zeros((batch_size,), dtype=torch.bool)
+    root_value = torch.full((batch_size,), float("nan"), dtype=torch.float32)
     for i, it in enumerate(items):
         n = int(it["token_type"].shape[0])
         if n > 0:
@@ -1305,6 +1328,9 @@ def structured_collate(
             token_scalars[i, :n, :] = it["token_scalars"]
             attention_mask[i, :n] = True
         outcome[i] = it["outcome"]
+        rv = it.get("root_value")
+        if rv is not None:
+            root_value[i] = rv
         policy_target[i] = it["policy_target"]
         action_mask[i] = it["action_mask"]
         has_policy[i] = it["has_policy"]
@@ -1314,6 +1340,7 @@ def structured_collate(
         "token_scalars": token_scalars,
         "attention_mask": attention_mask,
         "outcome": outcome,
+        "root_value": root_value,
         "policy_target": policy_target,
         "action_mask": action_mask,
         "has_policy": has_policy,
@@ -1650,6 +1677,11 @@ class _FlatStoreBuilder:
             (n_tok, plan.scalar_width),
         )
         self.outcomes = alloc("outcomes.npy", np.float32, (n_rows,))
+        # NaN = "no search root value for this row" (legacy shards,
+        # forced moves). Files that carry the column overwrite their
+        # rows in ``_stream_file_into_store``.
+        self.root_values = alloc("root_values.npy", np.float32, (n_rows,))
+        self.root_values[:] = np.nan
         self.policy_targets = alloc(
             "policy_targets.npy", np.float32, (n_rows, plan.policy_width),
         )
@@ -1748,6 +1780,7 @@ class _FlatStoreBuilder:
             del arr
         for attr in (
             "token_type", "token_emb_ids", "token_scalars", "outcomes",
+            "root_values",
             "policy_targets", "action_masks", "has_policy", "group_ids",
         ):
             setattr(self, attr, None)
@@ -1820,6 +1853,21 @@ def _stream_file_into_store(
                 f"{path}: outcomes rows {outcomes_rows} != structured "
                 f"token rows {n_rows}"
             )
+        if "root_values" in members:
+            rv_rows = 0
+            for offset, chunk in _iter_member_rows(
+                zf, members["root_values"],
+            ):
+                builder.write_rows(
+                    "root_values", row_start, offset,
+                    np.ascontiguousarray(chunk, dtype=np.float32),
+                )
+                rv_rows += int(chunk.shape[0])
+            if rv_rows != n_rows:
+                raise ValueError(
+                    f"{path}: root_values rows {rv_rows} != structured "
+                    f"token rows {n_rows}"
+                )
         # A file with no policy supervision leaves its rows at the
         # store's zero-fill: ``open_memmap`` allocates a fresh
         # zero-initialized file, which is exactly the all-zero

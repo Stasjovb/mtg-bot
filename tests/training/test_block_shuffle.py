@@ -410,7 +410,14 @@ def test_items_match_getitem_exactly(dataset) -> None:
         assert set(item) == set(ref)
         for key in ref:
             assert item[key].dtype == ref[key].dtype, key
-            assert torch.equal(item[key], ref[key]), key
+            if key == "root_value":
+                # NaN == NaN for the "no search value" rows.
+                assert torch.equal(
+                    torch.nan_to_num(item[key], nan=-7.0),
+                    torch.nan_to_num(ref[key], nan=-7.0),
+                ), key
+            else:
+                assert torch.equal(item[key], ref[key]), key
         seen += 1
     assert seen == len(dataset)
 

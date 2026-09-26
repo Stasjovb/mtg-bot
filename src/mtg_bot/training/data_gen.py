@@ -152,6 +152,34 @@ _STRUCT_NPZ_KEYS = (
 )
 
 
+def _root_value_from_candidates(
+    candidates: list[dict[str, Any]],
+) -> Optional[float]:
+    """Visit-weighted mean root Q over the search's root children, from
+    the ACTING player's perspective -- the search's own estimate of the
+    position. ``None`` when the search reported no usable Q (forced
+    move, random/baseline strategy, or every candidate unvisited).
+
+    This is the dense value target (2026-09-26): every net trained on
+    +/-1 game outcomes alone plateaued ~200 Elo below the heuristic
+    teacher with a value head that barely beat the life-differential
+    baseline. The root value is what the teacher actually believed at
+    the decision, not what happened 40 decisions later.
+    """
+    num = 0.0
+    den = 0
+    for c in candidates:
+        q = c.get("q")
+        v = int(c.get("visits") or 0)
+        if q is None or v <= 0:
+            continue
+        num += float(q) * v
+        den += v
+    if den <= 0:
+        return None
+    return num / den
+
+
 def _pad_and_stack_structured_rows(
     rows: list[dict[str, np.ndarray]],
     *,
@@ -200,6 +228,7 @@ def _pad_and_stack_structured_rows(
             "structured_attention_mask": np.zeros(
                 (0, 0), dtype=_DTYPE_STRUCT_MASK,
             ),
+            "root_values": np.zeros((0,), dtype=np.float32),
         }
     n_rows = len(rows)
     max_len = max(
@@ -235,7 +264,14 @@ def _pad_and_stack_structured_rows(
     attention_mask = np.zeros(
         (n_rows, max_len), dtype=_DTYPE_STRUCT_MASK,
     )
+    # Per-row search root value (viewer's perspective); NaN when the
+    # row was recorded without one (pre-2026-09-26 shards, forced
+    # moves, strategies without ``choose_with_full_stats``).
+    root_values = np.full((n_rows,), np.nan, dtype=np.float32)
     for i, r in enumerate(rows):
+        rv = r.get("root_value")
+        if rv is not None:
+            root_values[i] = np.float32(rv)
         n = int(r["token_type"].shape[0])
         if n == 0:
             continue
@@ -248,6 +284,7 @@ def _pad_and_stack_structured_rows(
         "structured_token_emb_ids": emb_ids,
         "structured_token_scalars": scalars,
         "structured_attention_mask": attention_mask,
+        "root_values": root_values,
     }
 
 
@@ -1523,6 +1560,10 @@ def _play_one_game_recording(
                 else:
                     active_policy = zero_policy
                     active_mask = zero_mask
+                # Dense value target: the search's root estimate for
+                # the actor; the non-active viewer row gets its
+                # negation (zero-sum). None -> NaN in the shard.
+                root_value = _root_value_from_candidates(candidates)
                 for viewer in (0, 1):
                     feats = extract_features(engine, viewer)
                     if viewer == active and visits:
@@ -1541,13 +1582,20 @@ def _play_one_game_recording(
                         # state (sample is taken pre-apply, so the
                         # caller's view is "state right now, with this
                         # decision about to be made").
-                        struct_rows.append(
-                            tokenize_state(
-                                engine, viewer_id=viewer,
-                                recent_actions=adapter.recent_actions,
-                                **tokenize_kwargs,
-                            )
+                        struct_row = tokenize_state(
+                            engine, viewer_id=viewer,
+                            recent_actions=adapter.recent_actions,
+                            **tokenize_kwargs,
                         )
+                        struct_row["root_value"] = (
+                            np.float32(
+                                root_value if viewer == active
+                                else -root_value
+                            )
+                            if root_value is not None
+                            else np.float32(np.nan)
+                        )
+                        struct_rows.append(struct_row)
             else:
                 if (
                     temperature_live
@@ -1680,6 +1728,7 @@ def save_dataset(
     structured_token_scalars: Optional[np.ndarray] = None,
     structured_attention_mask: Optional[np.ndarray] = None,
     game_ids: Optional[np.ndarray] = None,
+    root_values: Optional[np.ndarray] = None,
 ) -> None:
     """Save ``(features, outcomes)`` plus optional policy
     supervision, structured-token, and game-id arrays to a single
@@ -1767,6 +1816,17 @@ def save_dataset(
                     f"{name} rows {arr.shape[0]} != features rows {n}"
                 )
             arrays[name] = arr
+    if root_values is not None:
+        # ``(N,)`` float32 search root value from the row's viewer
+        # perspective, NaN where unknown. Optional: files without it
+        # load with all-NaN root values (the trainer falls back to
+        # the outcome for those rows).
+        root_values = np.ascontiguousarray(root_values, dtype=np.float32)
+        if root_values.shape != (n,):
+            raise ValueError(
+                f"root_values shape {root_values.shape} != ({n},)"
+            )
+        arrays["root_values"] = root_values
     if game_ids is not None:
         game_ids = np.asarray(game_ids)
         if game_ids.ndim != 1 or game_ids.shape[0] != n:

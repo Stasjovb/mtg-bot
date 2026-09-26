@@ -185,7 +185,7 @@ def test_heuristic_stage_drains_and_lands_nn_compatible_npzs(tmp_path):
         "features", "outcomes", "policy_targets", "action_masks",
         "structured_token_type", "structured_token_emb_ids",
         "structured_token_scalars", "structured_attention_mask",
-        "game_ids",
+        "root_values", "game_ids",
     }
     total_rows = 0
     for p in npzs:

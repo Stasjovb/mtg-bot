@@ -250,9 +250,18 @@ def test_real_heuristic_game_emits_nn_compatible_npz(tmp_path):
             "features", "outcomes", "policy_targets", "action_masks",
             "structured_token_type", "structured_token_emb_ids",
             "structured_token_scalars", "structured_attention_mask",
-            "game_ids",
+            "root_values", "game_ids",
         }
         assert data["features"].shape[0] > 0
+        # Dense value target (2026-09-26): the heuristic PIMC reports a
+        # root Q at every searched sample point, so a real game lands
+        # finite root values on (at least) those rows, in [-1, 1].
+        rv = data["root_values"]
+        assert rv.shape == (data["features"].shape[0],)
+        assert rv.dtype == np.float32
+        finite = np.isfinite(rv)
+        assert finite.any(), "no row carried a search root value"
+        assert np.all(np.abs(rv[finite]) <= 1.0 + 1e-6)
         # Scalar schema 2 width, as the claim asked for.
         assert data["structured_token_scalars"].shape[-1] == 29
         # Visit-count policy supervision actually landed.

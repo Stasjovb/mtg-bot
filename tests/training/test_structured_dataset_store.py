@@ -1092,6 +1092,17 @@ def test_in_ram_constructor_also_narrows() -> None:
         dataset.close()
 
 
+def _equal_nan(a: torch.Tensor, b: torch.Tensor) -> bool:
+    """``torch.equal`` that treats NaN == NaN (``root_value`` is NaN
+    for rows without a recorded search value)."""
+    if a.shape != b.shape:
+        return False
+    if a.is_floating_point():
+        return bool(torch.equal(torch.nan_to_num(a, nan=-7.0),
+                                torch.nan_to_num(b, nan=-7.0)))
+    return bool(torch.equal(a, b))
+
+
 def test_narrow_store_yields_tensors_identical_to_the_int64_store(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -1119,7 +1130,7 @@ def test_narrow_store_yields_tensors_identical_to_the_int64_store(
                     assert got.keys() == want.keys()
                     for key in want:
                         assert got[key].dtype == want[key].dtype, key
-                        assert torch.equal(got[key], want[key]), key
+                        assert _equal_nan(got[key], want[key]), key
                     assert got["token_type"].dtype == torch.int64
                     assert got["token_emb_ids"].dtype == torch.int64
                 batch_got = structured_collate(
@@ -1130,7 +1141,7 @@ def test_narrow_store_yields_tensors_identical_to_the_int64_store(
                 )
                 for key in batch_want:
                     assert batch_got[key].dtype == batch_want[key].dtype, key
-                    assert torch.equal(batch_got[key], batch_want[key]), key
+                    assert _equal_nan(batch_got[key], batch_want[key]), key
                 assert batch_got["token_type"].dtype == torch.int64
                 assert batch_got["token_emb_ids"].dtype == torch.int64
             finally:

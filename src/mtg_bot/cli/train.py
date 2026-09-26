@@ -842,6 +842,20 @@ def main(argv=None) -> None:
             "as training.structured_value_head_input."
         ),
     )
+    parser.add_argument(
+        "--value-target", default="outcome",
+        help=(
+            "Structured-trunk only. What the value head regresses: "
+            "'outcome' (+/-1 game result; default), 'root' (the "
+            "search root value recorded per row in shards written "
+            "after 2026-09-26 -- the teacher's own estimate at the "
+            "decision; rows without one fall back to the outcome), or "
+            "'blend:<w>' (w*root + (1-w)*outcome). The held-out gate "
+            "and calibration always score against the OUTCOME so a "
+            "root-trained head is judged on what matters at play time. "
+            "Recorded in metadata.json as training.value_target."
+        ),
+    )
     # --- Regularisation + held-out value gate (structured only) -----
     # Added 2026-09-24. Every s2-lineage version trained to value-MSE
     # ~0.005 while scoring 1.42-1.78 on a game-level held-out split
@@ -926,6 +940,8 @@ def main(argv=None) -> None:
     ]
     if args.keep_last_epoch:
         _flat_only_rejects.append("--keep-last-epoch")
+    if args.value_target != "outcome":
+        _flat_only_rejects.append("--value-target")
     if _flat_only_rejects:
         parser.error(
             f"{', '.join(_flat_only_rejects)} only apply to "
@@ -1732,6 +1748,7 @@ def _main_structured(args, parser) -> None:
             restore_best=restore_best,
             shuffle_mode=args.shuffle_mode,
             shuffle_block_rows=args.shuffle_block_rows,
+            value_target=args.value_target,
         )
         elapsed = time.perf_counter() - started
 
@@ -1814,6 +1831,7 @@ def _main_structured(args, parser) -> None:
                 "weight_decay": weight_decay,
                 "restore_best": restore_best,
                 "restored_best_epoch": history.restored_best_epoch,
+                "value_target": args.value_target,
                 "min_holdout_value_quality": (
                     args.min_holdout_value_quality
                 ),

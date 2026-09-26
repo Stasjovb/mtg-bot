@@ -361,6 +361,10 @@ def _encode_npz_bytes(
             "structured_token_emb_ids": struct["structured_token_emb_ids"],
             "structured_token_scalars": struct["structured_token_scalars"],
             "structured_attention_mask": struct["structured_attention_mask"],
+            # Search root value per row (NaN when unknown) -- the
+            # dense value target. Always present on structured shards
+            # written after 2026-09-26; older shards lack the key.
+            "root_values": struct["root_values"],
             "game_ids": game_ids,
         }
     else:

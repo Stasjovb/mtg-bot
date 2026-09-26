@@ -149,6 +149,7 @@ _FLAT_ATTRS = (
     "_token_emb_ids_flat",
     "_token_scalars_flat",
     "_outcomes",
+    "_root_values",
     "_policy_targets",
     "_action_masks",
     "_has_policy",
@@ -275,7 +276,7 @@ class _RowBlock:
 
     __slots__ = (
         "_lo", "_offsets", "_tt", "_emb", "_sca",
-        "_outcomes", "_policy", "_mask", "_has_policy",
+        "_outcomes", "_root_values", "_policy", "_mask", "_has_policy",
         "_dataset", "nbytes", "span", "n_rows",
     )
 
@@ -316,12 +317,14 @@ class _RowBlock:
         self._emb = np.array(dataset._token_emb_ids_flat[t0:t1])
         self._sca = np.array(dataset._token_scalars_flat[t0:t1])
         self._outcomes = np.array(dataset._outcomes[lo:hi])
+        self._root_values = np.array(dataset._root_values[lo:hi])
         self._policy = np.array(dataset._policy_targets[lo:hi])
         self._mask = np.array(dataset._action_masks[lo:hi])
         self._has_policy = np.array(dataset._has_policy[lo:hi])
         self.nbytes = int(
             self._tt.nbytes + self._emb.nbytes + self._sca.nbytes
-            + self._outcomes.nbytes + self._policy.nbytes
+            + self._outcomes.nbytes + self._root_values.nbytes
+            + self._policy.nbytes
             + self._mask.nbytes + self._has_policy.nbytes
         )
 
@@ -347,6 +350,9 @@ class _RowBlock:
             "attention_mask": torch.ones(end - start, dtype=torch.bool),
             "outcome": torch.tensor(
                 float(self._outcomes[j]), dtype=torch.float32,
+            ),
+            "root_value": torch.tensor(
+                float(self._root_values[j]), dtype=torch.float32,
             ),
             "policy_target": torch.from_numpy(
                 np.array(self._policy[j])
