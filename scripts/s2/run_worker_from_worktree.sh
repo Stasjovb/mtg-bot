@@ -45,4 +45,4 @@ sleep 8
 wpid=$(wmic process where "name='python.exe' and commandline like '%mtg_bot.worker_daemon%'" get processid 2>/dev/null | grep -E '^[0-9]' | tr -d ' \r' | head -1)
 echo "${wpid:-unknown}" > "$PIDFILE"
 n=0; until curl -sf -m 3 http://100.115.252.110:5198/v2/heartbeat >/dev/null 2>&1 || [ $n -ge 45 ]; do sleep 2; n=$((n+1)); done
-curl -s -m 5 http://100.115.252.110:5198/v2/heartbeat | "$PY" -c "import json,sys;d=json.load(sys.stdin);print('[wt-worker] up:',d['git_commit'],d['state'],'pid',open(r'$PIDFILE').read().strip())"
+curl -s -m 5 http://100.115.252.110:5198/v2/heartbeat | "$PY" -c "import json,sys;d=json.load(sys.stdin);print('[wt-worker] up:',d['git_commit'],d['state'])"; echo "[wt-worker] pid $(cat "$PIDFILE")"
