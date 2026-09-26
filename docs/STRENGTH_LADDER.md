@@ -188,3 +188,18 @@ life" from NN-play outcomes. Response: `current_best` reset to v8, the
 and the schedule switched to `scripts/s2/run_mixed_cycles.sh` (1,500
 heuristic games + 1,500 v8-driven NN games per cycle, gated promotion
 `S2_ACCEPT=0.55`) so the window stays heuristic-majority.
+
+### 2026-09-26 -- v12 (mixed cycle) and v13 (heuristic-only, 2x data)
+
+| version | training window | Elo | vs heuristic | vs random | held-out value corr (calibrated / life-diff baseline) |
+|---|---|---:|---|---|---:|
+| v12 | 4,500 heuristic + 1,500 v8-driven NN games; rejected by the 55% arena vs v8 (136-161) | +181 | 45-153 (22.7%) | 148-52 (74.0%) | 0.316 / 0.336 |
+| v13 | **12,207 heuristic games only** (no NN-play data), store on E: | +199 | **53-147 (26.5%)** | 152-48 (76.0%) | **0.323 / 0.299** |
+
+v13 is the first net whose value head beats the trivial life-differential
+baseline on held-out rows, and the best result vs heuristic so far -- but
+its vs-random score is below v8's (165-35), and single 200-game pairs put
+v8 and v13 well inside each other's CIs (the heuristic anchor itself
+bounces +375..+470 across runs). Decisive comparison: one ladder run with
+`v8:v13`, `heuristic:v8`, `heuristic:v13` at 300 games/pair
+(`ladder_runs/s2_v8_vs_v13/`, results below when done).
