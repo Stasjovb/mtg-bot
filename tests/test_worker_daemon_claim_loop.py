@@ -1109,6 +1109,27 @@ def test_report_loop_retries_on_connection_reset_then_succeeds():
     assert raises_left[0] == 0
 
 
+def test_claim_loop_treats_404_stage_as_drained():
+    """A purged stage answers 404 on /v2/claim. That is "nothing left
+    to do", not a fatal error: the loop drains and the daemon returns
+    to IDLE (2026-09-26 regression: both workers parked in ERROR)."""
+    fake = FakeCoordinator()
+    real_post = fake.http_post_json
+
+    def gone_post(url, payload, timeout=30.0):
+        if url.endswith("/v2/claim"):
+            return 404, b'{"error":"no such stage_id"}', {}
+        return real_post(url, payload, timeout)
+
+    fake.http_post_json = gone_post
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    loop, _ = _build_loop(fake, state=state)
+    loop.run()
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 0
+
+
 def test_report_loop_retries_on_5xx_then_succeeds():
     """A transient 503 on /v2/report_result retries and accepts."""
     fake = FakeCoordinator(

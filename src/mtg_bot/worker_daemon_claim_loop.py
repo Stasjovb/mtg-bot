@@ -819,6 +819,18 @@ class ClaimLoopRunner:
                 return json.loads(resp_body.decode("utf-8"))
             if status == 204:
                 return None
+            if status == 404:
+                # The stage no longer exists on the coordinator (an
+                # operator closed + purged it, or queue.db was reset
+                # under us). Nothing left to claim -- treat exactly
+                # like a drain instead of parking the daemon in ERROR
+                # (2026-09-26: both workers parked this way after a
+                # stage purge mid-batch).
+                log.warning(
+                    "[claim_loop] /v2/claim 404 for stage %s: treating "
+                    "as drained", self.cfg.stage_id,
+                )
+                return None
             if 500 <= status < 600:
                 last_err = f"HTTP {status} on /v2/claim attempt {attempt}"
                 log.warning("[claim_loop] %s", last_err)
