@@ -428,6 +428,60 @@ baseline instead. `target_mean` is reported so the skew is visible.
 
 ---
 
+## Diagnostic 6 — dense value targets: search root value instead of game outcome (2026-09-26, PRE-REGISTERED; corpus generation IN PROGRESS)
+
+**Why.** After D4/D5 every s2-lineage net still sits ~200 Elo below the
+heuristic teacher (`docs/STRENGTH_LADDER.md`, 2026-09-25/26): pure
+AlphaZero cycles from v8 decayed (v9-v11), the mixed heuristic/NN cycle
+was rejected by the 55 % arena (v12), and doubling the imitation corpus
+(v13, 12,207 heuristic games) tied v8 head-to-head (146-153). Deeper
+play-time search (nodes 400) is worth a few points at most. The one
+thing all of those share: the value head regresses the +/-1 **game
+outcome** and nothing else -- shards carried no search value at all --
+and its calibrated held-out corr only just clears the "who is ahead on
+life" baseline (v13: 0.323 vs 0.299). Outcome labels from ~40-decision
+games are mostly noise about the decision they are attached to.
+
+**Change (branch `feature/root-value-targets`).**
+
+- `data_gen._play_one_game_recording` records, at every sample point,
+  the visit-weighted mean root Q of the search
+  (`_root_value_from_candidates`, from the acting player's view; the
+  non-active viewer row gets its negation). It rides in the structured
+  row dict as `root_value` and lands in the shard as a `(N,)` float32
+  `root_values` column (NaN = unknown: forced move, strategy without
+  `choose_with_full_stats`, pre-change shard).
+- `structured_dataset` flat store v3 gains `root_values.npy` (NaN
+  default; streamed from files that carry the column). `FLAT_STORE_VERSION`
+  bump invalidates every cached store.
+- `train_structured_model(value_target=...)` / `mtg_bot train
+  --value-target outcome|root|blend:<w>`: the value MSE regresses the
+  chosen target; NaN root values fall back to the outcome per row. The
+  held-out gate, calibration and corr reporting are **unchanged and
+  still scored against the outcome** -- a root-trained head is judged
+  on what matters at play time, not on how well it copies the teacher.
+
+**Pre-registered protocol.**
+
+1. Regenerate a heuristic corpus at nodes 400 with the new column
+   (Mac-only while the desktop is in use; batches `s2_iter_017+`).
+2. Train three warm starts on the SAME shard set, same seed / epochs /
+   regularisation: `--value-target outcome` (control), `root`,
+   `blend:0.5`.
+3. Adjudicate: held-out value corr vs outcome (gate metric), then the
+   ladder (`heuristic:vN`, `random:vN`, 200 games) and a 300-game
+   head-to-head vs v13 for whichever wins the ladder.
+
+**Predictions.** If the hypothesis is right, `root` (or `blend`) trains
+past epoch 3 without the value-side val loss turning over, calibrated
+corr vs outcome rises well above the life-diff baseline, and the net
+takes a materially larger share from the heuristic than v13's 25-28 %.
+If `root` matches the control within CI, the value head is not the
+binding lever and the next candidates are policy-side (policy-only
+control) or trunk capacity.
+
+**Results.** _pending_
+
 ## Synthesis — what this means for the next iterate cycle
 
 As of 2026-05-18 **three of four levers are resolved, two validated**:
