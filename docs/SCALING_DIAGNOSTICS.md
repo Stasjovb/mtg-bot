@@ -484,7 +484,34 @@ If `root` matches the control within CI, the value head is not the
 binding lever and the next candidates are policy-side (policy-only
 control) or trunk capacity.
 
-**Results.** _pending_
+**Results (2026-09-26, same 6,000 dense shards = batches 17-20, seed 1,
+dropout 0.1 / wd 1e-4 / lr 3e-4, ladder at nodes 100 / samples 2, 200
+games per pair).**
+
+| value_target | version | epochs (best) | held-out corr vs outcome (calibrated / baseline) | vs heuristic | vs random | Elo (heuristic in same run) |
+|---|---|---|---:|---|---|---:|
+| outcome (control) | v14 | early-stop 11 (6) | 0.333 / 0.294 | 49-151 (24.5 %) | 165-35 (82.5 %) | +267 (heuristic +462) |
+| root | v15 | ran all 20, never turned over | **0.449** / 0.294 (raw 0.446 -- already calibrated) | **86-112 (43.4 %)** | **180-20 (90.0 %)** | **+378 (heuristic +423)** |
+| blend:0.5 | v16 | early-stop 8 (3) | 0.397 / 0.294 | 74-125 (37.2 %) | 173-27 (86.5 %) | +320 (heuristic +411) |
+
+The control reproduces the whole lineage's plateau on this corpus (v14 is
+statistically v8). The blend arm lands between the two on every metric
+-- both corr and strength are monotone in the root-value share of the
+target, which is what makes this a result rather than a lucky seed. Switching the regression target to the search root
+value, with nothing else changed, more than halves the gap to the
+teacher: 43 % vs heuristic and 90 % vs random are both the best any net
+has posted, and held-out corr with the *outcome* (which the root-trained
+head never saw) jumps from 0.33 to 0.45. The value-side val loss on the
+root target is ~0.002 from epoch 1 and keeps improving through epoch 20 --
+the first run in the lineage whose value head does not overfit. The
+value target was the binding lever; D3-D5's regularisation/calibration
+work was treating the symptom.
+
+Follow-ups: 300-game head-to-head v13 vs v15 (`ladder_runs/s2_v13_vs_v15/`)
+to promote `current_best`; then resume AlphaZero cycles from v15 with
+`--value-target root` (NN self-play now records the NN-PIMC root value,
+so the target stays dense) and see whether self-play data stops
+poisoning the window once the value head carries real information.
 
 ## Synthesis — what this means for the next iterate cycle
 

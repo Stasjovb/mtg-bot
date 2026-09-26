@@ -216,3 +216,18 @@ Elo: heuristic 0, v13 -202 [-245, -167], v8 -219 [-260, -187]. Doubling the
 imitation corpus (6k -> 12k games) bought ~+17 Elo, inside the CIs. v13 is
 `current_best` (tie-break: better value head, better vs heuristic), but the
 imitation route is at a plateau roughly 200 Elo below the teacher.
+
+### 2026-09-26 -- D6 value-target A/B: v14 (outcome) vs v15 (search root value), same corpus
+
+Both trained on the same 6,000 dense root-value heuristic games (batches
+17-20; `docs/SCALING_DIAGNOSTICS.md` D6). Only `--value-target` differs.
+
+| version | target | Elo | 95% CI | vs heuristic | vs random | held-out corr vs outcome |
+|---|---|---:|---|---|---|---:|
+| v14 | outcome | +267 | [+213, +335] | 49-151 (24.5%) | 165-35 (82.5%) | 0.333 |
+| **v15** | **root** | **+378** | [+313, +472] | **86-112 (43.4%)** | **180-20 (90.0%)** | **0.449** |
+| v16 | blend:0.5 | +320 | [+261, +398] | 74-125 (37.2%) | 173-27 (86.5%) | 0.397 |
+
+(heuristic anchored at +462 / +423 / +411 in the three runs.) v15 is the first
+net inside ~50 Elo of the teacher; every earlier version sat ~200 below.
+Decisive head-to-head vs v13 (300 games/pair) in `ladder_runs/s2_v13_vs_v15/`.
