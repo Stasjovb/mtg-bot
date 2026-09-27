@@ -227,6 +227,16 @@ _TAP_X_UNTAPPED_ARTIFACTS_PIECE = "Tap X untapped artifacts you control"
 # ``activated_abilities`` (whose activation path doesn't pay it).
 _DISCARD_THIS_CARD_PIECE = "Discard this card"
 
+# "Exile three cards from your graveyard" (Psychic Frog) —
+# ``ActivationCost.exile_cards_from_graveyard``: the activator exiles
+# any N cards of their choice from their own graveyard.
+_EXILE_N_CARDS_FROM_GRAVEYARD_PIECE = re.compile(
+    r"^Exile (\w+) cards from your graveyard$"
+)
+_EXILE_N_WORDS = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+}
+
 # "Exert this land" / "Exert this creature" (CR 701.39) —
 # ``ActivationCost.exert_self`` (Arena of Glory).
 _EXERT_SELF_PIECES = frozenset({
@@ -362,6 +372,12 @@ def _classify_builtin_cost_piece(piece: str) -> _CostPiece | None:
     named = _REMOVE_NAMED_COUNTER_FROM_SELF_PIECE.match(piece)
     if named is not None and named.group("kind") not in _DEDICATED_COUNTER_KINDS:
         return _CostPiece(kind="remove_named_counter", field=named.group("kind"))
+    exile_n = _EXILE_N_CARDS_FROM_GRAVEYARD_PIECE.match(piece)
+    if exile_n is not None:
+        n = _EXILE_N_WORDS.get(exile_n.group(1))
+        if n is None:
+            return None
+        return _CostPiece(kind="exile_n_from_graveyard", amount=n)
     energy_match = _PAY_ENERGY_PIECE.match(piece)
     if energy_match is not None:
         return _CostPiece(
@@ -457,6 +473,7 @@ def _build_cost_from_pieces(
     remove_counter_amount = 0
     sacrifice_n_nonland = 0
     extra_costs: list = []
+    exile_n_from_graveyard = 0
     for p in pieces:
         if p.kind == "extra":
             extra_costs.append(p.atom)
@@ -553,6 +570,10 @@ def _build_cost_from_pieces(
                 return None
             remove_counter_kind = p.field
             remove_counter_amount = p.amount
+        elif p.kind == "exile_n_from_graveyard":
+            if exile_n_from_graveyard:
+                return None
+            exile_n_from_graveyard = p.amount
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -608,6 +629,8 @@ def _build_cost_from_pieces(
         kwargs["remove_counters_from_self_amount"] = remove_counter_amount
     if extra_costs:
         kwargs["extra_costs"] = tuple(extra_costs)
+    if exile_n_from_graveyard:
+        kwargs["exile_cards_from_graveyard"] = exile_n_from_graveyard
     return ActivationCost(**kwargs)
 
 

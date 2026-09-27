@@ -910,6 +910,7 @@ def _classify_sac_for_mana(
             or c.exile_self
             or c.tap_permanent_you_control
             or c.exile_artifact_from_graveyard
+            or c.exile_cards_from_graveyard
             or c.pay_life
             or c.discard_a_card
             or c.pay_energy
@@ -3730,6 +3731,30 @@ def _activate_ability(
         tap_permanent(state, chosen)
         cost_paid_objects.append(chosen)
 
+    # "Exile N cards from your graveyard" cost (Psychic Frog). The agent
+    # picks each card; legal_actions gates on N cards being there.
+    if ability.cost.exile_cards_from_graveyard:
+        p = state.player_by_id(player_id)
+        for _ in range(ability.cost.exile_cards_from_graveyard):
+            if not p.graveyard:  # pragma: no cover - gated by legal_actions
+                break
+            chosen_card = p.graveyard[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [c.id for c in p.graveyard]
+                )
+                chosen_card = next(
+                    (c for c in p.graveyard if c.id == pick_id), chosen_card
+                )
+            p.graveyard.remove(chosen_card)
+            chosen_card.zone = Zone.EXILE
+            p.exile.append(chosen_card)
+            cost_paid_objects.append(chosen_card)
+        state.log.append(
+            f"P{player_id} exiles {ability.cost.exile_cards_from_graveyard} "
+            f"cards from graveyard (cost for {source.printing.name}'s ability)"
+        )
+
     # "Exile an artifact card from your graveyard" cost (Rust Harvester).
     # Agent picks which artifact card from graveyard to exile.
     # legal_actions gates on at least one artifact card in graveyard.
@@ -4241,10 +4266,12 @@ def _declare_blockers(
     for bid, aid in validated.items():
         blockers_by_attacker.setdefault(aid, []).append(bid)
     for aid, blocker_ids in blockers_by_attacker.items():
-        if (
-            "menace" in effective_keywords(state, attackers[aid])
-            and len(blocker_ids) < 2
-        ):
+        # "can't be blocked except by N or more creatures" generalizes
+        # menace (N=2).
+        needed = attackers[aid].printing.min_blockers
+        if "menace" in effective_keywords(state, attackers[aid]):
+            needed = max(needed, 2)
+        if len(blocker_ids) < needed:
             for bid in blocker_ids:
                 validated.pop(bid, None)
 

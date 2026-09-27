@@ -26,18 +26,32 @@ _DRAWS_TRIGGER = re.compile(
 )
 
 
+_COMBAT_DAMAGE_TO_PLAYER_OR_PW = (
+    "this creature deals combat damage to a player or planeswalker"
+)
+
+
 def parse_ub_trigger_phrase(phrase: str):
-    """``(Event, Predicate)`` for the draw-observer conditions, else
-    ``None``. Plain "you draw a card" stays with the pre-existing
-    phrasebook (``effects_ext``), which is consulted first."""
+    """``(Event, Predicate)`` for the draw-observer conditions and the
+    player-or-planeswalker combat-damage condition, else ``None``.
+    Plain "you draw a card" stays with the pre-existing phrasebook
+    (``effects_ext``), which is consulted first."""
     from mtg_bot.effects.object_predicates import (
         DrawIsFirstInOwnDrawStep,
         HasDrawnNCardsThisTurn,
+        IsPlaneswalker,
+        IsPlayer,
     )
     from mtg_bot.effects.predicates import (
-        OPPONENT, YOU, Always, Controlled, Event, Subject,
+        OPPONENT, YOU, Always, Controlled, Event, IsSelf, Subject,
     )
 
+    if phrase == _COMBAT_DAMAGE_TO_PLAYER_OR_PW:
+        return (
+            Event.DEALS_COMBAT_DAMAGE,
+            IsSelf(subject="source")
+            & Subject("target", IsPlayer() | IsPlaneswalker()),
+        )
     m = _DRAWS_TRIGGER.match(phrase)
     if m is None:
         return None
@@ -71,15 +85,37 @@ def bind_event_player_anaphora(event, effect: Effect) -> Effect:
 
 
 _AMASS = re.compile(r"^amass (?P<type>[A-Z][a-z]+?)s? (?P<n>\d+)$")
+# "<sentence about this creature>. Tap it." -- "it" is the source.
+_SELF_SENTENCE_THEN_TAP_IT = re.compile(
+    r"^(?P<first>this creature [^.]+)\. [Tt]ap it$"
+)
+_REVEAL_TOP_TO_HAND_LOSE_MV = re.compile(
+    r"^reveal the top card of your library and put (?:that card|it) into "
+    r"your hand\. [Yy]ou lose life equal to (?:its|that card's) mana value$"
+)
 
 
 def parse_ub_effect(phrase: str) -> Effect | None:
     """Effect phrases introduced by the U/B creature bucket."""
-    from mtg_bot.effects.generic.cube_creatures_ub import Amass
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        Amass,
+        RevealTopCardToHandLoseLifeEqualMV,
+        TapSelf,
+    )
 
     m = _AMASS.match(phrase)
     if m is not None:
         return Amass(subtype=m.group("type"), amount=int(m.group("n")))
+    m = _SELF_SENTENCE_THEN_TAP_IT.match(phrase)
+    if m is not None:
+        first = _parse_effect(m.group("first"))
+        if first is not None and not first.requires_target():
+            return Sequence(effects=(first, TapSelf()))
+        return None
+    if _REVEAL_TOP_TO_HAND_LOSE_MV.match(phrase):
+        return RevealTopCardToHandLoseLifeEqualMV()
     return None
 
 
@@ -95,16 +131,20 @@ class UBLine:
     for keyword mechanics that live on the printing rather than on an
     ability (Ninjutsu, Emerge, ...)."""
 
-    __slots__ = ("keywords", "triggers", "activated", "statics", "fields")
+    __slots__ = (
+        "keywords", "triggers", "activated", "statics", "hand_abilities",
+        "fields",
+    )
 
     def __init__(
         self, *, keywords=(), triggers=(), activated=(), statics=(),
-        fields=None,
+        hand_abilities=(), fields=None,
     ):
         self.keywords = tuple(keywords)
         self.triggers = tuple(triggers)
         self.activated = tuple(activated)
         self.statics = tuple(statics)
+        self.hand_abilities = tuple(hand_abilities)
         self.fields = dict(fields or {})
 
 
@@ -149,8 +189,36 @@ def _parse_draw_replacement_line(line: str) -> UBLine | None:
     ),))
 
 
+def _parse_hand_ability_line(line: str) -> UBLine | None:
+    """``{cost}, Discard this card: <effect>.`` -- an ability that
+    functions only from its owner's hand (Harvester of Misery). Routed
+    to ``CardPrinting.hand_activated_abilities``."""
+    from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+
+    ability = _parse_activated_ability_line(line, from_hand=True)
+    if ability is None:
+        return None
+    return UBLine(hand_abilities=(ability,))
+
+
+_MIN_BLOCKERS = re.compile(
+    r"^This creature can't be blocked except by (?P<n>two|three|four) or "
+    r"more creatures\.$"
+)
+_SMALL_NUMBERS = {"two": 2, "three": 3, "four": 4}
+
+
+def _parse_min_blockers_line(line: str) -> UBLine | None:
+    m = _MIN_BLOCKERS.match(line)
+    if m is None:
+        return None
+    return UBLine(fields={"min_blockers": _SMALL_NUMBERS[m.group("n")]})
+
+
 _LINE_PARSERS = (
     _parse_draw_replacement_line,
+    _parse_hand_ability_line,
+    _parse_min_blockers_line,
 )
 
 

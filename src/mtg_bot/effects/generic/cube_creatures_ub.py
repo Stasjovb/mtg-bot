@@ -125,7 +125,73 @@ class Amass(Effect):
         return f"amass {self.subtype}s {self.amount}"
 
 
+# ---------------------------------------------------------------------------
+# Self-referential riders
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TapSelf(Effect):
+    """"Tap it." where "it" is the ability's own source (Iron-Shield
+    Elf's "This creature gains indestructible until end of turn. Tap
+    it."). No-op when the source has left the battlefield."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import tap_permanent
+
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        tap_permanent(state, src)
+
+    def describe(self) -> str:
+        return "tap this creature"
+
+
+# ---------------------------------------------------------------------------
+# Library-top reveals
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RevealTopCardToHandLoseLifeEqualMV(Effect):
+    """"Reveal the top card of your library and put that card into your
+    hand. You lose life equal to its mana value." (Dark Confidant). An
+    empty library reveals nothing and costs no life."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        if not p.library:
+            return
+        card = p.library.pop(0)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        card.publicly_known_to = frozenset(pl.id for pl in state.players)
+        mv = card.printing.mana_cost.total
+        p.life -= mv
+        state.log.append(
+            f"P{controller_id} reveals {card.printing.name} and puts it "
+            f"into their hand, losing {mv} life (now {p.life})"
+        )
+
+    def describe(self) -> str:
+        return (
+            "reveal the top card of your library and put it into your "
+            "hand; you lose life equal to its mana value"
+        )
+
+
 __all__ = [
+    "RevealTopCardToHandLoseLifeEqualMV",
+    "TapSelf",
     "Amass",
     "BindEventPlayer",
 ]

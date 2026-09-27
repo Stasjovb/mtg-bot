@@ -390,6 +390,10 @@ class ActivationCost:
     # from their graveyard as a cost. Legal only when the graveyard
     # contains at least one artifact card.
     exile_artifact_from_graveyard: bool = False
+    # "Exile three cards from your graveyard" — Psychic Frog. The
+    # activating player exiles N cards of their choice from their own
+    # graveyard; legal only with at least N cards there.
+    exile_cards_from_graveyard: int = 0
     # "Sacrifice another creature or artifact" — the caster picks a
     # legal target via choose_sacrifice. Cannot be the source itself.
     sacrifice_another_creature_or_artifact: bool = False
@@ -567,6 +571,11 @@ class ActivationCost:
             parts.append("Tap an untapped permanent you control")
         if self.exile_artifact_from_graveyard:
             parts.append("Exile an artifact card from your graveyard")
+        if self.exile_cards_from_graveyard:
+            parts.append(
+                f"Exile {self.exile_cards_from_graveyard} cards from your "
+                "graveyard"
+            )
         if self.sacrifice_another_creature_or_artifact:
             parts.append("Sacrifice another creature or artifact")
         if self.sacrifice_another_artifact_or_land:

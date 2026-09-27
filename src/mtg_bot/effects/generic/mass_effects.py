@@ -26,6 +26,9 @@ class PumpAllCreaturesUEOT(Effect):
     toughness: int = 0
     x_power: int = 0
     x_toughness: int = 0
+    # "Other creatures get ..." (Harvester of Misery): every creature
+    # except the resolving ability's source.
+    exclude_source: bool = False
 
     def useful_x_cap(self, state: "GameState", controller_id: int) -> "int | None":
         """Largest X that still changes the outcome: once -X/-X kills the
@@ -48,14 +51,20 @@ class PumpAllCreaturesUEOT(Effect):
         x = max(0, state.resolving_x_value)
         dp = self.power + self.x_power * x
         dt = self.toughness + self.x_toughness * x
-        affected = [o for o in state.battlefield if is_creature_now(o)]
+        source = state.resolving_source if self.exclude_source else None
+        affected = [
+            o for o in state.battlefield
+            if is_creature_now(o)
+            and (source is None or o.id != source.id)
+        ]
+        who = "other" if self.exclude_source else "all"
         for o in affected:
             state.grant_pt_pump_ueot(
                 source_id=o.id, target_id=o.id, power=dp, toughness=dt,
-                description=f"all creatures get {dp:+d}/{dt:+d}",
+                description=f"{who} creatures get {dp:+d}/{dt:+d}",
             )
         state.log.append(
-            f"all creatures get {dp:+d}/{dt:+d} until end of turn "
+            f"{who} creatures get {dp:+d}/{dt:+d} until end of turn "
             f"({len(affected)} affected)"
         )
 
@@ -66,8 +75,9 @@ class PumpAllCreaturesUEOT(Effect):
             sign = "-" if xcoef < 0 else "+"
             return f"{sign}X" if base == 0 else f"{base:+d}{sign}X"
 
+        who = "other" if self.exclude_source else "all"
         return (
-            f"all creatures get {part(self.power, self.x_power)}/"
+            f"{who} creatures get {part(self.power, self.x_power)}/"
             f"{part(self.toughness, self.x_toughness)} until end of turn"
         )
 

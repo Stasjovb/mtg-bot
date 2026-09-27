@@ -1381,6 +1381,11 @@ class CardPrinting:
     # "Whenever you tap a creature for mana, add an additional {G}."
     # (Badgermole Cub): the extra coin colors (a triggered mana ability).
     extra_mana_when_you_tap_creature_for_mana: tuple = ()
+    # ── U/B cube creatures ──────────────────────────────────────────
+    # "This creature can't be blocked except by N or more creatures."
+    # (Troll of Khazad-dûm, N=3): a block by fewer than N creatures is
+    # illegal -- the menace check generalized (menace is N=2).
+    min_blockers: int = 0
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -1549,6 +1549,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     continue
             if ability.cost.discard_a_card and not p.hand:
                 continue
+            if (
+                ability.cost.exile_cards_from_graveyard
+                and len(p.graveyard) < ability.cost.exile_cards_from_graveyard
+            ):
+                continue
             if ability.cost.exile_artifact_from_graveyard:
                 # "Exile an artifact card from your graveyard" — Rust
                 # Harvester. Requires at least one artifact card in the

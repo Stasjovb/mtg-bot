@@ -382,6 +382,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     # contributed by lines the pre-existing grammar declines.
     wg_fields: dict = {}
     ub_fields: dict = {}
+    ub_hand_abilities: list[ActivatedAbility] = []
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -859,6 +860,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             triggers.extend(ub_line.triggers)
             activated.extend(ub_line.activated)
             statics.extend(ub_line.statics)
+            ub_hand_abilities.extend(ub_line.hand_abilities)
             ub_fields.update(ub_line.fields)
             continue
         # Pass the printing's own name to the clause dispatcher so the
@@ -997,6 +999,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 + tuple(wg_fields["graveyard_activated_abilities"])
             )
         printing = replace(printing, **wg_fields)
+    if ub_hand_abilities:
+        ub_fields["hand_activated_abilities"] = (
+            tuple(printing.hand_activated_abilities) + tuple(ub_hand_abilities)
+        )
     if ub_fields:
         printing = replace(printing, **ub_fields)
     return printing

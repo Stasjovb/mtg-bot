@@ -192,7 +192,8 @@ _REVEAL_HAND_YOU_CHOOSE_DISCARD_RE = re.compile(
     r"[Tt]hat player discards that card(?:\. (?P<rest>.+))?$"
 )
 _SEARCH_TO_ZONE_RE = re.compile(
-    r"^search your library for (?P<desc>.+? card)(?P<reveal>, reveal it)?, "
+    r"^search your library for (?P<desc>.+? card(?: with mana value \d+ "
+    r"or less)?)(?P<reveal>, reveal (?:it|that card))?, "
     r"put (?:that card|it) (?P<dest>into your hand|into your graveyard|"
     r"onto the battlefield)(?P<tapped> tapped)?, then shuffle$"
 )
@@ -290,7 +291,7 @@ _PUT_INTO_LIBRARY_RE = re.compile(
     r"library)(?:\. [Ii]ts controller gains (?P<life>\d+) life)?$"
 )
 _ALL_CREATURES_GET_UEOT_RE = re.compile(
-    r"^all creatures get (?P<p>[+-](?:\d+|X))/(?P<t>[+-](?:\d+|X)) "
+    r"^(?P<who>all|other) creatures get (?P<p>[+-](?:\d+|X))/(?P<t>[+-](?:\d+|X)) "
     r"until end of turn$"
 )
 
@@ -728,6 +729,7 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         t, xt = _pt_part(m.group("t"))
         return PumpAllCreaturesUEOT(
             power=p, toughness=t, x_power=xp, x_toughness=xt,
+            exclude_source=m.group("who") == "other",
         )
     m = _CHOOSE_NAME_REVEAL_UNTIL_RE.match(phrase)
     if m is not None:
