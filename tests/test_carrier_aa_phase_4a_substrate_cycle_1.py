@@ -143,7 +143,7 @@ PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS = (
 @pytest.fixture(scope="module")
 def printings():
     """Live-EoE printings dict (verify-first source of truth)."""
-    return OracleParserCardSource().get_printings()
+    return OracleParserCardSource(pool="eoe").get_printings()
 
 
 @pytest.mark.parametrize("name", PHASE_1_3_ADMITTED_LAND_CARRIERS)

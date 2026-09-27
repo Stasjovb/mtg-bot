@@ -53,6 +53,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUST_CARDS_FILE = REPO_ROOT / "rust" / "src" / "cards.rs"
 
+# The Rust cross-engine parity campaign is scoped to the Edge of
+# Eternities-era pool (``eoe`` + Stellar Sights + Special Guests +
+# Duskmourn). The project's TARGET pool moved to the PowerLSV cube on
+# 2026-09-27 (``mtg_bot.cards.pools.TARGET_POOL``), but the parity
+# evidence base (``docs/POOL_PARITY.md`` / ``docs/RUST_EFFECT_COVERAGE.md``
+# and their pinned counts) only makes sense over the pool it was
+# built against, so every parity walker constructs its source from
+# THIS pool explicitly instead of the env-selected default.
+PARITY_POOL = "eoe"
+
 # Rust variant name -> Python class name override. Empty mapping means
 # "use the variant name verbatim" (the 1:1 case). Populate this if a
 # Rust variant intentionally maps to a Python class with a different
@@ -558,7 +568,7 @@ def collect_python_effect_vocab():
     """Return ``(classes: Counter, examples: dict, n_printings: int)``."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool=PARITY_POOL)
     printings = src.get_printings()
 
     classes: Counter[str] = Counter()

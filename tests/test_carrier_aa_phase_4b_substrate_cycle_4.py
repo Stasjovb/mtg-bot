@@ -339,7 +339,7 @@ def test_mirrorpool_live_printing_flips_admitted_at_full_admit_gate_post_c4():
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     if "Mirrorpool" not in printings:
         pytest.skip(
             "Mirrorpool not in live EoE pool — skip the live-printing "
@@ -391,7 +391,7 @@ def test_mirrorpool_live_both_aas_round_trip_at_bridge_floor_post_c4():
         _python_aa_to_safe_dict,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     if "Mirrorpool" not in printings:
         pytest.skip(
             "Mirrorpool not in live EoE pool — skip the live bridge-"
@@ -513,7 +513,7 @@ def test_full_pool_admit_set_grows_by_exactly_one_post_c4():
         _printing_is_bridge_simple_carrier_aa_any,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     admitted = frozenset(
         name
         for name, p in printings.items()
@@ -550,7 +550,7 @@ def test_phase_1_3_4d_4b_land_admit_set_unchanged_minus_mirrorpool_post_c4():
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     for name in PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS:
         assert name in printings, f"verify-first: {name} missing from pool"
         assert _printing_is_bridge_simple_carrier_aa_land(printings[name]), (
@@ -569,7 +569,7 @@ def test_phase_4d_artifact_admit_set_unchanged_post_phase_4b_c4():
         _printing_is_bridge_simple_carrier_aa_artifact,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     for name in PHASE_4D_ADMITTED_ARTIFACT_CARRIERS:
         assert name in printings, f"verify-first: {name} missing from pool"
         assert _printing_is_bridge_simple_carrier_aa_artifact(

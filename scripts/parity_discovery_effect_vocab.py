@@ -90,8 +90,9 @@ def _maybe_walk(v, classes, examples, parent_card_name, seen_ids):
 
 def main():
     from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.effect_coverage import PARITY_POOL
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool=PARITY_POOL)
     printings = src.get_printings()
 
     classes: Counter[str] = Counter()

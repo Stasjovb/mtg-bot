@@ -93,7 +93,7 @@ def test_eternity_elevator_admits_at_canonical_or_chain():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     prints = src.get_printings()
     names, defs = _filter_deck_to_bridge_supported(
         ["The Eternity Elevator"],
@@ -199,7 +199,7 @@ def test_phase_4_admit_set_is_exactly_the_eternity_elevator():
         _printing_is_bridge_phase_4_spacecraft_eternity_elevator,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     prints = src.get_printings()
     admits = []
     for name, p in prints.items():
@@ -239,7 +239,7 @@ def test_phase_1_spacecraft_admits_unchanged(name):
         _printing_is_bridge_pure_station_spacecraft,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     p = src.get_printings()[name]
     assert _printing_is_bridge_pure_station_spacecraft(p) is True
 
@@ -260,7 +260,7 @@ def test_phase_2_spacecraft_admits_unchanged(name):
         _printing_is_bridge_phase_2_static_anthem_spacecraft,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     p = src.get_printings()[name]
     assert _printing_is_bridge_phase_2_static_anthem_spacecraft(p) is True
 
@@ -285,7 +285,7 @@ def test_phase_3_spacecraft_admits_unchanged(name):
         _printing_is_bridge_phase_3_trigger_spacecraft,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     p = src.get_printings()[name]
     assert _printing_is_bridge_phase_3_trigger_spacecraft(p) is True
 
@@ -302,7 +302,7 @@ def test_phase_4_predicate_declines_every_animating_spacecraft():
         _printing_is_bridge_phase_4_spacecraft_eternity_elevator,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     prints = src.get_printings()
     spacecraft = [
         (name, p) for name, p in prints.items()
@@ -349,7 +349,7 @@ def test_carrier_aa_land_admits_unchanged_post_c2():
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     prints = src.get_printings()
     admits = sorted(
         name for name, p in prints.items()
@@ -392,7 +392,7 @@ def test_carrier_aa_artifact_admits_unchanged_post_c2():
         _printing_is_bridge_simple_carrier_aa_artifact,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     prints = src.get_printings()
     admits = sorted(
         name for name, p in prints.items()

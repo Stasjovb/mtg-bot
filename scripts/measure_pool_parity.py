@@ -5135,8 +5135,9 @@ def classify_pool() -> PoolParityResult:
     tier by the strict precedence in the module docstring, and run the
     residue-worklist internal-consistency cross-check."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.effect_coverage import PARITY_POOL
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool=PARITY_POOL)
     printings = src.get_printings()
     pool_names = set(printings.keys())
 

@@ -783,7 +783,7 @@ def test_synthetic_precedence_genuinely_missing_beats_probe(
     import mtg_bot.cards.parser.source as src_mod
 
     monkeypatch.setattr(
-        src_mod, "OracleParserCardSource", lambda: _Src()
+        src_mod, "OracleParserCardSource", lambda *a, **k: _Src()
     )
     # Both synthetic effect-bearing cards' effect class is "_Eff" —
     # mark it covered. Probe both effect-bearing cards. Mark the

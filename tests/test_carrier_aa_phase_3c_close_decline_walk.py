@@ -276,7 +276,7 @@ def test_phase_3c_close_dispatcher_admits_each_carrier_aa_admit(card_name):
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     assert card_name in ps, (
         f"{card_name} must be parser-claimed by the active CardSource"
     )
@@ -327,7 +327,7 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     assert card_name in ps, (
         f"{card_name} must be parser-claimed by the active CardSource"
     )
@@ -515,7 +515,7 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -582,7 +582,7 @@ def test_phase_3c_close_carrier_aa_artifact_admit_set_is_empty_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -631,7 +631,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -717,7 +717,7 @@ def test_phase_3c_close_phase_4_carrier_declines_on_both_sub_predicates_and_disp
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     if card_name not in ps:
         pytest.skip(
             f"{card_name} absent from active CardSource — "
@@ -768,7 +768,7 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     # LOADER-SIDE admit set: cards that produce a non-None CardDef
     # from EITHER the Land sibling OR the Artifact sibling.
     loader_admit_count = sum(

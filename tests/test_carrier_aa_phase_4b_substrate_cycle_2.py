@@ -201,7 +201,7 @@ def test_mirrorpool_live_per_aa_mixed_admit_decline_post_c2():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
 
-    printing = OracleParserCardSource().get_printings()["Mirrorpool"]
+    printing = OracleParserCardSource(pool="eoe").get_printings()["Mirrorpool"]
     assert len(printing.activated_abilities) == 2
     aa0 = printing.activated_abilities[0]
     aa1 = printing.activated_abilities[1]
@@ -237,7 +237,7 @@ def test_mirrorpool_printing_level_admit_stays_declined_post_c2():
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
-    printing = OracleParserCardSource().get_printings()["Mirrorpool"]
+    printing = OracleParserCardSource(pool="eoe").get_printings()["Mirrorpool"]
     # **Phase 4B C4 inversion (2026-05-26).** FLIPs ADMITTED on the
     # Land predicate.
     assert _printing_is_bridge_simple_carrier_aa_land(printing), (
@@ -440,7 +440,7 @@ def test_phase_1_3_4d_land_admit_set_unchanged_post_phase_4b_c2():
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     for name in PHASE_1_3_4D_ADMITTED_LAND_CARRIERS:
         assert name in printings, f"verify-first: {name} missing from pool"
         assert _printing_is_bridge_simple_carrier_aa_land(printings[name]), (
@@ -474,7 +474,7 @@ def test_phase_4d_artifact_admit_set_unchanged_post_phase_4b_c2():
         _printing_is_bridge_simple_carrier_aa_artifact,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     for name in PHASE_4D_ADMITTED_ARTIFACT_CARRIERS:
         assert name in printings, f"verify-first: {name} missing from pool"
         assert _printing_is_bridge_simple_carrier_aa_artifact(
@@ -497,7 +497,7 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
         _printing_is_bridge_simple_carrier_aa_any,
     )
 
-    printings = OracleParserCardSource().get_printings()
+    printings = OracleParserCardSource(pool="eoe").get_printings()
     admitted = frozenset(
         name
         for name, p in printings.items()
@@ -650,7 +650,7 @@ def test_mirrorpool_live_per_aa_dict_partial_round_trip_post_c2():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
 
-    printing = OracleParserCardSource().get_printings()["Mirrorpool"]
+    printing = OracleParserCardSource(pool="eoe").get_printings()["Mirrorpool"]
     assert len(printing.activated_abilities) == 2
 
     aa0_dict = _python_aa_to_safe_dict(printing.activated_abilities[0])
