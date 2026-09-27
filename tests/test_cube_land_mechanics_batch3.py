@@ -234,3 +234,20 @@ def test_exert_and_haste_rider_grammar():
         "Exert this creature, Discard this card: Draw a card.",
         from_hand=True,
     ) is None
+
+
+def test_haste_rider_mana_is_never_folded_into_produces():
+    from mtg_bot.cards.parser.land_builder import _build_land_printing
+
+    for text in (
+        "{T}: Add {R}. If any of that mana is spent on a creature spell, "
+        "it gains haste until end of turn.",
+        "{T}: Add {R}{R}. If any of that mana is spent on a creature "
+        "spell, it gains haste until end of turn.",
+    ):
+        p = _build_land_printing(
+            {"name": "X", "type_line": "Land", "oracle_text": text}
+        )
+        assert p.produces == frozenset()
+        (ability,) = p.activated_abilities
+        assert ability.effect.grants_haste_to_creature_spell

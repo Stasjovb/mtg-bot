@@ -24,8 +24,19 @@ Per-line recognizers:
   ``you control <N> or fewer other lands`` (fast lands),
   ``you control a basic land``, ``you control a/an <basic land type>``
   (check lands). Compiles to ``CardPrinting.enters_tapped_unless``.
+  ... or ``it's your first, second, or third turn of the game``
+  (Starting Town).
+- ``As this land enters, choose a basic land type. Then you may pay N
+  life. If you don't, it enters tapped.`` + ``This land is the chosen
+  type.`` (Multiversal Passage; both lines required).
+- ``This land enters with <N> <kind> counters on it.`` for a counter
+  kind without a dedicated engine field (Gemstone Mine).
 - ``Cycling <cost>`` — a hand-activated ``<cost>, Discard this card:
   Draw a card.`` ability (CR 702.29a).
+- ``[<Ability word> — ]<cost incl. "Discard this card">: <effect>.`` —
+  other hand-activated abilities (Channel), via the activated grammar's
+  ``from_hand=True`` mode. Ability-word prefixes are stripped (they
+  have no rules meaning) before every activated / triggered parse.
 - Triggered-ability lines through the unified trigger grammar
   (``When this land enters, surveil 1.``).
 - Activated-ability lines through the unified activated grammar. Mana
@@ -62,7 +73,10 @@ from mtg_bot.cards.base import (
     make_utility_land,
     parse_mana_cost,
 )
-from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+from mtg_bot.cards.parser.activated import (
+    _DEDICATED_COUNTER_KINDS,
+    _parse_activated_ability_line,
+)
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.effects.conditions import (
@@ -119,9 +133,6 @@ _IS_CHOSEN_TYPE_LINE = "This land is the chosen type."
 _ENTERS_WITH_NAMED_COUNTERS_RE = re.compile(
     r"^This land enters with (?P<n>[a-z]+|\d+) (?P<kind>[a-z]+) counters? "
     r"on it\.$"
-)
-_DEDICATED_COUNTER_KINDS = frozenset(
-    {"charge", "time", "stun", "loyalty", "lore", "luck"}
 )
 _CYCLING_RE = re.compile(r"^Cycling (?P<cost>(?:\{[^}]+\})+)$")
 # ``<Ability word> — <ability>`` (Channel — ...). Ability words have no
@@ -182,7 +193,10 @@ def _simple_mana_colors(effect) -> frozenset[str] | None:
     """Colors of a one-mana, unrestricted production (``Add {X}`` or
     ``Add {X} or {Y}``), else ``None``."""
     if isinstance(effect, AddManaToPool):
-        if effect.spend_restriction is not None:
+        if (
+            effect.spend_restriction is not None
+            or effect.grants_haste_to_creature_spell
+        ):
             return None
         if len(effect.produces) != 1:
             return None
@@ -202,7 +216,11 @@ def _multi_mana_kind(effect) -> str | None:
     more of one kind), else ``None``."""
     if not isinstance(effect, AddManaToPool):
         return None
-    if effect.spend_restriction is not None or len(effect.produces) != 1:
+    if (
+        effect.spend_restriction is not None
+        or effect.grants_haste_to_creature_spell
+        or len(effect.produces) != 1
+    ):
         return None
     color, count = effect.produces[0]
     if count < 2 or color == "any":
