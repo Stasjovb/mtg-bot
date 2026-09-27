@@ -154,6 +154,92 @@ def bind_event_player_anaphora(event, effect: Effect) -> Effect:
 
 
 _AMASS = re.compile(r"^amass (?P<type>[A-Z][a-z]+?)s? (?P<n>\d+)$")
+# Thassa's Oracle
+_THASSA = re.compile(
+    r"^look at the top X cards of your library, where X is your devotion to "
+    r"(?P<color>white|blue|black|red|green)\. Put up to one of them on top "
+    r"of your library and the rest on the bottom of your library in a "
+    r"random order\. If X is greater than or equal to the number of cards "
+    r"in your library, you win the game$"
+)
+_COLOR_LETTERS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+# "<targeted sentence>. It loses all abilities for as long as this
+# creature remains on the battlefield" (The Wondrous Wasp)
+_THEN_IT_LOSES_ABILITIES = re.compile(
+    r"^(?P<first>[^.]+ target [^.]+)\. It loses all abilities for as long "
+    r"as this creature remains on the battlefield$"
+)
+# "<targeted sentence>. Its controller draws a card" (Ertai Resurrected)
+_THEN_ITS_CONTROLLER_DRAWS = re.compile(
+    r"^(?P<first>[^.]+ target [^.]+)\. Its controller draws a card$"
+)
+# "counter [up to one ]target <kind>[, <kind>,] [or <kind>]"
+_COUNTER_STACK_OBJECT = re.compile(
+    r"^counter (?P<upto>up to one )?target (?P<kinds>activated or triggered "
+    r"ability|(?:spell|activated ability|triggered ability)(?:(?:, |, or | "
+    r"or )(?:spell|activated ability|triggered ability))*)(?P<rider>\. If an ability of an "
+    r"artifact, creature, or planeswalker is countered this way, that "
+    r"permanent loses all abilities for as long as this creature remains "
+    r"on the battlefield)?$"
+)
+_STACK_KIND_WORDS = {
+    "spell": "spell", "activated ability": "activated",
+    "triggered ability": "triggered",
+}
+
+
+def _parse_ub_effect_batch5(phrase: str) -> Effect | None:
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        CounterTargetStackObject,
+        DevotionTo,
+        FormulaCoversLibrary,
+        LookTopNKeepUpToOneOnTopRestBottom,
+        ThenItsControllerDraws,
+        ThenTargetLosesAbilitiesWhileSourceRemains,
+    )
+    from mtg_bot.effects.generic.cube_walkers import IfCondition, WinTheGame
+    from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
+
+    if phrase == "tap up to one target creature":
+        return TapUpToOneTargetCreature()
+    m = _THASSA.match(phrase)
+    if m is not None:
+        x = DevotionTo(color=_COLOR_LETTERS[m.group("color")])
+        return Sequence(effects=(
+            LookTopNKeepUpToOneOnTopRestBottom(count=x),
+            IfCondition(condition=FormulaCoversLibrary(formula=x), then=WinTheGame()),
+        ))
+    m = _COUNTER_STACK_OBJECT.match(phrase)
+    if m is not None:
+        kinds_text = m.group("kinds").replace(
+            "activated or triggered ability",
+            "activated ability or triggered ability",
+        )
+        pieces = re.split(r", or |, | or ", kinds_text)
+        return CounterTargetStackObject(
+            kinds=tuple(_STACK_KIND_WORDS[p] for p in pieces),
+            up_to_one=m.group("upto") is not None,
+            lose_abilities_while_source=m.group("rider") is not None,
+        )
+    m = _THEN_IT_LOSES_ABILITIES.match(phrase)
+    if m is not None:
+        first = _parse_effect(m.group("first"))
+        if first is None or first.target_count_range()[1] < 1:
+            return None
+        return ThenTargetLosesAbilitiesWhileSourceRemains(inner=first)
+    m = _THEN_ITS_CONTROLLER_DRAWS.match(phrase)
+    if m is not None:
+        first = _parse_effect(m.group("first"))
+        if first is None or not first.requires_target():
+            return None
+        return ThenItsControllerDraws(inner=first)
+    return None
+
+
 # Emry: "choose target <desc> card in your graveyard. You may cast that
 # card this turn"
 _CHOOSE_GY_CARD_MAY_CAST = re.compile(
@@ -195,6 +281,9 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         second = _parse_effect("this creature " + m.group("rest"))
         if first is not None and second is not None:
             return Sequence(effects=(first, second))
+    ub = _parse_ub_effect_batch5(phrase)
+    if ub is not None:
+        return ub
     m = _CHOOSE_GY_CARD_MAY_CAST.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import (

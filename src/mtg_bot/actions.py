@@ -4576,6 +4576,10 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
     # graveyard (permanents and non-permanents alike) per rule 701.5a.
     if item.countered:
         state.log.append(f"{item.source.printing.name} is countered")
+        if item.ability is not None:
+            # A countered activated / triggered ability is simply removed
+            # from the stack (CR 701.5a); its source stays put.
+            return
         move_spell_off_stack(
             state, item.source, destination=item.countered_destination,
         )

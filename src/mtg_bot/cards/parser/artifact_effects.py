@@ -589,8 +589,9 @@ _HARNESS_SELF = re.compile(rf"^harness {_SELF_NOUN}$")
 # The Mind Stone's ∞ body — blink up to one other nonland permanent you
 # control ("that card" anaphora keeps the two halves together).
 _FLICKER_OTHER_NONLAND_YOU_CONTROL = re.compile(
-    r"^exile up to one other target nonland permanent you control, then "
-    r"return that card to the battlefield under its owner's control$"
+    r"^exile up to one (?P<other>other )?target nonland permanent you "
+    r"control, then return that card to the battlefield under its owner's "
+    r"control$"
 )
 
 
@@ -602,8 +603,12 @@ def _parse_harness_phrase(phrase: str) -> Effect | None:
 
     if _HARNESS_SELF.match(phrase):
         return HarnessSelf()
-    if _FLICKER_OTHER_NONLAND_YOU_CONTROL.match(phrase):
-        return FlickerUpToOneOtherTargetNonlandPermanentYouControl()
+    m = _FLICKER_OTHER_NONLAND_YOU_CONTROL.match(phrase)
+    if m is not None:
+        # Displacer Kitten omits "other": the source may flicker itself.
+        return FlickerUpToOneOtherTargetNonlandPermanentYouControl(
+            other=m.group("other") is not None,
+        )
     return None
 
 

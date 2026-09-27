@@ -177,13 +177,16 @@ from mtg_bot.effects.predicates import (
 # lowercase first letter) because each mode is a full printed sentence
 # rather than the ``it deals …`` creature-trigger form.
 _MODAL_CHOOSE_ONE_SUFFIX = ", choose one —"
+# "choose up to one —" (Ertai Resurrected): the same block plus a
+# "choose no mode" option.
+_MODAL_CHOOSE_UP_TO_ONE_SUFFIX = ", choose up to one —"
 _MODAL_MODE_PREFIX = "• "
 
 # Trigger-header shape for a modal triggered ability. The leading
 # ``When``/``Whenever`` and the trailing ``, choose one —`` are fixed;
 # the condition body (group 1) is captured non-greedily.
 _MODAL_TRIGGER_HEADER_RE = re.compile(
-    r"^(?:When|Whenever) (.+?), choose one —$"
+    r"^(?:When|Whenever) (.+?), choose (up to )?one —$"
 )
 
 
@@ -250,6 +253,10 @@ def _parse_modal_trigger_block(
         if eff is None:
             return None
         parsed_modes.append(eff)
+    if m.group(2):
+        from mtg_bot.effects.generic.cube_creatures_ub import ChooseNoMode
+
+        parsed_modes.append(ChooseNoMode())
     return TriggeredAbility(
         event=event,
         predicate=predicate,
@@ -400,7 +407,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     _i = 0
     while _i < len(_raw_lines):
         _ln = _raw_lines[_i]
-        if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX):
+        if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX) or _ln.endswith(
+            _MODAL_CHOOSE_UP_TO_ONE_SUFFIX
+        ):
             # Modal trigger header — collect subsequent bullet mode lines.
             _modes: list[str] = []
             _j = _i + 1

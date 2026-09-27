@@ -1180,18 +1180,22 @@ class FlickerUpToOneOtherTargetNonlandPermanentYouControl(Effect):
     """"Exile up to one other target nonland permanent you control, then
     return that card to the battlefield under its owner's control."
     (The Mind Stone's ∞ ability). The returned card is a new object
-    (fresh ETB, no counters). Tokens exiled this way cease to exist."""
+    (fresh ETB, no counters). Tokens exiled this way cease to exist.
+    ``other=False`` drops the "other" restriction (Displacer Kitten's
+    "exile up to one target nonland permanent you control ...")."""
+
+    other: bool = True
 
     def __post_init__(self) -> None:
         from mtg_bot.effects.object_predicates import (
             ControlledByYou, IsLand, IsPlayer, IsSource,
         )
         from mtg_bot.effects.targets import TargetSpec
+        f = ~IsLand() & ~IsPlayer() & ControlledByYou()
+        if self.other:
+            f = f & ~IsSource()
         object.__setattr__(self, "targets", (
-            TargetSpec(
-                ~IsLand() & ~IsPlayer() & ControlledByYou() & ~IsSource(),
-                count_min=0, count_max=1,
-            ),
+            TargetSpec(f, count_min=0, count_max=1),
         ))
 
     def resolve(
@@ -1229,9 +1233,10 @@ class FlickerUpToOneOtherTargetNonlandPermanentYouControl(Effect):
         put_into_battlefield(state, obj, obj.owner_id)
 
     def describe(self) -> str:
+        other = "other " if self.other else ""
         return (
-            "exile up to one other target nonland permanent you control, then "
-            "return it to the battlefield under its owner's control"
+            f"exile up to one {other}target nonland permanent you control, "
+            "then return it to the battlefield under its owner's control"
         )
 
 

@@ -304,7 +304,8 @@ _WIN_THE_GAME = re.compile(r"^(?:you )?win the game$")
 _IF_CONDITION = re.compile(r"^if (?P<cond>[^,]+), (?P<eff>.+)$")
 _YOU_MAY = re.compile(r"^you may (?P<eff>.+)$")
 _DESTROY_OR_EXILE = re.compile(
-    r"^(?P<verb>destroy|exile) (?P<upto>up to one )?target (?P<noun>.+)$"
+    r"^(?P<verb>destroy|exile) (?P<upto>up to one )?(?P<another>another )?"
+    r"target (?P<noun>.+)$"
 )
 _BOUNCE = re.compile(
     r"^return (?P<upto>up to one )?target (?P<noun>.+) to its owner's hand$"
@@ -507,6 +508,12 @@ def parse_ext_effect(phrase: str) -> Effect | None:
     m = _DESTROY_OR_EXILE.match(phrase)
     if m is not None:
         spec = _target_spec(m.group("noun"), bool(m.group("upto")))
+        if spec is not None and m.group("another"):
+            from dataclasses import replace as _replace
+
+            from mtg_bot.effects.object_predicates import IsSource
+
+            spec = _replace(spec, filter=spec.filter & ~IsSource())
         if spec is not None:
             if m.group("verb") == "destroy":
                 from mtg_bot.effects.generic.destroy import Destroy
