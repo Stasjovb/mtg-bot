@@ -4142,6 +4142,10 @@ def push_spell_copy(
         f"P{controller_id} puts a copy of {printing.name} on the stack"
         + _format_log_targets(state, tuple(targets))
     )
+    # "Whenever you cast or copy ..." (magecraft) observers.
+    from mtg_bot.effects.generic.cube_creatures_rmc import fire_copy_triggers
+
+    fire_copy_triggers(state, obj, controller_id)
     return obj
 
 
@@ -4694,6 +4698,13 @@ def put_into_battlefield(
     # ``False`` for every existing creature/spell that hasn't opted
     # in, so the change is a no-op for the pre-existing pool.
     obj.tapped = bool(obj.printing.enters_tapped)
+    if not obj.tapped and state.battlefield:
+        # "<Types> your opponents control enter tapped." (Spider-Woman).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            enters_tapped_by_opponent_static,
+        )
+
+        obj.tapped = enters_tapped_by_opponent_static(state, obj, controller_id)
     # Slice 14 (TTT Pin 2): summoning sickness is a creature-only
     # property per CR 302.1 + 612.6 — non-creature permanents
     # (Equipment, Aura, Enchantment, Artifact, planeswalker) do not

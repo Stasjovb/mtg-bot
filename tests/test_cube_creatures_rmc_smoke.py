@@ -23,7 +23,11 @@ BUCKET_CARDS = [
     "Goblin Engineer", "Ivora, Insatiable Heir", "Magda, Brazen Outlaw",
     "Otharri, Suns' Glory", "Pyrogoyf", "Screaming Nemesis",
     "Seasoned Pyromancer", "Territorial Kavu", "Tersa Lightshatter",
-    "Thor, God of Thunder",
+    "Thor, God of Thunder", "Dragon's Rage Channeler",
+    "Spider-Woman, Stunning Savior", "Painter's Servant",
+    "Raph & Mikey, Troublemakers", "Atraxa, Grand Unifier",
+    "Witherbloom Apprentice", "Wolverine, Fierce Fighter", "Chaos Defiler",
+    "Figure of Destiny", "Blightsteel Colossus",
 ]
 BASICS = ["Mountain", "Forest", "Plains", "Island", "Swamp"]
 

@@ -1290,6 +1290,11 @@ class CardPrinting:
     # ``CastSpell(id, use_dash=True)``.
     dash_cost: ManaCost | None = None
     dash_cost_str: str = ""
+    # "If damage would be dealt to <this creature>, instead that damage
+    # is dealt, but all other damage already dealt to him is healed."
+    # (Wolverine, Fierce Fighter): marked damage is cleared right
+    # before new damage is marked (``cube_creatures_rmc.heal_before_damage``).
+    heals_other_damage_when_dealt_damage: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

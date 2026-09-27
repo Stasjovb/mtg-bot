@@ -310,6 +310,12 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
                     f"{source.printing.name} is prevented (protection)"
                 )
                 return
+            if obj.printing.heals_other_damage_when_dealt_damage:
+                from mtg_bot.effects.generic.cube_creatures_rmc import (
+                    heal_before_damage,
+                )
+
+                heal_before_damage(obj)
             obj.damage += amount
             obj.damaged_this_turn = True
             state.log.append(f"{obj.printing.name} takes {amount} damage")
@@ -795,6 +801,15 @@ class StaticAbility:
     # additional ward instance costing N life. Summed with the printed
     # ``ward_life_cost`` by ``cube_creatures_rmc.effective_ward_life_cost``.
     grants_ward_life_cost: int = 0
+    # "... attacks each combat if able." (Dragon's Rage Channeler's
+    # delirium clause): every creature this static ``applies_to`` is
+    # forced into the attack declaration while able
+    # (``designations.forced_attackers``).
+    must_attack_each_combat: bool = False
+    # "<Types> your opponents control enter tapped." (Spider-Woman):
+    # card types (``"Artifact"``, ``"Creature"``) of permanents entering
+    # under an opponent's control that enter tapped.
+    opponents_enter_tapped_types: tuple = ()
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,

@@ -1396,3 +1396,385 @@ class ExileUpToOneTargetCardFromGraveyard(_ExileTargetCardFromGraveyard):
 
     def describe(self) -> str:
         return "exile up to one target card from a graveyard"
+
+
+# ---------------------------------------------------------------------------
+# Batch 4: attack requirements, enters-tapped statics, reveal effects,
+# magecraft, fights, random destruction, level-up style "becomes",
+# graveyard self-replacement
+# ---------------------------------------------------------------------------
+
+
+def must_attack_ids(state: "GameState", player_id: int, eligible: list) -> list[int]:
+    """Ids among ``eligible`` (attack-eligible creatures of
+    ``player_id``) that "attack each combat if able" through an
+    applying static (Dragon's Rage Channeler's delirium clause)."""
+    out: list[int] = []
+    for obj in eligible:
+        for source in state.battlefield:
+            if any(
+                sa.must_attack_each_combat and sa.applies_to(source, obj, state)
+                for sa in source.printing.static_abilities
+            ):
+                out.append(obj.id)
+                break
+    return out
+
+
+def enters_tapped_by_opponent_static(state: "GameState", obj: "GameObject", controller_id: int) -> bool:
+    """Whether a static of a permanent an opponent of ``controller_id``
+    controls makes ``obj`` enter tapped ("Artifacts and creatures your
+    opponents control enter tapped." — Spider-Woman)."""
+    for source in state.battlefield:
+        if source.controller_id == controller_id:
+            continue
+        for sa in source.printing.static_abilities:
+            types = sa.opponents_enter_tapped_types
+            if types and any(t in obj.printing.card_types for t in types):
+                return True
+    return False
+
+
+@dataclass(frozen=True)
+class RevealUntilCreatureOntoBattlefieldAttacking(Effect):
+    """Raph & Mikey: reveal cards from the top of your library until you
+    reveal a creature card; put that card onto the battlefield tapped
+    and attacking (the single opponent) and the rest on the bottom of
+    your library in a random order."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        revealed: list = []
+        hit = None
+        while p.library:
+            card = p.library.pop(0)
+            reveal_to_all(state, card)
+            if card.printing.is_creature:
+                hit = card
+                break
+            revealed.append(card)
+        if hit is not None:
+            state.log.append(
+                f"P{controller_id} reveals {hit.printing.name}; it enters "
+                f"tapped and attacking"
+            )
+            put_into_battlefield(state, hit, controller_id)
+            hit.tapped = True
+            hit.attacking = True
+        state.rng.shuffle(revealed)
+        for c in revealed:
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+
+    def describe(self) -> str:
+        return (
+            "reveal until a creature card; it enters tapped and attacking, "
+            "the rest go to the bottom"
+        )
+
+
+_TYPE_ORDER = (
+    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
+    "Land", "Planeswalker", "Sorcery",
+)
+
+
+@dataclass(frozen=True)
+class RevealTopNOnePerCardTypeToHand(Effect):
+    """Atraxa, Grand Unifier: reveal the top N cards; for each card type
+    you may put a card of that type from among them into your hand; the
+    rest go to the bottom in a random order. Card types are walked in
+    CR 205.2a order; for each one the controller picks one of the
+    still-unpicked revealed cards with that type
+    (``choose_card_from_library``; ``None`` declines)."""
+
+    count: int = 10
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        revealed = []
+        for _ in range(self.count):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            reveal_to_all(state, card)
+            revealed.append(card)
+        taken: list = []
+        for card_type in _TYPE_ORDER:
+            options = [
+                c for c in revealed
+                if c not in taken and card_type in c.printing.card_types
+            ]
+            if not options:
+                continue
+            pick = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in options],
+                )
+            chosen = next((c for c in options if c.id == pick), None)
+            if chosen is not None:
+                taken.append(chosen)
+        for c in taken:
+            c.zone = Zone.HAND
+            p.hand.append(c)
+            reveal_to(c, controller_id)
+        rest = [c for c in revealed if c not in taken]
+        state.rng.shuffle(rest)
+        for c in rest:
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+        state.log.append(
+            f"P{controller_id} reveals {len(revealed)} and takes "
+            f"{', '.join(c.printing.name for c in taken) or 'nothing'}"
+        )
+
+    def describe(self) -> str:
+        return f"reveal the top {self.count} cards; take one of each card type"
+
+
+@dataclass(frozen=True)
+class CastOrCopy(_TriggerPredicate):
+    """Marker conjunct for magecraft-style "Whenever you cast or copy a
+    <spell>": true for the cast dispatch; ``fire_copy_triggers`` stacks
+    the same abilities when a spell is copied (CR 707.10: copies aren't
+    cast)."""
+
+    def matches(self, state, subjects, source):
+        return True
+
+
+def _has_cast_or_copy(pred) -> bool:
+    from mtg_bot.effects.predicates import And
+
+    stack = [pred]
+    while stack:
+        p = stack.pop()
+        if isinstance(p, CastOrCopy):
+            return True
+        if isinstance(p, And):
+            stack.extend((p.left, p.right))
+    return False
+
+
+def fire_copy_triggers(state: "GameState", copy_obj: "GameObject", controller_id: int) -> None:
+    """A spell copy was put on the stack: stack every battlefield
+    "Whenever you cast or copy ..." ability whose predicate accepts the
+    copy (same subject mapping as the cast dispatch)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.predicates import Event
+
+    subjects = {"spell": copy_obj, "controller": state.player_by_id(controller_id)}
+    for source in list(state.battlefield):
+        for idx, ability in enumerate(source.printing.triggered_abilities):
+            if ability.event != Event.IS_CAST or not _has_cast_or_copy(ability.predicate):
+                continue
+            if not ability.matches_event(Event.IS_CAST, subjects, source, state):
+                continue
+            push_triggered_ability(
+                state, source=source, ability=ability, ability_index=idx,
+                controller_id=source.controller_id, label="copy",
+            )
+
+
+@dataclass(frozen=True)
+class SourceFightsTarget(Effect):
+    """"<This creature> fights [up to one ][other ]target creature."
+    (CR 701.12): each deals damage equal to its power to the other;
+    nothing happens if either creature has left the battlefield."""
+
+    optional: bool = False
+    other: bool = True
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature, IsSource
+        from mtg_bot.effects.targets import TargetSpec
+
+        pred = IsCreature()
+        if self.other:
+            pred = pred & ~IsSource()
+        object.__setattr__(self, "targets", (TargetSpec(
+            pred, count_min=0 if self.optional else 1, count_max=1,
+        ),))
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.game import effective_power
+
+        src = state.resolving_source
+        me = next(
+            (o for o in state.battlefield if src is not None and o.id == src.id),
+            None,
+        )
+        for _kind, tid in targets:
+            them = next((o for o in state.battlefield if o.id == tid), None)
+            if me is None or them is None:
+                return
+            p_me = effective_power(state, me)
+            p_them = effective_power(state, them)
+            state.log.append(f"{me.printing.name} fights {them.printing.name}")
+            if p_me > 0:
+                _apply_damage(state, ("creature", them.id), p_me)
+            if p_them > 0:
+                _apply_damage(state, ("creature", me.id), p_them)
+
+    def describe(self) -> str:
+        return "fights " + ("up to one " if self.optional else "") + (
+            "other " if self.other else ""
+        ) + "target creature"
+
+
+def heal_before_damage(obj: "GameObject") -> None:
+    """Wolverine's replacement ("If damage would be dealt to <it>,
+    instead that damage is dealt, but all other damage already dealt to
+    him is healed."), applied right before new damage is marked."""
+    if obj.printing.heals_other_damage_when_dealt_damage:
+        obj.damage = 0
+        obj.marked_lethal = False
+
+
+@dataclass(frozen=True)
+class EachOpponentChoiceDestroyOneAtRandom(Effect):
+    """Chaos Defiler: for each opponent, choose a nonland permanent that
+    player controls; destroy one of them chosen at random. The choice
+    isn't targeted (hexproof doesn't stop it)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import destroy
+
+        p = state.player_by_id(controller_id)
+        chosen = []
+        for opp in state.players:
+            if opp.id == controller_id or opp.has_lost:
+                continue
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == opp.id and not o.printing.is_land
+            ]
+            if not options:
+                continue
+            pick = options[0].id
+            if p.agent is not None:
+                picked = p.agent.choose_sacrifice(
+                    state, controller_id, [o.id for o in options],
+                )
+                if picked in {o.id for o in options}:
+                    pick = picked
+            chosen.append(next(o for o in options if o.id == pick))
+        if not chosen:
+            return
+        victim = state.rng.choice(chosen)
+        state.log.append(f"{victim.printing.name} is destroyed (chosen at random)")
+        destroy(state, victim)
+
+    def describe(self) -> str:
+        return (
+            "for each opponent, choose a nonland permanent they control; "
+            "destroy one of them at random"
+        )
+
+
+@dataclass(frozen=True)
+class SourceBecomesIfSubtype(Effect):
+    """Figure of Destiny: "[If this creature is a <Req>, ]it becomes a
+    <Subtypes> with base power and toughness P/T[, <keywords>]." — a
+    permanent change (no duration): subtypes and keywords are added and
+    the base P/T set (latest timestamp wins)."""
+
+    subtypes: tuple[str, ...] = ()
+    base_pt: tuple = (0, 0)
+    keywords: frozenset = frozenset()
+    requires_subtype: str = ""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.become_type import BecomeType
+        from mtg_bot.game import effective_subtypes
+
+        src = state.resolving_source
+        me = next(
+            (o for o in state.battlefield if src is not None and o.id == src.id),
+            None,
+        )
+        if me is None:
+            return
+        current = effective_subtypes(state, me)
+        if self.requires_subtype and self.requires_subtype not in current:
+            state.log.append(
+                f"{me.printing.name} isn't a {self.requires_subtype}; nothing happens"
+            )
+            return
+        BecomeType(
+            subtypes_to_add=tuple(s for s in self.subtypes if s not in current),
+            base_pt=self.base_pt,
+        ).resolve(state, controller_id, ())
+        for kw in sorted(self.keywords):
+            state.add_continuous_effect(
+                source_id=me.id, layer=6, kind="grant_keyword",
+                target_id=me.id, params=(kw,),
+                description=f"{me.printing.name} has {kw}",
+            )
+
+    def describe(self) -> str:
+        cond = f"if a {self.requires_subtype}, " if self.requires_subtype else ""
+        return (
+            f"{cond}becomes a {' '.join(self.subtypes)} "
+            f"{self.base_pt[0]}/{self.base_pt[1]}"
+        )
+
+
+def graveyard_self_replacement_destination(state: "GameState", card: "GameObject") -> str:
+    """``"graveyard"`` or where a self-replacement on ``card`` ("If
+    <Name> would be put into a graveyard from anywhere, ... shuffle it
+    into its owner's library instead.") redirects it."""
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    if not any(
+        sa.replacement_effect is not None
+        and sa.replacement_effect.event_pattern.event == Event.WOULD_GO_TO_GRAVEYARD
+        for sa in card.printing.static_abilities
+    ):
+        return "graveyard"
+    out = dispatch_replacement(
+        state, Event.WOULD_GO_TO_GRAVEYARD,
+        affected_player_id=card.owner_id,
+        subjects={"card": card},
+        payload={"destination": "graveyard"},
+    )
+    return out.get("destination", "graveyard")
+
+
+def sweep_graveyard_self_replacements(state: "GameState") -> bool:
+    """Catch-all for "would be put into a graveyard from anywhere"
+    self-replacements on permanents (Blightsteel Colossus) reaching the
+    graveyard by a path that doesn't consult them (discard, mill, ...):
+    such a card found in a graveyard is shuffled into its owner's
+    library. ``move_off_battlefield`` and spells leaving the stack
+    redirect before the card lands."""
+    from mtg_bot.game import Zone, shuffle_library
+
+    changed = False
+    for p in state.players:
+        movers = [
+            c for c in p.graveyard
+            if c.printing.is_permanent
+            and c.printing.static_abilities
+            and graveyard_self_replacement_destination(state, c) == "library"
+        ]
+        for c in movers:
+            p.graveyard.remove(c)
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+            shuffle_library(state, p.id)
+            state.log.append(
+                f"{c.printing.name} is shuffled into P{p.id}'s library "
+                f"instead of staying in the graveyard"
+            )
+            changed = True
+    return changed

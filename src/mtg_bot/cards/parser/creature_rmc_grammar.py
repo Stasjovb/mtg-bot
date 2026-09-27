@@ -396,7 +396,7 @@ def parse_rmc_effect(phrase: str) -> Effect | None:
                 from mtg_bot.effects.generic.cube_walkers import IfCondition
 
                 return IfCondition(condition=StateCondition(gate), then=inner)
-        return None
+            return None
 
     m = _DAMAGE_2_PLUS_SACRIFICED_MV.match(phrase)
     if m is not None:
@@ -592,7 +592,59 @@ def _parse_counts_and_hand_effect(phrase: str) -> Effect | None:
         return IfYouDo(do_action=do, then_action=then)
     if phrase == _EXILE_UP_TO_ONE_GRAVEYARD_CARD:
         return rmc.ExileUpToOneTargetCardFromGraveyard()
+    if phrase == _REVEAL_UNTIL_CREATURE_ATTACKING:
+        return rmc.RevealUntilCreatureOntoBattlefieldAttacking()
+    m = _REVEAL_TOP_ONE_PER_TYPE.match(phrase)
+    if m is not None:
+        return rmc.RevealTopNOnePerCardTypeToHand(count=_n(m.group("n")))
+    m = _SOURCE_FIGHTS.match(phrase)
+    if m is not None:
+        return rmc.SourceFightsTarget(
+            optional=bool(m.group("upto")), other=bool(m.group("other")),
+        )
+    if phrase == _CHOOSE_PER_OPPONENT_DESTROY_RANDOM:
+        return rmc.EachOpponentChoiceDestroyOneAtRandom()
+    m = _BECOMES_WITH_BASE_PT.match(phrase)
+    if m is not None:
+        kws: frozenset = frozenset()
+        if m.group("kw"):
+            from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+            kws = _parse_keyword_grant_body(m.group("kw").replace(", and ", " and "))
+            if not kws:
+                return None
+        return rmc.SourceBecomesIfSubtype(
+            subtypes=tuple(m.group("subs").split(" ")),
+            base_pt=(int(m.group("p")), int(m.group("t"))),
+            keywords=kws,
+            requires_subtype=m.group("req") or "",
+        )
     return _parse_sentence_sequence(phrase)
+
+
+_REVEAL_UNTIL_CREATURE_ATTACKING = (
+    "reveal cards from the top of your library until you reveal a creature "
+    "card. Put that card onto the battlefield tapped and attacking and the "
+    "rest on the bottom of your library in a random order"
+)
+_REVEAL_TOP_ONE_PER_TYPE = re.compile(
+    rf"^reveal the top (?P<n>{_N}) cards of your library\. For each card "
+    r"type, you may put a card of that type from among the revealed cards "
+    r"into your hand\. Put the rest on the bottom of your library in a "
+    r"random order$"
+)
+_SOURCE_FIGHTS = re.compile(
+    r"^fights (?P<upto>up to one )?(?P<other>other )?target creature$"
+)
+_CHOOSE_PER_OPPONENT_DESTROY_RANDOM = (
+    "for each opponent, choose a nonland permanent that player controls. "
+    "Destroy one of them chosen at random"
+)
+_BECOMES_WITH_BASE_PT = re.compile(
+    r"^(?:if this creature is an? (?P<req>[A-Z][a-z]+), it|this creature) "
+    r"becomes an? (?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) with base power and "
+    r"toughness (?P<p>\d+)/(?P<t>\d+)(?:, (?P<kw>[a-z ,]+))?$"
+)
 
 
 def _parse_sentence_sequence(phrase: str) -> Effect | None:
@@ -718,6 +770,22 @@ def parse_rmc_trigger_phrase(phrase: str):
     from mtg_bot.effects.object_predicates import HasSubtype, IsCreature
     from mtg_bot.effects.predicates import YOU, Controlled, Subject
 
+    if phrase == "this creature attack":
+        # A plural-named source ("Whenever Raph & Mikey attack").
+        return (Event.ATTACKS, IsSelf())
+    m = _CAST_OR_COPY.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _spell_filter
+        from mtg_bot.effects.generic.cube_creatures_rmc import CastOrCopy
+
+        spell_pred = _spell_filter(m.group("filter"))
+        if spell_pred is None:
+            return None
+        return (
+            Event.IS_CAST,
+            Subject("spell", spell_pred)
+            & Controlled(YOU, subject="controller") & CastOrCopy(),
+        )
     m = _SUBTYPE_BECOMES_TAPPED.match(phrase)
     if m is not None:
         return (
@@ -738,6 +806,10 @@ def parse_rmc_trigger_phrase(phrase: str):
     return None
 
 
+_STATIC_ABILITY_WORD = re.compile(
+    r"^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — (?=As long as )"
+)
+_CAST_OR_COPY = re.compile(r"^you cast or copy an? (?P<filter>.+) spell$")
 _SUBTYPE_BECOMES_TAPPED = re.compile(
     r"^an? (?P<sub>[A-Z][a-z]+) you control becomes tapped$"
 )
@@ -851,6 +923,9 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
     """Static lines tried after the clause dispatcher declined."""
     if _DISABLED[0]:
         return None
+    # Ability words carry no rules meaning (CR 207.2c): "Delirium — As
+    # long as ...".
+    line = _STATIC_ABILITY_WORD.sub("", line, count=1)
     m = _ACTIVATED_IT_SUBJECT.match(line)
     if m is not None:
         from mtg_bot.cards.parser.activated import _parse_activated_ability_line
@@ -910,7 +985,43 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
             scope=StaticScope.SELF, condition=cond(),
             power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
             granted_keywords=kws,
+            must_attack_each_combat=bool(m.group("attack")),
         ),))
+    m = _OPPONENTS_ENTER_TAPPED.match(line)
+    if m is not None:
+        types = []
+        for word in re.split(r", and | and |, ", m.group("types")):
+            t = _CARD_TYPE_NAMES.get(_singular(word.strip().lower()))
+            if t is None:
+                return None
+            types.append(t)
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.SELF, opponents_enter_tapped_types=tuple(types),
+        ),))
+    if line == _CHOOSE_A_COLOR_AS_ENTERS:
+        return RmcLine(printing_fields={"_chooses_color": True})
+    if line == _PAINT_ALL_CHOSEN_COLOR:
+        return RmcLine(printing_fields={
+            "paints_all_objects_chosen_color_at_etb": True,
+        })
+    m = _HEAL_REPLACEMENT.match(line.replace(name, "this creature"))
+    if m is None:
+        from mtg_bot.cards.parser.triggers import _substitute_self_name as _sub
+
+        m = _HEAL_REPLACEMENT.match(_sub(line, name))
+    if m is not None:
+        return RmcLine(printing_fields={
+            "heals_other_damage_when_dealt_damage": True,
+        })
+    if "would be put into a graveyard from anywhere" in line:
+        from mtg_bot.cards.parser.spell_builder import (
+            _detect_shuffle_self_statics,
+        )
+
+        statics = _detect_shuffle_self_statics(line, name)
+        if statics:
+            return RmcLine(statics=statics)
+        return None
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
     m = _ENTERS_AND_WHENEVER.match(_substitute_self_name(line, name))
@@ -941,7 +1052,8 @@ _SUBTYPE_LORD = re.compile(
 # "As long as <condition>, this creature gets +N/+M[ and has <kws>]."
 _AS_LONG_AS_SELF_GETS = re.compile(
     r"^As long as (?P<cond>.+?), this creature gets \+(?P<p>\d+)/\+(?P<t>\d+)"
-    r"(?: and has (?P<kw>[a-z ,]+))?\.$"
+    r"(?:(?: and|,) has (?P<kw>[a-z ]+?))?"
+    r"(?P<attack>,? and attacks each combat if able)?\.$"
 )
 
 
@@ -951,9 +1063,31 @@ def _hand_at_most_one():
     return HandSizeAtMost(1)
 
 
+def _delirium():
+    from mtg_bot.effects.conditions import DeliriumActive
+
+    return DeliriumActive()
+
+
 _STATIC_CONDITIONS = {
     "you have one or fewer cards in hand": _hand_at_most_one,
+    "there are four or more card types among cards in your graveyard": _delirium,
 }
+# "[<Ability word> — ]<Types> your opponents control enter tapped."
+_OPPONENTS_ENTER_TAPPED = re.compile(
+    r"^(?:[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — )?(?P<types>[A-Z][a-z]+(?:(?:,| and|, and) "
+    r"[a-z]+)*) your opponents control enter tapped\.$"
+)
+_CHOOSE_A_COLOR_AS_ENTERS = "As this creature enters, choose a color."
+_PAINT_ALL_CHOSEN_COLOR = (
+    "All cards that aren't on the battlefield, spells, and permanents are "
+    "the chosen color in addition to their other colors."
+)
+_HEAL_REPLACEMENT = re.compile(
+    r"^If damage would be dealt to this creature, instead that damage is "
+    r"dealt, but all other damage already dealt to (?:him|her|it|them) is "
+    r"healed\.$"
+)
 # "When <this creature enters> and whenever <it does X>, <effect>."
 _ENTERS_AND_WHENEVER = re.compile(
     r"^When (?P<first>this creature enters) and whenever (?P<second>[^,]+), "

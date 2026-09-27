@@ -579,6 +579,7 @@ def _resolve_damage_step(
     # one can independently matter for triggers and SBAs.
     player_life_damage: dict[int, int] = {}
     sources_hit_player: list[tuple[int, int, int]] = []
+    healed_this_step: set[int] = set()
     sources_hit_creature: list[tuple[int, int, int]] = []
     for (
         kind, target_id, amount, source_id, source_kws, source_controller,
@@ -631,6 +632,18 @@ def _resolve_damage_step(
                         f"from infect"
                     )
                 else:
+                    if (
+                        obj.printing.heals_other_damage_when_dealt_damage
+                        and obj.id not in healed_this_step
+                    ):
+                        # Wolverine: prior damage healed once per damage
+                        # step (combat damage is one simultaneous event).
+                        from mtg_bot.effects.generic.cube_creatures_rmc import (
+                            heal_before_damage,
+                        )
+
+                        heal_before_damage(obj)
+                        healed_this_step.add(obj.id)
                     obj.damage += amount
                     obj.damaged_this_turn = True
                 sources_hit_creature.append((source_id, target_id, amount))

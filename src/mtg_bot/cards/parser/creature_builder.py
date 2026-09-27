@@ -935,6 +935,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         rmc_printing_fields["graveyard_activated_abilities"] = tuple(
             rmc_graveyard_abilities
         )
+    # "As this creature enters, choose a color." only means something
+    # together with the line that uses the chosen color (Painter's
+    # Servant): claim both or neither.
+    chooses_color = rmc_printing_fields.pop("_chooses_color", False)
+    if chooses_color != rmc_printing_fields.get(
+        "paints_all_objects_chosen_color_at_etb", False,
+    ):
+        return None
     if rmc_printing_fields:
         printing = replace(printing, **rmc_printing_fields)
     return printing

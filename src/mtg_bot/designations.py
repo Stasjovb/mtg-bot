@@ -67,10 +67,15 @@ def forced_attackers(state: "GameState", player_id: int) -> list[int]:
     (goaded) among the currently eligible attackers."""
     from mtg_bot.combat import eligible_attackers
 
-    return [
-        o.id for o in eligible_attackers(state, player_id)
-        if o.goaded_by is not None
-    ]
+    eligible = eligible_attackers(state, player_id)
+    forced = [o.id for o in eligible if o.goaded_by is not None]
+    # "... attacks each combat if able." statics (cube creatures bucket).
+    from mtg_bot.effects.generic.cube_creatures_rmc import must_attack_ids
+
+    for oid in must_attack_ids(state, player_id, eligible):
+        if oid not in forced:
+            forced.append(oid)
+    return forced
 
 
 # ---------------------------------------------------------------- undercity

@@ -327,6 +327,23 @@ def move_off_battlefield(
     ):
         # Yawgmoth's Will: exiled instead (it never dies).
         destination = "exile"
+    if destination == "graveyard" and obj.printing.static_abilities:
+        # "If <Name> would be put into a graveyard from anywhere, ...
+        # shuffle it into its owner's library instead." (Blightsteel).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            graveyard_self_replacement_destination,
+        )
+
+        if graveyard_self_replacement_destination(state, obj) == "library":
+            state.log.append(
+                f"{obj.printing.name} is shuffled into its owner's library "
+                f"instead"
+            )
+            move_off_battlefield(state, obj, destination="library")
+            from mtg_bot.game import shuffle_library
+
+            shuffle_library(state, obj.owner_id)
+            return
     was_creature = is_creature_now(obj)
     if obj.exile_if_dies_this_turn:
         obj.exile_if_dies_this_turn = False
@@ -1456,6 +1473,14 @@ def state_based_actions(state: GameState) -> bool:
             break
         any_changed = True
     if apply_graveyard_exile_replacement(state):
+        any_changed = True
+    # "... would be put into a graveyard from anywhere" permanents that
+    # reached a graveyard by discard / mill (cube creatures bucket).
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        sweep_graveyard_self_replacements,
+    )
+
+    if sweep_graveyard_self_replacements(state):
         any_changed = True
     return any_changed
 
