@@ -936,6 +936,9 @@ class GameObject:
     # your graveyard, exile it instead." (Bilbo, Thief in the Night) --
     # honored when the spell leaves the stack.
     exile_if_put_into_graveyard_from_stack: bool = False
+    # Superior Spider-Man: the graveyard card this object copied as it
+    # entered ("When you do, exile that card." fires after it enters).
+    copied_card_to_exile: Optional[int] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

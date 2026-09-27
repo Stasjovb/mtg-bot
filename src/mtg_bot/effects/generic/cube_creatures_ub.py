@@ -682,6 +682,33 @@ class MayCastSourceFromHandForMiracleCost(Effect):
         return "you may cast this card for its miracle cost"
 
 
+@dataclass(frozen=True)
+class ExileGraveyardCardById(Effect):
+    """Exile the (fixed) graveyard card named by ``targets[0]`` if it's
+    still in a graveyard ("When you do, exile that card.")."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        tid = targets[0][1]
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == tid), None)
+            if card is not None:
+                p.graveyard.remove(card)
+                card.zone = Zone.EXILE
+                p.exile.append(card)
+                state.log.append(f"{card.printing.name} is exiled")
+                return
+
+    def describe(self) -> str:
+        return "exile that card"
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -1149,6 +1176,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "ExileGraveyardCardById",
     "MayCastSourceFromHandForMiracleCost",
     "TargetOpponentExilesThreeMayCastOneFree",
     "ExileUntilNonlandThenCounterOrMayCastIt",

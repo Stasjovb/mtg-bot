@@ -808,7 +808,69 @@ def _parse_additional_exile_line(line: str) -> UBLine | None:
     })
 
 
+def _parse_artifact_ability_reduction_line(line: str) -> UBLine | None:
+    """Forensic Gadgeteer. Parameterized on N."""
+    m = re.match(
+        r"^Activated abilities of artifacts you control cost \{(\d+)\} less "
+        r"to activate\. This effect can't reduce the mana in that cost to "
+        r"less than one mana\.$",
+        line,
+    )
+    if m is None:
+        return None
+    return UBLine(fields={"artifact_ability_cost_reduction": int(m.group(1))})
+
+
+# "[<Ability word> — ]You may have <self> enter as a copy of any <types>
+# on the battlefield / creature card in a graveyard[, except <riders>].
+# [When you do, exile that card.]"
+_ENTER_AS_COPY = re.compile(
+    r"^(?:[A-Z][A-Za-z']*(?: [A-Za-z']+)* — )?You may have this creature "
+    r"enter as a copy of any (?P<what>[a-z ]+?) (?:on the battlefield|"
+    r"(?P<gy>card in a graveyard))(?:, except (?P<except>.+?))?\."
+    r"(?P<exile> When you do, exile that card\.)?$"
+)
+_COPY_TYPE_WORDS = {"artifact": "Artifact", "creature": "Creature",
+                    "enchantment": "Enchantment", "land": "Land"}
+
+
+def _parse_enter_as_copy_line(line: str) -> UBLine | None:
+    m = _ENTER_AS_COPY.match(line)
+    if m is None:
+        return None
+    words = re.split(r" or |, ", m.group("what"))
+    if not words or not all(w in _COPY_TYPE_WORDS for w in words):
+        return None
+    fields: dict = {
+        "enters_as_copy_types": tuple(_COPY_TYPE_WORDS[w] for w in words),
+    }
+    if m.group("gy"):
+        fields["enters_as_copy_zone"] = "graveyard"
+    exc = m.group("except")
+    if exc is not None:
+        a = re.match(r"^it's an? (artifact|enchantment) in addition to its "
+                     r"other types$", exc)
+        b = re.match(r"^(?:his|her|its) name is this creature and (?:he|she|"
+                     r"it)'s a (\d+)/(\d+) ([A-Z][A-Za-z ]+?) in addition to "
+                     r"(?:his|her|its) other types$", exc)
+        if a is not None:
+            fields["enters_as_copy_add_type"] = _COPY_TYPE_WORDS[a.group(1)]
+        elif b is not None:
+            fields["enters_as_copy_keep_name"] = True
+            fields["enters_as_copy_base_pt"] = (int(b.group(1)), int(b.group(2)))
+            fields["enters_as_copy_add_subtypes"] = tuple(b.group(3).split(" "))
+        else:
+            return None
+    if m.group("exile"):
+        if not m.group("gy"):
+            return None
+        fields["enters_as_copy_exiles_card"] = True
+    return UBLine(fields=fields)
+
+
 _LINE_PARSERS = (
+    _parse_artifact_ability_reduction_line,
+    _parse_enter_as_copy_line,
     _parse_additional_exile_line,
     _parse_miracle_line,
     _parse_emerge_line,

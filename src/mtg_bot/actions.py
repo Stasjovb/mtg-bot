@@ -3167,6 +3167,21 @@ def _effective_ability_mana_cost(
                 f"ability cost reduced by {reduction} "
                 f"({type(rule.condition).__name__})"
             )
+    if source.printing.is_artifact and source in state.battlefield:
+        from mtg_bot.game import _source_layer6_wiped
+
+        reduction = sum(
+            o.printing.artifact_ability_cost_reduction
+            for o in state.battlefield
+            if o.printing.artifact_ability_cost_reduction
+            and o.controller_id == source.controller_id
+            and not _source_layer6_wiped(state, o)
+        )
+        if reduction:
+            # Forensic Gadgeteer: never below one mana.
+            total = cost.total
+            reduction = min(reduction, cost.generic, max(0, total - 1))
+            cost = cost.reduced(reduction)
     # Zirda-style "Abilities you activate ... cost {N} less" statics.
     from mtg_bot.effects.generic.cube_creatures_rmc import (
         activation_cost_reduction,
@@ -4864,6 +4879,12 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                     apply_clone_enters_as_copy_replacement(
                         state, card, item.controller_id,
                     )
+                elif card.printing.enters_as_copy_types:
+                    from mtg_bot.creature_casting_ub import (
+                        apply_copy_on_entry,
+                    )
+
+                    apply_copy_on_entry(state, card, item.controller_id)
                 # DSK Rooms: the half cast determines which half is
                 # unlocked when the Room enters. Set it BEFORE
                 # ``put_into_battlefield`` so any "When you unlock
@@ -5372,6 +5393,12 @@ def put_into_battlefield(
 
         apply_dash_etb(state, obj, controller_id)
     _trigger_etb_abilities(state, obj)
+    pending_exile = obj.copied_card_to_exile
+    if pending_exile is not None:
+        obj.copied_card_to_exile = None
+        from mtg_bot.creature_casting_ub import push_exile_copied_card
+
+        push_exile_copied_card(state, obj, pending_exile, controller_id)
 
 
 def _discard_land_to_enter(

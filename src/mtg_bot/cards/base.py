@@ -1415,6 +1415,25 @@ class CardPrinting:
     # "As an additional cost to cast this spell, exile N cards from your
     # graveyard." (Abhorrent Oculus)
     additional_cost_exile_from_graveyard: int = 0
+    # "Activated abilities of artifacts you control cost {N} less to
+    # activate. This effect can't reduce the mana in that cost to less
+    # than one mana." (Forensic Gadgeteer)
+    artifact_ability_cost_reduction: int = 0
+    # Clone family beyond ``enters_as_copy_of_creature`` (U/B cube):
+    # "You may have this creature enter as a copy of any <types> on the
+    # battlefield" (``enters_as_copy_types``, e.g. ("Artifact",
+    # "Creature") for Phyrexian Metamorph) or "... any creature card in a
+    # graveyard" (``enters_as_copy_zone="graveyard"``, Superior
+    # Spider-Man); the "except ..." riders: an added card type, a kept
+    # name, a set base P/T and added subtypes; and "When you do, exile
+    # that card." (``enters_as_copy_exiles_card``).
+    enters_as_copy_types: tuple[str, ...] = ()
+    enters_as_copy_zone: str = "battlefield"
+    enters_as_copy_add_type: str = ""
+    enters_as_copy_keep_name: bool = False
+    enters_as_copy_base_pt: "tuple[int, int] | None" = None
+    enters_as_copy_add_subtypes: tuple[str, ...] = ()
+    enters_as_copy_exiles_card: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

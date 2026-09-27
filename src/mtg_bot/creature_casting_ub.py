@@ -191,6 +191,100 @@ def pay_exile_from_graveyard_cost(
 
 
 # ---------------------------------------------------------------------
+# Enter as a copy (Phyrexian Metamorph, Superior Spider-Man)
+# ---------------------------------------------------------------------
+
+
+def apply_copy_on_entry(
+    state: "GameState", clone: "GameObject", controller_id: int,
+) -> None:
+    """"You may have this creature enter as a copy of any <types> on the
+    battlefield / creature card in a graveyard, except ..." (CR 707.9).
+    The controller picks (or declines with ``None``) via
+    ``choose_target``; the copy's printing carries the "except"
+    modifications, the pre-copy printing is kept in
+    ``original_printing`` and a layer-1 ``is_copy`` entry lasts while the
+    clone is on the battlefield."""
+    import dataclasses
+
+    from mtg_bot.game import is_creature_now
+
+    pr = clone.printing
+    types = pr.enters_as_copy_types
+    if pr.enters_as_copy_zone == "graveyard":
+        candidates = [
+            ("graveyard_card", c.id) for p in state.players for c in p.graveyard
+            if any(t in c.printing.card_types for t in types)
+        ]
+        by_id = {c.id: c for p in state.players for c in p.graveyard}
+    else:
+        candidates = [
+            ("permanent", o.id) for o in state.battlefield
+            if o is not clone and (
+                any(t in o.printing.card_types for t in types)
+                or ("Creature" in types and is_creature_now(o))
+            )
+        ]
+        by_id = {o.id: o for o in state.battlefield}
+    if not candidates:
+        return
+    agent = state.player_by_id(controller_id).agent
+    chosen = agent.choose_target(state, controller_id, candidates) if agent else None
+    if chosen is None or chosen not in candidates:
+        return
+    target = by_id[chosen[1]]
+    base = target.printing
+    changes: dict = {}
+    if pr.enters_as_copy_add_type and pr.enters_as_copy_add_type not in base.card_types:
+        changes["card_types"] = base.card_types + (pr.enters_as_copy_add_type,)
+    if pr.enters_as_copy_keep_name:
+        changes["name"] = pr.name
+    if pr.enters_as_copy_base_pt is not None:
+        changes["power"], changes["toughness"] = pr.enters_as_copy_base_pt
+    extra = tuple(s for s in pr.enters_as_copy_add_subtypes if s not in base.subtypes)
+    if extra:
+        changes["subtypes"] = base.subtypes + extra
+    copied = dataclasses.replace(base, **changes) if changes else base
+    if clone.original_printing is None:
+        clone.original_printing = pr
+    clone.printing = copied
+    state.add_continuous_effect(
+        source_id=clone.id, layer=1, kind="is_copy", target_id=clone.id,
+        params=(copied,),
+        description=f"{pr.name} is a copy of {base.name}",
+    )
+    state.log.append(f"{pr.name} enters as a copy of {base.name}")
+    if pr.enters_as_copy_exiles_card and pr.enters_as_copy_zone == "graveyard":
+        clone.copied_card_to_exile = target.id
+
+
+def push_exile_copied_card(
+    state: "GameState", clone: "GameObject", card_id: int, controller_id: int,
+) -> None:
+    """The reflexive "When you do, exile that card." trigger, put on the
+    stack once the copy has entered."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_ub import ExileGraveyardCardById
+    from mtg_bot.effects.predicates import Event
+
+    push_triggered_ability(
+        state,
+        source=clone,
+        ability=TriggeredAbility(
+            event=Event.ENTERS, effect=ExileGraveyardCardById(),
+        ),
+        ability_index=_REFLEXIVE_EXILE_INDEX,
+        controller_id=controller_id,
+        label="when you do",
+        fixed_targets=(("graveyard_card", card_id),),
+    )
+
+
+_REFLEXIVE_EXILE_INDEX = 2102
+
+
+# ---------------------------------------------------------------------
 # Miracle (CR 702.94)
 # ---------------------------------------------------------------------
 
