@@ -84,8 +84,9 @@ TS_UP_RC=1
 for attempt in 1 2 3; do
   if tailscale up --authkey="$MTG_BOT_TAILSCALE_AUTHKEY" --hostname="${HOSTNAME_TAG}-${IID}" --accept-dns=true --ssh; then
     TS_UP_RC=0; break
+  else
+    TS_UP_RC=$?   # inside else, $? is still the failed command's status
   fi
-  TS_UP_RC=$?
   echo "tailscale up attempt $attempt failed (rc=$TS_UP_RC); retrying in 5s"
   sleep 5
 done

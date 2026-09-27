@@ -271,6 +271,18 @@ def test_build_env_injection_emits_export_for_s3_uri():
     assert lines[1] == "export MTG_BOT_TAILSCALE_AUTHKEY=tskey-auth-dummy"
 
 
+def test_build_env_injection_strips_whitespace_around_authkey():
+    """Regression (2026-09-27): the key file on the launcher host was
+    CRLF-terminated and the s2 scripts only stripped LF, so the worker
+    ran ``tailscale up --authkey=tskey-...<CR>`` and the control plane
+    rejected it ("invalid key"). The renderer now strips."""
+    block = _build_env_injection("null://", "tskey-auth-abc123\r\n")
+    assert "export MTG_BOT_TAILSCALE_AUTHKEY=tskey-auth-abc123" in block
+    assert "\r" not in block
+    # Whitespace-only still counts as missing.
+    with pytest.raises(FleetConfigError):
+        _build_env_injection("null://", " \r\n")
+
 def test_build_env_injection_quotes_shell_metachars():
     """Defensive: storage_uri values with spaces / dollar signs / etc
     must survive intact through shell parsing on the worker."""
