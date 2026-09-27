@@ -14,8 +14,11 @@ Shapes:
 * ``exile [up to one ]target <noun> until this <permanent> leaves the
   battlefield`` -> :class:`ExileTargetUntilSourceLeaves` (Touch the
   Spirit Realm), any noun the compositional noun-phrase parser reads.
-* ``exile target <noun>. Return it to the battlefield under its owner's
-  control at the beginning of the next end step`` ->
+* ``exile [up to one ][another|other ]target <noun>. Return it|that card
+  to the battlefield under its owner's control at the beginning of the
+  next end step`` (and the "At the beginning of the next end step,
+  return that card ... [If it entered under your control, put a +1/+1
+  counter on this creature]" wording) ->
   :class:`ExileTargetReturnAtNextEndStep` (Touch the Spirit Realm's
   Channel ability).
 * ``each player returns to the battlefield all cards they own exiled
@@ -44,9 +47,17 @@ _EXILE_UNTIL_SOURCE_LEAVES = re.compile(
     rf"leaves the battlefield$"
 )
 
+# Also Flickerwisp's "exile another target permanent. Return that card
+# ..." and Phelia's "exile up to one other target nonland permanent. At
+# the beginning of the next end step, return that card ... If it entered
+# under your control, put a +1/+1 counter on <this>." (cube W/G bucket).
 _EXILE_RETURN_AT_NEXT_END_STEP = re.compile(
-    r"^exile target (?P<noun>.+?)\. [Rr]eturn it to the battlefield under "
-    r"its owner's control at the beginning of the next end step$"
+    r"^exile (?P<upto>up to one )?(?:(?P<other>another|other) )?target "
+    r"(?P<noun>.+?)\. (?:[Rr]eturn (?:it|that card) to the battlefield under "
+    r"its owner's control at the beginning of the next end step|At the "
+    r"beginning of the next end step, return (?:it|that card) to the "
+    r"battlefield under its owner's control(?P<counter>\. If it entered "
+    r"under your control, put a \+1/\+1 counter on this creature)?)$"
 )
 
 _EACH_PLAYER_RETURNS_EXILED_WITH = re.compile(
@@ -88,10 +99,19 @@ def parse_enchantment_phrase(phrase: str) -> Effect | None:
         return ExileTargetUntilSourceLeaves(targets=(spec,))
     m = _EXILE_RETURN_AT_NEXT_END_STEP.match(phrase)
     if m is not None:
-        spec = _target_spec(m.group("noun"), False)
+        spec = _target_spec(m.group("noun"), bool(m.group("upto")))
         if spec is None:
             return None
-        return ExileTargetReturnAtNextEndStep(targets=(spec,))
+        if m.group("other"):
+            from dataclasses import replace
+
+            from mtg_bot.effects.object_predicates import IsSource
+
+            spec = replace(spec, filter=spec.filter & ~IsSource())
+        return ExileTargetReturnAtNextEndStep(
+            targets=(spec,),
+            counter_on_source_if_yours=bool(m.group("counter")),
+        )
     if _EACH_PLAYER_RETURNS_EXILED_WITH.match(phrase):
         return EachPlayerReturnsCardsExiledWithSource()
     m = _OATH_BODY.match(phrase)

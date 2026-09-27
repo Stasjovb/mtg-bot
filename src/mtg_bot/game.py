@@ -877,14 +877,6 @@ class GameObject:
     # trigger and resolution time. Cleared whenever the object leaves
     # the battlefield (a flickered evoked creature is a new object).
     evoked: bool = False
-    # Linked "exiled with <source>" abilities (CR 607.2a): ``(source id,
-    # source etb_timestamp)`` of the permanent whose linked exiling
-    # ability put this card into exile (Skyclave Apparition, Keen-Eyed
-    # Curator). The timestamp pins one battlefield incarnation of the
-    # source, so a source that leaves and returns is a new object with
-    # no exiled cards. ``()`` when unlinked. See
-    # ``effects.generic.cube_creatures_wg.cards_exiled_with``.
-    exiled_with: tuple = ()
     # "Exile ... until an opponent becomes the monarch" (Palace Jailer):
     # id of the player whose opponent's becoming the monarch returns
     # this card from exile. ``None`` otherwise.

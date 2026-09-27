@@ -80,23 +80,24 @@ class TargetPlayerPutsGraveyardOnBottomRandom(Effect):
 
 
 def exile_link_key(source) -> tuple:
-    """The ``GameObject.exiled_with`` value naming ``source``'s current
-    battlefield incarnation."""
+    """The ``GameObject.imprinted_on`` value naming ``source``'s current
+    battlefield incarnation (the base's imprint / "exiled with" link)."""
     return (source.id, source.etb_timestamp)
 
 
 def cards_exiled_with(state: "GameState", source) -> list:
     """Cards in exile that ``source``'s linked exiling ability put there
     (this incarnation of ``source`` only)."""
-    key = exile_link_key(source)
-    return [c for p in state.players for c in p.exile if c.exiled_with == key]
+    from mtg_bot.effects.generic.artifact_mechanics import imprinted_cards
+
+    return imprinted_cards(state, source)
 
 
 @dataclass(frozen=True)
 class LinkExiledCardsToSource(Effect):
     """Wraps the exiling half of a linked ability pair (CR 607.2a): every
     card the inner effect moves into exile is tagged as "exiled with"
-    the resolving source (``GameObject.exiled_with``), so the other half
+    the resolving source (``GameObject.imprinted_on``), so the other half
     ("the exiled card", "cards exiled with this creature") can find it.
 
     Targeting delegates to ``inner`` unchanged."""
@@ -128,7 +129,7 @@ class LinkExiledCardsToSource(Effect):
             for p in state.players:
                 for c in p.exile:
                     if c.id not in before:
-                        c.exiled_with = key
+                        c.imprinted_on = key
         return result
 
     def describe(self) -> str:
@@ -155,7 +156,7 @@ class ExiledCardOwnerCreatesManaValueToken(Effect):
         if source is None:
             return
         for card in cards_exiled_with(state, source):
-            card.exiled_with = ()
+            card.imprinted_on = None
             x = card.printing.mana_cost.total
             printing = make_token_creature(
                 name=self.subtype, power=x, toughness=x,
@@ -234,111 +235,6 @@ def release_exiled_until_opponent_monarch(
             )
             _reset_left_battlefield_object(c)
             put_into_battlefield(state, c, p.id)
-
-
-# ---------------------------------------------------------------------
-# Flicker until the next end step (Flickerwisp, Phelia)
-# ---------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ExileTargetReturnAtNextEndStep(Effect):
-    """"Exile <target>. Return that card to the battlefield under its
-    owner's control at the beginning of the next end step." (Flickerwisp)
-    / "... At the beginning of the next end step, return that card ...
-    If it entered under your control, put a +1/+1 counter on <this>."
-    (Phelia, ``counter_on_source_if_yours``).
-
-    The return is a delayed trigger (``schedule_at_next_end_step``)
-    carrying the exiled card's id; a token target ceases to exist and
-    nothing returns."""
-
-    targets: tuple = ()
-    counter_on_source_if_yours: bool = False
-
-    def resolve(self, state, controller_id, targets=()):
-        from mtg_bot.effects.generic.delayed_actions import (
-            schedule_at_next_end_step,
-        )
-        from mtg_bot.effects.generic.targets_helpers import (
-            _slot_target_still_legal,
-        )
-        from mtg_bot.turn import move_off_battlefield
-
-        source = state.resolving_source
-        prior = getattr(state, "resolving_controller_id", None)
-        state.resolving_controller_id = controller_id
-        try:
-            for slot, chosen in zip(self.targets, targets):
-                if not _slot_target_still_legal(state, slot, chosen):
-                    continue
-                obj = next(o for o in state.battlefield if o.id == chosen[1])
-                state.log.append(f"{obj.printing.name} is exiled")
-                move_off_battlefield(state, obj, destination="exile")
-                if obj.printing.is_token:
-                    continue
-                schedule_at_next_end_step(
-                    state, controller_id, obj.id,
-                    ReturnExiledCardToBattlefield(
-                        card_id=obj.id,
-                        counter_on_id=(
-                            source.id
-                            if self.counter_on_source_if_yours
-                            and source is not None else None
-                        ),
-                    ),
-                )
-        finally:
-            state.resolving_controller_id = prior
-
-    def describe(self) -> str:
-        return (
-            "exile target permanent; return it at the beginning of the next "
-            "end step"
-        )
-
-
-@dataclass(frozen=True)
-class ReturnExiledCardToBattlefield(Effect):
-    """Delayed half of :class:`ExileTargetReturnAtNextEndStep`: return
-    the exiled card ``card_id`` to the battlefield under its owner's
-    control (no-op if it left exile); if ``counter_on_id`` is set and
-    the card entered under this ability's controller's control, put a
-    +1/+1 counter on that permanent (Phelia)."""
-
-    card_id: int = -1
-    counter_on_id: "int | None" = None
-
-    def resolve(self, state, controller_id, targets=()):
-        from mtg_bot.actions import put_into_battlefield
-        from mtg_bot.game import add_plus_one_counters
-        from mtg_bot.turn import _reset_left_battlefield_object
-
-        for p in state.players:
-            card = next((c for c in p.exile if c.id == self.card_id), None)
-            if card is None:
-                continue
-            p.exile.remove(card)
-            state.log.append(
-                f"{card.printing.name} returns to the battlefield under "
-                f"P{p.id}'s control"
-            )
-            _reset_left_battlefield_object(card)
-            put_into_battlefield(state, card, p.id)
-            if self.counter_on_id is not None and p.id == controller_id:
-                host = next(
-                    (o for o in state.battlefield if o.id == self.counter_on_id),
-                    None,
-                )
-                if host is not None:
-                    add_plus_one_counters(state, host, 1)
-            return
-
-    def describe(self) -> str:
-        return (
-            "return the exiled card to the battlefield under its owner's "
-            "control"
-        )
 
 
 # ---------------------------------------------------------------------

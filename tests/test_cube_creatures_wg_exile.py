@@ -6,15 +6,18 @@ from __future__ import annotations
 
 from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
 from mtg_bot.cards.parser.creature_wg_lines import link_exile_abilities
+from mtg_bot.cards.parser.enchantment_phrases import parse_enchantment_phrase
 from mtg_bot.designations import become_monarch
 from mtg_bot.effects.generic.cube_creatures_wg import (
     ExiledCardOwnerCreatesManaValueToken,
-    ExileTargetReturnAtNextEndStep,
     ExileUntilOpponentBecomesMonarch,
     LinkExiledCardsToSource,
-    ReturnExiledCardToBattlefield,
     cards_exiled_with,
     release_exiled_until_opponent_monarch,
+)
+from mtg_bot.effects.generic.enchantment_mechanics import (
+    ExileTargetReturnAtNextEndStep,
+    ReturnResolvingSourceFromExileUnderOwner,
 )
 from mtg_bot.effects.generic.exile import Exile
 from mtg_bot.effects.generic.keyword_actions import BecomeMonarch
@@ -68,7 +71,7 @@ def test_skyclave_exiles_then_owner_gets_illusion_when_it_leaves():
     assert tok.controller_id == 1 and tok.owner_id == 1
     assert (tok.printing.power, tok.printing.toughness) == (2, 2)
     assert tok.printing.color_indicator == frozenset({"U"})
-    assert victim.exiled_with == ()
+    assert victim.imprinted_on is None
 
 
 def test_skyclave_cannot_target_big_or_own_permanents():
@@ -90,7 +93,7 @@ def test_link_is_per_incarnation():
     LinkExiledCardsToSource(Exile()).resolve(state, 0, ())
     move_off_battlefield(state, other, destination="exile")
     assert cards_exiled_with(state, sky) == []
-    other.exiled_with = (sky.id, sky.etb_timestamp + 1)
+    other.imprinted_on = (sky.id, sky.etb_timestamp + 1)
     assert cards_exiled_with(state, sky) == []
     eff = ExiledCardOwnerCreatesManaValueToken()
     eff.resolve(state, 0)
@@ -234,23 +237,25 @@ def test_phelia_no_counter_for_opponents_permanent_or_missing_phelia():
     state = make_state()
     phelia = put(state, 0, "Phelia, Exuberant Shepherd")
     theirs = put(state, 1, bear("Theirs"), Zone.EXILE)
-    ReturnExiledCardToBattlefield(card_id=theirs.id, counter_on_id=phelia.id).resolve(
+    state.resolving_source = theirs
+    ReturnResolvingSourceFromExileUnderOwner(counter_on_id=phelia.id).resolve(
         state, 0,
     )
     assert theirs in state.battlefield and phelia.plus_one_counters == 0
     mine = put(state, 0, bear("Mine"), Zone.EXILE)
-    ReturnExiledCardToBattlefield(card_id=mine.id, counter_on_id=999).resolve(state, 0)
+    state.resolving_source = mine
+    ReturnResolvingSourceFromExileUnderOwner(counter_on_id=999).resolve(state, 0)
     assert mine in state.battlefield
     # Card already gone: nothing happens.
-    ReturnExiledCardToBattlefield(card_id=12345).resolve(state, 0)
-    assert "return" in ReturnExiledCardToBattlefield().describe()
+    ReturnResolvingSourceFromExileUnderOwner().resolve(state, 0)
+    state.resolving_source = None
 
 
 def test_flicker_fizzles_when_target_gone():
     state = make_state()
     wisp = put(state, 0, "Flickerwisp")
     other = put(state, 1, bear("Other"))
-    eff = parse_wg_effect(
+    eff = parse_enchantment_phrase(
         "exile another target permanent. Return that card to the battlefield "
         "under its owner's control at the beginning of the next end step"
     )
@@ -265,7 +270,7 @@ def test_wg_effect_grammar_rejects_unknown_nouns():
     assert parse_wg_effect(
         "exile target wombat until an opponent becomes the monarch"
     ) is None
-    assert parse_wg_effect(
+    assert parse_enchantment_phrase(
         "exile another target wombat. Return that card to the battlefield "
         "under its owner's control at the beginning of the next end step"
     ) is None

@@ -209,13 +209,23 @@ class ExileTargetUntilSourceLeaves(Exile):
 class ReturnResolvingSourceFromExileUnderOwner(Effect):
     """Delayed half of a flicker: returns the scheduled card (the
     delayed trigger's source) from exile to the battlefield under its
-    owner's control. No-op if it is no longer in exile (CR 400.7)."""
+    owner's control, as a new object (CR 400.7: no counters). No-op if
+    it is no longer in exile.
+
+    ``counter_on_id``: "If it entered under your control, put a +1/+1
+    counter on <that permanent>." (Phelia, Exuberant Shepherd) -- when
+    the card returns under this ability's controller's control and that
+    permanent is still on the battlefield."""
+
+    counter_on_id: "int | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
         from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import add_plus_one_counters
+        from mtg_bot.turn import _reset_left_battlefield_object
 
         card = state.resolving_source
         if card is None:
@@ -228,7 +238,15 @@ class ReturnResolvingSourceFromExileUnderOwner(Effect):
             f"{card.printing.name} returns to the battlefield under "
             f"P{owner.id}'s control"
         )
+        _reset_left_battlefield_object(card)
         put_into_battlefield(state, card, owner.id)
+        if self.counter_on_id is not None and owner.id == controller_id:
+            host = next(
+                (o for o in state.battlefield if o.id == self.counter_on_id),
+                None,
+            )
+            if host is not None:
+                add_plus_one_counters(state, host, 1)
 
     def describe(self) -> str:
         return "return it to the battlefield under its owner's control"
@@ -238,8 +256,11 @@ class ReturnResolvingSourceFromExileUnderOwner(Effect):
 class ExileTargetReturnAtNextEndStep(Exile):
     """"Exile target <permanent>. Return it to the battlefield under its
     owner's control at the beginning of the next end step." (Touch the
-    Spirit Realm's Channel ability). A token exiled this way ceases to
-    exist and never returns."""
+    Spirit Realm's Channel ability; Flickerwisp; Phelia, Exuberant
+    Shepherd with ``counter_on_source_if_yours``). A token exiled this
+    way ceases to exist and never returns."""
+
+    counter_on_source_if_yours: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -249,13 +270,20 @@ class ExileTargetReturnAtNextEndStep(Exile):
             schedule_at_next_end_step,
         )
 
+        source = state.resolving_source
+        counter_on_id = (
+            source.id
+            if self.counter_on_source_if_yours and source is not None else None
+        )
         for obj in _legal_exile_targets(self, state, controller_id, targets):
             _exile_permanent(state, obj)
             if obj.printing.is_token:
                 continue
             schedule_at_next_end_step(
                 state, controller_id, obj.id,
-                ReturnResolvingSourceFromExileUnderOwner(),
+                ReturnResolvingSourceFromExileUnderOwner(
+                    counter_on_id=counter_on_id,
+                ),
             )
 
     def describe(self) -> str:

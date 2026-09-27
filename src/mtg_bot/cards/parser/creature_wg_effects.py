@@ -94,12 +94,6 @@ Shapes:
 * ``earthbend N`` -> :class:`Earthbend` (Badgermole Cub)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
-* ``exile [up to one ][another|other ]target <noun>. Return that card to
-  the battlefield under its owner's control at the beginning of the next
-  end step`` / ``... At the beginning of the next end step, return that
-  card to the battlefield under its owner's control[. If it entered
-  under your control, put a +1/+1 counter on this creature]`` ->
-  :class:`ExileTargetReturnAtNextEndStep` (Flickerwisp, Phelia)
 """
 
 from __future__ import annotations
@@ -244,14 +238,6 @@ _EARTHBEND_RE = re.compile(r"^earthbend (?P<n>\d+)$")
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
     r"becomes the monarch$"
-)
-_FLICKER_UNTIL_NEXT_END_STEP_RE = re.compile(
-    r"^exile (?P<upto>up to one )?(?:(?P<other>another|other) )?target "
-    r"(?P<noun>.+?)\. (?:[Rr]eturn that card to the battlefield under its "
-    r"owner's control at the beginning of the next end step|At the "
-    r"beginning of the next end step, return that card to the battlefield "
-    r"under its owner's control(?P<counter>\. If it entered under your "
-    r"control, put a \+1/\+1 counter on this creature)?)$"
 )
 
 
@@ -651,16 +637,6 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         spec = _target_spec(m.group("noun"), bool(m.group("upto")))
         if spec is not None:
             return wg.ExileUntilOpponentBecomesMonarch(targets=(spec,))
-    m = _FLICKER_UNTIL_NEXT_END_STEP_RE.match(phrase)
-    if m is not None:
-        spec = _target_spec(
-            m.group("noun"), bool(m.group("upto")), bool(m.group("other")),
-        )
-        if spec is not None:
-            return wg.ExileTargetReturnAtNextEndStep(
-                targets=(spec,),
-                counter_on_source_if_yours=bool(m.group("counter")),
-            )
     return None
 
 

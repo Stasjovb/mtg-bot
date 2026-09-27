@@ -19325,7 +19325,7 @@ claimed in both pools).
    need the creature on the battlefield), but a flicker-in-response line
    (sacrifice trigger still on the stack) is only reachable with the
    printed ETB resolving second.
-2. **"Exiled with" links** (`GameObject.exiled_with`, `cube_creatures_wg.
+2. **"Exiled with" links** (the base's `GameObject.imprinted_on`, `cube_creatures_wg.
    LinkExiledCardsToSource`) pin a card to one battlefield incarnation of
    its source (id + ETB timestamp) and are consumed by the linked
    ability. A linked card that leaves exile and later returns to exile by
@@ -19382,7 +19382,7 @@ claimed in both pools).
     is per object and survives a same-turn flicker (the engine keeps the
     object id).
 13. **New per-object / per-player state is not part of search hashing**:
-    `evoked`, `exiled_with`, `exiled_until_opponent_monarch_of`,
+    `evoked`, `exiled_until_opponent_monarch_of`,
     `graveyard_arrival_pending`, `resolutions_this_turn`,
     `cast_uncounterable`, `must_attack_turn`, `exile_cast_extra_surcharge`,
     `graveyard_permission_used_turn`, `leaves_to_graveyard_exile_gain_life`,
