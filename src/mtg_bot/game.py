@@ -942,6 +942,11 @@ class GameObject:
     # Saddle (CR 702.171b): "This Mount becomes saddled until end of
     # turn." Cleared at cleanup.
     saddled: bool = False
+    # "choose odd or even" answer ("odd" / "even"), set as it enters.
+    chosen_parity: Optional[str] = None
+    # Indices of the modes already chosen for a "choose one that hasn't
+    # been chosen" modal ability (Gollum, Riddle Master).
+    modes_chosen: tuple = ()
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

@@ -180,13 +180,16 @@ _MODAL_CHOOSE_ONE_SUFFIX = ", choose one —"
 # "choose up to one —" (Ertai Resurrected): the same block plus a
 # "choose no mode" option.
 _MODAL_CHOOSE_UP_TO_ONE_SUFFIX = ", choose up to one —"
+# "choose one that hasn't been chosen —" (Gollum, Riddle Master).
+_MODAL_CHOOSE_UNUSED_SUFFIX = ", choose one that hasn't been chosen —"
 _MODAL_MODE_PREFIX = "• "
 
 # Trigger-header shape for a modal triggered ability. The leading
 # ``When``/``Whenever`` and the trailing ``, choose one —`` are fixed;
 # the condition body (group 1) is captured non-greedily.
 _MODAL_TRIGGER_HEADER_RE = re.compile(
-    r"^(?:When|Whenever) (.+?), choose (up to )?one —$"
+    r"^(?:When|Whenever) (.+?), choose (up to )?one"
+    r"( that hasn't been chosen)? —$"
 )
 
 
@@ -249,6 +252,8 @@ def _parse_modal_trigger_block(
         if not raw.startswith(_MODAL_MODE_PREFIX):
             return None
         body = raw[len(_MODAL_MODE_PREFIX):]
+        if name is not None:
+            body = _substitute_self_name(body, name)
         eff = _parse_modal_mode_phrase(body)
         if eff is None:
             return None
@@ -257,6 +262,18 @@ def _parse_modal_trigger_block(
         from mtg_bot.effects.generic.cube_creatures_ub import ChooseNoMode
 
         parsed_modes.append(ChooseNoMode())
+    if m.group(3):
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ModalChooseOneNotYetChosen,
+        )
+
+        if any(e.requires_target() for e in parsed_modes):
+            return None
+        return TriggeredAbility(
+            event=event,
+            predicate=predicate,
+            effect=ModalChooseOneNotYetChosen(modes=tuple(parsed_modes)),
+        )
     return TriggeredAbility(
         event=event,
         predicate=predicate,
@@ -409,7 +426,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         _ln = _raw_lines[_i]
         if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX) or _ln.endswith(
             _MODAL_CHOOSE_UP_TO_ONE_SUFFIX
-        ):
+        ) or _ln.endswith(_MODAL_CHOOSE_UNUSED_SUFFIX):
             # Modal trigger header — collect subsequent bullet mode lines.
             _modes: list[str] = []
             _j = _i + 1

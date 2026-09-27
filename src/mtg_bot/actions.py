@@ -5310,6 +5310,13 @@ def put_into_battlefield(
         from mtg_bot.creature_statics_wg import choose_card_name_as_enters
 
         choose_card_name_as_enters(state, obj, controller_id)
+    obj.chosen_parity = None
+    obj.modes_chosen = ()
+    if obj.printing.chooses_parity_as_enters:
+        agent = state.player_by_id(controller_id).agent
+        idx = agent.choose_mode(state, controller_id, ["odd", "even"]) if agent else 0
+        obj.chosen_parity = "even" if idx == 1 else "odd"
+        state.log.append(f"{obj.printing.name} enters; chose {obj.chosen_parity}")
     if obj.printing.chooses_player_as_enters:
         options = [("player", pl.id) for pl in state.players if not pl.has_lost]
         agent = state.player_by_id(controller_id).agent

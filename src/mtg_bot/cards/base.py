@@ -1419,6 +1419,8 @@ class CardPrinting:
     # activate. This effect can't reduce the mana in that cost to less
     # than one mana." (Forensic Gadgeteer)
     artifact_ability_cost_reduction: int = 0
+    # "As <this> enters, choose odd or even." (Gollum, Riddle Master)
+    chooses_parity_as_enters: bool = False
     # Clone family beyond ``enters_as_copy_of_creature`` (U/B cube):
     # "You may have this creature enter as a copy of any <types> on the
     # battlefield" (``enters_as_copy_types``, e.g. ("Artifact",

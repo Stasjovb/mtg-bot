@@ -101,6 +101,17 @@ def parse_ub_trigger_phrase(phrase: str):
             IsSelf(subject="source")
             & Subject("target", IsPlayer() | IsPlaneswalker()),
         )
+    if phrase == (
+        "an opponent casts a spell with mana value of the chosen quality"
+    ):
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            SpellMVHasSourceParity,
+        )
+
+        return (
+            Event.IS_CAST,
+            Controlled(OPPONENT, subject="controller") & SpellMVHasSourceParity(),
+        )
     m = _SELF_OR_ANOTHER_ENTERS.match(phrase)
     if m is not None:
         noun = _leaves_noun(m.group("noun"))
@@ -892,7 +903,14 @@ def _parse_saddle_line(line: str) -> UBLine | None:
     ),))
 
 
+def _parse_choose_parity_line(line: str) -> UBLine | None:
+    if line != "As this creature enters, choose odd or even.":
+        return None
+    return UBLine(fields={"chooses_parity_as_enters": True})
+
+
 _LINE_PARSERS = (
+    _parse_choose_parity_line,
     _parse_saddle_line,
     _parse_artifact_ability_reduction_line,
     _parse_enter_as_copy_line,

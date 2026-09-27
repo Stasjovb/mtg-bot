@@ -727,6 +727,74 @@ class BecomeSaddled(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Parity choice / once-per-mode modal (Gollum, Riddle Master)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SpellMVHasSourceParity:
+    """Trigger predicate: the cast spell's mana value is odd / even per
+    the source's ``chosen_parity`` ("a spell with mana value of the
+    chosen quality"; 0 is even). No choice -> never."""
+
+    def matches(self, state, subjects, source) -> bool:
+        spell = subjects.get("spell")
+        parity = getattr(source, "chosen_parity", None)
+        if spell is None or parity is None:
+            return False
+        mv = spell.printing.mana_cost.total
+        return (mv % 2 == 1) == (parity == "odd")
+
+    def __and__(self, other):
+        from mtg_bot.effects.predicates import And
+
+        return And(self, other)
+
+    def __rand__(self, other):
+        from mtg_bot.effects.predicates import And
+
+        return And(other, self)
+
+
+@dataclass(frozen=True)
+class ModalChooseOneNotYetChosen(Effect):
+    """"choose one that hasn't been chosen —" (CR 700.2): each mode can
+    be chosen once for this object; once all have been chosen the
+    ability does nothing. Used modes are recorded on the source
+    (``GameObject.modes_chosen``)."""
+
+    modes: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        used = tuple(src.modes_chosen) if src is not None else ()
+        open_modes = [i for i in range(len(self.modes)) if i not in used]
+        if not open_modes:
+            state.log.append("every mode has already been chosen")
+            return
+        p = state.player_by_id(controller_id)
+        pick = open_modes[0]
+        if p.agent is not None and len(open_modes) > 1:
+            idx = p.agent.choose_mode(
+                state, controller_id,
+                [self.modes[i].describe() for i in open_modes],
+            )
+            pick = open_modes[max(0, min(idx, len(open_modes) - 1))]
+        if src is not None:
+            src.modes_chosen = used + (pick,)
+        state.log.append(f"mode chosen: {self.modes[pick].describe()}")
+        self.modes[pick].resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return "choose one that hasn't been chosen: " + " / ".join(
+            m.describe() for m in self.modes
+        )
+
+
+# ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
 
@@ -1208,6 +1276,8 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "ModalChooseOneNotYetChosen",
+    "SpellMVHasSourceParity",
     "BecomeSaddled",
     "ExileGraveyardCardById",
     "MayCastSourceFromHandForMiracleCost",
