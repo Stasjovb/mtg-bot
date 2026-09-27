@@ -118,6 +118,9 @@ class CastSpell(Action):
     use_plot: bool = False
     # Escape (CR 702.138): cast from the graveyard for the escape cost.
     use_escape: bool = False
+    # Dash (CR 702.109): cast from hand for the dash cost; the permanent
+    # gains haste and returns to hand at the next end step.
+    use_dash: bool = False
 
 
 @dataclass(frozen=True)
@@ -1248,6 +1251,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_flashback=action.use_flashback,
             use_buyback=action.use_buyback,
             use_escape=action.use_escape,
+            use_dash=action.use_dash,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1866,6 +1870,7 @@ def _cast_spell(
     use_flashback: bool = False,
     use_buyback: bool = False,
     use_escape: bool = False,
+    use_dash: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -1933,6 +1938,9 @@ def _cast_spell(
             cost = half.mana_cost
         elif use_impending:
             cost = card.printing.impending_cost
+        elif use_dash:
+            # Dash (CR 702.109): an alternative cost from hand.
+            cost = card.printing.dash_cost
         elif use_warp:
             # Innate warp first, then battlefield-granted warp
             # (Tannuk, Steadfast Second's hand-warp grant). The
@@ -2565,6 +2573,9 @@ def _cast_spell(
             ),
             division=division,
             spliced=spliced,
+            alt_cost=(
+                "dash" if use_dash else "escape" if use_escape else ""
+            ),
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -2572,6 +2583,10 @@ def _cast_spell(
         mode = " (flashback)"
     if alt_cost_index is not None:
         mode = " (alternative cost)"
+    if use_dash:
+        mode = " (dash)"
+    if use_escape:
+        mode = " (escape)"
     if cast_room_half is not None:
         mode = f" ({cast_room_half})"
     state.log.append(
@@ -2614,6 +2629,16 @@ def _cast_spell(
                 x_value=x_value,
             )
 
+    # "When you cast this spell, ..." (CR 603.2 on the stack: the
+    # spell's own IS_CAST abilities — Emrakul, cascade). The battlefield
+    # IS_CAST dispatch below never sees them (the spell isn't a
+    # permanent), so they're stacked here with the spell as source.
+    if card.printing.triggered_abilities:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_this_spell_cast_triggers,
+        )
+
+        fire_this_spell_cast_triggers(state, card, player_id)
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
     p.spells_cast_this_game += 1
@@ -3719,6 +3744,9 @@ def _activate_ability(
     # Exhaust (CR 702.177): latch this ability index on the object.
     if ability.exhaust:
         source.exhausted_abilities = source.exhausted_abilities | {ability_index}
+    # Boast (CR 702.142): once each turn.
+    if ability.boast:
+        source.boasted_turn = state.turn_number
 
     # Exile-self and sacrifice-self are paid LAST so the source is still
     # on the battlefield for target selection. exile_self moves the source
@@ -4389,6 +4417,10 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                         f"{card.printing.name}: unlocked door "
                         f"{item.cast_room_half}"
                     )
+            # Dash / escape provenance (cube creatures bucket) for the
+            # ETB riders in ``put_into_battlefield``.
+            card.dashed = item.alt_cost == "dash"
+            card.escaped = item.alt_cost == "escape"
             put_into_battlefield(state, card, item.controller_id)
             if card.cast_without_sorcery_timing:
                 # Necromancy: cast when a sorcery couldn't have been ->
@@ -4831,6 +4863,12 @@ def put_into_battlefield(
         state.player_by_id(
             controller_id
         ).artifacts_entered_under_your_control_this_turn += 1
+    if obj.dashed:
+        # Dash (CR 702.109a): haste while on the battlefield + a delayed
+        # return-to-hand at the beginning of the next end step.
+        from mtg_bot.effects.generic.cube_creatures_rmc import apply_dash_etb
+
+        apply_dash_etb(state, obj, controller_id)
     _trigger_etb_abilities(state, obj)
 
 

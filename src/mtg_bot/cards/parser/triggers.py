@@ -1692,7 +1692,15 @@ def _parse_predicate_trigger_phrase(
         # <filter> spell") -- see ``effects_ext.parse_ext_trigger_phrase``.
         from mtg_bot.cards.parser.effects_ext import parse_ext_trigger_phrase
 
-        return parse_ext_trigger_phrase(phrase.strip())
+        ext = parse_ext_trigger_phrase(phrase.strip())
+        if ext is not None:
+            return ext
+        # Cube creatures (R / multicolor / colorless) bucket conditions.
+        from mtg_bot.cards.parser.creature_rmc_grammar import (
+            parse_rmc_trigger_phrase,
+        )
+
+        return parse_rmc_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 

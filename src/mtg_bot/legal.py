@@ -511,6 +511,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             kwargs.get("use_impending", False),
             kwargs.get("cast_room_half", None),
             kwargs.get("use_buyback", False),
+            kwargs.get("use_dash", False),
         )
         if key in seen_instant:
             return
@@ -824,6 +825,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             kwargs.get("use_impending", False),
             kwargs.get("cast_room_half", None),
             kwargs.get("use_buyback", False),
+            kwargs.get("use_dash", False),
         )
         if key in seen_sorcery:
             return
@@ -878,6 +880,18 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and _additional_costs_payable(state, player_id, card)
             ):
                 _emit_hand_sorcery_cast(card, kicked=True)
+            # Dash (CR 702.109): alternative cost from hand, sorcery
+            # timing like the normal cast of the creature.
+            if (
+                card.printing.dash_cost is not None
+                and _can_cast(
+                    state, player_id, card,
+                    _effective_cost(card, card.printing.dash_cost),
+                )
+                and _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                _emit_hand_sorcery_cast(card, use_dash=True)
             if (
                 card.printing.warp_cost is not None
                 and _can_cast(
@@ -1165,6 +1179,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 continue
             # Exhaust (CR 702.177): each exhaust ability once per object.
             if ability.exhaust and idx in obj.exhausted_abilities:
+                continue
+            # Boast (CR 702.142): only if it attacked this turn, once
+            # each turn.
+            if ability.boast and (
+                obj.boasted_turn == state.turn_number
+                or not any(
+                    a.id == obj.id for a in p.attacked_this_turn
+                )
+            ):
                 continue
             if ability.cost.extra_costs and not _extra_costs_payable(
                 state, player_id, obj, ability.cost,

@@ -434,31 +434,78 @@ class ReturnThisCardFromGraveyardToBattlefield(Effect):
 
 @dataclass(frozen=True)
 class ExileTopCardsWithPlayPermission(Effect):
-    """"Exile the top N cards of your library. You may play them this
-    turn [without paying their mana costs]." (Golos, Tireless Pilgrim)
-    — the exiled cards carry an :class:`ExilePlayPermission` for the
-    controller (``free`` for the no-mana-cost form)."""
+    """"Exile the top N cards of <whose> library[ face down]. <You may
+    play / cast that card <duration>>." — the impulse family (Golos,
+    Ragavan, Laelia, Headliner Scarlett, Caves of Chaos Adventurer,
+    Robber of the Rich). Each exiled card carries an
+    :class:`ExilePlayPermission` for the controller.
+
+    * ``whose`` — ``"you"`` (the controller's library),
+      ``"that_player"`` (the player in the anaphoric ``targets`` tuple —
+      the damaged player of a combat-damage trigger) or
+      ``"defending_player"`` (the opponent, for attack triggers).
+    * ``free`` / ``free_if`` — "without paying its mana cost" always, or
+      only while ``free_if`` (a ``StatePredicate`` for the controller)
+      holds at resolution ("If you've completed a dungeon, ...
+      Otherwise, ...").
+    * ``cast_only`` — "you may cast that card" (lands excluded).
+    * ``face_down`` — only the controller learns the card.
+    * ``requires_attacked_with_subtype`` / ``any_color_mana`` — Robber
+      of the Rich's permission shape.
+    """
 
     count: int = 1
     free: bool = False
     duration: str = THIS_TURN
+    whose: str = "you"
+    cast_only: bool = False
+    face_down: bool = False
+    free_if: object = None
+    requires_attacked_with_subtype: str = ""
+    any_color_mana: bool = False
+
+    def _library_owner(self, state, controller_id, targets):
+        if self.whose == "you":
+            return controller_id
+        if self.whose == "that_player":
+            return next((tid for kind, tid in targets if kind == "player"), None)
+        # defending player: the (single) opponent.
+        return next(
+            (pl.id for pl in state.players
+             if pl.id != controller_id and not pl.has_lost),
+            None,
+        )
 
     def resolve(self, state, controller_id, targets=()):
-        p = state.player_by_id(controller_id)
+        owner_id = self._library_owner(state, controller_id, targets)
+        if owner_id is None:
+            return
+        p = state.player_by_id(owner_id)
+        free = self.free or (
+            self.free_if is not None and self.free_if.test(state, controller_id)
+        )
         exiled = []
         for _ in range(self.count):
             if not p.library:
                 break
             card = p.library.pop(0)
-            exile_card(state, card)
+            exile_card(
+                state, card,
+                face_down_for=controller_id if self.face_down else None,
+            )
             grant_exile_play(
                 state, card, controller_id,
-                duration=self.duration, free=self.free,
+                duration=self.duration, free=free,
+                cast_only=self.cast_only,
+                requires_attacked_with_subtype=self.requires_attacked_with_subtype,
+                any_color_mana=self.any_color_mana,
             )
-            exiled.append(card.printing.name)
+            exiled.append("a card" if self.face_down else card.printing.name)
+        verb = "cast" if self.cast_only else "play"
         state.log.append(
-            f"P{controller_id} exiles {', '.join(exiled) or 'nothing'} "
-            f"(may play {'free ' if self.free else ''}{self.duration})"
+            f"P{controller_id} exiles {', '.join(exiled) or 'nothing'} from "
+            f"P{owner_id}'s library (may {verb} "
+            f"{'free ' if free else ''}{self.duration})"
         )
 
     def describe(self) -> str:
@@ -467,3 +514,463 @@ class ExileTopCardsWithPlayPermission(Effect):
             f"play them this turn"
             + (" without paying their mana costs" if self.free else "")
         )
+
+
+# ---------------------------------------------------------------------------
+# Dash (CR 702.109)
+# ---------------------------------------------------------------------------
+
+
+def apply_dash_etb(state: "GameState", obj: "GameObject", controller_id: int) -> None:
+    """A dashed permanent entering: it has haste for as long as it stays
+    on the battlefield, and a delayed trigger returns it to its owner's
+    hand at the beginning of the next end step (CR 702.109a)."""
+    state.add_continuous_effect(
+        source_id=obj.id, layer=6, kind="grant_keyword",
+        target_id=obj.id, params=("haste",),
+        description=f"{obj.printing.name}: dash (haste)",
+    )
+    state.delayed_triggers.append({
+        "fire_at_turn": state.turn_number,
+        "controller_id": controller_id,
+        "source_id": obj.id,
+        "effect": ReturnDashedPermanentToHand(etb_timestamp=obj.etb_timestamp),
+        "any_player_end_step": True,
+    })
+    state.log.append(f"{obj.printing.name} was dashed (haste; returns at end step)")
+
+
+@dataclass(frozen=True)
+class ReturnDashedPermanentToHand(Effect):
+    """Dash's delayed trigger: return the dashed permanent to its
+    owner's hand — only if it's the same object that entered
+    (``etb_timestamp`` match; CR 400.7)."""
+
+    etb_timestamp: int = 0
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import move_off_battlefield
+
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next((o for o in state.battlefield if o.id == ref.id), None)
+        if obj is None or obj.etb_timestamp != self.etb_timestamp:
+            return
+        state.log.append(f"{obj.printing.name} returns to its owner's hand (dash)")
+        move_off_battlefield(state, obj, destination="hand")
+
+    def describe(self) -> str:
+        return "return the dashed permanent to its owner's hand"
+
+
+# ---------------------------------------------------------------------------
+# Escape (CR 702.138c: "escaped")
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SacrificeSelfUnlessEscaped(Effect):
+    """"When this creature enters, sacrifice it unless it escaped."
+    (Phlage, Uro)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import sacrifice
+
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next((o for o in state.battlefield if o.id == ref.id), None)
+        if obj is None or obj.escaped:
+            return
+        state.log.append(f"{obj.printing.name} is sacrificed (didn't escape)")
+        sacrifice(state, obj)
+
+    def describe(self) -> str:
+        return "sacrifice it unless it escaped"
+
+
+# ---------------------------------------------------------------------------
+# "When you cast this spell" (cast triggers from the stack)
+# ---------------------------------------------------------------------------
+
+from mtg_bot.effects.predicates import TriggerPredicate as _TriggerPredicate  # noqa: E402
+
+
+@dataclass(frozen=True)
+class IsThisSpell(_TriggerPredicate):
+    """IS_CAST subject ``spell`` IS the ability's own card — "When you
+    cast this spell". Never true for a battlefield permanent observing
+    some other spell; the cast pipeline stacks these abilities itself
+    (:func:`fire_this_spell_cast_triggers`)."""
+
+    def matches(self, state, subjects, source):
+        return subjects.get("spell") is source
+
+
+def _is_this_spell_ability(ability) -> bool:
+    from mtg_bot.effects.predicates import And, Event
+
+    if ability.event != Event.IS_CAST:
+        return False
+    pred = ability.predicate
+    stack = [pred]
+    while stack:
+        p = stack.pop()
+        if isinstance(p, IsThisSpell):
+            return True
+        if isinstance(p, And):
+            stack.extend((p.left, p.right))
+    return False
+
+
+def fire_this_spell_cast_triggers(state: "GameState", card: "GameObject", controller_id: int) -> None:
+    """Stack every "When you cast this spell" ability of ``card``, the
+    spell just put on the stack (source = the spell)."""
+    from mtg_bot.actions import push_triggered_ability
+
+    caster = state.player_by_id(controller_id)
+    subjects = {"spell": card, "controller": caster}
+    for idx, ability in enumerate(card.printing.triggered_abilities):
+        if not _is_this_spell_ability(ability):
+            continue
+        if not ability.matches_event(ability.event, subjects, card, state):
+            continue
+        push_triggered_ability(
+            state, source=card, ability=ability, ability_index=idx,
+            controller_id=controller_id, label="cast",
+        )
+
+
+def cast_card_from_exile_for_free(state: "GameState", player_id: int, card: "GameObject") -> bool:
+    """Cast ``card`` (in some exile zone) without paying its mana cost
+    in the middle of a resolving ability (cascade, CR 608.2g: timing is
+    ignored). Returns False — leaving the card where it is — when the
+    spell couldn't be cast (no legal targets / unpayable additional
+    costs)."""
+    from mtg_bot.actions import _cast_spell
+    from mtg_bot.legal import _additional_costs_payable, _targets_are_satisfiable
+
+    if card.printing.is_land:
+        return False
+    grant_exile_play(state, card, player_id, free=True, cast_only=True)
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        card.exile_play_permission = None
+        return False
+    _cast_spell(state, player_id, card.id, cast_for_free=True)
+    return True
+
+
+@dataclass(frozen=True)
+class Cascade(Effect):
+    """Cascade (CR 702.85a): "When you cast this spell, exile cards from
+    the top of your library until you exile a nonland card whose mana
+    value is less than this spell's mana value. You may cast that card
+    without paying its mana cost. Then put all cards exiled this way that
+    weren't cast on the bottom of your library in a random order."
+
+    The spell is the resolving ability's source (its printed mana value
+    is read even if it has since left the stack)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        spell = state.resolving_source
+        if spell is None:
+            return
+        threshold = spell.printing.mana_cost.total
+        p = state.player_by_id(controller_id)
+        exiled: list = []
+        hit = None
+        while p.library:
+            card = p.library.pop(0)
+            exile_card(state, card)
+            exiled.append(card)
+            if not card.printing.is_land and card.printing.mana_cost.total < threshold:
+                hit = card
+                break
+        state.log.append(
+            f"P{controller_id} cascades into "
+            f"{hit.printing.name if hit else 'nothing'} "
+            f"({len(exiled)} card(s) exiled)"
+        )
+        cast = False
+        if hit is not None:
+            agent = p.agent
+            wants = agent is None or agent.choose_yes_no(
+                state, controller_id,
+                f"Cascade: cast {hit.printing.name} without paying its mana cost?",
+            )
+            if wants:
+                cast = cast_card_from_exile_for_free(state, controller_id, hit)
+        rest = [c for c in exiled if not (cast and c is hit)]
+        state.rng.shuffle(rest)
+        for c in rest:
+            state.player_by_id(c.owner_id).exile.remove(c)
+            c.exile_play_permission = None
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+
+    def describe(self) -> str:
+        return "cascade"
+
+
+# ---------------------------------------------------------------------------
+# More impulse variants
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CardTypeOrSubtypeFilter:
+    """A card matching ANY of ``types`` (card types) or ``subtypes``
+    ("Equipment, instant, or sorcery card"; "artifact or Dragon card").
+    Same ``matches(printing)`` protocol as ``card_flow.CardFilter``."""
+
+    types: tuple[str, ...] = ()
+    subtypes: tuple[str, ...] = ()
+
+    @property
+    def has_quality(self) -> bool:
+        return True
+
+    def matches(self, printing) -> bool:
+        return any(t in printing.card_types for t in self.types) or any(
+            s in printing.subtypes for s in self.subtypes
+        )
+
+    def describe(self) -> str:
+        return " or ".join((*self.types, *self.subtypes)) + " card"
+
+
+@dataclass(frozen=True)
+class ExileRandomGraveyardCardWithPlayPermission(Effect):
+    """"Exile a card at random from your graveyard. You may play that
+    card this turn." (Tersa Lightshatter)."""
+
+    duration: str = THIS_TURN
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        if not p.graveyard:
+            return
+        card = state.rng.choice(list(p.graveyard))
+        p.graveyard.remove(card)
+        exile_card(state, card)
+        grant_exile_play(state, card, controller_id, duration=self.duration)
+        state.log.append(
+            f"P{controller_id} exiles {card.printing.name} at random from "
+            f"their graveyard (may play {self.duration})"
+        )
+
+    def describe(self) -> str:
+        return "exile a card at random from your graveyard; you may play it"
+
+
+@dataclass(frozen=True)
+class ExileTargetGraveyardCardWithPlayPermission(Effect):
+    """"Exile target <card filter> card from your graveyard. <Until the
+    end of your next turn>, you may play that card." (Thor, God of
+    Thunder). ``card_filter`` is a ``CardFilter`` over printings."""
+
+    card_filter: object = None
+    duration: str = UNTIL_END_OF_YOUR_NEXT_TURN
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_card", c.id) for c in p.graveyard
+            if self.card_filter is None or self.card_filter.matches(c.printing)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        for kind, tid in targets:
+            if kind != "graveyard_card":
+                continue
+            card = next((c for c in p.graveyard if c.id == tid), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            exile_card(state, card)
+            grant_exile_play(state, card, controller_id, duration=self.duration)
+            state.log.append(
+                f"P{controller_id} exiles {card.printing.name} from their "
+                f"graveyard (may play {self.duration})"
+            )
+
+    def describe(self) -> str:
+        return "exile target card from your graveyard; you may play it"
+
+
+# ---------------------------------------------------------------------------
+# "can't block this turn"
+# ---------------------------------------------------------------------------
+
+_CANT_BLOCK = "cant_block"
+_CREATURES_CANT_BLOCK = "creatures_cant_block"
+
+
+def creature_cant_block(state: "GameState", obj: "GameObject") -> bool:
+    """Whether a "can't block this turn" effect applies to ``obj``: a
+    per-creature entry (``TargetCreatureCantBlockThisTurn``) or a
+    player-wide one (``CreaturesCantBlockThisTurn`` — every creature the
+    named player controls, including ones that arrive later this turn;
+    ``params == (None,)`` means every player)."""
+    for ce in state.continuous_effects:
+        if ce.kind == _CANT_BLOCK and ce.target_id == obj.id:
+            return True
+        if ce.kind == _CREATURES_CANT_BLOCK and ce.params and (
+            ce.params[0] is None or ce.params[0] == obj.controller_id
+        ):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class TargetCreatureCantBlockThisTurn(Effect):
+    """"[Up to one ]target creature can't block this turn." """
+
+    optional: bool = False
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+
+        object.__setattr__(self, "targets", (TargetSpec(
+            IsCreature(), count_min=0 if self.optional else 1, count_max=1,
+        ),))
+
+    def resolve(self, state, controller_id, targets=()):
+        for kind, tid in targets:
+            if kind == "player":
+                continue
+            obj = next((o for o in state.battlefield if o.id == tid), None)
+            if obj is None:
+                continue
+            src = state.resolving_source
+            state.add_continuous_effect(
+                source_id=src.id if src is not None else -1,
+                layer=6, kind=_CANT_BLOCK, target_id=obj.id,
+                expires_at="cleanup",
+                description=f"{obj.printing.name} can't block this turn",
+            )
+            state.log.append(f"{obj.printing.name} can't block this turn")
+
+    def describe(self) -> str:
+        return ("up to one " if self.optional else "") + (
+            "target creature can't block this turn"
+        )
+
+
+@dataclass(frozen=True)
+class CreaturesCantBlockThisTurn(Effect):
+    """"Creatures can't block this turn." / "Creatures target player
+    controls can't block this turn." (``target_player``)."""
+
+    target_player: bool = False
+
+    def requires_target(self) -> bool:
+        return self.target_player
+
+    def target_count_range(self):
+        return (1, 1) if self.target_player else (0, 0)
+
+    def legal_targets(self, state, controller_id):
+        if not self.target_player:
+            return []
+        return [("player", pl.id) for pl in state.players if not pl.has_lost]
+
+    def resolve(self, state, controller_id, targets=()):
+        pid = None
+        if self.target_player:
+            pid = next((tid for kind, tid in targets if kind == "player"), None)
+            if pid is None:
+                return
+        src = state.resolving_source
+        label = (
+            "creatures can't block this turn" if pid is None
+            else f"creatures P{pid} controls can't block this turn"
+        )
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else -1,
+            layer=6, kind=_CREATURES_CANT_BLOCK, params=(pid,),
+            expires_at="cleanup", description=label,
+        )
+        state.log.append(label)
+
+    def describe(self) -> str:
+        return (
+            "creatures target player controls can't block this turn"
+            if self.target_player else "creatures can't block this turn"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Conditions / formulas / formula damage
+# ---------------------------------------------------------------------------
+
+from mtg_bot.effects.conditions import Condition as _Condition  # noqa: E402
+from mtg_bot.effects.formulas import Formula as _Formula  # noqa: E402
+
+
+@dataclass(frozen=True)
+class StateCondition(_Condition):
+    """Adapter: a viewer-scoped ``StatePredicate`` as a ``Condition``
+    ("if you're the monarch", "if you've completed a dungeon")."""
+
+    predicate: object = None
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return self.predicate.test(state, viewer_id)
+
+
+@dataclass(frozen=True)
+class ResolvingDamageAmount(_Formula):
+    """"that much damage" — the damage amount carried by the resolving
+    dealt-damage / combat-damage trigger."""
+
+    def value(self, state, controller_id):
+        return max(0, state.resolving_combat_damage_amount)
+
+
+@dataclass(frozen=True)
+class DealDamageByFormula(Effect):
+    """"<source> deals damage equal to <formula> to <target>" — the
+    unified ``DealDamage`` resolve with a runtime amount (Broadside
+    Bombardiers: 2 plus the sacrificed permanent's mana value)."""
+
+    amount: object = None
+    targets: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        n = self.amount.value(state, controller_id)
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(_fizzle_message(state, chosen))
+                    continue
+                if n > 0:
+                    _apply_damage(state, chosen, n)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return "deals damage equal to X to target"

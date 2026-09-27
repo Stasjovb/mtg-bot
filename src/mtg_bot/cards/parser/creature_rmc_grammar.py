@@ -221,11 +221,70 @@ _RETURN_THIS_CARD_FROM_GRAVEYARD = re.compile(
     r"^return this card from your graveyard to the battlefield"
     r"(?P<tapped> tapped)?$"
 )
-_EXILE_TOP_N_MAY_PLAY = re.compile(
-    rf"^exile the top (?P<n>{_N}) cards? of your library\. [Yy]ou may play "
-    r"(?:them|it|that card) this turn(?P<free> without paying (?:their|its) "
-    r"mana costs?)?$"
+# Impulse family: "exile the top <N> card(s) of <whose> library[ face
+# down]. <permission sentence>". The permission sentence is looked up in
+# ``_PERMISSIONS``; Caves of Chaos Adventurer's two-branch form ("If
+# <gate>, <free permission>. Otherwise, <permission>.") is its own arm.
+_EXILE_TOP_WITH_PERMISSION = re.compile(
+    rf"^exile the top (?:(?P<n>{_N}) )?cards? of (?P<whose>your|that player's) "
+    r"library(?P<face_down> face down)?\. (?P<perm>.+)$"
 )
+_CONDITIONAL_FREE_PERMISSION = re.compile(
+    r"^[Ii]f (?P<gate>[^,]+), (?P<free>you may play that card this turn "
+    r"without paying its mana cost)\. Otherwise, (?P<paid>you may play that "
+    r"card this turn)$"
+)
+_PERMISSIONS: dict[str, dict] = {
+    "you may play that card this turn": {},
+    "you may play them this turn": {},
+    "you may play it this turn": {},
+    "you may play them this turn without paying their mana costs": {"free": True},
+    "you may play that card this turn without paying its mana cost": {"free": True},
+    "you may look at and play that card this turn": {},
+    "until end of turn, you may cast that card": {"cast_only": True},
+    "you may play that card until your next end step": {
+        "duration": "until_your_next_end_step",
+    },
+    "until the end of your next turn, you may play that card": {
+        "duration": "until_end_of_your_next_turn",
+    },
+}
+_EXILE_RANDOM_FROM_GRAVEYARD = re.compile(
+    r"^exile a card at random from your graveyard\. (?P<perm>.+)$"
+)
+_EXILE_TARGET_FROM_GRAVEYARD_WITH_PERMISSION = re.compile(
+    r"^exile target (?P<desc>.+?) card from your graveyard\. (?P<perm>.+)$"
+)
+_SACRIFICE_UNLESS_ESCAPED = "sacrifice it unless it escaped"
+_TARGET_CREATURE_CANT_BLOCK = re.compile(
+    r"^(?P<upto>up to one )?target creature can't block this turn$"
+)
+_CREATURES_CANT_BLOCK = re.compile(
+    r"^creatures(?P<tp> target player controls)? can't block this turn$"
+)
+_IF_GATE_EFFECT = re.compile(r"^if (?P<gate>[^,]+), (?P<eff>.+)$")
+_DAMAGE_2_PLUS_SACRIFICED_MV = re.compile(
+    r"^deals damage equal to (?P<k>\d+) plus the sacrificed permanent's "
+    r"mana value to any target$"
+)
+
+
+def _permission_kwargs(sentence: str) -> dict | None:
+    """ExilePlayPermission kwargs for a printed permission sentence."""
+    key = sentence[0].lower() + sentence[1:] if sentence else sentence
+    return _PERMISSIONS.get(key)
+
+
+def _gate_state_predicate(gate: str):
+    """The viewer-scoped ``StatePredicate`` behind an "if <gate>" phrase
+    (the triggers module's intervening-if phrasebook), or ``None``."""
+    from mtg_bot.cards.parser.triggers import _parse_intervening_if_phrase
+    from mtg_bot.effects.predicates import StateBound
+
+    pred = _parse_intervening_if_phrase(gate)
+    if isinstance(pred, StateBound):
+        return pred.inner
+    return None
 
 
 def parse_rmc_effect(phrase: str) -> Effect | None:
@@ -264,16 +323,140 @@ def parse_rmc_effect(phrase: str) -> Effect | None:
             tapped=bool(m.group("tapped")),
         )
 
-    m = _EXILE_TOP_N_MAY_PLAY.match(phrase)
+    m = _EXILE_TOP_WITH_PERMISSION.match(phrase)
     if m is not None:
         from mtg_bot.effects.generic.cube_creatures_rmc import (
             ExileTopCardsWithPlayPermission,
         )
 
-        return ExileTopCardsWithPlayPermission(
-            count=_n(m.group("n")), free=bool(m.group("free")),
+        base = dict(
+            count=_n(m.group("n")) if m.group("n") else 1,
+            whose="you" if m.group("whose") == "your" else "that_player",
+            face_down=bool(m.group("face_down")),
+        )
+        perm = m.group("perm")
+        kwargs = _permission_kwargs(perm)
+        if kwargs is not None:
+            if base["face_down"] != perm.lower().startswith("you may look at"):
+                return None
+            return ExileTopCardsWithPlayPermission(**base, **kwargs)
+        cond = _CONDITIONAL_FREE_PERMISSION.match(perm)
+        if cond is not None and not base["face_down"]:
+            gate = _gate_state_predicate(cond.group("gate"))
+            if gate is not None:
+                return ExileTopCardsWithPlayPermission(**base, free_if=gate)
+        return None
+
+    m = _EXILE_RANDOM_FROM_GRAVEYARD.match(phrase)
+    if m is not None:
+        kwargs = _permission_kwargs(m.group("perm"))
+        if kwargs == {}:
+            from mtg_bot.effects.generic.cube_creatures_rmc import (
+                ExileRandomGraveyardCardWithPlayPermission,
+            )
+
+            return ExileRandomGraveyardCardWithPlayPermission()
+        return None
+
+    m = _EXILE_TARGET_FROM_GRAVEYARD_WITH_PERMISSION.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            ExileTargetGraveyardCardWithPlayPermission,
+        )
+
+        kwargs = _permission_kwargs(m.group("perm"))
+        desc = _alternation_card_filter(m.group("desc"))
+        if desc is None:
+            desc = parse_card_descriptor(_article(m.group("desc")) + " card")
+        if kwargs is None or desc is None or set(kwargs) - {"duration"}:
+            return None
+        return ExileTargetGraveyardCardWithPlayPermission(
+            card_filter=desc, **kwargs,
+        )
+
+    if phrase == _SACRIFICE_UNLESS_ESCAPED:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            SacrificeSelfUnlessEscaped,
+        )
+
+        return SacrificeSelfUnlessEscaped()
+
+    m = _TARGET_CREATURE_CANT_BLOCK.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            TargetCreatureCantBlockThisTurn,
+        )
+
+        return TargetCreatureCantBlockThisTurn(optional=bool(m.group("upto")))
+
+    m = _CREATURES_CANT_BLOCK.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            CreaturesCantBlockThisTurn,
+        )
+
+        return CreaturesCantBlockThisTurn(target_player=bool(m.group("tp")))
+
+    m = _IF_GATE_EFFECT.match(phrase)
+    if m is not None:
+        gate = _gate_state_predicate(m.group("gate"))
+        if gate is not None:
+            inner = _parse_effect(m.group("eff"))
+            if inner is not None:
+                from mtg_bot.effects.generic.cube_creatures_rmc import (
+                    StateCondition,
+                )
+                from mtg_bot.effects.generic.cube_walkers import IfCondition
+
+                return IfCondition(condition=StateCondition(gate), then=inner)
+        return None
+
+    m = _DAMAGE_2_PLUS_SACRIFICED_MV.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+        from mtg_bot.effects.generic.cube_creatures_rmc import DealDamageByFormula
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        return DealDamageByFormula(
+            amount=MVOfCostPaidObjectPlus(constant=int(m.group("k"))),
+            targets=(TargetSpec(any_target_filter()),),
         )
     return None
+
+
+def _article(desc: str) -> str:
+    """``artifact`` -> ``an artifact`` for ``parse_card_descriptor``."""
+    return ("an " if desc[:1].lower() in "aeiou" else "a ") + desc
+
+
+_CARD_TYPE_NAMES = {
+    "artifact": "Artifact", "creature": "Creature", "enchantment": "Enchantment",
+    "instant": "Instant", "sorcery": "Sorcery", "land": "Land",
+    "planeswalker": "Planeswalker", "battle": "Battle",
+}
+
+
+def _alternation_card_filter(desc: str):
+    """``Equipment, instant, or sorcery`` / ``artifact or Dragon`` — an
+    OR-list of card types (lower-case) and subtypes (capitalized) ->
+    ``CardTypeOrSubtypeFilter``; ``None`` for anything else (including
+    a single type, which ``parse_card_descriptor`` owns)."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import CardTypeOrSubtypeFilter
+
+    words = [w.strip() for w in re.split(r", or |, | or ", desc)]
+    if len(words) < 2:
+        return None
+    types: list[str] = []
+    subtypes: list[str] = []
+    for w in words:
+        if w in _CARD_TYPE_NAMES:
+            types.append(_CARD_TYPE_NAMES[w])
+        elif re.fullmatch(r"[A-Z][a-z]+", w):
+            subtypes.append(w)
+        else:
+            return None
+    return CardTypeOrSubtypeFilter(types=tuple(types), subtypes=tuple(subtypes))
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +487,35 @@ _EXILE_FROM_HAND_ABILITY = re.compile(r"^Exile this card from your hand: (?P<eff
 # this creature: It deals 1 damage to any target.").
 _ACTIVATED_IT_SUBJECT = re.compile(r"^(?P<cost>[^:]+): It (?P<verb>deals|fights) ")
 _EXHAUST_LINE = re.compile(r"^Exhaust — (?P<body>.+)$")
+_BOAST_LINE = re.compile(r"^Boast — (?P<body>.+)$")
+_DASH_LINE = re.compile(r"^Dash (?P<cost>(?:\{[^}]+\})+)$")
+
+
+# ---------------------------------------------------------------------------
+# Trigger conditions
+# ---------------------------------------------------------------------------
+
+
+def parse_rmc_trigger_phrase(phrase: str):
+    """``(Event, Predicate)`` for trigger conditions of the bucket, tried
+    after the predicate-trigger phrasebook and the planeswalker
+    extension declined:
+
+    * ``you cast this spell`` -> ``IS_CAST`` of the card itself
+      (stacked by the cast pipeline, see ``IsThisSpell``)
+    * ``this creature is dealt damage`` -> ``DEALT_DAMAGE`` of the source
+    """
+    if _DISABLED[0]:
+        return None
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    if phrase == "you cast this spell":
+        from mtg_bot.effects.generic.cube_creatures_rmc import IsThisSpell
+
+        return (Event.IS_CAST, IsThisSpell())
+    if phrase == "this creature is dealt damage":
+        return (Event.DEALT_DAMAGE, IsSelf())
+    return None
 
 
 def _functions_from_graveyard(ability: ActivatedAbility) -> bool:
@@ -351,6 +563,47 @@ def parse_rmc_creature_line_pre(line: str, name: str) -> RmcLine | None:
         if ability is None or _functions_from_graveyard(ability):
             return None
         return RmcLine(activated=(replace(ability, exhaust=True),))
+
+    m = _BOAST_LINE.match(line)
+    if m is not None:
+        ability = _parse_activated_ability_line(
+            _substitute_self_name(m.group("body"), name)
+        )
+        if ability is None or _functions_from_graveyard(ability):
+            return None
+        return RmcLine(activated=(replace(ability, boast=True),))
+
+    m = _DASH_LINE.match(line)
+    if m is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        cost = m.group("cost")
+        return RmcLine(printing_fields={
+            "dash_cost": parse_mana_cost(cost), "dash_cost_str": cost,
+        })
+
+    if line.startswith("Escape—"):
+        from mtg_bot.cards.parser.spell_builder import _casting_keyword_fields
+
+        fields = _casting_keyword_fields(line)
+        if fields is not None and "escape_cost" in fields:
+            return RmcLine(printing_fields=fields)
+        return None
+
+    if line == "Cascade":
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            Cascade,
+            IsThisSpell,
+        )
+        from mtg_bot.effects.predicates import Event
+
+        return RmcLine(
+            keywords=("cascade",),
+            triggers=(TriggeredAbility(
+                event=Event.IS_CAST, predicate=IsThisSpell(), effect=Cascade(),
+            ),),
+        )
 
     if ": " in line and "graveyard" in line:
         ability = _parse_activated_ability_line(_substitute_self_name(line, name))

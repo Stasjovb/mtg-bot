@@ -854,6 +854,9 @@ class GameObject:
     # stamped at ETB (it gains haste and returns to hand at the next
     # end step). Cleared when it leaves the battlefield.
     dashed: bool = False
+    # Boast (CR 702.142): ``state.turn_number`` of the last activation of
+    # this permanent's boast ability (0 = never).
+    boasted_turn: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -2720,6 +2723,10 @@ class StackItem:
     # Splice (CR 702.47): ``(printing, targets)`` for each card spliced
     # onto this spell; their effects resolve after the spell's own.
     spliced: tuple = ()
+    # Which alternative cost of this bucket the spell was cast for
+    # (``"dash"`` / ``"escape"``; ``""`` otherwise). A permanent spell
+    # stamps ``GameObject.dashed`` / ``escaped`` from it as it resolves.
+    alt_cost: str = ""
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject

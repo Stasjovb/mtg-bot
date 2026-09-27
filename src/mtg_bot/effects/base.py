@@ -696,9 +696,16 @@ class ActivatedAbility:
     # a permanent with several exhaust abilities (Loot, the Pathfinder)
     # can use each of them once; a new object (CR 400.7) starts fresh.
     exhaust: bool = False
+    # Boast (CR 702.142): "Activate only if this creature attacked this
+    # turn and only once each turn." Gated in ``legal_actions`` on the
+    # source being among its controller's attackers this turn and
+    # ``GameObject.boasted_turn`` differing from the current turn.
+    boast: bool = False
 
     def describe(self) -> str:
         prefix = "Exhaust — " if self.exhaust else ""
+        if self.boast:
+            prefix = "Boast — "
         return f"{prefix}{self.cost.describe()}: {self.effect.describe()}"
 
 

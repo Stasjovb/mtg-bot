@@ -24,12 +24,21 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    blockers = [
         o for o in state.battlefield
         if o.controller_id == player_id
         and is_creature_now(o)
         and not o.tapped
     ]
+    if blockers and state.continuous_effects:
+        # "... can't block this turn" (cube creatures bucket: Aragorn,
+        # Headliner Scarlett, Zirda).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            creature_cant_block,
+        )
+
+        blockers = [o for o in blockers if not creature_cant_block(state, o)]
+    return blockers
 
 
 def can_block(
