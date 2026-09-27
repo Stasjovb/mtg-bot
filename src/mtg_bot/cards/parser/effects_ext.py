@@ -347,6 +347,12 @@ _PUT_CARD_WITH_COUNTER_FROM_EXILE = re.compile(
     r"^put a card you own with an? (?P<counter>silver) counter on it from "
     r"exile into your hand$"
 )
+_TARGET_BECOMES_COPY_OF_ANOTHER_TARGET_UEOT = re.compile(
+    r"^target (?P<a>.+?) becomes a copy of another target (?P<b>.+?) "
+    r"until end of turn(?:, except it's an? "
+    r"(?P<extra>artifact|creature|enchantment) in addition to its other "
+    r"types)?$"
+)
 # Stat token whose only rider is a quoted self-anthem scaling with a
 # count: 'with "This token gets +N/+M for each <noun> you control."'
 _CREATE_TOKEN_WITH_PER_COUNT_ANTHEM = re.compile(
@@ -612,6 +618,25 @@ def parse_ext_effect(phrase: str) -> Effect | None:
                     static_abilities=(anthem,),
                 ),
                 count=_count(m.group("count")),
+            )
+
+    m = _TARGET_BECOMES_COPY_OF_ANOTHER_TARGET_UEOT.match(phrase)
+    if m is not None:
+        a = _target_spec(m.group("a"), up_to_one=False)
+        b = _target_spec(m.group("b"), up_to_one=False)
+        if a is not None and b is not None:
+            from dataclasses import replace as _replace
+
+            from mtg_bot.effects.generic.cube_walkers import (
+                TargetBecomesCopyOfAnotherTargetUEOT,
+            )
+
+            extra = m.group("extra")
+            return TargetBecomesCopyOfAnotherTargetUEOT(
+                targets=(a, _replace(b, distinct_from=(0,))),
+                add_card_types=(
+                    (_CARD_TYPE_WORDS[extra],) if extra else ()
+                ),
             )
 
     m = _YOU_GET_AN_EMBLEM_WITH.match(phrase)

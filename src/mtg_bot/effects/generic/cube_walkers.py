@@ -1193,7 +1193,124 @@ class PutCardYouOwnWithCounterFromExileIntoHand(Effect):
         )
 
 
+# ---------------------------------------------------------------------------
+# Temporary copy effect with two differently-filtered targets (misc cluster)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TargetBecomesCopyOfAnotherTargetUEOT(Effect):
+    """"Target <A> becomes a copy of another target <B> until end of
+    turn[, except it's a <type> in addition to its other types]."
+    (Saheeli, Sublime Artificer's -2: A = artifact you control, B =
+    artifact or creature you control, extra type Artifact).
+
+    Two ``TargetSpec`` slots with their own filters; the activation
+    pipeline enumerates each slot through ``legal_targets_for_slot``
+    and keeps them distinct ("another"). Resolution follows the
+    Cytoshape layer-1 precedent: snapshot ``original_printing``, swap
+    in the copied printing, and register an ``is_copy`` entry expiring
+    at cleanup (``run_cleanup_step`` / ``move_off_battlefield`` revert
+    it). The copy keeps the copier's token status (CR 707.2 -- being a
+    token isn't a copiable value) and gains ``add_card_types``."""
+
+    targets: tuple = ()
+    add_card_types: tuple = ()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def legal_targets_for_slot(
+        self, state: "GameState", controller_id: int, slot_idx: int,
+    ) -> list[Target]:
+        return self._enumerate_for_filter(
+            state, controller_id, self.targets[slot_idx].filter,
+        )
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        """Slot-0 candidates, or ``[]`` when no DISTINCT pair of legal
+        targets exists (so the ability isn't offered)."""
+        first = self.legal_targets_for_slot(state, controller_id, 0)
+        second = self.legal_targets_for_slot(state, controller_id, 1)
+        for a in first:
+            if any(b != a for b in second):
+                return first
+        return []
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import dataclasses as _dc
+
+        if len(targets) < 2 or targets[0] == targets[1]:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            legal = all(
+                _slot_target_still_legal(state, slot, chosen)
+                for slot, chosen in zip(self.targets, targets)
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, targets[0], action="copy"))
+            return
+        first = next(o for o in state.battlefield if o.id == targets[0][1])
+        second = next(o for o in state.battlefield if o.id == targets[1][1])
+        if first.original_printing is None:
+            first.original_printing = first.printing
+        copied = second.printing
+        extra_types = tuple(
+            t for t in self.add_card_types if t not in copied.card_types
+        )
+        supertypes = copied.supertypes
+        if (
+            "Token" in first.original_printing.supertypes
+            and "Token" not in supertypes
+        ):
+            supertypes = supertypes + ("Token",)
+        elif "Token" not in first.original_printing.supertypes:
+            supertypes = tuple(s for s in supertypes if s != "Token")
+        copied = _dc.replace(
+            copied,
+            card_types=extra_types + copied.card_types,
+            supertypes=supertypes,
+        )
+        first.printing = copied
+        src = state.resolving_source
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else first.id,
+            layer=1,
+            kind="is_copy",
+            target_id=first.id,
+            params=(copied,),
+            expires_at="cleanup",
+            description=(
+                f"{first.original_printing.name} becomes a copy of "
+                f"{second.printing.name} UEOT"
+            ),
+        )
+        state.log.append(
+            f"{first.original_printing.name} becomes a copy of "
+            f"{second.printing.name} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{_describe_targets(self.targets[:1])} becomes a copy of "
+            f"another target until end of turn"
+        )
+
+
 __all__ = [
+    "TargetBecomesCopyOfAnotherTargetUEOT",
     "PutCardYouOwnWithCounterFromExileIntoHand",
     "RevealTopNOpponentChoosesOneRestExiledWithCounter",
     "GainControlOfTriggeringSpellTargets",

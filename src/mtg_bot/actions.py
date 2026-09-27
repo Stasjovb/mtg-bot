@@ -2336,8 +2336,24 @@ def _activate_ability(
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
             slot_kinds = ability.effect.target_slot_kinds()
+            # Effects whose target slots carry DIFFERENT filters
+            # ("target artifact you control ... another target artifact
+            # or creature you control") enumerate each slot themselves.
+            per_slot = getattr(
+                ability.effect, "legal_targets_for_slot", None,
+            )
             for slot_idx in range(max_t):
-                if slot_kinds and slot_idx < len(slot_kinds):
+                if per_slot is not None:
+                    pool = [
+                        t for t in per_slot(state, player_id, slot_idx)
+                        if t not in chosen_list
+                        and not (
+                            (ability.cost.sacrifice_self
+                             or ability.cost.exile_self)
+                            and t[1] == source.id
+                        )
+                    ]
+                elif slot_kinds and slot_idx < len(slot_kinds):
                     needed = slot_kinds[slot_idx]
                     pool = [t for t in remaining if t[0] == needed]
                 else:
@@ -2353,7 +2369,8 @@ def _activate_ability(
                 if pick is None or pick not in pool:
                     break
                 chosen_list.append(pick)
-                remaining.remove(pick)
+                if pick in remaining:
+                    remaining.remove(pick)
             targets = tuple(chosen_list)
 
     # "Sacrifice another ..." paid BEFORE sacrifice-self so the source

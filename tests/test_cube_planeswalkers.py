@@ -1015,3 +1015,82 @@ def test_karn_minus_two_construct_scales_with_artifacts():
     assert effective_power(s, construct) == 2
     state_based_actions(s)
     assert construct in s.battlefield
+
+
+# ---------------------------------------------------------------------------
+# Saheeli, Sublime Artificer
+# ---------------------------------------------------------------------------
+
+
+def _cast(s, pid, printing, lands=1):
+    from mtg_bot.actions import apply_action
+    for _ in range(lands):
+        _put(s, BASIC_LANDS["Island"], pid)
+    card = s.new_object(printing, pid, Zone.HAND)
+    s.player_by_id(pid).hand.append(card)
+    apply_action(s, pid, CastSpell(card.id))
+    return card
+
+
+def test_saheeli_servo_on_noncreature_spells_you_cast():
+    from mtg_bot.cards.base import make_artifact
+    s = _state()
+    _put(s, _P["Saheeli, Sublime Artificer"], 0)
+    _cast(s, 0, make_artifact("Trinket", "{1}"))
+    assert len(s.stack) == 2
+    _drain(s)
+    servos = [o for o in s.battlefield if o.printing.name == "Servo"]
+    assert len(servos) == 1
+    assert servos[0].printing.is_artifact and servos[0].printing.is_creature
+    # A creature spell doesn't trigger it.
+    _cast(s, 0, _creature(cost="{U}"))
+    assert len(s.stack) == 1
+    _drain(s)
+    # Nor does an opponent's noncreature spell.
+    s.active_player_idx = s.priority_player_idx = 1
+    _cast(s, 1, make_artifact("Opp Trinket", "{1}"))
+    assert len(s.stack) == 1
+
+
+def test_saheeli_minus_two_servo_copies_creature_until_end_of_turn():
+    from mtg_bot.cards.base import make_token_creature
+    s = _state()
+    saheeli = _put(s, _P["Saheeli, Sublime Artificer"], 0)
+    servo = _put(s, make_token_creature(
+        "Servo", 1, 1, subtypes=("Servo",), artifact=True), 0)
+    ogre = _put(s, _creature("Ogre", 4, 4, cost="{3}{R}"), 0)
+    _put(s, _creature("Enemy"), 1)
+
+    picks = iter([("creature", servo.id), ("creature", ogre.id)])
+    agent = s.player_by_id(0).agent
+    agent.choose_target = lambda st, pid, legal: (
+        agent.picks_seen.append(list(legal)) or next(picks)
+    )
+    _activate(s, 0, saheeli, -2)
+    slot0, slot1 = agent.picks_seen[-2:]
+    assert slot0 == [("creature", servo.id)]  # artifacts you control
+    assert ("creature", ogre.id) in slot1
+    assert ("creature", servo.id) not in slot1  # "another"
+    assert all(t[1] != saheeli.id for t in slot1)
+    assert servo.printing.name == "Ogre"
+    assert servo.printing.is_artifact and servo.printing.power == 4
+    assert "Token" in servo.printing.supertypes
+    run_cleanup_step(s)
+    assert servo.printing.name == "Servo"
+
+
+def test_saheeli_minus_two_needs_two_distinct_targets():
+    s = _state()
+    saheeli = _put(s, _P["Saheeli, Sublime Artificer"], 0)
+    from mtg_bot.cards.base import make_artifact
+    _put(s, make_artifact("Rock", "{2}"), 0)
+    idx = _ability_index(saheeli, -2)
+    assert not [
+        a for a in legal_actions(s, 0)
+        if isinstance(a, ActivateAbility) and a.ability_index == idx
+    ]
+    _put(s, _creature(), 0)
+    assert [
+        a for a in legal_actions(s, 0)
+        if isinstance(a, ActivateAbility) and a.ability_index == idx
+    ]

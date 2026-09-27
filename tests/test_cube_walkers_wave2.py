@@ -384,6 +384,60 @@ def test_karn_plus_one_without_opponent_agent_takes_first():
     assert p.hand == [lib[0]] and p.exile == [lib[1]]
 
 
+def test_copy_effect_edges():
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.cube_walkers import (
+        TargetBecomesCopyOfAnotherTargetUEOT,
+    )
+    from mtg_bot.effects.object_predicates import ControlledByYou
+
+    eff = _parse_effect(
+        "target artifact you control becomes a copy of another target "
+        "artifact or creature you control until end of turn, except it's "
+        "an artifact in addition to its other types"
+    )
+    assert isinstance(eff, TargetBecomesCopyOfAnotherTargetUEOT)
+    assert eff.add_card_types == ("Artifact",)
+    assert eff.targets[1].distinct_from == (0,)
+    plain = _parse_effect(
+        "target creature becomes a copy of another target creature until "
+        "end of turn"
+    )
+    assert plain.add_card_types == ()
+    assert parse_ext_effect(
+        "target spell becomes a copy of another target creature until "
+        "end of turn"
+    ) is None
+    assert "copy" in plain.describe()
+
+    s = _state()
+    rock = _bf(s, make_artifact("Rock", "{2}"), 0)
+    golem = _bf(s, make_artifact("Golem Relic", "{3}"), 0)
+    thopter = _bf(s, make_token_creature(
+        "Thopter", 1, 1, subtypes=("Thopter",), artifact=True), 0)
+    eff2 = TargetBecomesCopyOfAnotherTargetUEOT(
+        targets=(
+            TargetSpec(filter=IsArtifact() & ControlledByYou()),
+            TargetSpec(filter=IsArtifact() & ControlledByYou(),
+                       distinct_from=(0,)),
+        ),
+        add_card_types=("Artifact",),
+    )
+    eff2.resolve(s, 0, (("permanent", rock.id),))  # one target: no-op
+    eff2.resolve(s, 0, (("permanent", rock.id), ("permanent", rock.id)))
+    assert rock.printing.name == "Rock"
+    # A nontoken copying a token doesn't become a token; the extra type
+    # the copied printing already has isn't duplicated.
+    eff2.resolve(s, 0, (("permanent", rock.id), ("creature", thopter.id)))
+    assert rock.printing.name == "Thopter"
+    assert "Token" not in rock.printing.supertypes
+    assert rock.printing.card_types.count("Artifact") == 1
+    # Illegal (opponent-controlled) second target: fizzles.
+    golem.controller_id = 1
+    eff2.resolve(s, 0, (("permanent", thopter.id), ("permanent", golem.id)))
+    assert thopter.printing.name == "Thopter"
+
+
 def test_draws_card_event_fires_once_per_card():
     from mtg_bot.cards.base import make_emblem
     from mtg_bot.effects.base import TriggeredAbility
