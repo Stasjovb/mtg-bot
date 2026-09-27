@@ -102,6 +102,48 @@ def _parse_mobilize_line(line: str, card: dict) -> WGLine | None:
 
 
 # ---------------------------------------------------------------------
+# Batched enters triggers
+# ---------------------------------------------------------------------
+
+_ONE_OR_MORE_ENTER_ONCE_PER_TURN_RE = re.compile(
+    r"^Whenever one or more (?P<other>other )?(?P<noun>.+?) enter, "
+    r"(?P<eff>.+)\. This ability triggers only once each turn\.$"
+)
+
+
+def _parse_one_or_more_enter_once_per_turn(line: str, card: dict) -> WGLine | None:
+    """``Whenever one or more [other] <nouns> enter, <effect>. This
+    ability triggers only once each turn.`` (Enduring Innocence). With
+    the once-each-turn rider the batched "one or more" trigger fires
+    exactly when the per-object ENTERS trigger first fires in a turn, so
+    it is modeled as that trigger with ``once_per_turn``. (Without the
+    rider the batch would need its own dispatch; that form isn't
+    claimed.)"""
+    m = _ONE_OR_MORE_ENTER_ONCE_PER_TURN_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.creature_wg_effects import trigger_subject
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf, Subject
+
+    subject = trigger_subject(m.group("noun"))
+    effect = _parse_effect_phrase(m.group("eff"))
+    if subject is None or effect is None:
+        return None
+    pred, controlled = subject
+    predicate = Subject(None, pred)
+    if controlled is not None:
+        predicate = predicate & controlled
+    if m.group("other"):
+        predicate = predicate & ~IsSelf()
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.ENTERS, predicate=predicate, effect=effect,
+        once_per_turn=True,
+    ),))
+
+
+# ---------------------------------------------------------------------
 # Rules-restricting statics (``mtg_bot.creature_statics_wg``)
 # ---------------------------------------------------------------------
 
@@ -130,6 +172,7 @@ _RECOGNIZERS = (
     _parse_ravenous_line,
     _parse_mobilize_line,
     _parse_static_flag_line,
+    _parse_one_or_more_enter_once_per_turn,
 )
 
 

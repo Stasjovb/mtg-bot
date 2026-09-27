@@ -921,6 +921,16 @@ def _is_mana_ability_effect(effect) -> bool:
         if effect.requires_target():
             return False
         return True
+    # "Add {G}{G}. If you've completed a dungeon, add six {G} instead."
+    # (Undermountain Adventurer): both branches produce mana.
+    from mtg_bot.effects.combinators import IfConditionElse
+
+    if isinstance(effect, IfConditionElse):
+        return (
+            effect.else_effect is not None
+            and _is_mana_ability_effect(effect.then_effect)
+            and _is_mana_ability_effect(effect.else_effect)
+        )
     # CR 605.1a: an activated ability that could add mana and doesn't
     # target is a mana ability even when it does other things too —
     # the Talismans' ``Add {U} or {B}. This artifact deals 1 damage to

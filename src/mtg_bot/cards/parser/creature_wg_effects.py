@@ -31,6 +31,14 @@ Shapes:
 * ``put <a filter> card from your hand onto the battlefield[ tapped]`` ->
   :class:`PutCardFromHandOntoBattlefield` (Stoneforge Mystic; "you may"
   composes through the extension grammar's ``MayDo``)
+* ``create a token that's a copy of it[, except it's an <type> in
+  addition to its other types]`` -> :class:`CreateTokenCopyOfSource`
+  (Vaultborn Tyrant)
+* ``<base>. If <condition>, <alt> instead`` -> ``IfConditionElse``
+  (White Plume / Undermountain Adventurer's dungeon riders)
+* ``add <N> {C}`` -> ``AddManaToPool``; ``untap a <noun>`` /
+  ``untap all <nouns>`` -> :class:`UntapChosenPermanents` /
+  :class:`UntapAllMatching`
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -82,6 +90,20 @@ _PUT_CARD_FROM_HAND_ONTO_BATTLEFIELD_RE = re.compile(
     r"^put (?P<desc>an? .+? card) from your hand onto the battlefield"
     r"(?P<tapped> tapped)?$"
 )
+_TOKEN_COPY_OF_IT_RE = re.compile(
+    r"^create a token that's a copy of it(?:, except it's an? "
+    r"(?P<type>artifact|enchantment|creature) in addition to its other "
+    r"types)?$"
+)
+_INSTEAD_IF_RIDER_RE = re.compile(
+    r"^(?P<base>.+?)\. If (?P<cond>[^,]+), (?P<alt>.+) instead$"
+)
+_ADD_N_OF_ONE_COLOR_RE = re.compile(
+    r"^add (?P<n>two|three|four|five|six|seven|eight|nine|ten|\d+) "
+    r"\{(?P<c>[WUBRGC])\}$"
+)
+_UNTAP_A_RE = re.compile(r"^untap (?:a|an|one) (?P<noun>.+)$")
+_UNTAP_ALL_RE = re.compile(r"^untap all (?P<noun>.+)$")
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
     r"becomes the monarch$"
@@ -137,6 +159,48 @@ def wg_grammar_pinned_off(name: str):
 
 def wg_grammar_disabled() -> bool:
     return _DISABLED[0]
+
+
+_WORD_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _controlled(noun: str):
+    """Object filter for a (possibly plural) permanent noun phrase with
+    its controller clause folded in as an object predicate (``creatures
+    you control``) -- for untargeted "a/all <noun>" effects, which
+    resolve with ``state.resolving_controller_id`` pinned."""
+    from mtg_bot.cards.parser.effects_ext import parse_target_noun_phrase
+
+    words = noun.split(" ")
+    for i, w in enumerate(words):
+        if w.endswith("s") and w[:-1] in (
+            "creature", "artifact", "land", "enchantment", "permanent",
+        ):
+            words[i] = w[:-1]
+            break
+    return parse_target_noun_phrase(" ".join(words))
+
+
+def _instead_if_rider(m):
+    """``<base>. If <condition>, <alt> instead`` -> ``IfConditionElse``
+    (condition from the trigger intervening-if phrasebook, evaluated for
+    the controller at resolution)."""
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.cards.parser.triggers import _parse_intervening_if_phrase
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.predicates import StateBound
+
+    gate = _parse_intervening_if_phrase(m.group("cond"))
+    if not isinstance(gate, StateBound):
+        return None
+    base = _parse_effect(m.group("base"))
+    alt = _parse_effect(m.group("alt"))
+    if base is None or alt is None:
+        return None
+    return IfConditionElse(condition=gate.inner, then_effect=alt, else_effect=base)
 
 
 def parse_wg_effect(phrase: str) -> Effect | None:
@@ -203,6 +267,34 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCardFromHandOntoBattlefield(
                 card_filter=f, optional=False, tapped=bool(m.group("tapped")),
             )
+    m = _INSTEAD_IF_RIDER_RE.match(phrase)
+    if m is not None:
+        rider = _instead_if_rider(m)
+        if rider is not None:
+            return rider
+    m = _ADD_N_OF_ONE_COLOR_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        n = m.group("n")
+        count = int(n) if n.isdigit() else _WORD_NUMBERS[n]
+        return AddManaToPool(produces=((m.group("c"), count),))
+    m = _UNTAP_A_RE.match(phrase)
+    if m is not None:
+        f = _controlled(m.group("noun"))
+        if f is not None:
+            return wg.UntapChosenPermanents(n=1, permanent_filter=f)
+    m = _UNTAP_ALL_RE.match(phrase)
+    if m is not None:
+        f = _controlled(m.group("noun"))
+        if f is not None:
+            return wg.UntapAllMatching(permanent_filter=f)
+    m = _TOKEN_COPY_OF_IT_RE.match(phrase)
+    if m is not None:
+        t = m.group("type")
+        return wg.CreateTokenCopyOfSource(
+            extra_card_types=(t.capitalize(),) if t else (),
+        )
     m = _EXILE_UNTIL_OPPONENT_MONARCH_RE.match(phrase)
     if m is not None:
         spec = _target_spec(m.group("noun"), bool(m.group("upto")))
@@ -221,4 +313,79 @@ def parse_wg_effect(phrase: str) -> Effect | None:
     return None
 
 
-__all__ = ["parse_wg_effect"]
+# ---------------------------------------------------------------------
+# Trigger conditions (fallback of ``effects_ext.parse_ext_trigger_phrase``)
+# ---------------------------------------------------------------------
+
+_PERMANENT_PUT_INTO_GRAVEYARD_RE = re.compile(
+    r"^an? (?P<noun>[a-z]+) you control is put into a graveyard from the "
+    r"battlefield$"
+)
+_SELF_OR_ANOTHER_ENTERS_RE = re.compile(
+    r"^this creature or another (?P<noun>.+) enters$"
+)
+
+
+def trigger_subject(noun: str):
+    """``(ObjectPredicate, TriggerPredicate | None)`` for a trigger's
+    subject noun phrase (``creature you control with power 4 or
+    greater``): the object filter plus the ``Controlled`` binder for a
+    controller clause (``None`` when the phrase has none). ``None`` when
+    the noun phrase isn't in the closed vocabulary. Plural heads
+    (``creatures``) are accepted."""
+    from mtg_bot.cards.parser.effects_ext import parse_target_noun_phrase
+    from mtg_bot.effects.predicates import OPPONENT, YOU, Controlled
+
+    head, sep, qualifier = noun.partition(" with ")
+    controlled = None
+    for suffix, who in ((" you control", YOU), (" an opponent controls", OPPONENT)):
+        if head.endswith(suffix):
+            head = head[: -len(suffix)]
+            controlled = Controlled(who)
+            break
+    words = head.split(" ")
+    if words[-1].endswith("s") and words[-1][:-1] in (
+        "creature", "artifact", "land", "enchantment", "permanent",
+    ):
+        words[-1] = words[-1][:-1]
+    pred = parse_target_noun_phrase(" ".join(words) + sep + qualifier)
+    if pred is None:
+        return None
+    return pred, controlled
+
+
+def parse_wg_trigger_phrase(phrase: str):
+    """``(Event, Predicate)`` for W/G bucket trigger conditions:
+
+    * ``a[n] <type> you control is put into a graveyard from the
+      battlefield`` -> ``DIES`` (the engine's battlefield-to-graveyard
+      event, dispatched for creatures, artifacts and lands) filtered to
+      that type under your control (Titania, Protector of Argoth).
+    * ``this creature or another <noun> enters`` -> ``ENTERS`` for the
+      source or another matching permanent (Vaultborn Tyrant).
+    """
+    if _DISABLED[0]:
+        return None
+    from mtg_bot.cards.parser.effects_ext import parse_target_noun_phrase
+    from mtg_bot.effects.predicates import YOU, Controlled, Event, Subject
+
+    m = _PERMANENT_PUT_INTO_GRAVEYARD_RE.match(phrase)
+    if m is not None:
+        pred = parse_target_noun_phrase(m.group("noun"))
+        if pred is not None:
+            return (Event.DIES, Subject(None, pred) & Controlled(YOU))
+    m = _SELF_OR_ANOTHER_ENTERS_RE.match(phrase)
+    if m is not None:
+        subject = trigger_subject(m.group("noun"))
+        if subject is not None:
+            from mtg_bot.effects.predicates import IsSelf
+
+            pred, controlled = subject
+            other = Subject(None, pred) & ~IsSelf()
+            if controlled is not None:
+                other = other & controlled
+            return (Event.ENTERS, IsSelf() | other)
+    return None
+
+
+__all__ = ["parse_wg_effect", "parse_wg_trigger_phrase"]

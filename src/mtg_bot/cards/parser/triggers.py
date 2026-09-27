@@ -540,6 +540,10 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # to ``Always()``, but no card today carries that form so only the
     # controller-gated entry is wired.
     "your upkeep": (Event.BEGINNING_OF_UPKEEP, Controlled(YOU)),
+    # White Plume Adventurer (cube W/G bucket): each opponent's upkeep.
+    "each opponent's upkeep": (
+        Event.BEGINNING_OF_UPKEEP, Controlled(OPPONENT),
+    ),
     # ``At the beginning of combat on your turn`` — Molecular Modifier's
     # pump-and-grant trigger and Ouroboroid's mass-counter trigger.
     # Surface form pairs the ``BEGINNING_OF_COMBAT`` event with the
@@ -1491,6 +1495,9 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # gate is in place if a future engine change ever loosened the
     # call-site ``was_creature`` check.
     "it was a creature": Subject(None, IsCreature()),
+    # Vaultborn Tyrant's dies trigger (cube W/G bucket): "if it's not a
+    # token" -- the dying object (the trigger's subject) isn't a token.
+    "it's not a token": Subject(None, IsNontoken()),
     # Designation gates (``mtg_bot.designations``): Feywild Caretaker /
     # Passageway Seer ``if you have the initiative``, the monarch
     # family ``if you're the monarch``, White Plume Adventurer-style

@@ -106,6 +106,8 @@ from mtg_bot.effects.object_predicates import (
     ControlledByOpponent,
     ControlledByYou,
     HasKeyword,
+    HasPowerAtLeast,
+    HasPowerAtMost,
     HasSubtype,
     IsArtifact,
     IsAttacking,
@@ -157,6 +159,7 @@ _CONTROLLER_SUFFIXES: tuple[tuple[str, ObjectPredicate], ...] = (
 )
 
 _WITH_MANA_VALUE = re.compile(r"^mana value (\d+) or (greater|less)$")
+_WITH_POWER = re.compile(r"^power (\d+) or (greater|less)$")
 # A permanent subtype used as a target noun (cube W/G creature bucket:
 # Bejeweled Warg's "target Wolf you control").
 _SUBTYPE_NOUN = re.compile(r"^[A-Z][a-z]+$")
@@ -169,13 +172,20 @@ def _keyword_names() -> frozenset[str]:
 
 
 def _parse_with_qualifier(text: str) -> ObjectPredicate | None:
-    """``with <qualifier>`` tail: ``mana value N or greater|less`` or a
-    keyword disjunction (``trample or haste``) / single keyword."""
+    """``with <qualifier>`` tail: ``mana value N or greater|less``,
+    ``power N or greater|less`` or a keyword disjunction (``trample or
+    haste``) / single keyword."""
     m = _WITH_MANA_VALUE.match(text)
     if m is not None:
         n = int(m.group(1))
         return HasManaValueAtLeast(n) if m.group(2) == "greater" else (
             HasManaValueAtMost(n)
+        )
+    m = _WITH_POWER.match(text)
+    if m is not None:
+        n = int(m.group(1))
+        return HasPowerAtLeast(n) if m.group(2) == "greater" else (
+            HasPowerAtMost(n)
         )
     kws = [k.strip() for k in text.split(" or ")]
     known = _keyword_names()
@@ -793,7 +803,10 @@ def parse_ext_trigger_phrase(phrase: str):
         pred = _spell_filter(m.group("filter"))
         if pred is not None:
             return (Event.IS_CAST, Subject("spell", pred) & yours)
-    return None
+    # Cube W/G creature bucket trigger conditions.
+    from mtg_bot.cards.parser.creature_wg_effects import parse_wg_trigger_phrase
+
+    return parse_wg_trigger_phrase(phrase)
 
 
 __all__ = ["parse_ext_effect", "parse_target_noun_phrase"]

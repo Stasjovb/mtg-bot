@@ -319,8 +319,10 @@ def test_parse_effect_returns_none_for_truncated_search_phrase():
 def test_parse_effect_returns_none_for_search_with_wrong_filter():
     # Other card-type filters (creature, land, ...) now claim through
     # the generic card-flow tutor grammar (``SearchLibrary``) rather
-    # than this artifact-specific regex; a descriptor outside that
-    # grammar (a creature subtype) still stays unclaimed.
+    # than this artifact-specific regex. A subtype descriptor ("a Wizard
+    # card") claims through the same grammar since the cube W/G bucket
+    # added ``CardFilter.subtype``; a descriptor outside the grammar (a
+    # lower-case unknown word) still stays unclaimed.
     from mtg_bot.effects.generic.card_flow import CardFilter, SearchLibrary
 
     assert _parse_effect(
@@ -332,6 +334,13 @@ def test_parse_effect_returns_none_for_search_with_wrong_filter():
     )
     assert _parse_effect(
         "search your library for a Wizard card, "
+        "reveal it, put it into your hand, then shuffle"
+    ) == SearchLibrary(
+        card_filter=CardFilter(subtype="Wizard"),
+        destination="hand", reveal=True,
+    )
+    assert _parse_effect(
+        "search your library for a wizardly card, "
         "reveal it, put it into your hand, then shuffle"
     ) is None
 

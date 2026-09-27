@@ -522,3 +522,118 @@ class PutCardFromHandOntoBattlefield(Effect):
             f"{may}put {self.card_filter.describe()} from your hand onto the "
             f"battlefield"
         )
+
+
+# ---------------------------------------------------------------------
+# Token copies of the source (Vaultborn Tyrant)
+# ---------------------------------------------------------------------
+
+
+def token_copy_printing(base, extra_card_types: tuple = ()):
+    """A token printing copying ``base``'s copiable values, with the
+    Token supertype and ``extra_card_types`` ("except it's an artifact in
+    addition to its other types") added."""
+    import dataclasses as _dc
+
+    supertypes = tuple(base.supertypes) + (
+        () if "Token" in base.supertypes else ("Token",)
+    )
+    card_types = tuple(
+        t for t in extra_card_types if t not in base.card_types
+    ) + tuple(base.card_types)
+    left = " ".join(supertypes + card_types)
+    type_line = f"{left} — {' '.join(base.subtypes)}" if base.subtypes else left
+    return _dc.replace(
+        base, supertypes=supertypes, card_types=card_types, type_line=type_line,
+    )
+
+
+@dataclass(frozen=True)
+class CreateTokenCopyOfSource(Effect):
+    """"Create a token that's a copy of it[, except it's an <type> in
+    addition to its other types]." -- "it" being this ability's source
+    (Vaultborn Tyrant's dies trigger: last known copiable values)."""
+
+    extra_card_types: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        source = state.resolving_source
+        if source is None:
+            return
+        CreateToken(
+            token_printing=token_copy_printing(
+                source.printing, self.extra_card_types,
+            ),
+        ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        extra = " and ".join(t.lower() for t in self.extra_card_types)
+        tail = f", except it's also {extra}" if extra else ""
+        return f"create a token that's a copy of it{tail}"
+
+
+# ---------------------------------------------------------------------
+# Untapping (White Plume Adventurer)
+# ---------------------------------------------------------------------
+
+
+def _matching_permanents(state, controller_id, permanent_filter) -> list:
+    prior = getattr(state, "resolving_controller_id", None)
+    state.resolving_controller_id = controller_id
+    try:
+        return [o for o in state.battlefield if permanent_filter.test(o, state)]
+    finally:
+        state.resolving_controller_id = prior
+
+
+@dataclass(frozen=True)
+class UntapChosenPermanents(Effect):
+    """"Untap a <permanent>." -- untargeted: the controller picks ``n``
+    matching permanents (via ``choose_permanent_to_tap``; a declined
+    pick falls back to the first tapped option, since the printed "a"
+    isn't optional). Untapping an untapped permanent is a no-op, so the
+    tapped ones are offered."""
+
+    n: int = 1
+    permanent_filter: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        for _ in range(self.n):
+            options = [
+                o for o in _matching_permanents(
+                    state, controller_id, self.permanent_filter,
+                )
+                if o.tapped
+            ]
+            if not options:
+                return
+            pick = None
+            if p.agent is not None:
+                pick = p.agent.choose_permanent_to_tap(
+                    state, controller_id, [o.id for o in options],
+                )
+            obj = next((o for o in options if o.id == pick), options[0])
+            obj.tapped = False
+            state.log.append(f"P{controller_id} untaps {obj.printing.name}")
+
+    def describe(self) -> str:
+        return f"untap {self.n} chosen permanent(s)"
+
+
+@dataclass(frozen=True)
+class UntapAllMatching(Effect):
+    """"Untap all <permanents>." (White Plume Adventurer's dungeon
+    rider: "untap all creatures you control")."""
+
+    permanent_filter: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        for o in _matching_permanents(state, controller_id, self.permanent_filter):
+            o.tapped = False
+        state.log.append(f"P{controller_id} untaps all matching permanents")
+
+    def describe(self) -> str:
+        return "untap all matching permanents"

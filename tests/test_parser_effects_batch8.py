@@ -215,6 +215,8 @@ def test_parse_spell_effect_phrase_returns_none_for_malformed_phrase():
     assert _parse_spell_effect_phrase(
         "Mill the top three cards of your library.", "Bogus"
     ) is None
+    # A capitalized subtype is a target noun since the cube W/G bucket
+    # ("target Wolf you control"); an unknown lower-case noun isn't.
     assert _parse_spell_effect_phrase(
-        "Destroy target Dragon.", "Bogus"
+        "Destroy target dragon.", "Bogus"
     ) is None

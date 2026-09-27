@@ -511,7 +511,12 @@ def move_off_battlefield(
     # used to. Predicates handle type-filtering downstream — a
     # ``IsCreature() & ...`` predicate won't match an artifact-only
     # death.
-    if destination == "graveyard" and (was_creature or obj.printing.is_artifact):
+    # Lands too (cube W/G bucket: Titania's "Whenever a land you control
+    # is put into a graveyard from the battlefield"); every DIES
+    # observer's predicate is typed or self-referential.
+    if destination == "graveyard" and (
+        was_creature or obj.printing.is_artifact or obj.printing.is_land
+    ):
         from mtg_bot.actions import dispatch_event as _dispatch_event_dies
         from mtg_bot.effects.predicates import Event as _Event_dies
 

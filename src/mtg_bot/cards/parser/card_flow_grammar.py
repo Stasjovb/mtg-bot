@@ -217,6 +217,15 @@ _SEL_MAY_TAKE_RE = re.compile(
     r"\. [Pp]ut the rest (?P<rest>on the bottom of your library in "
     r"(?:any|a random) order|into your graveyard)(?:\. (?P<tail>.+))?$"
 )
+# "Put any number of <type> and/or <type> cards from among them into
+# your hand and the rest ..." (Torsten, Founder of Benalia; cube W/G
+# creature bucket).
+_SEL_ANY_NUMBER_RE = re.compile(
+    r"^[Pp]ut any number of (?P<types>[a-z]+(?: (?:and/or|or) [a-z]+)*) "
+    r"cards from among them into your hand and the rest "
+    r"(?P<rest>on the bottom of your library in (?:any|a random) order|"
+    r"into your graveyard)(?:\. (?P<tail>.+))?$"
+)
 _X_DEFINITION_TWICE_LANDS = "twice the number of lands you control"
 _REORDER_TOP_N_RE = re.compile(
     rf"^look at the top (?P<n>{_AMT}) cards of your library, then put them "
@@ -529,6 +538,19 @@ def _parse_look_top_n(m: re.Match) -> Effect | None:
         if not isinstance(count, int):
             return None
         return _parse_distribute(sm, count)
+    sm = _SEL_ANY_NUMBER_RE.match(sel)
+    if sm is not None and isinstance(count, int):
+        words = re.split(r" (?:and/or|or) ", sm.group("types"))
+        if not all(w in _TYPE_WORDS for w in words):
+            return None
+        rest_zone, rest_random = _rest_fields(sm.group("rest"))
+        eff = LookAtTopCardsPutIntoHand(
+            count=count, take=count,
+            take_filter=CardFilter(any_types=tuple(_TYPE_WORDS[w] for w in words)),
+            optional=True, reveal=reveal, reveal_taken=reveal,
+            rest_zone=rest_zone, rest_random=rest_random,
+        )
+        return _with_tail(eff, sm.group("tail"))
     sm = _SEL_MAY_TAKE_RE.match(sel)
     if sm is not None:
         desc = sm.group("desc_r") or sm.group("desc_p")

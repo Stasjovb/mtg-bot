@@ -498,6 +498,26 @@ class HasPowerAtMost(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class HasPowerAtLeast(ObjectPredicate):
+    """The object's effective power is at least ``n`` ("with power N or
+    greater" -- Vaultborn Tyrant, the ferocious gate). Same measuring
+    rules as :class:`HasPowerAtMost`."""
+
+    n: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_power
+
+        try:
+            power = effective_power(state, obj)
+        except Exception:
+            return False
+        return power >= self.n
+
+
+@dataclass(frozen=True)
 class HasToughnessAtMost(ObjectPredicate):
     """The object's effective toughness is less than or equal to ``n``.
 
