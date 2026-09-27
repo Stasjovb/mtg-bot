@@ -13,6 +13,10 @@
 #   S2_TRAIN_WORKERS   DataLoader workers (default 4)
 #   S2_LR              (default 3e-4)   S2_SEED (default 1)
 #   S2_LADDER          1 = ladder the newest version after each cycle (default 1)
+#   S2_NODES           self-play + arena search nodes (default: the TOML's; the
+#                      arena depth always matches self-play depth -- one knob;
+#                      the post-cycle ladder stays at nodes 100 as the yardstick)
+#   S2_SAMPLES         PIMC samples for the same (default: the TOML's)
 #   S2_CACHE           store dir (default E:/mtg_bot_structured_cache)
 set -uo pipefail
 WT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -28,7 +32,7 @@ VT="${S2_VALUE_TARGET:-root}"
 STATE="$MAIN_WIN/trained_weights_s2/iterate_state.json"   # Windows path: read by the Windows python
 log() { echo "[s2-cycle] $(date -u +%FT%TZ) $*"; }
 
-log "worktree=$WT HEAD=$(git rev-parse --short HEAD) value_target=$VT accept=${S2_ACCEPT:-0.55} window=${S2_WINDOW:-6000}"
+log "worktree=$WT HEAD=$(git rev-parse --short HEAD) value_target=$VT accept=${S2_ACCEPT:-0.55} window=${S2_WINDOW:-6000} nodes=${S2_NODES:-toml} samples=${S2_SAMPLES:-toml}"
 if ! curl -sf -m 10 http://100.115.252.110:5099/v2/weights/v1/metadata | grep -q '"scalar_schema_version": *2'; then
   log "ABORT: coordinator at :5099 is not serving trained_weights_s2" >&2
   exit 2
@@ -40,6 +44,7 @@ for _ in $(seq 1 "$N"); do
   log "launching iteration $target (self-play driven by $best)"
   "$PY" -m mtg_bot.cli iterate-distributed \
     --config "$CONFIG" --iter.target_iter "$target" \
+    ${S2_NODES:+--iter.nodes "$S2_NODES"} ${S2_SAMPLES:+--iter.samples "$S2_SAMPLES"} \
     --registry-root "$MAIN_WIN/trained_weights_s2" --progress-dir "$MAIN_WIN/training_progress_s2" \
     --deck-pool "$MAIN_WIN/data/17lands/eoe_decks.json.gz" \
     --queue-url http://100.115.252.110:5099 \
