@@ -158,8 +158,9 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
 # built from the text itself (CR 111.4: a token's characteristics are
 # exactly what the effect that created it says). ``<count>`` may be
 # ``X`` / ``twice X`` (the resolving spell's X: Pest Infestation, Forth
-# Eorlingas!). A quoted ability must be the crew rider below or a
-# triggered ability the unified trigger grammar parses; anything else
+# Eorlingas!). A quoted ability must be the crew rider below or parse
+# through the creature clause grammar (``_with_quoted_token_ability``:
+# triggered / activated / static abilities, keywords); anything else
 # (or ``named <Name>``) keeps the card unclaimed.
 _COLOR_WORD = r"(?:white|blue|black|red|green)"
 _SYNTH_TOKEN = re.compile(
@@ -170,7 +171,9 @@ _SYNTH_TOKEN = re.compile(
     r"(?P<subtypes>[A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*)*) "
     r"(?P<artifact>artifact )?(?P<enchantment>enchantment )?creature tokens?"
     r"(?P<attacking> that's tapped and attacking)?"
-    r"(?: with (?:(?P<body>[^\"]+?)|(?P<quoted>\"[^\"]*\")))?"
+    # A quoted granted ability; the closing quote may already have been
+    # consumed by the enclosing trigger-line regex.
+    r"(?: with (?:(?P<body>[^\"]+?)|(?P<quoted>\"[^\"]*\"?)))?"
     r"(?P<attacking_after> that's tapped and attacking)?$"
 )
 # Quoted token abilities modeled as printing fields: Reckoner
@@ -207,6 +210,33 @@ def _parse_token_keyword_list(body: str) -> frozenset[str] | None:
     return frozenset(out)
 
 
+def _with_quoted_token_ability(printing, quoted: str):
+    """Attach a quoted granted ability (``with "When this token dies,
+    you gain 1 life."``) to a synthesized token printing. The quote
+    parses through the creature clause grammar with ``this token`` read
+    as the token itself; an unparseable quote returns ``None``."""
+    import dataclasses
+
+    from mtg_bot.cards.parser.clause import _parse_clause
+
+    line = re.sub(
+        r"\b([Tt])his token\b", lambda m: m.group(1) + "his creature",
+        quoted,
+    ).rstrip(".")
+    parsed = _parse_clause(line + ".")
+    if parsed is None:
+        return None
+    return dataclasses.replace(
+        printing,
+        keywords=printing.keywords | frozenset(parsed.keywords),
+        triggered_abilities=printing.triggered_abilities + tuple(parsed.triggers),
+        activated_abilities=printing.activated_abilities + (
+            (parsed.activated,) if parsed.activated is not None else ()
+        ),
+        static_abilities=printing.static_abilities + tuple(parsed.statics),
+    )
+
+
 def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
     from mtg_bot.cards.base import make_token_creature
     from mtg_bot.effects.generic.tokens import CreateToken
@@ -221,24 +251,13 @@ def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
             return None
         keywords = parsed
     crew_bonus = 0
-    token_triggers: tuple = ()
+    quoted_ability = None
     if m.group("quoted") is not None:
         crew_m = _TOKEN_CREW_BONUS_RIDER.match(m.group("quoted"))
         if crew_m is not None:
             crew_bonus = int(crew_m.group(1))
         else:
-            from mtg_bot.cards.parser.triggers import (
-                _parse_triggered_ability_line,
-            )
-
-            parsed_ta = _parse_triggered_ability_line(
-                m.group("quoted")[1:-1].replace("this token", "this creature"),
-            )
-            if parsed_ta is None:
-                return None
-            token_triggers = (
-                parsed_ta if isinstance(parsed_ta, tuple) else (parsed_ta,)
-            )
+            quoted_ability = m.group("quoted").strip('"')
     raw_count = m.group("count")
     x_multiplier = {"X": 1, "twice X": 2}.get(raw_count, 0)
     count = (
@@ -259,9 +278,10 @@ def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
     if crew_bonus:
         from dataclasses import replace
         printing = replace(printing, crew_power_bonus=crew_bonus)
-    if token_triggers:
-        from dataclasses import replace
-        printing = replace(printing, triggered_abilities=token_triggers)
+    if quoted_ability is not None:
+        printing = _with_quoted_token_ability(printing, quoted_ability)
+        if printing is None:
+            return None
     attacking = (
         m.group("attacking") is not None
         or m.group("attacking_after") is not None

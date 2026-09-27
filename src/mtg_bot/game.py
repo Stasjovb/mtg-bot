@@ -914,6 +914,14 @@ class GameObject:
     # to the battlefield tapped." -- set on the earthbent land; fired and
     # cleared by ``move_off_battlefield``.
     earthbent: bool = False
+    # Optional additional costs paid while casting this object (U/B
+    # cube creatures): how many times its Squad cost was paid (CR
+    # 702.157) and whether its Offspring cost was paid (CR 702.175).
+    # Set by ``_cast_spell``; ``put_into_battlefield`` keeps them only
+    # when the object enters by resolving as that spell (any other entry
+    # is a new object whose costs weren't paid).
+    squad_paid_count: int = 0
+    offspring_paid: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

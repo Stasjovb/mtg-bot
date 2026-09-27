@@ -1424,7 +1424,16 @@ def _parse_collapsed_predicate_trigger_phrase(
 def _parse_compound_predicate_trigger_phrase(
     phrase: str,
 ) -> tuple[tuple[Event, Predicate], ...] | None:
-    return _COMPOUND_PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+    hit = _COMPOUND_PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
+    if hit is not None:
+        return hit
+    # Parameterized multi-arm conditions ("you cast or copy <filter>
+    # spell") -- U/B creature bucket.
+    from mtg_bot.cards.parser.cube_creatures_ub import (
+        parse_ub_compound_trigger_phrase,
+    )
+
+    return parse_ub_compound_trigger_phrase(phrase.strip())
 
 
 # Intervening-if gate phrases → predicate. The phrase is the verbatim
@@ -1678,7 +1687,8 @@ def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
 # ``Creature — Dragon``) and other em-dash uses don't accidentally
 # match.
 _ABILITY_WORD_PREFIX = re.compile(
-    r"^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — (?=When |Whenever )"
+    r"^[A-Z][A-Za-z']*(?: (?:[A-Z][A-Za-z']*|of|the|and))* — "
+    r"(?=When |Whenever )"
 )
 
 

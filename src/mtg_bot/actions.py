@@ -2354,6 +2354,15 @@ def _cast_spell(
             kick_count += extra
     else:
         kick_count = 0
+    # Squad / Offspring (U/B cube creatures): optional additional costs
+    # the caster opts into while casting.
+    if (
+        card.printing.squad_cost is not None
+        or card.printing.offspring_cost is not None
+    ):
+        from mtg_bot.creature_casting_ub import offer_creature_additional_costs
+
+        cost = offer_creature_additional_costs(state, player_id, card, cost)
     # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
     # one mana of its color before the rest of the payment.
     if cost.phyrexian:
@@ -4381,6 +4390,13 @@ def push_spell_copy(
 
     fire_copy_triggers(state, obj, controller_id)
     fire_becomes_target(state, tuple(targets), obj, controller_id)
+    # "Whenever you ... copy an instant or sorcery spell" observers.
+    from mtg_bot.effects.predicates import Event as _Event
+
+    dispatch_event(
+        state, _Event.SPELL_COPIED, label="copied",
+        spell=obj, controller=state.player_by_id(controller_id),
+    )
     return obj
 
 
@@ -5032,6 +5048,11 @@ def put_into_battlefield(
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
     obj.cast_via_hand = False
+    # Squad / Offspring payments belong to the spell that resolved into
+    # this permanent; any other entry is a new object that paid nothing.
+    if state.resolving_spell is not obj:
+        obj.squad_paid_count = 0
+        obj.offspring_paid = False
     # Death-tracker-gated ETB replacement: enters with one +1/+1
     # counter on it if a creature died this turn (Cackling Slasher).
     # Read from the global ``state.creatures_died_this_turn`` tracker

@@ -1386,6 +1386,14 @@ class CardPrinting:
     # (Troll of Khazad-dûm, N=3): a block by fewer than N creatures is
     # illegal -- the menace check generalized (menace is N=2).
     min_blockers: int = 0
+    # "Squad {cost}" (CR 702.157): an additional cost payable any number
+    # of times; one token copy per payment when it enters.
+    squad_cost: ManaCost | None = None
+    squad_cost_str: str = ""
+    # "Offspring {cost}" (CR 702.175): an optional additional cost; if
+    # paid, a 1/1 token copy when it enters.
+    offspring_cost: ManaCost | None = None
+    offspring_cost_str: str = ""
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

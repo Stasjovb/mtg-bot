@@ -555,6 +555,25 @@ class HasCardType(ObjectPredicate):
         return printing is not None and self.card_type in printing.card_types
 
 
+# ---------- optional additional costs (Squad / Offspring) ----------
+
+
+@dataclass(frozen=True)
+class SquadCostPaid(ObjectPredicate):
+    """"if its squad cost was paid" (CR 702.157a)."""
+
+    def test(self, obj, state):
+        return getattr(obj, "squad_paid_count", 0) > 0
+
+
+@dataclass(frozen=True)
+class OffspringCostPaid(ObjectPredicate):
+    """"if its offspring cost was paid" (CR 702.175a)."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "offspring_paid", False))
+
+
 # ---------- drawing-player predicates (DRAWS_CARD / WOULD_DRAW_A_CARD) ----------
 
 
