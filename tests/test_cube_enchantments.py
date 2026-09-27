@@ -109,6 +109,14 @@ def test_builder_gates():
     assert printing.is_aura and len(printing.activated_abilities) == 1
 
 
+def test_builder_rejects_unparseable_hand_ability():
+    card = dict(
+        cube_card("Touch the Spirit Realm"),
+        oracle_text="Channel — {1}{W}, Discard this card: Frobnicate.",
+    )
+    assert build_cube_enchantment(card) is None
+
+
 def test_builder_blank_lines_and_keyword_merge(monkeypatch):
     monkeypatch.setattr(
         ce, "CUBE_ENCHANTMENT_NAMES", CUBE_ENCHANTMENT_NAMES | {"Frob"},

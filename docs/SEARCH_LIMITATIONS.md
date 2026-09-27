@@ -19123,3 +19123,59 @@ the new mechanics; none changes EoE-pool behavior.
 
 **What the shortcut is.** "You may pay any amount of {E}" is asked through the existing `choose_x` hook (`[0, energy]`, card name "energy to pay"); the default / random / tactical agents pay everything, so saving energy for a later Galvanic Discharge is only reachable through the search's X decision.
 
+
+## PowerLSV cube enchantment bucket — deliberate simplifications (2026-09-27, `feature/cube-enchantments`)
+
+Engine / parser shortcuts behind the claimed cube enchantments
+(`cards/parser/cube_enchantments.py`, `cards/parser/enchantment_phrases.py`,
+`effects/generic/enchantment_mechanics.py`). None changes EoE-pool
+behavior (every EoE printing parses identically).
+
+1. **Necromancy's "as though it had flash" is the `flash` keyword** on the
+   printing. The only observable difference (a permanent "having flash")
+   isn't read by anything in the pool.
+2. **Cleanup-step delayed triggers resolve without priority**
+   (`enchantment_mechanics.run_delayed_cleanup_triggers`, called at the end
+   of `turn.run_cleanup_step`). Necromancy cast when a sorcery couldn't have
+   been is sacrificed at the next cleanup step; its leaves trigger (and any
+   other trigger that sacrifice causes) is resolved immediately in stack
+   order and SBAs are checked. CR 514.3a would give players priority and
+   run another cleanup step, so no one can respond to those triggers.
+   *Impact:* negligible (responses to "sacrifice that creature" are rare).
+3. **Reanimation Auras' new enchant restriction** ("enchant creature put
+   onto the battlefield with this Aura") is modeled as enchant creature via
+   `GameObject.aura_enchant_override = "creature"`. The Aura is only ever
+   attached by its own trigger, so this differs only if another effect
+   tried to move the Aura to a different creature (none in the pool).
+4. **Oath of Druids' target is picked by the Oath controller's agent**, not
+   by "that player" (the upkeep's active player). The legal set (opponents
+   of the active player with more creatures) has at most one member in
+   two-player games, so the choice is forced. If the revealed cards contain
+   no creature card, nothing moves (the revealed library stays in order) —
+   the "If the first player does" clause fails.
+5. **Squandered Resources reads the sacrificed land's mana through
+   `effective_land_produces` on the graveyard object** (last-known
+   information approximated by its printed types; a type-changing effect
+   that stopped applying when it left isn't seen). The ability is a
+   manually activated mana ability only — the automatic cost payer
+   (`_classify_sac_for_mana`, sacrifice-self sources only) never
+   sacrifices lands for it.
+6. **Fastbond's "any number of lands"** is `grants_additional_land_per_turn
+   = 1_000_000` so every land-drop reader (legal actions and the search
+   capability check) agrees without a second code path; no game can play
+   that many lands.
+7. **Underworld Breach's granted escape vs. a printed escape:** a card with
+   its own escape always uses its printed escape terms
+   (`alt_casting.escape_terms`); the player can't choose Breach's cost
+   instead. Which other graveyard cards are exiled is automatic (the
+   existing escape/delve convention).
+8. **"Exiled with it" (Parallax Wave) rides the imprint link**
+   (`GameObject.imprinted_on` = source id + ETB timestamp). If the Wave
+   left and re-entered the battlefield before its leaves trigger resolved,
+   the re-entry overwrites the timestamp and the trigger returns nothing
+   (CR would still return the first object's cards).
+9. **New per-object state is not part of search hashing.** The fields
+   `aura_enchant_override`, `linked_creature` and
+   `cast_without_sorcery_timing` (`game.GameObject`) aren't in the
+   canonical-state / info-set hashes (search code is outside this bucket),
+   so two states differing only in them can share a transposition entry.

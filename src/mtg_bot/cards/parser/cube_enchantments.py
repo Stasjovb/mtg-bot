@@ -299,7 +299,12 @@ def _link_exiles_to_source(acc: _Accumulator) -> None:
         return
 
     def link(effect):
-        if type(effect) is Exile:
+        # A bare "exile target X" (``Exile`` or its constructor sugar
+        # such as ``ExileTargetCreature`` -- same resolve).
+        if (
+            isinstance(effect, Exile)
+            and type(effect).resolve is Exile.resolve
+        ):
             return ExileLinkedToSource(targets=effect.targets)
         return effect
 
