@@ -30,7 +30,8 @@ BUCKET_CARDS = [
     "Figure of Destiny", "Blightsteel Colossus", "Emrakul, the Aeons Torn",
     "Alpha Deathclaw", "Robber of the Rich", "Raffine, Scheming Seer",
     "Gut, True Soul Zealot", "Zirda, the Dawnwaker", "Lurrus of the Dream-Den",
-    "Cogwork Librarian",
+    "Cogwork Librarian", "Leovold, Emissary of Trest", "Nadu, Winged Wisdom",
+    "Lutri, the Spellchaser", "Goblin Welder", "Inti, Seneschal of the Sun",
 ]
 BASICS = ["Mountain", "Forest", "Plains", "Island", "Swamp"]
 

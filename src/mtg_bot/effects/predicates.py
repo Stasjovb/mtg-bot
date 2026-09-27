@@ -171,6 +171,13 @@ class Event(str, Enum):
     # permanent (``"obj"``). Alpha Deathclaw's "When this creature enters
     # or becomes monstrous".
     BECOMES_MONSTROUS = "becomes_monstrous"
+    # A player or permanent has just become the target of a spell or
+    # ability (CR 603.2). Subjects: ``"target"`` (the Player or the
+    # permanent) and ``"controller"`` (the Player controlling the spell /
+    # ability). Dispatched once per distinct target when a spell is cast,
+    # an ability is activated or a triggered ability is put on the stack
+    # with targets (Leovold, Emissary of Trest; Nadu, Winged Wisdom).
+    BECOMES_TARGET = "becomes_target"
     # The active player has just declared one or more attackers in this
     # combat phase. Subject is the attacking Player (the active player —
     # ``"player"``). Distinct from ``ATTACKS`` (per-attacker, fires once
@@ -272,6 +279,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.BECOMES_MONSTROUS: ("obj",),
+    Event.BECOMES_TARGET: ("target", "controller"),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
     Event.WOULD_DRAW_CARDS: ("player",),

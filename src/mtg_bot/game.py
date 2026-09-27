@@ -862,6 +862,9 @@ class GameObject:
     # Lurrus-style "Once during each of your turns, you may cast ... from
     # your graveyard": ``state.turn_number`` of the last use (0 = never).
     graveyard_cast_used_turn: int = 0
+    # This permanent resolved from a (non-copy) spell — "if you cast it"
+    # on its ETB trigger (Lutri). Reset when it leaves the battlefield.
+    entered_via_cast: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

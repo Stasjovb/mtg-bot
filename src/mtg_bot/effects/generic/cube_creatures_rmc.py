@@ -2069,3 +2069,262 @@ class OpponentHasMoreCardsInHand(_StatePredicate):
             len(p.hand) > mine for p in state.players
             if p.id != viewer_id and not p.has_lost
         )
+
+
+# ---------------------------------------------------------------------------
+# Batch 6: "becomes the target" (Leovold, Nadu), real spell copies (Lutri),
+# Goblin Welder's swap, "one or more" discard batches (Inti)
+# ---------------------------------------------------------------------------
+
+
+_PERMANENT_TARGET_KINDS = frozenset({
+    "creature", "permanent", "my_creature", "untapped_permanent",
+    "planeswalker", "battle",
+})
+
+
+def fire_becomes_target(
+    state: "GameState", targets, source_obj, controller_id: int,
+) -> None:
+    """A spell or ability controlled by ``controller_id`` (source
+    ``source_obj``) just got its targets: dispatch
+    ``Event.BECOMES_TARGET`` once per distinct targeted player /
+    permanent, and stack the "Whenever this creature becomes the target
+    ..." abilities granted by statics (Nadu, Winged Wisdom)."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    if not targets:
+        return
+    caster = state.player_by_id(controller_id)
+    seen: set = set()
+    for kind, tid in targets:
+        if (kind, tid) in seen:
+            continue
+        seen.add((kind, tid))
+        if kind == "player":
+            subject = state.player_by_id(tid)
+        elif kind in _PERMANENT_TARGET_KINDS:
+            subject = next((o for o in state.battlefield if o.id == tid), None)
+            if subject is None:
+                continue
+        else:  # stack / graveyard / exile / card targets aren't permanents
+            continue
+        dispatch_event(
+            state, Event.BECOMES_TARGET, label="becomes-target",
+            target=subject, controller=caster,
+        )
+        if kind != "player":
+            _fire_granted_becomes_target_triggers(state, subject)
+
+
+def _fire_granted_becomes_target_triggers(state, creature) -> None:
+    """Statics that grant creatures 'Whenever this creature becomes the
+    target of a spell or ability, <effect>. This ability triggers only
+    N times each turn.' (``StaticAbility.granted_becomes_target_effect``,
+    with the per-turn cap in ``granted_trigger_limit_per_turn``)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    for source in state.battlefield:
+        for idx, sa in enumerate(source.printing.static_abilities):
+            eff = sa.granted_becomes_target_effect
+            if eff is None or not sa.applies_to(source, creature, state):
+                continue
+            key = ("granted_becomes_target", source.id, idx, creature.id)
+            fired = state.ability_resolutions_this_turn.get(key, 0)
+            if sa.granted_trigger_limit_per_turn and fired >= sa.granted_trigger_limit_per_turn:
+                continue
+            state.ability_resolutions_this_turn[key] = fired + 1
+            push_triggered_ability(
+                state, source=creature,
+                ability=TriggeredAbility(
+                    event=Event.BECOMES_TARGET, predicate=IsSelf(subject="target"),
+                    effect=eff,
+                ),
+                ability_index=3000 + idx,
+                controller_id=creature.controller_id,
+                label="becomes-target (granted)",
+            )
+
+
+@dataclass(frozen=True)
+class RevealTopLandToBattlefieldElseHand(Effect):
+    """"Reveal the top card of your library. If it's a land card, put it
+    onto the battlefield. Otherwise, put it into your hand." (Nadu's
+    granted trigger)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        if not p.library:
+            return
+        card = p.library.pop(0)
+        reveal_to_all(state, card)
+        if card.printing.is_land:
+            state.log.append(f"P{controller_id} reveals {card.printing.name}; onto the battlefield")
+            put_into_battlefield(state, card, controller_id)
+        else:
+            state.log.append(f"P{controller_id} reveals {card.printing.name}; into hand")
+            card.zone = Zone.HAND
+            p.hand.append(card)
+
+    def describe(self) -> str:
+        return "reveal the top card; a land goes onto the battlefield, else into your hand"
+
+
+@dataclass(frozen=True)
+class CopyTargetInstantOrSorcerySpellYouControl(Effect):
+    """"Copy target instant or sorcery spell you control. You may choose
+    new targets for the copy." — a real copy on the stack
+    (``push_spell_copy``, CR 707.10), unlike the Mirrorpool
+    short-circuit ``CopyTargetInstantOrSorceryYouControl``."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("stack_spell", item.source.id) for item in state.stack
+            if item.ability is None
+            and item.controller_id == controller_id
+            and (item.source.printing.is_instant or item.source.printing.is_sorcery)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import push_spell_copy
+        from mtg_bot.effects.generic.spell_copies import _choose_copy_targets
+
+        for kind, sid in targets:
+            item = next(
+                (i for i in state.stack if i.ability is None and i.source.id == sid),
+                None,
+            )
+            if kind != "stack_spell" or item is None:
+                continue
+            new_targets = _choose_copy_targets(
+                state, controller_id, item.source.printing, item.targets,
+            )
+            push_spell_copy(
+                state, item.source.printing, controller_id, new_targets,
+                x_value=item.x_value,
+            )
+
+    def describe(self) -> str:
+        return "copy target instant or sorcery spell you control"
+
+
+@dataclass(frozen=True)
+class EnteredViaCast(_TriggerPredicate):
+    """Intervening-if "if you cast it" on an ETB trigger: the source
+    permanent resolved from a spell (``GameObject.entered_via_cast``)."""
+
+    def matches(self, state, subjects, source):
+        return bool(getattr(source, "entered_via_cast", False))
+
+
+@dataclass(frozen=True)
+class SwapArtifactWithGraveyardArtifact(Effect):
+    """Goblin Welder: "Choose target artifact a player controls and
+    target artifact card in that player's graveyard. If both targets are
+    still legal as this ability resolves, that player simultaneously
+    sacrifices the artifact and returns the artifact card to the
+    battlefield." Slot 1's pool depends on slot 0's controller
+    (``legal_targets_for_slot`` receives the targets chosen so far)."""
+
+    slot_targets_depend_on_chosen = True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self):
+        return (2, 2)
+
+    def _artifact_ok(self, state, o) -> bool:
+        pl = state.player_by_id(o.controller_id)
+        return "Artifact" in o.printing.card_types and any(
+            "Artifact" in c.printing.card_types for c in pl.graveyard
+        )
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("permanent", o.id) for o in state.battlefield if self._artifact_ok(state, o)
+        ]
+
+    def legal_targets_for_slot(self, state, controller_id, slot_idx, chosen=()):
+        if slot_idx == 0:
+            return self.legal_targets(state, controller_id)
+        if not chosen:
+            return []
+        first = next((o for o in state.battlefield if o.id == chosen[0][1]), None)
+        if first is None:
+            return []
+        pl = state.player_by_id(first.controller_id)
+        return [
+            ("graveyard_card", c.id) for c in pl.graveyard
+            if "Artifact" in c.printing.card_types
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.turn import sacrifice
+
+        if len(targets) < 2:
+            return
+        art = next(
+            (o for o in state.battlefield
+             if o.id == targets[0][1] and "Artifact" in o.printing.card_types),
+            None,
+        )
+        if art is None:
+            return
+        player = state.player_by_id(art.controller_id)
+        card = next(
+            (c for c in player.graveyard
+             if c.id == targets[1][1] and "Artifact" in c.printing.card_types),
+            None,
+        )
+        if card is None:
+            return
+        state.log.append(
+            f"P{player.id} swaps {art.printing.name} for {card.printing.name}"
+        )
+        player.graveyard.remove(card)
+        sacrifice(state, art)
+        put_into_battlefield(state, card, player.id)
+
+    def describe(self) -> str:
+        return "swap target artifact with target artifact card in its controller's graveyard"
+
+
+@dataclass(frozen=True)
+class OneOrMoreBatch(_TriggerPredicate):
+    """Conjunct for "Whenever you <do something to> one or more cards"
+    observers fed by a per-card event (Inti's discards): no second
+    instance while an instance from the same source is still waiting on
+    the stack (the per-card dispatches of one discard all happen before
+    anyone gets priority)."""
+
+    def matches(self, state, subjects, source):
+        for item in state.stack:
+            if item.source is source and item.ability is not None and _contains_identity(
+                item.ability.predicate, self,
+            ):
+                return False
+        return True
+
+
+def _contains_identity(pred, needle) -> bool:
+    from mtg_bot.effects.predicates import And
+
+    stack = [pred]
+    while stack:
+        p = stack.pop()
+        if p is needle:
+            return True
+        if isinstance(p, And):
+            stack.extend((p.left, p.right))
+    return False

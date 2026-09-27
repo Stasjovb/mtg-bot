@@ -672,7 +672,31 @@ def _parse_batch5_effect(phrase: str) -> Effect | None:
         return rmc.Monstrosity(count=_n(m.group("n")))
     if phrase == "its owner shuffles their graveyard into their library":
         return rmc.OwnerShufflesGraveyardIntoLibrary()
+    if phrase == _REVEAL_TOP_LAND_ELSE_HAND:
+        return rmc.RevealTopLandToBattlefieldElseHand()
+    if phrase == _COPY_TARGET_SPELL_NEW_TARGETS:
+        return rmc.CopyTargetInstantOrSorcerySpellYouControl()
+    if phrase == _WELDER_SWAP:
+        return rmc.SwapArtifactWithGraveyardArtifact()
     return _parse_sentence_sequence(phrase)
+
+
+_REVEAL_TOP_LAND_ELSE_HAND = (
+    "reveal the top card of your library. If it's a land card, put it onto "
+    "the battlefield. Otherwise, put it into your hand"
+)
+_COPY_TARGET_SPELL_NEW_TARGETS = (
+    "copy target instant or sorcery spell you control. You may choose new "
+    "targets for the copy"
+)
+# Goblin Welder — the only card in the pool with this two-target swap;
+# literal until a second printing varies the card types.
+_WELDER_SWAP = (
+    "choose target artifact a player controls and target artifact card in "
+    "that player's graveyard. If both targets are still legal as this "
+    "ability resolves, that player simultaneously sacrifices the artifact "
+    "and returns the artifact card to the battlefield"
+)
 
 
 _REVEAL_UNTIL_CREATURE_ATTACKING = (
@@ -793,6 +817,11 @@ _EXILE_FROM_HAND_ABILITY = re.compile(r"^Exile this card from your hand: (?P<eff
 _ACTIVATED_IT_SUBJECT = re.compile(r"^(?P<cost>[^:]+): It (?P<verb>deals|fights) ")
 _EXHAUST_LINE = re.compile(r"^Exhaust — (?P<body>.+)$")
 _BOAST_LINE = re.compile(r"^Boast — (?P<body>.+)$")
+# "When <this creature> enters, if you cast it, <effect>." — gated on the
+# permanent having resolved from a spell (``GameObject.entered_via_cast``).
+_IF_YOU_CAST_IT_ETB = re.compile(
+    r"^When this creature enters, if you cast it, (?P<eff>.+)\.$"
+)
 _DASH_LINE = re.compile(r"^Dash (?P<cost>(?:\{[^}]+\})+)$")
 
 
@@ -842,6 +871,24 @@ def parse_rmc_trigger_phrase(phrase: str):
     from mtg_bot.effects.object_predicates import HasSubtype, IsCreature
     from mtg_bot.effects.predicates import YOU, Controlled, Subject
 
+    if phrase == (
+        "you or a permanent you control becomes the target of a spell or "
+        "ability an opponent controls"
+    ):
+        from mtg_bot.effects.predicates import OPPONENT
+
+        return (
+            Event.BECOMES_TARGET,
+            Controlled(YOU, subject="target")
+            & Controlled(OPPONENT, subject="controller"),
+        )
+    if phrase == "you discard one or more cards":
+        from mtg_bot.effects.generic.cube_creatures_rmc import OneOrMoreBatch
+
+        return (
+            Event.DISCARDS_CARD,
+            Controlled(YOU, subject="player") & OneOrMoreBatch(),
+        )
     if phrase == "this creature becomes monstrous":
         return (Event.BECOMES_MONSTROUS, IsSelf())
     if phrase == "this creature attack":
@@ -964,6 +1011,21 @@ def parse_rmc_creature_line_pre(line: str, name: str) -> RmcLine | None:
             return RmcLine(printing_fields=fields)
         return None
 
+    m = _IF_YOU_CAST_IT_ETB.match(_substitute_self_name(line, name))
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect_phrase
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.cube_creatures_rmc import EnteredViaCast
+        from mtg_bot.effects.predicates import Event, IsSelf
+
+        effect = _parse_effect_phrase(m.group("eff"))
+        if effect is None:
+            return None
+        return RmcLine(triggers=(TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf() & EnteredViaCast(),
+            effect=effect,
+        ),))
+
     if line == "Cascade":
         from mtg_bot.effects.base import TriggeredAbility
         from mtg_bot.effects.generic.cube_creatures_rmc import (
@@ -1072,6 +1134,27 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
                 event=parsed[0], predicate=parsed[1], effect=effect,
             ))
         return RmcLine(triggers=tuple(arms))
+    from mtg_bot.cards.parser.planeswalker_builder import (
+        _OPPONENTS_DRAW_AT_MOST_ONE_LINE,
+    )
+
+    if line == _OPPONENTS_DRAW_AT_MOST_ONE_LINE:
+        return RmcLine(printing_fields={
+            "opponents_cant_draw_more_than_one_card_each_turn": True,
+        })
+    m = _GRANT_BECOMES_TARGET_TRIGGER.match(line)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None or effect.target_count_range()[1] > 0:
+            return None
+        limit = {"once": 1, "twice": 2, None: 0}.get(m.group("n"))
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.CREATURES_YOU_CONTROL,
+            granted_becomes_target_effect=effect,
+            granted_trigger_limit_per_turn=limit,
+        ),))
     if line == _ZIRDA_ACTIVATION_REDUCTION:
         return RmcLine(statics=(StaticAbility(
             scope=StaticScope.SELF, activation_cost_reduction=2,
@@ -1219,6 +1302,11 @@ _GRAVEYARD_ARRIVAL_TRIGGER = re.compile(
 _WHEN_THIS_A_OR_B = re.compile(
     r"^When this creature (?P<a>enters|dies|attacks) or "
     r"(?P<b>becomes monstrous), (?P<eff>.+)\.$"
+)
+_GRANT_BECOMES_TARGET_TRIGGER = re.compile(
+    r'^Creatures you control have "Whenever this creature becomes the target '
+    r'of a spell or ability, (?P<eff>.+?)\.(?: This ability triggers only '
+    r'(?P<n>once|twice) each turn\.)?"$'
 )
 _ZIRDA_ACTIVATION_REDUCTION = (
     "Abilities you activate that aren't mana abilities cost {2} less to "

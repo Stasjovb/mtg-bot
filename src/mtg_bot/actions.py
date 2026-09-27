@@ -2589,6 +2589,13 @@ def _cast_spell(
             ),
         )
     )
+    if targets:
+        # "Whenever ... becomes the target of a spell" (cube creatures).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_becomes_target,
+        )
+
+        fire_becomes_target(state, targets, card, player_id)
     mode = " (warp)" if use_warp else ""
     if use_flashback:
         mode = " (flashback)"
@@ -3017,6 +3024,12 @@ def _activate_hand_ability(
         f"P{player_id} activates {card.printing.name}'s ability from hand"
         + _format_log_targets(state, targets)
     )
+    if targets:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_becomes_target,
+        )
+
+        fire_becomes_target(state, targets, card, player_id)
 
 
 def _lurrus_permission_for(state: GameState, player_id: int, card):
@@ -3066,6 +3079,12 @@ def _activate_graveyard_ability(
         f"P{player_id} activates {card.printing.name}'s ability from the "
         f"graveyard" + _format_log_targets(state, targets)
     )
+    if targets:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_becomes_target,
+        )
+
+        fire_becomes_target(state, targets, card, player_id)
 
 
 def _activate_ability(
@@ -3274,7 +3293,17 @@ def _activate_ability(
             for slot_idx in range(max_t):
                 if per_slot is not None:
                     pool = [
-                        t for t in per_slot(state, player_id, slot_idx)
+                        t for t in (
+                            per_slot(
+                                state, player_id, slot_idx,
+                                chosen=tuple(chosen_list),
+                            )
+                            if getattr(
+                                ability.effect,
+                                "slot_targets_depend_on_chosen", False,
+                            )
+                            else per_slot(state, player_id, slot_idx)
+                        )
                         if t not in chosen_list
                         and not (
                             (ability.cost.sacrifice_self
@@ -3843,6 +3872,12 @@ def _activate_ability(
         f"P{player_id} activates {source.printing.name}'s ability"
         + _format_log_targets(state, targets)
     )
+    if targets:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_becomes_target,
+        )
+
+        fire_becomes_target(state, targets, source, player_id)
 
 
 def _activate_station(
@@ -4166,9 +4201,13 @@ def push_spell_copy(
         + _format_log_targets(state, tuple(targets))
     )
     # "Whenever you cast or copy ..." (magecraft) observers.
-    from mtg_bot.effects.generic.cube_creatures_rmc import fire_copy_triggers
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        fire_becomes_target,
+        fire_copy_triggers,
+    )
 
     fire_copy_triggers(state, obj, controller_id)
+    fire_becomes_target(state, tuple(targets), obj, controller_id)
     return obj
 
 
@@ -4450,6 +4489,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             # ETB riders in ``put_into_battlefield``.
             card.dashed = item.alt_cost == "dash"
             card.escaped = item.alt_cost == "escape"
+            card.entered_via_cast = not card.is_spell_copy
             put_into_battlefield(state, card, item.controller_id)
             if card.cast_without_sorcery_timing:
                 # Necromancy: cast when a sorcery couldn't have been ->
@@ -5133,6 +5173,12 @@ def push_triggered_ability(
         f"{source.printing.name}'s {label} trigger goes on the stack"
         + _format_log_targets(state, targets)
     )
+    if targets and fixed_targets is None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            fire_becomes_target,
+        )
+
+        fire_becomes_target(state, targets, source, controller_id)
     return True
 
 

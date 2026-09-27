@@ -817,6 +817,12 @@ class StaticAbility:
     # "Once during each of your turns, you may cast a permanent spell
     # with mana value N or less from your graveyard." (Lurrus): N, or -1.
     graveyard_permanent_cast_mv_max: int = -1
+    # 'Creatures you control have "Whenever this creature becomes the
+    # target of a spell or ability, <effect>. This ability triggers only
+    # N times each turn."' (Nadu): the granted trigger's effect, stacked
+    # by ``cube_creatures_rmc.fire_becomes_target``; N (0 = no cap).
+    granted_becomes_target_effect: "Effect | None" = None
+    granted_trigger_limit_per_turn: int = 0
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,

@@ -448,6 +448,7 @@ def move_off_battlefield(
     obj.escaped = False
     obj.dashed = False
     obj.monstrous = False
+    obj.entered_via_cast = False
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
