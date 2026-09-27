@@ -168,3 +168,33 @@ def test_evoked_grief_discards_then_is_sacrificed(cube):
     cast_and_resolve(state, 0, grief, use_evoke=True)
     assert bolt in state.players[1].graveyard
     assert grief in state.players[0].graveyard
+
+
+def test_evoked_solitude_exiles_and_gives_life(cube):
+    from mtg_bot.cards import make_creature
+
+    pr = cube["Solitude"]
+    assert {"flash", "lifelink"} <= pr.keywords
+    assert pr.evoke_exile_from_hand.color == "W"
+    state = make_state()
+    sol = add(state, 0, "Solitude", Zone.HAND)
+    add(state, 0, "Thraben Inspector", Zone.HAND)  # white pitch card
+    big = state.new_object(make_creature("Big", "{3}{G}", 4, 4), 1, Zone.BATTLEFIELD)
+    state.battlefield.append(big)
+    state.players[0].agent.scripts["target"] = [("creature", big.id)]
+    cast_and_resolve(state, 0, sol, use_evoke=True)
+    assert big in state.players[1].exile
+    assert state.players[1].life == 24
+    assert sol in state.players[0].graveyard
+
+
+def test_solitude_cannot_exile_itself(cube):
+    state = make_state()
+    sol = add(state, 0, "Solitude", Zone.BATTLEFIELD)
+    etb = next(
+        t.effect for t in cube["Solitude"].triggered_abilities
+        if t.effect is not None and "exile" in t.effect.describe().lower()
+    )
+    state.resolving_source = sol
+    assert ("creature", sol.id) not in etb.legal_targets(state, 0)
+    state.resolving_source = None

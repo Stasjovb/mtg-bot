@@ -270,3 +270,16 @@ def test_wg_effect_grammar_rejects_unknown_nouns():
         "under its owner's control at the beginning of the next end step"
     ) is None
     assert parse_wg_effect("do a little dance") is None
+
+
+def test_removal_grammar_other_target_excludes_source():
+    from mtg_bot.cards.parser.removal_phrases import parse_targeted_removal
+    from mtg_bot.effects.object_predicates import IsSource
+
+    eff = parse_targeted_removal("destroy another target creature")
+    assert eff.target_filter.right == ~IsSource()
+    eff = parse_targeted_removal(
+        "exile up to one other target creature. That creature's controller "
+        "gains life equal to its power"
+    )
+    assert eff.count_min == 0 and eff.rider is not None

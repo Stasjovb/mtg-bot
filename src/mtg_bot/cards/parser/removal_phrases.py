@@ -77,8 +77,10 @@ _NO_REGEN_RE = re.compile(
     r"^(?:it|they|that creature|a creature destroyed this way) "
     r"can't be regenerated$"
 )
+# "That creature's controller ..." is Solitude's wording of the
+# Swords to Plowshares rider (cube W/G creature bucket).
 _GAIN_LIFE_EQUAL_POWER_RE = re.compile(
-    r"^its controller gains life equal to its power$"
+    r"^(?:its|that creature's) controller gains life equal to its power$"
 )
 _MAY_SEARCH_BASIC_RE = re.compile(
     r"^its controller may search their library for a basic land card, "
@@ -182,6 +184,9 @@ _COLOR_LETTERS = {
 }
 
 
+_OTHER_TARGET_RE = re.compile(r"\b(?:an)?other target ")
+
+
 def parse_targeted_removal(phrase: str) -> Effect | None:
     """``destroy|exile [count] target <np>`` / ``return target <np> to
     its owner's hand``, plus riders."""
@@ -193,6 +198,11 @@ def parse_targeted_removal(phrase: str) -> Effect | None:
         return None
     verb = m.group("verb") or "bounce"
     rest = m.group("rest") if m.group("verb") else m.group("brest")
+    # "[up to one ]other target" / "another target" (Solitude; cube W/G
+    # creature bucket): the source itself isn't a legal target.
+    other = _OTHER_TARGET_RE.search(rest) is not None
+    if other:
+        rest = _OTHER_TARGET_RE.sub("target ", rest, count=1)
     counted = parse_target_count(rest)
     if counted is None:
         return None
@@ -206,6 +216,10 @@ def parse_targeted_removal(phrase: str) -> Effect | None:
     target_filter = parse_permanent_phrase(np, plural=plural)
     if target_filter is None:
         return None
+    if other:
+        from mtg_bot.effects.object_predicates import IsSource
+
+        target_filter = target_filter & ~IsSource()
     riders = _parse_riders(sentences[1:], verb)
     if riders is None:
         return None
