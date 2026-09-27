@@ -1497,7 +1497,7 @@ def effective_subtypes(
     # before the layer-3/4 walk (so Blood Moon's later set-type still
     # overrides it).
     if (
-        obj.printing.is_chosen_basic_land_type
+        getattr(obj.printing, "is_chosen_basic_land_type", False)
         and obj.chosen_basic_land_type is not None
         and obj.zone == Zone.BATTLEFIELD
         and obj.chosen_basic_land_type not in subtypes
