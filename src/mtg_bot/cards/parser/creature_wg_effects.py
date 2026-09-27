@@ -77,6 +77,10 @@ Shapes:
   control that entered this turn, create a token that's a copy of it``
   -> ``Sequence`` + :class:`CopyEachTokenYouControlEnteredThisTurn`
   (Ocelot Pride)
+* ``look at target opponent's hand. You may exile a nonland card from
+  it. For as long as that card remains exiled, its owner may play it. A
+  spell cast this way costs {N} more to cast`` ->
+  :class:`LookAtHandExileNonlandOwnerMayPlayTaxed` (Elite Spellbinder)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -203,6 +207,11 @@ _COUNTER_THEN_ATTACKS_MONARCH_RE = re.compile(
 _THEN_IF_BLESSING_COPY_TOKENS_RE = re.compile(
     r"^(?P<first>.+?)\. Then if you have the city's blessing, for each token "
     r"you control that entered this turn, create a token that's a copy of it$"
+)
+_LOOK_HAND_EXILE_MAY_PLAY_TAXED_RE = re.compile(
+    r"^look at target opponent's hand\. You may exile a nonland card from "
+    r"it\. For as long as that card remains exiled, its owner may play it\. "
+    r"A spell cast this way costs \{(?P<n>\d+)\} more to cast$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -460,6 +469,11 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _LOOK_HAND_EXILE_MAY_PLAY_TAXED_RE.match(phrase)
+    if m is not None and int(m.group("n")) >= 1:
+        return wg.LookAtHandExileNonlandOwnerMayPlayTaxed(
+            surcharge=int(m.group("n")),
+        )
     m = _THEN_IF_BLESSING_COPY_TOKENS_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_effect

@@ -1111,7 +1111,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             continue
         # Apply +{1} surcharge on top of normal effective cost.
         base_with_surcharge = ManaCost(
-            generic=_effective_cost(card, card.printing.mana_cost).generic + 1,
+            generic=(
+                _effective_cost(card, card.printing.mana_cost).generic + 1
+                + card.exile_cast_extra_surcharge
+            ),
             colored=_effective_cost(card, card.printing.mana_cost).colored,
             x_pips=_effective_cost(card, card.printing.mana_cost).x_pips,
         )

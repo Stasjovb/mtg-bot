@@ -1337,3 +1337,67 @@ class CopyEachTokenYouControlEnteredThisTurn(Effect):
 
     def describe(self) -> str:
         return "copy each token you control that entered this turn"
+
+
+# ---------------------------------------------------------------------
+# Elite Spellbinder
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LookAtHandExileNonlandOwnerMayPlayTaxed(Effect):
+    """"Look at target opponent's hand. You may exile a nonland card from
+    it. For as long as that card remains exiled, its owner may play it.
+    A spell cast this way costs {N} more to cast." (Elite Spellbinder.)
+    Rides the Lightstall exile-play permission
+    (``cast_from_exile_with_lightstall_surcharge``, {1}) plus
+    ``exile_cast_extra_surcharge`` for the rest of N."""
+
+    surcharge: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        opp = _chosen_player(state, targets)
+        if opp is None:
+            return
+        for c in opp.hand:
+            reveal_to(c, controller_id)
+        options = [c for c in opp.hand if not c.printing.is_land]
+        if not options:
+            return
+        me = state.player_by_id(controller_id)
+        if me.agent is not None and not me.agent.choose_yes_no(
+            state, controller_id, "exile a nonland card from their hand?",
+        ):
+            return
+        pick = options[0].id
+        if me.agent is not None:
+            pick = me.agent.choose_card_from_opponent_hand(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == pick), options[0])
+        opp.hand.remove(card)
+        card.zone = Zone.EXILE
+        card.cast_from_exile_with_lightstall_surcharge = True
+        card.exile_cast_extra_surcharge = max(0, self.surcharge - 1)
+        opp.exile.append(card)
+        state.log.append(
+            f"P{controller_id} exiles {card.printing.name} from P{opp.id}'s "
+            f"hand (castable from exile for {{{self.surcharge}}} more)"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"look at target opponent's hand; you may exile a nonland card "
+            f"from it, which its owner may cast for {{{self.surcharge}}} more"
+        )

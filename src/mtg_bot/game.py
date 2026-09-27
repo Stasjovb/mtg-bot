@@ -906,6 +906,10 @@ class GameObject:
     # combat if able" (Ursine Monstrosity); -1 otherwise. Read by
     # ``designations.forced_attackers``.
     must_attack_turn: int = -1
+    # Extra generic surcharge (beyond Lightstall's {1}) on casting this
+    # card from exile under the "its owner may play it for as long as it
+    # remains exiled" permission (Elite Spellbinder: {2} total).
+    exile_cast_extra_surcharge: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

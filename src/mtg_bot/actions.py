@@ -2123,10 +2123,11 @@ def _cast_spell(
             # offset the surcharge (standard MTG layer order).
             if card.cast_from_exile_with_lightstall_surcharge:
                 cost = ManaCost(
-                    generic=cost.generic + 1,
+                    generic=cost.generic + 1 + card.exile_cast_extra_surcharge,
                     colored=cost.colored,
                     x_pips=cost.x_pips,
                 )
+                card.exile_cast_extra_surcharge = 0
             cast_from_outside_hand = True
             p.exile.remove(card)
             card.warped = False

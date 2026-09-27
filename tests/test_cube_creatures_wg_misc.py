@@ -344,3 +344,59 @@ def test_ascend_needs_ten_permanents_and_an_ascend_source():
     put(state, 1, "Ocelot Pride")
     apply_ascend(state)
     assert not state.players[1].has_citys_blessing
+
+
+def test_elite_spellbinder_taxes_the_exiled_card():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        LookAtHandExileNonlandOwnerMayPlayTaxed,
+    )
+
+    pr = cube()["Elite Spellbinder"]
+    eff = next(
+        t.effect for t in pr.triggered_abilities
+        if isinstance(t.effect, LookAtHandExileNonlandOwnerMayPlayTaxed)
+    )
+    assert eff.surcharge == 2 and "flying" in pr.keywords
+    state = make_state()
+    sb = put(state, 0, pr, Zone.HAND)
+    add_lands(state, 0, "Plains", 3)
+    bolt = put(state, 1, "Lightning Bolt", Zone.HAND)
+    put(state, 1, "Mountain", Zone.HAND)
+    state.players[0].agent.scripts["target"] = [("player", 1)]
+    cast_and_resolve(state, 0, sb)
+    assert bolt in state.players[1].exile
+    # Owner may cast it (sorcery timing, like Lightstall) for {R}+{2}.
+    state.active_player_idx = 1
+    state.priority_player_idx = 1
+    add_lands(state, 1, "Mountain", 2)
+    assert CastSpell(bolt.id) not in legal_actions(state, 1)
+    add_lands(state, 1, "Mountain", 1)
+    assert CastSpell(bolt.id) in legal_actions(state, 1)
+    state.players[1].agent.scripts["target"] = [("player", 0)]
+    cast_and_resolve(state, 1, bolt)
+    assert state.players[0].life == 17
+    assert all(
+        o.tapped for o in state.battlefield
+        if o.printing.name == "Mountain" and o.controller_id == 1
+    )
+    assert bolt.exile_cast_extra_surcharge == 0
+
+
+def test_spellbinder_effect_edges():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        LookAtHandExileNonlandOwnerMayPlayTaxed,
+    )
+
+    state = make_state()
+    eff = LookAtHandExileNonlandOwnerMayPlayTaxed(surcharge=2)
+    assert eff.requires_target() and eff.legal_targets(state, 0) == [("player", 1)]
+    eff.resolve(state, 0, ())
+    land = put(state, 1, "Forest", Zone.HAND)
+    eff.resolve(state, 0, (("player", 1),))  # only a land: nothing
+    assert land in state.players[1].hand
+    put(state, 1, "Lightning Bolt", Zone.HAND)
+    state.players[0].agent.scripts["yes_no"] = [False]
+    eff.resolve(state, 0, (("player", 1),))
+    assert not state.players[1].exile
+    assert "{2}" in eff.describe()
