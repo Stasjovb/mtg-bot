@@ -26,8 +26,6 @@ Shapes:
 * ``return target <artifact|creature|land> card with mana value N or less
   from your graveyard to your hand`` -> ``ReturnFromGraveyard`` (Auriok
   Salvagers)
-* ``you may discard a card. If you do, <effect>`` ->
-  ``IfYouDo(MayDo(DiscardSelf(1)), <effect>)`` (Formidable Speaker)
 * ``put <a filter> card from your hand onto the battlefield[ tapped]`` ->
   :class:`PutCardFromHandOntoBattlefield` (Stoneforge Mystic; "you may"
   composes through the extension grammar's ``MayDo``)
@@ -137,9 +135,6 @@ _YOU_AND_TARGET_OPPONENT_DRAW_RE = re.compile(
 _RETURN_TYPED_CARD_WITH_MV_TO_HAND_RE = re.compile(
     r"^return target (?P<type>artifact|creature|land) card with mana value "
     r"(?P<mv>\d+) or less from your graveyard to your hand$"
-)
-_MAY_DISCARD_IF_YOU_DO_RE = re.compile(
-    r"^you may discard a card\. If you do, (?P<rest>.+)$"
 )
 _PUT_CARD_FROM_HAND_ONTO_BATTLEFIELD_RE = re.compile(
     r"^put (?P<desc>an? .+? card) from your hand onto the battlefield"
@@ -469,17 +464,6 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             kind: True, "max_mv": int(m.group("mv")),
             "destination": "hand", "target_kind": f"graveyard_{kind}",
         })
-    m = _MAY_DISCARD_IF_YOU_DO_RE.match(phrase)
-    if m is not None:
-        from mtg_bot.cards.parser.effects import _parse_effect
-        from mtg_bot.effects.combinators import IfYouDo, MayDo
-        from mtg_bot.effects.generic.discard import DiscardSelf
-
-        rest = _parse_effect(m.group("rest"))
-        if rest is not None:
-            return IfYouDo(
-                do_action=MayDo(inner=DiscardSelf(amount=1)), then_action=rest,
-            )
     m = _PUT_CARD_FROM_HAND_ONTO_BATTLEFIELD_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
