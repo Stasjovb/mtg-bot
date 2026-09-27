@@ -170,6 +170,10 @@ class CounterTargetSpell(Effect):
             for sa in obj.printing.static_abilities:
                 if sa.grants_spells_uncounterable:
                     return True
+        # Paid with "that spell can't be countered" mana (Delighted
+        # Halfling).
+        if getattr(item.source, "cast_uncounterable", False):
+            return True
         # Battlefield static grant: "Creature spells you control can't be
         # countered." Only applies to creature spells.
         if "Creature" in src.card_types:

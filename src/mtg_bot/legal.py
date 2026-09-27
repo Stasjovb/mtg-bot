@@ -1577,10 +1577,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
 def _filter_cast_restrictions_wg(state, player_id, actions):
     """Cube W/G creature statics that forbid casting (Voice of Victory,
-    Archon of Emeria) -- see ``mtg_bot.creature_statics_wg``."""
-    from mtg_bot.creature_statics_wg import filter_cast_restrictions
+    Archon of Emeria) or activating (Clarion Conqueror) -- see
+    ``mtg_bot.creature_statics_wg``."""
+    from mtg_bot.creature_statics_wg import (
+        filter_activation_locks,
+        filter_cast_restrictions,
+    )
 
-    return filter_cast_restrictions(state, player_id, actions)
+    actions = filter_cast_restrictions(state, player_id, actions)
+    return filter_activation_locks(state, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

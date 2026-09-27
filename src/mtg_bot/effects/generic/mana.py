@@ -51,6 +51,8 @@ class AddManaToPool(Effect):
     # until end of turn." — tags each minted coin
     # (``ManaCoin.grants_haste_to_creature_spell``).
     grants_haste_to_creature_spell: bool = False
+    # "... and that spell can't be countered" (Delighted Halfling).
+    makes_spell_uncounterable: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -68,6 +70,9 @@ class AddManaToPool(Effect):
                         spend_restriction=self.spend_restriction,
                         grants_haste_to_creature_spell=(
                             self.grants_haste_to_creature_spell
+                        ),
+                        makes_spell_uncounterable=(
+                            self.makes_spell_uncounterable
                         ),
                     )
                 )

@@ -64,6 +64,10 @@ Shapes:
   :class:`CreateAttackingTokenForEachOpponent` (Adeline)
 * ``create a P/T <color> <Subtypes> creature token named <Name> with
   "<trigger>"`` -> ``CreateToken`` carrying the trigger (Mole Man)
+* ``add one mana of any color. Spend this mana only to cast a
+  legendary spell, and that spell can't be countered`` -> restricted
+  ``AddManaToPool`` whose coins make the spell uncounterable (Delighted
+  Halfling)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -171,6 +175,10 @@ _NAMED_TOKEN_WITH_TRIGGER_RE = re.compile(
     r"^create an? (?P<p>\d+)/(?P<t>\d+) (?P<color>white|blue|black|red|green|"
     r"colorless) (?P<sub>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature token named "
     r"(?P<name>[A-Z][A-Za-z' ]*?) with \"(?P<ability>.+)\"$"
+)
+_ANY_COLOR_UNCOUNTERABLE_RESTRICTED_RE = re.compile(
+    r"^add one mana of any color\. Spend this mana only to cast an? "
+    r"(?P<kind>legendary|artifact) spell, and that spell can't be countered$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -428,6 +436,15 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _ANY_COLOR_UNCOUNTERABLE_RESTRICTED_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        return AddManaToPool(
+            produces=(("any", 1),),
+            spend_restriction=f"{m.group('kind')}_spell",
+            makes_spell_uncounterable=True,
+        )
     m = _NAMED_TOKEN_WITH_TRIGGER_RE.match(phrase)
     if m is not None:
         token = _named_token_with_trigger(m)

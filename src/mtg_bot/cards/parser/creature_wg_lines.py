@@ -148,6 +148,8 @@ def _parse_one_or_more_enter_once_per_turn(line: str, card: dict) -> WGLine | No
 # ---------------------------------------------------------------------
 
 _STATIC_FLAG_LINES: dict[str, str] = {
+    "If a nontoken creature would enter and it wasn't cast, exile it "
+    "instead.": "exiles_uncast_nontoken_creatures_entering",
     "Your opponents can't cast spells during your turn.": (
         "opponents_cant_cast_spells_during_your_turn"
     ),
@@ -344,6 +346,31 @@ def _parse_quote_final_line(line: str, card: dict) -> WGLine | None:
     )
 
 
+_ACTIVATION_LOCK_RE = re.compile(
+    r"^Activated abilities of (?P<types>[a-z, ]+?) can't be activated\.$"
+)
+_PLURAL_TYPES = {
+    "artifacts": "Artifact", "creatures": "Creature",
+    "planeswalkers": "Planeswalker", "enchantments": "Enchantment",
+    "lands": "Land", "battles": "Battle",
+}
+
+
+def _parse_activation_lock_line(line: str, card: dict) -> WGLine | None:
+    """``Activated abilities of <types> can't be activated.`` (Clarion
+    Conqueror) -> ``locks_activated_abilities_of`` (mana abilities
+    included, as printed)."""
+    m = _ACTIVATION_LOCK_RE.match(line)
+    if m is None:
+        return None
+    words = re.split(r", and |, or |, | and | or ", m.group("types"))
+    if not words or not all(w in _PLURAL_TYPES for w in words):
+        return None
+    return WGLine(fields={
+        "locks_activated_abilities_of": tuple(_PLURAL_TYPES[w] for w in words),
+    })
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -357,6 +384,7 @@ _RECOGNIZERS = (
     _parse_enters_with_counters_line,
     _parse_exiled_with_card_types_static,
     _parse_quote_final_line,
+    _parse_activation_lock_line,
 )
 
 

@@ -1347,6 +1347,14 @@ class CardPrinting:
     # ``creature_statics_wg.fire_graveyard_arrival_triggers`` during
     # state-based-action checks, i.e. before the next priority).
     graveyard_arrival_triggers: tuple = ()
+    # "Activated abilities of <types> can't be activated." (Clarion
+    # Conqueror): the card types whose permanents' activated abilities
+    # (mana abilities included) are locked while this is on the
+    # battlefield.
+    locks_activated_abilities_of: tuple = ()
+    # "If a nontoken creature would enter and it wasn't cast, exile it
+    # instead." (Containment Priest).
+    exiles_uncast_nontoken_creatures_entering: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

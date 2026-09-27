@@ -934,11 +934,15 @@ def _sac_for_mana_sources(
     Already-tapped sources can still fire (a tap-then-sac ability needs
     {T} which a tapped source can't pay; ``_can_fire_now`` filters that).
     """
+    from mtg_bot.creature_statics_wg import activation_locked
+
     sources: list[tuple[GameObject, int, tuple[tuple[str, int], ...]]] = []
     for o in state.battlefield:
         if o.controller_id != player_id:
             continue
         if o.phased_out:
+            continue
+        if activation_locked(state, o):
             continue
         for idx, produces in _classify_sac_for_mana(state, o):
             sources.append((o, idx, produces))
@@ -2430,12 +2434,19 @@ def _cast_spell(
     haste_coins_before = sum(
         1 for c in p.mana_pool if c.grants_haste_to_creature_spell
     )
+    uncounterable_coins_before = sum(
+        1 for c in p.mana_pool if c.makes_spell_uncounterable
+    )
     # Colors of mana spent (Sunburst, Converge): every cast records
     # them — Prismatic Ending reads the count on the stack.
     color_sources: list = []
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
         color_sources=color_sources,
+    )
+    # Delighted Halfling: "... and that spell can't be countered."
+    card.cast_uncounterable = uncounterable_coins_before > sum(
+        1 for c in p.mana_pool if c.makes_spell_uncounterable
     )
     # Arena of Glory: "If any of that mana is spent on a creature spell,
     # it gains haste until end of turn." A UEOT grant on the spell's
@@ -3139,6 +3150,13 @@ def _activate_ability(
     from mtg_bot.turn import move_off_battlefield
 
     source = next((o for o in state.battlefield if o.id == source_id), None)
+    if source is not None:
+        # "Activated abilities of <types> can't be activated." (Clarion
+        # Conqueror; legal_actions never offers these).
+        from mtg_bot.creature_statics_wg import activation_locked
+
+        if activation_locked(state, source):  # pragma: no cover - gated
+            return
     if source is None:
         # Hand-resident source: Cycling / Channel style abilities that
         # function from the owner's hand (``hand_activated_abilities``).
@@ -4770,6 +4788,12 @@ def put_into_battlefield(
     you control enters" triggers on other permanents the controller
     controls if the entering object is an artifact.
     """
+    # Containment Priest (cube W/G bucket): "If a nontoken creature
+    # would enter and it wasn't cast, exile it instead."
+    from mtg_bot.creature_statics_wg import exile_instead_of_entering
+
+    if exile_instead_of_entering(state, obj):
+        return
     # Mox Diamond-style self-replacement (CR 614.1c): "If this would
     # enter, you may discard a land card instead. If you do, put it onto
     # the battlefield. If you don't, put it into its owner's graveyard."

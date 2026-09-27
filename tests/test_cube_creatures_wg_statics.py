@@ -201,3 +201,106 @@ def test_graveyard_arrival_line_needs_a_rearming_effect():
         "When Big Wurm is put into a graveyard from anywhere, shuffle it "
         "into its owner's library.", card,
     ).fields["graveyard_arrival_triggers"]
+
+
+# ---------------------------------------------------------------------
+# Clarion Conqueror
+# ---------------------------------------------------------------------
+
+
+def test_clarion_conqueror_locks_artifact_creature_planeswalker_abilities():
+    from mtg_bot.actions import ActivateAbility, _sac_for_mana_sources
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    from mtg_bot.creature_statics_wg import activation_locked, filter_activation_locks
+
+    pr = cube()["Clarion Conqueror"]
+    assert pr.locks_activated_abilities_of == ("Artifact", "Creature", "Planeswalker")
+    assert "flying" in pr.keywords
+    state = make_state()
+    elves = put(state, 0, "Llanowar Elves")
+    ring = put(state, 0, "Sol Ring")
+    treasure = put(state, 0, TOKEN_PRINTINGS["Treasure"])
+    land = put(state, 0, "Forest")
+    before = legal_actions(state, 0)
+    assert ActivateAbility(source_id=elves.id, ability_index=0) in before
+    assert _sac_for_mana_sources(state, 0)
+    conq = put(state, 1, pr)
+    after = legal_actions(state, 0)
+    for obj in (elves, ring, treasure):
+        assert activation_locked(state, obj)
+        assert not any(
+            isinstance(a, ActivateAbility) and a.source_id == obj.id for a in after
+        )
+    assert not activation_locked(state, land)
+    assert _sac_for_mana_sources(state, 0) == []
+    # Unlocked again once it leaves.
+    sacrifice(state, conq)
+    assert ActivateAbility(source_id=elves.id, ability_index=0) in legal_actions(state, 0)
+    assert filter_activation_locks(state, ["x"]) == ["x"]
+
+
+# ---------------------------------------------------------------------
+# Containment Priest
+# ---------------------------------------------------------------------
+
+
+def test_containment_priest_exiles_uncast_creatures_only():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.base import make_token_creature
+
+    pr = cube()["Containment Priest"]
+    assert pr.exiles_uncast_nontoken_creatures_entering and "flash" in pr.keywords
+    state = make_state()
+    put(state, 0, pr)
+    # Reanimated (not cast): exiled instead.
+    dead = put(state, 1, bear("Dead"), Zone.GRAVEYARD)
+    state.players[1].graveyard.remove(dead)
+    put_into_battlefield(state, dead, 1)
+    assert dead in state.players[1].exile and dead not in state.battlefield
+    # Cast creatures enter normally.
+    elves = put(state, 0, "Llanowar Elves", Zone.HAND)
+    add_lands(state, 0, "Forest", 1)
+    cast_and_resolve(state, 0, elves)
+    assert elves in state.battlefield
+    # Tokens and noncreatures are unaffected.
+    tok = state.new_object(make_token_creature("Spirit", 1, 1), 0, Zone.BATTLEFIELD)
+    put_into_battlefield(state, tok, 0)
+    assert tok in state.battlefield
+    land = put(state, 0, "Forest", Zone.HAND)
+    state.players[0].hand.remove(land)
+    put_into_battlefield(state, land, 0)
+    assert land in state.battlefield
+
+
+# ---------------------------------------------------------------------
+# Delighted Halfling
+# ---------------------------------------------------------------------
+
+
+def test_delighted_halfling_mana_makes_legendary_spell_uncounterable():
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+
+    pr = cube()["Delighted Halfling"]
+    mana_abs = [a for a in pr.activated_abilities if a.is_mana_ability]
+    assert len(mana_abs) == 2
+    restricted = next(a for a in mana_abs if a.effect.spend_restriction)
+    assert restricted.effect.makes_spell_uncounterable
+    state = make_state()
+    halfling = put(state, 0, pr)
+    idx = pr.activated_abilities.index(restricted)
+    apply_action(state, 0, ActivateAbility(source_id=halfling.id, ability_index=idx))
+    (coin,) = state.players[0].mana_pool
+    assert coin.makes_spell_uncounterable and coin.spend_restriction == "legendary_spell"
+    thalia = put(state, 0, "Thalia, Guardian of Thraben", Zone.HAND)
+    add_lands(state, 0, "Plains", 1)
+    apply_action(state, 0, CastSpell(thalia.id))
+    item = state.stack[-1]
+    assert thalia.cast_uncounterable
+    assert CounterTargetSpell._is_uncounterable(state, item)
+    drain(state)
+    # A spell paid without that mana stays counterable.
+    elves = put(state, 0, "Llanowar Elves", Zone.HAND)
+    add_lands(state, 0, "Forest", 1)
+    apply_action(state, 0, CastSpell(elves.id))
+    assert not elves.cast_uncounterable
+    assert not CounterTargetSpell._is_uncounterable(state, state.stack[-1])

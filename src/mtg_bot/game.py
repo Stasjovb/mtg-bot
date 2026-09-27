@@ -898,6 +898,10 @@ class GameObject:
     # resolved N times this turn" ability (Scythecat Cub); ``()`` until
     # it first resolves.
     resolutions_this_turn: tuple = ()
+    # "... and that spell can't be countered" -- set when this spell was
+    # paid for with mana that makes it uncounterable (Delighted
+    # Halfling); honored by ``CounterTargetSpell._is_uncounterable``.
+    cast_uncounterable: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -2995,6 +2999,10 @@ class ManaCoin:
     # until end of turn." (Arena of Glory) — ``_cast_spell`` grants the
     # creature spell haste UEOT when a coin with this flag pays for it.
     grants_haste_to_creature_spell: bool = False
+    # "Spend this mana only to cast a legendary spell, and that spell
+    # can't be countered." (Delighted Halfling) -- the spell it pays for
+    # becomes uncounterable.
+    makes_spell_uncounterable: bool = False
 
 
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)

@@ -6004,7 +6004,11 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
         tail = m.group(1)
         restriction = _SPEND_RESTRICTION_BY_PHRASE.get(tail)
         if restriction is None:
-            return None
+            # "..., and that spell can't be countered" (Delighted
+            # Halfling) -- the cube W/G bucket's restricted-mana shape.
+            from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
+
+            return parse_wg_effect(phrase)
         return AddManaToPool(
             produces=(("any", 1),),
             spend_restriction=restriction,

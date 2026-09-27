@@ -148,3 +148,85 @@ def fire_graveyard_arrival_triggers(state: "GameState") -> bool:
                 )
                 fired = True
     return fired
+
+
+# ---------------------------------------------------------------------
+# Activation locks (Clarion Conqueror)
+# ---------------------------------------------------------------------
+
+
+def _card_types_now(obj) -> set:
+    from mtg_bot.game import is_creature_now
+
+    types = set(obj.printing.card_types)
+    if is_creature_now(obj):
+        types.add("Creature")
+    else:
+        types.discard("Creature")
+    return types
+
+
+def activation_locked(state: "GameState", obj: "GameObject") -> bool:
+    """"Activated abilities of <types> can't be activated." -- does a
+    permanent on the battlefield lock ``obj``'s activated abilities?"""
+    locks = [
+        o.printing.locks_activated_abilities_of for o in state.battlefield
+        if o.printing.locks_activated_abilities_of
+    ]
+    if not locks:
+        return False
+    types = _card_types_now(obj)
+    return any(types.intersection(lock) for lock in locks)
+
+
+def filter_activation_locks(state: "GameState", actions: list) -> list:
+    """Drop ``ActivateAbility`` / ``ActivateStation`` proposals whose
+    battlefield source is locked."""
+    if not any(o.printing.locks_activated_abilities_of for o in state.battlefield):
+        return actions
+    from mtg_bot.actions import ActivateAbility, ActivateStation
+
+    by_id = {o.id: o for o in state.battlefield}
+    out = []
+    for a in actions:
+        source_id = (
+            a.source_id if isinstance(a, ActivateAbility)
+            else a.spacecraft_id if isinstance(a, ActivateStation) else None
+        )
+        src = by_id.get(source_id) if source_id is not None else None
+        if src is not None and activation_locked(state, src):
+            continue
+        out.append(a)
+    return out
+
+
+# ---------------------------------------------------------------------
+# Containment Priest
+# ---------------------------------------------------------------------
+
+
+def exile_instead_of_entering(state: "GameState", obj: "GameObject") -> bool:
+    """"If a nontoken creature would enter and it wasn't cast, exile it
+    instead." -- apply the replacement to ``obj`` (about to enter the
+    battlefield). "Cast" means it is the permanent spell now resolving;
+    copies of spells are tokens. Returns True when ``obj`` was exiled
+    instead."""
+    if not any(
+        o.printing.exiles_uncast_nontoken_creatures_entering
+        for o in state.battlefield
+    ):
+        return False
+    pr = obj.printing
+    if not pr.is_creature or pr.is_token or obj.is_spell_copy:
+        return False
+    if getattr(state, "resolving_spell", None) is obj:
+        return False
+    from mtg_bot.game import Zone
+
+    owner = state.player_by_id(obj.owner_id)
+    obj.zone = Zone.EXILE
+    owner.exile.append(obj)
+    state.log.append(
+        f"{pr.name} would enter without being cast -- exiled instead"
+    )
+    return True
