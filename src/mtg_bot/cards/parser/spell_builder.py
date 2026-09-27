@@ -73,6 +73,7 @@ from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.base import StaticAbility, StaticScope
+from mtg_bot.effects.conditions import FirstSpellYouCastThisGame
 from mtg_bot.effects.modifiers import (
     EventPattern,
     Replace,
@@ -622,11 +623,32 @@ _SPELL_CASTING_KEYWORD_LINE_RE = re.compile(
 )
 
 
+# "If <condition>, you may cast it without paying its mana cost." — a
+# conditional alternative (free) cast (Once Upon a Time) ->
+# ``free_cast_condition``.
+_FREE_CAST_IF_LINE_RE = re.compile(
+    r"^If (?P<cond>.+), you may cast it without paying its mana cost\.$"
+)
+
+
+_FREE_CAST_CONDITIONS = {
+    "this spell is the first spell you've cast this game": (
+        FirstSpellYouCastThisGame()
+    ),
+}
+
+
 def _casting_keyword_fields(clause: str) -> dict | None:
     """``CardPrinting`` fields for a casting-keyword line, or ``None``
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
+    m = _FREE_CAST_IF_LINE_RE.match(clause.strip())
+    if m is not None:
+        cond = _FREE_CAST_CONDITIONS.get(m.group("cond"))
+        if cond is None:
+            return None
+        return {"free_cast_condition": cond}
     m = _SPELL_CASTING_KEYWORD_LINE_RE.match(clause.strip())
     if m is None:
         return None

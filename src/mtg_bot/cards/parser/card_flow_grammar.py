@@ -311,6 +311,90 @@ def _parse_reanimate(m: re.Match) -> Effect | None:
     )
 
 
+# Expressive Iteration's distribution sentence: one card per pile.
+_SEL_DISTRIBUTE_PART_PILES: dict[str, str] = {
+    "put one of them into your hand": "hand",
+    "put one of them on the bottom of your library": "bottom",
+    "exile one of them": "exile_playable",
+}
+_SEL_DISTRIBUTE_RE = re.compile(
+    r"^(?P<parts>[Pp]ut one of them .+?, and exile one of them)\. "
+    r"[Yy]ou may play the exiled card this turn$"
+)
+# Demonic Consultation (only card with this shape; the exile count is
+# the parameter).
+_CHOOSE_NAME_REVEAL_UNTIL_RE = re.compile(
+    rf"^choose a card name\. [Ee]xile the top (?P<n>{_AMT}) cards of your "
+    r"library, then reveal cards from the top of your library until you "
+    r"reveal a card with the chosen name\. [Pp]ut that card into your hand "
+    r"and exile all other cards revealed this way$"
+)
+# Lim-Dul's Vault (only card with this shape; window size and life
+# payment are the parameters).
+_REPEAT_LOOK_PAY_LIFE_RE = re.compile(
+    rf"^look at the top (?P<n>{_AMT}) cards of your library\. [Aa]s many "
+    r"times as you choose, you may pay (?P<life>\d+) life, put those cards on "
+    r"the bottom of your library in any order, then look at the top "
+    rf"(?P=n) cards of your library\. [Tt]hen shuffle and put the last "
+    r"cards you looked at this way on top in any order$"
+)
+# Occult Epiphany.
+_DRAW_DISCARD_TOKENS_PER_TYPE_RE = re.compile(
+    rf"^draw (?P<n>{_AMT}) cards, then discard (?P=n) cards\. [Cc]reate "
+    r"(?P<token>an? .+? creature token(?: with .+?)?) for each card type "
+    r"among cards discarded this way$"
+)
+# Balance (only card with this shape).
+_BALANCE_RE = re.compile(
+    r"^each player chooses a number of lands they control equal to the "
+    r"number of lands controlled by the player who controls the fewest, "
+    r"then sacrifices the rest\. [Pp]layers discard cards and sacrifice "
+    r"creatures the same way$"
+)
+# Council's Judgment (only Will-of-the-council card in the pool).
+_VOTE_EXILE_RE = re.compile(
+    r"^will of the council — [Ss]tarting with you, each player votes for a "
+    r"nonland permanent you don't control\. [Ee]xile each permanent with "
+    r"the most votes or tied for most votes$"
+)
+# Flash — "sacrifice it unless you pay its mana cost reduced by {N}".
+_PUT_CREATURE_SAC_UNLESS_PAY_RE = re.compile(
+    r"^you may put a creature card from your hand onto the battlefield\. "
+    r"If you do, sacrifice it unless you pay its mana cost reduced by "
+    r"\{(?P<n>\d+)\}$"
+)
+# Transmute Artifact (only card with this shape).
+_TRANSMUTE_ARTIFACT_RE = re.compile(
+    r"^sacrifice an artifact\. If you do, search your library for an "
+    r"artifact card\. If that card's mana value is less than or equal to "
+    r"the sacrificed artifact's mana value, put it onto the battlefield\. "
+    r"If it's greater, you may pay \{X\}, where X is the difference\. If you "
+    r"do, put it onto the battlefield\. If you don't, put it into its "
+    r"owner's graveyard\. Then shuffle$"
+)
+# Rain of Filth — a quoted activated ability granted until end of turn.
+_GRANT_ABILITY_TO_YOURS_UEOT_RE = re.compile(
+    r"^until end of turn, (?P<what>lands|creatures|artifacts) you control "
+    r'gain "(?P<ability>[^"]+)"$'
+)
+_PLURAL_PERMANENT_TYPES = {
+    "lands": "Land", "creatures": "Creature", "artifacts": "Artifact",
+}
+
+
+def _parse_distribute(m: re.Match, count) -> Effect | None:
+    from mtg_bot.effects.generic.card_flow import LookAtTopCardsDistribute
+
+    parts = re.split(r", and |, ", m.group("parts"))
+    piles = []
+    for part in parts:
+        pile = _SEL_DISTRIBUTE_PART_PILES.get(part[0].lower() + part[1:])
+        if pile is None or pile in piles:
+            return None
+        piles.append(pile)
+    return LookAtTopCardsDistribute(count=count, piles=tuple(piles))
+
+
 def _rest_fields(rest: str) -> tuple[str, bool]:
     if rest == "into your graveyard":
         return "graveyard", False
@@ -356,6 +440,11 @@ def _parse_look_top_n(m: re.Match) -> Effect | None:
             rest_zone=rest_zone, rest_random=rest_random,
         )
         return _with_tail(eff, sm.group("tail"))
+    sm = _SEL_DISTRIBUTE_RE.match(sel)
+    if sm is not None:
+        if not isinstance(count, int):
+            return None
+        return _parse_distribute(sm, count)
     sm = _SEL_MAY_TAKE_RE.match(sel)
     if sm is not None:
         desc = sm.group("desc_r") or sm.group("desc_p")
@@ -427,6 +516,18 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         if not isinstance(n, int):
             return None
         return ReorderTopCards(count=n)
+    m = _REPEAT_LOOK_PAY_LIFE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.card_flow import (
+            LookAtTopRepeatPayLifeThenStackTop,
+        )
+
+        n = _amount(m.group("n"))
+        if not isinstance(n, int):
+            return None
+        return LookAtTopRepeatPayLifeThenStackTop(
+            count=n, life_per_repeat=int(m.group("life")),
+        )
     m = _LOOK_TOP_N_HEAD_RE.match(phrase)
     if m is not None:
         return _parse_look_top_n(m)
@@ -511,6 +612,67 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         t, xt = _pt_part(m.group("t"))
         return PumpAllCreaturesUEOT(
             power=p, toughness=t, x_power=xp, x_toughness=xt,
+        )
+    m = _CHOOSE_NAME_REVEAL_UNTIL_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.card_flow import (
+            ChooseNameExileThenRevealUntilNamed,
+        )
+
+        n = _amount(m.group("n"))
+        if not isinstance(n, int):
+            return None
+        return ChooseNameExileThenRevealUntilNamed(exile_first=n)
+    m = _DRAW_DISCARD_TOKENS_PER_TYPE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.base import CreateToken
+        from mtg_bot.cards.parser.effects import _parse_create_token_effect
+        from mtg_bot.effects.generic.card_flow import (
+            DrawDiscardThenTokensPerDiscardedType,
+        )
+
+        token = _parse_create_token_effect("create " + m.group("token"))
+        if not isinstance(token, CreateToken) or token.count != 1:
+            return None
+        return DrawDiscardThenTokensPerDiscardedType(
+            amount=_amount(m.group("n")), token_printing=token.token_printing,
+        )
+    if _BALANCE_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.mass_effects import BalanceEffect
+
+        return BalanceEffect()
+    if _VOTE_EXILE_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.mass_effects import VoteExileNonlandPermanent
+
+        return VoteExileNonlandPermanent()
+    m = _PUT_CREATURE_SAC_UNLESS_PAY_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cheat_into_play import (
+            PutCreatureFromHandSacrificeUnlessPay,
+        )
+
+        return PutCreatureFromHandSacrificeUnlessPay(reduction=int(m.group("n")))
+    if _TRANSMUTE_ARTIFACT_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.cheat_into_play import (
+            SacrificeArtifactTutorArtifactPayDifference,
+        )
+
+        return SacrificeArtifactTutorArtifactPayDifference()
+    m = _GRANT_ABILITY_TO_YOURS_UEOT_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+        from mtg_bot.effects.generic.mass_effects import (
+            GrantAbilityToPermanentsYouControlUEOT,
+        )
+
+        ability = _parse_activated_ability_line(m.group("ability"))
+        if ability is None:
+            return None
+        return GrantAbilityToPermanentsYouControlUEOT(
+            card_filter=CardFilter(
+                any_types=(_PLURAL_PERMANENT_TYPES[m.group("what")],),
+            ),
+            ability=ability,
         )
     m = _ADD_N_MANA_ANY_COMBINATION_RE.match(phrase)
     if m is not None:

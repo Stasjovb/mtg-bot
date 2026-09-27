@@ -132,6 +132,7 @@ _SACRIFICE_SELF_PIECES = frozenset({
     "Sacrifice this artifact",
     # Lands' self-reference (Horizon Canopy's "{1}, {T}, Sacrifice this
     # land: Draw a card.", Wasteland, the fetch lands).
+    # (Also Rain of Filth's granted "Sacrifice this land: Add {B}.")
     "Sacrifice this land",
 })
 

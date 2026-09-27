@@ -147,6 +147,26 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
             ),
         ),
     ),
+    # 1/1 white Spirit creature token with flying — Lingering Souls,
+    # Occult Epiphany (cube). Color is not tracked on tokens (see the
+    # Insect note below).
+    "Spirit": make_token_creature(
+        "Spirit", 1, 1, subtypes=("Spirit",),
+        keywords=frozenset({"flying"}),
+    ),
+    # 0/1 colorless Eldrazi Spawn creature token with "Sacrifice this
+    # token: Add {C}." — Malevolent Rumble (cube). Same mana ability
+    # shape as the Eldrazi Scion token above.
+    "Eldrazi Spawn": make_token_creature(
+        "Eldrazi Spawn", 0, 1, subtypes=("Eldrazi", "Spawn"),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(sacrifice_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+        ),
+    ),
     # 2/1 white Insect creature token with flying — the Mistmoors
     # Overlord (Duskmourn) creates two of these whenever it enters
     # or attacks. Color isn't tracked through tokens (the engine

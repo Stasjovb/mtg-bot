@@ -323,6 +323,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         )
     )
 
+    def _own_free_cast(card) -> bool:
+        cond = card.printing.free_cast_condition
+        return cond is not None and cond.matches(state, player_id)
+
     # Instant-speed-castable: instants AND any permanent spell with flash.
     # Hand-zone PlayLand / CastSpell dedup: two same-printing copies in hand
     # reach identical end-states modulo card.id (which is a label with no
@@ -415,9 +419,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 _emit_hand_cast(card, use_warp=True)
         # Weftwalking free-cast variant. Skips the mana-cost payable
         # check (it's free) but still gates on targets / additional
-        # non-mana costs.
+        # non-mana costs. Also covers the spell's own conditional free
+        # cast (Once Upon a Time's ``free_cast_condition``).
         if (
-            free_first_cast_active
+            (free_first_cast_active or _own_free_cast(card))
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
         ):
@@ -650,7 +655,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             # spell. Skips the mana-cost payable check (it's free)
             # but still gates on targets / additional non-mana costs.
             if (
-                free_first_cast_active
+                (free_first_cast_active or _own_free_cast(card))
                 and _targets_are_satisfiable(state, player_id, card)
                 and _additional_costs_payable(state, player_id, card)
             ):

@@ -427,7 +427,7 @@ def _phyrexian_split_affordable(
 
 
 def _settle_phyrexian_pips(
-    state: GameState, player_id: int, card: "GameObject", cost: ManaCost,
+    state: GameState, player_id: int, label: str, cost: ManaCost,
     spell_kind: "frozenset[str]",
 ) -> ManaCost:
     """Decide, pip by pip, whether each Phyrexian symbol is paid with 2
@@ -474,7 +474,7 @@ def _settle_phyrexian_pips(
         if life_ok and mana_ok and p.agent is not None:
             pay_life = p.agent.choose_yes_no(
                 state, player_id,
-                f"Pay 2 life for {{{color}/P}} ({card.printing.name})?",
+                f"Pay 2 life for {{{color}/P}} ({label})?",
             )
         if pay_life:
             life_paid += 2
@@ -1864,7 +1864,7 @@ def _cast_spell(
         if cast_from_outside_hand:
             _spell_kinds_for_phyrexian.add("cast_from_outside_hand")
         cost = _settle_phyrexian_pips(
-            state, player_id, card, cost,
+            state, player_id, card.printing.name, cost,
             frozenset(_spell_kinds_for_phyrexian),
         )
     # Buyback (CR 702.27): the optional additional cost joins the total
@@ -2108,6 +2108,7 @@ def _cast_spell(
 
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
+    p.spells_cast_this_game += 1
     # Track noncreature-spell casts for the Deafening Silence
     # restriction ("each player can't cast more than one noncreature
     # spell each turn").

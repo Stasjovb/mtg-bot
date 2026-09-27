@@ -858,3 +858,265 @@ class ReturnTargetSpellToOwnersHand(Effect):
 
     def describe(self) -> str:
         return "return target spell to its owner's hand"
+
+
+# ---------------------------------------------------------------------
+# Distribute / reveal-until / repeat-look (Expressive Iteration,
+# Demonic Consultation, Lim-Dul's Vault, Occult Epiphany)
+# ---------------------------------------------------------------------
+
+
+DISTRIBUTE_PILES = ("hand", "bottom", "exile_playable")
+
+
+@dataclass(frozen=True)
+class LookAtTopCardsDistribute(Effect):
+    """Look at the top ``count`` cards and put one into each of
+    ``piles`` in order (Expressive Iteration: "Put one of them into your
+    hand, put one of them on the bottom of your library, and exile one
+    of them. You may play the exiled card this turn.").
+
+    ``"exile_playable"`` exiles the card with
+    ``playable_from_exile_this_turn`` set (the existing impulse-play
+    permission, cleared at cleanup). Each pick goes through
+    ``choose_card_from_library`` among the cards still unplaced.
+    """
+
+    count: int = 3
+    piles: tuple[str, ...] = ("hand", "bottom", "exile_playable")
+
+    def __post_init__(self) -> None:
+        for pile in self.piles:
+            if pile not in DISTRIBUTE_PILES:
+                raise ValueError(f"unknown pile {pile!r}")
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        n = min(self.count, len(p.library))
+        remaining = [p.library.pop(0) for _ in range(n)]
+        for c in remaining:
+            reveal_to(c, controller_id)
+        for pile in self.piles:
+            if not remaining:
+                break
+            chosen = remaining[0]
+            if p.agent is not None and len(remaining) > 1:
+                picked = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in remaining],
+                )
+                chosen = _agent_pick(remaining, picked) or remaining[0]
+            remaining.remove(chosen)
+            if pile == "hand":
+                chosen.zone = Zone.HAND
+                p.hand.append(chosen)
+            elif pile == "bottom":
+                chosen.zone = Zone.LIBRARY
+                p.library.append(chosen)
+            else:
+                chosen.zone = Zone.EXILE
+                chosen.playable_from_exile_this_turn = True
+                p.exile.append(chosen)
+                state.log.append(
+                    f"P{controller_id} exiles {chosen.printing.name} "
+                    f"(may play it this turn)"
+                )
+        # Leftovers (only when fewer piles than cards) go back on top.
+        for c in reversed(remaining):
+            c.zone = Zone.LIBRARY
+            p.library.insert(0, c)
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.count} cards of your library and "
+            f"distribute them: {', '.join(self.piles)}"
+        )
+
+
+NAME_NOT_IN_LIBRARY = "(a card name not in your library)"
+
+
+@dataclass(frozen=True)
+class ChooseNameExileThenRevealUntilNamed(Effect):
+    """Demonic Consultation: "Choose a card name. Exile the top N cards
+    of your library, then reveal cards from the top of your library
+    until you reveal a card with the chosen name. Put that card into
+    your hand and exile all other cards revealed this way."
+
+    The name is chosen through ``choose_mode`` over the distinct names
+    in the caster's library plus one entry standing for any name not in
+    it (which exiles the whole library). Only one card in the pool has
+    this shape; the exile count is the parameter.
+    """
+
+    exile_first: int = 6
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        names = sorted({c.printing.name for c in p.library})
+        options = names + [NAME_NOT_IN_LIBRARY]
+        idx = len(options) - 1
+        if p.agent is not None:
+            picked = p.agent.choose_mode(state, controller_id, options)
+            if isinstance(picked, int) and 0 <= picked < len(options):
+                idx = picked
+        chosen_name = options[idx]
+        state.log.append(f"P{controller_id} names {chosen_name}")
+        exiled = 0
+        for _ in range(min(self.exile_first, len(p.library))):
+            c = p.library.pop(0)
+            c.zone = Zone.EXILE
+            p.exile.append(c)
+            exiled += 1
+        found = None
+        while p.library:
+            c = p.library.pop(0)
+            reveal_to_all(state, c)
+            if c.printing.name == chosen_name:
+                found = c
+                break
+            c.zone = Zone.EXILE
+            p.exile.append(c)
+            exiled += 1
+        if found is not None:
+            found.zone = Zone.HAND
+            p.hand.append(found)
+        state.log.append(
+            f"P{controller_id} exiles {exiled} card(s)"
+            + (f" and puts {found.printing.name} into hand" if found else "")
+        )
+
+    def describe(self) -> str:
+        return (
+            f"choose a card name; exile the top {self.exile_first} cards, "
+            f"then reveal until that name; put it into your hand and exile "
+            f"the rest"
+        )
+
+
+@dataclass(frozen=True)
+class LookAtTopRepeatPayLifeThenStackTop(Effect):
+    """Lim-Dul's Vault: look at the top ``count`` cards; any number of
+    times, pay ``life_per_repeat`` life to put them on the bottom (in
+    their current order) and look at the next ``count``; then shuffle
+    and put the last cards looked at on top in any order.
+
+    Each repeat is a ``choose_yes_no``; the offer stops once another
+    payment would drop the controller to 0 life or every card of the
+    library has been seen (further windows would only repeat). The final
+    top-of-library order is built with ``choose_card_from_library``
+    picks, like :class:`ReorderTopCards`.
+    """
+
+    count: int = 5
+    life_per_repeat: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to, shuffle_library
+
+        p = state.player_by_id(controller_id)
+        n = min(self.count, len(p.library))
+        looked = [p.library.pop(0) for _ in range(n)]
+        max_repeats = len(p.library) // max(1, self.count) + 1 if p.library else 0
+        repeats = 0
+        while (
+            repeats < max_repeats
+            and p.library
+            and p.life > self.life_per_repeat
+            and p.agent is not None
+            and p.agent.choose_yes_no(
+                state, controller_id,
+                f"Pay {self.life_per_repeat} life to bottom these and look "
+                f"at the next {self.count}?",
+            )
+        ):
+            p.life -= self.life_per_repeat
+            for c in looked:
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+            n = min(self.count, len(p.library))
+            looked = [p.library.pop(0) for _ in range(n)]
+            repeats += 1
+        state.log.append(
+            f"P{controller_id} pays {repeats * self.life_per_repeat} life "
+            f"to look at new cards"
+        )
+        shuffle_library(state, controller_id)
+        ordered: list = []
+        remaining = list(looked)
+        while remaining:
+            chosen = remaining[0]
+            if p.agent is not None and len(remaining) > 1:
+                picked = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in remaining],
+                )
+                chosen = _agent_pick(remaining, picked) or remaining[0]
+            remaining.remove(chosen)
+            ordered.append(chosen)
+        for c in reversed(ordered):
+            c.zone = Zone.LIBRARY
+            p.library.insert(0, c)
+            reveal_to(c, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.count} cards; repeatedly pay "
+            f"{self.life_per_repeat} life to bottom them and look again; "
+            f"then shuffle and put the last ones on top"
+        )
+
+
+_CARD_TYPES_FOR_COUNTING = (
+    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
+    "Land", "Planeswalker", "Sorcery",
+)
+
+
+@dataclass(frozen=True)
+class DrawDiscardThenTokensPerDiscardedType(Effect):
+    """Occult Epiphany: "Draw X cards, then discard X cards. Create a
+    <token> for each card type among cards discarded this way."
+
+    ``amount`` is an int or ``Formula`` (``ResolvingX``); the discards
+    are the controller's own picks (``choose_discard``)."""
+
+    amount: Amount = 1
+    token_printing: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+        from mtg_bot.turn import draw_n_cards
+
+        p = state.player_by_id(controller_id)
+        n = _amount(self.amount, state, controller_id)
+        draw_n_cards(state, controller_id, n)
+        discarded: list = []
+        for _ in range(n):
+            if not p.hand:
+                break
+            chosen = p.hand[0]
+            if p.agent is not None:
+                picked = p.agent.choose_discard(
+                    state, controller_id, [c.id for c in p.hand],
+                )
+                chosen = _agent_pick(p.hand, picked) or p.hand[0]
+            discard_card(state, p, chosen)
+            discarded.append(chosen)
+        types = {
+            t for c in discarded for t in c.printing.card_types
+            if t in _CARD_TYPES_FOR_COUNTING
+        }
+        if types and self.token_printing is not None:
+            CreateToken(
+                token_printing=self.token_printing, count=len(types),
+            ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"draw {_describe_amount(self.amount)} cards, then discard "
+            f"{_describe_amount(self.amount)} cards; create a token for "
+            f"each card type among the discarded cards"
+        )

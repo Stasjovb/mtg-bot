@@ -1180,6 +1180,12 @@ class CardPrinting:
     # StackItem's ``x_value`` and read at resolve through
     # ``state.resolving_x_value`` (Toxic Deluge).
     additional_cost_pay_x_life: bool = False
+    # "If <condition>, you may cast it without paying its mana cost."
+    # (Once Upon a Time: ``FirstSpellYouCastThisGame``). A
+    # ``mtg_bot.effects.conditions.Condition`` evaluated for the caster;
+    # when it holds ``legal_actions`` also offers the
+    # ``CastSpell(cast_for_free=True)`` variant.
+    free_cast_condition: "object | None" = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -636,3 +636,16 @@ class CardsInYourGraveyardAtLeast(Condition):
         except (KeyError, AttributeError):
             return False
         return len(player.graveyard) >= self.n
+
+
+@dataclass(frozen=True)
+class FirstSpellYouCastThisGame(Condition):
+    """The viewer hasn't cast a spell yet this game (Once Upon a Time's
+    "If this spell is the first spell you've cast this game")."""
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        try:
+            player = state.player_by_id(viewer_id)
+        except (KeyError, AttributeError):
+            return False
+        return player.spells_cast_this_game == 0

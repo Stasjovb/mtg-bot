@@ -3336,6 +3336,15 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
         subtype = m.group(6)
         if subtype not in TOKEN_PRINTINGS:
             return _synthesize_creature_token_effect(phrase)
+        # The registry is keyed by subtype only; a printed token whose
+        # stats differ from the registered one (a 3/1 Spirit vs. the
+        # registered 1/1 Spirit) is a different token — build it from
+        # its printed characteristics instead.
+        registered = TOKEN_PRINTINGS[subtype]
+        if (registered.power, registered.toughness) != (
+            int(m.group(3)), int(m.group(4)),
+        ):
+            return _synthesize_creature_token_effect(phrase)
         # ``that's tapped and attacking`` qualifier — token enters declared
         # as an attacker in the current combat. Only meaningful during an
         # attack trigger; the ``attacking`` flag on ``CreateToken`` sets
