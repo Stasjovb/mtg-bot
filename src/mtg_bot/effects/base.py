@@ -385,6 +385,10 @@ class ActivationCost:
     # ability. The activating player picks any other untapped permanent
     # they control (not the source) and taps it as a cost.
     tap_permanent_you_control: bool = False
+    # Narrows ``tap_permanent_you_control`` to a card type: "Tap an
+    # untapped artifact you control" (Urza, Lord High Artificer) ->
+    # ``"Artifact"``. Empty = any permanent.
+    tap_permanent_type: str = ""
     # "Exile an artifact card from your graveyard" — Rust Harvester's
     # activated ability. The activating player exiles one artifact card
     # from their graveyard as a cost. Legal only when the graveyard
@@ -394,6 +398,10 @@ class ActivationCost:
     # activating player exiles N cards of their choice from their own
     # graveyard; legal only with at least N cards there.
     exile_cards_from_graveyard: int = 0
+    # Ninjutsu's "Return an unblocked attacker you control to hand"
+    # (CR 702.49a). Legal only in the declare blockers step with an
+    # unblocked attacker the activator controls.
+    return_unblocked_attacker: bool = False
     # "Sacrifice another creature or artifact" — the caster picks a
     # legal target via choose_sacrifice. Cannot be the source itself.
     sacrifice_another_creature_or_artifact: bool = False
@@ -568,9 +576,12 @@ class ActivationCost:
         if self.exile_self:
             parts.append("Exile ~")
         if self.tap_permanent_you_control:
-            parts.append("Tap an untapped permanent you control")
+            noun = (self.tap_permanent_type or "permanent").lower()
+            parts.append(f"Tap an untapped {noun} you control")
         if self.exile_artifact_from_graveyard:
             parts.append("Exile an artifact card from your graveyard")
+        if self.return_unblocked_attacker:
+            parts.append("Return an unblocked attacker you control to hand")
         if self.exile_cards_from_graveyard:
             parts.append(
                 f"Exile {self.exile_cards_from_graveyard} cards from your "

@@ -925,6 +925,13 @@ class GameObject:
     # "You may cast that card this turn." (Emry, Lurker of the Loch):
     # this graveyard card may be cast for its mana cost until cleanup.
     castable_from_graveyard_this_turn: bool = False
+    # "You may play <those cards> this turn [without paying their mana
+    # costs]" on a card in exile (any player's exile zone): the player
+    # allowed to play it, whether it's free, and whether mana of any
+    # type can be spent on it. Cleared at cleanup and when played.
+    may_play_by: Optional[int] = None
+    may_play_free: bool = False
+    may_play_any_mana: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -1650,6 +1657,13 @@ def _dynamic_base_pt(
             if o.controller_id == obj.controller_id and o.printing.is_land
         )
         return n, n
+    if formula == "card_types_in_all_graveyards":
+        types: set[str] = set()
+        for pl in state.players:
+            for c in pl.graveyard:
+                types.update(c.printing.card_types)
+        n = len(types)
+        return n, n + 1
     if formula == "emissary_escort":
         # "Gets +X/+0 where X is the greatest mana value among other
         # artifacts you control." We encode that as a dynamic base

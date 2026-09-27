@@ -154,6 +154,15 @@ def bind_event_player_anaphora(event, effect: Effect) -> Effect:
 
 
 _AMASS = re.compile(r"^amass (?P<type>[A-Z][a-z]+?)s? (?P<n>\d+)$")
+# Fallen Shinobi: "that player exiles the top N cards of their library.
+# Until end of turn, you may play those cards[ without paying their mana
+# costs]"
+_THAT_PLAYER_EXILES_TOP_MAY_PLAY = re.compile(
+    r"^that player exiles the top (?P<n>two|three|four|five) cards of their "
+    r"library\. Until end of turn, you may play those cards"
+    r"(?P<free> without paying their mana costs)?$"
+)
+_WORD_COUNTS = {"two": 2, "three": 3, "four": 4, "five": 5}
 # Thassa's Oracle
 _THASSA = re.compile(
     r"^look at the top X cards of your library, where X is your devotion to "
@@ -281,6 +290,37 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         second = _parse_effect("this creature " + m.group("rest"))
         if first is not None and second is not None:
             return Sequence(effects=(first, second))
+    m = _THAT_PLAYER_EXILES_TOP_MAY_PLAY.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            TargetPlayerExilesTopNYouMayPlayThem,
+        )
+
+        return TargetPlayerExilesTopNYouMayPlayThem(
+            amount=_WORD_COUNTS[m.group("n")], free=m.group("free") is not None,
+        )
+    if phrase == (
+        "shuffle your library, then exile the top card. Until end of turn, "
+        "you may play that card without paying its mana cost"
+    ):
+        # Literal: Urza is the only card in the pool with this
+        # shuffle-then-impulse shape; the permission substrate is shared.
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ShuffleThenExileTopMayPlayFree,
+        )
+
+        return ShuffleThenExileTopMayPlayFree()
+    if phrase == (
+        "you may mill that many cards. If you do, you may put a creature "
+        "card from among them into your hand"
+    ):
+        # Literal: Barrowgoyf is the only card in the pool with this
+        # mill-that-many-then-take shape.
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            MayMillDamageThenMayTakeCreature,
+        )
+
+        return MayMillDamageThenMayTakeCreature()
     ub = _parse_ub_effect_batch5(phrase)
     if ub is not None:
         return ub
@@ -552,7 +592,39 @@ def _parse_cost_keyword_line(line: str) -> UBLine | None:
     return None
 
 
+_NINJUTSU = re.compile(r"^Ninjutsu (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def _parse_ninjutsu_line(line: str) -> UBLine | None:
+    """``Ninjutsu {cost}`` (CR 702.49): a hand-activated ability --
+    "{cost}, Return an unblocked attacker you control to hand: Put this
+    card onto the battlefield from your hand tapped and attacking."
+    """
+    from mtg_bot.cards.base import (
+        ActivatedAbility, ActivationCost, parse_mana_cost,
+    )
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        PutSourceOntoBattlefieldTappedAndAttacking,
+    )
+
+    m = _NINJUTSU.match(line)
+    if m is None:
+        return None
+    try:
+        mana = parse_mana_cost(m.group("cost"))
+    except ValueError:
+        return None
+    return UBLine(hand_abilities=(ActivatedAbility(
+        cost=ActivationCost(
+            mana=mana, mana_str=m.group("cost"),
+            return_unblocked_attacker=True,
+        ),
+        effect=PutSourceOntoBattlefieldTappedAndAttacking(),
+    ),))
+
+
 _LINE_PARSERS = (
+    _parse_ninjutsu_line,
     _parse_cost_keyword_line,
     _parse_squad_offspring_line,
     _parse_draw_replacement_line,

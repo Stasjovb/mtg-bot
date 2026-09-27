@@ -348,6 +348,8 @@ def _classify_builtin_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="exile_self")
     if piece == _TAP_PERMANENT_YOU_CONTROL_PIECE:
         return _CostPiece(kind="tap_permanent_you_control")
+    if piece == "Tap an untapped artifact you control":
+        return _CostPiece(kind="tap_permanent_you_control", field="Artifact")
     if piece == _EXILE_ARTIFACT_FROM_GRAVEYARD_PIECE:
         return _CostPiece(kind="exile_artifact_from_graveyard")
     if piece == _DISCARD_A_CARD_PIECE:
@@ -474,6 +476,7 @@ def _build_cost_from_pieces(
     sacrifice_n_nonland = 0
     extra_costs: list = []
     exile_n_from_graveyard = 0
+    tap_permanent_type = ""
     for p in pieces:
         if p.kind == "extra":
             extra_costs.append(p.atom)
@@ -500,6 +503,7 @@ def _build_cost_from_pieces(
             if tap_permanent_you_control:
                 return None
             tap_permanent_you_control = True
+            tap_permanent_type = p.field or ""
         elif p.kind == "exile_artifact_from_graveyard":
             if exile_artifact_from_graveyard:
                 return None
@@ -588,6 +592,8 @@ def _build_cost_from_pieces(
         kwargs["exile_self"] = True
     if tap_permanent_you_control:
         kwargs["tap_permanent_you_control"] = True
+        if tap_permanent_type:
+            kwargs["tap_permanent_type"] = tap_permanent_type
     if exile_artifact_from_graveyard:
         kwargs["exile_artifact_from_graveyard"] = True
     if pay_life:

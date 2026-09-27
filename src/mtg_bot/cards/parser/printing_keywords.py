@@ -568,6 +568,12 @@ _DYNAMIC_PT_FORMULA_LINES: dict[str, str] = {
     # second land-count P/T formula lands.
     "Harmonious Grovestrider's power and toughness are each equal to "
     "the number of lands you control.": "harmonious_grovestrider",
+    # Barrowgoyf {2}{B} */(1+*) Lhurgoyf -- card types among cards in
+    # ALL graveyards (the classic Tarmogoyf formula).
+    "Barrowgoyf's power is equal to the number of card types among cards "
+    "in all graveyards and its toughness is equal to that number plus 1.": (
+        "card_types_in_all_graveyards"
+    ),
 }
 
 

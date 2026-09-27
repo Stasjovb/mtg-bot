@@ -227,6 +227,177 @@ class MayCastTargetGraveyardCardThisTurn(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Ninjutsu
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PutSourceOntoBattlefieldTappedAndAttacking(Effect):
+    """Ninjutsu's effect: "Put this card onto the battlefield from your
+    hand tapped and attacking" (CR 702.49a/c). The ninja attacks the
+    player the returned creature was attacking (the defending player);
+    it was never declared as an attacker, so "whenever attacks"
+    triggers don't fire."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        card = state.resolving_source
+        p = state.player_by_id(controller_id)
+        if card is None or card not in p.hand:
+            return
+        p.hand.remove(card)
+        put_into_battlefield(state, card, controller_id)
+        if card in state.battlefield:
+            card.tapped = True
+            card.attacking = True
+            state.log.append(
+                f"{card.printing.name} enters tapped and attacking"
+            )
+
+    def describe(self) -> str:
+        return (
+            "put this card onto the battlefield from your hand tapped and "
+            "attacking"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Exile play permissions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TargetPlayerExilesTopNYouMayPlayThem(Effect):
+    """"That player exiles the top N cards of their library. Until end
+    of turn, you may play those cards [without paying their mana
+    costs]." (Fallen Shinobi). The player is the (fixed) target -- the
+    damaged player on a combat-damage trigger."""
+
+    amount: int = 1
+    free: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets or targets[0][0] != "player":
+            return
+        p = state.player_by_id(targets[0][1])
+        for _ in range(self.amount):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.EXILE
+            card.may_play_by = controller_id
+            card.may_play_free = self.free
+            p.exile.append(card)
+            state.log.append(
+                f"P{p.id} exiles {card.printing.name}; P{controller_id} "
+                f"may play it this turn"
+            )
+
+    def describe(self) -> str:
+        free = " without paying their mana costs" if self.free else ""
+        return (
+            f"that player exiles the top {self.amount} cards of their "
+            f"library; until end of turn, you may play them{free}"
+        )
+
+
+@dataclass(frozen=True)
+class ShuffleThenExileTopMayPlayFree(Effect):
+    """"Shuffle your library, then exile the top card. Until end of
+    turn, you may play that card without paying its mana cost." (Urza,
+    Lord High Artificer)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+        shuffle_library(state, controller_id)
+        if not p.library:
+            return
+        card = p.library.pop(0)
+        card.zone = Zone.EXILE
+        card.may_play_by = controller_id
+        card.may_play_free = True
+        p.exile.append(card)
+        state.log.append(
+            f"P{controller_id} exiles {card.printing.name}; may play it "
+            f"free this turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "shuffle your library, then exile the top card; until end of "
+            "turn, you may play it without paying its mana cost"
+        )
+
+
+@dataclass(frozen=True)
+class MayMillDamageThenMayTakeCreature(Effect):
+    """"You may mill that many cards. If you do, you may put a creature
+    card from among them into your hand." (Barrowgoyf) -- "that many"
+    is the combat damage dealt (``state.resolving_combat_damage_amount``).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        n = state.resolving_combat_damage_amount
+        p = state.player_by_id(controller_id)
+        if n <= 0 or not p.library:
+            return
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, f"Mill {n} cards?",
+        ):
+            return
+        milled = []
+        for _ in range(n):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            milled.append(card)
+        state.log.append(f"P{controller_id} mills {len(milled)} cards")
+        creatures = [c for c in milled if c.printing.is_creature]
+        if not creatures or p.agent is None:
+            return
+        pick = p.agent.choose_card_from_library(
+            state, controller_id, [c.id for c in creatures],
+        )
+        chosen = next((c for c in creatures if c.id == pick), None)
+        if chosen is None:
+            return
+        p.graveyard.remove(chosen)
+        chosen.zone = Zone.HAND
+        p.hand.append(chosen)
+        state.log.append(
+            f"P{controller_id} puts {chosen.printing.name} into their hand"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you may mill that many cards; if you do, you may put a "
+            "creature card from among them into your hand"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
 
@@ -693,6 +864,10 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "MayMillDamageThenMayTakeCreature",
+    "ShuffleThenExileTopMayPlayFree",
+    "PutSourceOntoBattlefieldTappedAndAttacking",
+    "TargetPlayerExilesTopNYouMayPlayThem",
     "ChooseNoMode",
     "CounterTargetStackObject",
     "DevotionTo",

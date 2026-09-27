@@ -1447,6 +1447,16 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
             )
             if permitted is not None:
                 card, exile_zone = permitted, perm_owner.exile
+        if card is None:
+            # A land in any player's exile this player may play
+            # (Fallen Shinobi / Dauthi Voidwalker permissions).
+            card = next(
+                (
+                    c for owner in state.players for c in owner.exile
+                    if c.id == card_id and c.may_play_by == player_id
+                ),
+                None,
+            )
         if card is None:  # pragma: no cover - defensive; legal_actions gates
             raise ValueError(
                 f"land {card_id} not playable by P{player_id}"
@@ -1455,6 +1465,12 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         card.playable_from_exile_this_turn = False
         card.play_from_exile_requires_kavu = False
         card.exile_play_permission = None
+        state.player_by_id(card.owner_id).exile.remove(card)
+        card.playable_from_exile_this_turn = False
+        card.play_from_exile_requires_kavu = False
+        card.may_play_by = None
+        card.may_play_free = False
+        card.may_play_any_mana = False
     # Track whether the land was played from Lightstall exile (enters
     # tapped regardless of printing) before clearing the flag.
     lightstall_land = card.cast_from_exile_with_lightstall_surcharge
@@ -2001,6 +2017,9 @@ def _cast_spell(
     # Necromancy's "if you cast it any time a sorcery couldn't have been
     # cast" reads the timing before the spell moves to the stack.
     sorcery_timing_at_cast = _is_sorcery_timing(state, player_id)
+    # Set when an exile play permission lets this cast skip its mana
+    # cost (so a pitch alternative cost is never demanded).
+    free_by_permission = False
 
     # A spell can be cast from the hand (normal or warp cost), from
     # the "warped" / impulse-playable exile zone (normal cost), or —
@@ -2236,6 +2255,28 @@ def _cast_spell(
             perm_owner.exile.remove(card)
             card.exile_play_permission = None
             card.playable_from_exile_this_turn = False
+        permitted = None
+        if card is None:
+            # An exile play permission granted to this player, on a card
+            # in any player's exile (Fallen Shinobi, Urza, Dauthi).
+            permitted = next(
+                (
+                    c for owner in state.players for c in owner.exile
+                    if c.id == card_id and c.may_play_by == player_id
+                ),
+                None,
+            )
+        if permitted is not None:
+            from mtg_bot.legal import permission_cost as _permission_cost
+
+            card = permitted
+            cost = _permission_cost(card)
+            free_by_permission = card.may_play_free
+            cast_from_outside_hand = True
+            state.player_by_id(card.owner_id).exile.remove(card)
+            card.may_play_by = None
+            card.may_play_free = False
+            card.may_play_any_mana = False
             card.cast_via_warp = False
             card.cast_via_hand = False
         elif card is not None:
@@ -2501,6 +2542,7 @@ def _cast_spell(
 
         if (
             card.printing.alt_cost_exile_from_hand is not None
+            and not free_by_permission
             and not _free_permission(state, player_id, card)
         ):
             _pay_pitch(state, player_id, card)
@@ -3194,6 +3236,27 @@ def _activate_hand_ability(
         cost_paid_objects.extend(
             pay_extra_costs(state, player_id, card, ability.cost)
         )
+    if ability.cost.return_unblocked_attacker:
+        # Ninjutsu (CR 702.49a): return an unblocked attacker you
+        # control to its owner's hand as part of the cost.
+        from mtg_bot.legal import unblocked_attackers
+        from mtg_bot.turn import move_off_battlefield
+
+        options = unblocked_attackers(state, player_id)
+        if not options:  # pragma: no cover - legal_actions gates
+            return
+        returned = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_sacrifice(
+                state, player_id, [o.id for o in options],
+            )
+            returned = next((o for o in options if o.id == pick), returned)
+        state.log.append(
+            f"P{player_id} returns unblocked {returned.printing.name} to "
+            f"hand (ninjutsu cost)"
+        )
+        move_off_battlefield(state, returned, "hand")
+        cost_paid_objects.append(returned)
     if ability.cost.discard_self:
         p.hand.remove(card)
         card.zone = Zone.GRAVEYARD
@@ -3793,6 +3856,10 @@ def _activate_ability(
             if o.controller_id == player_id
             and o.id != source.id
             and not o.tapped
+            and (
+                not ability.cost.tap_permanent_type
+                or ability.cost.tap_permanent_type in o.printing.card_types
+            )
         ]
         chosen = options[0]
         if p.agent is not None:

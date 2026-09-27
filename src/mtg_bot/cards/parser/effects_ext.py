@@ -404,7 +404,10 @@ _CREATE_TOKEN_WITH_PER_COUNT_ANTHEM = re.compile(
     rf"^create (?P<count>{_COUNT}) (?P<p>\d+)/(?P<t>\d+) (?:{_COLOR}) "
     r"(?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
     r"(?P<artifact>artifact )?creature tokens? with \"This token gets "
-    r"\+(?P<pb>\d+)/\+(?P<tb>\d+) for each (?P<each>[a-z]+) you control\.\"$"
+    r"\+(?P<pb>\d+)/\+(?P<tb>\d+) for each (?P<each>[a-z]+) you control"
+    # The closing ``."`` is absent when the enclosing trigger-line regex
+    # already consumed it (Urza, Lord High Artificer's ETB).
+    r"(?:\.\")?$"
 )
 
 # Closed condition phrasebook for the ``if <condition>, <effect>`` shape.

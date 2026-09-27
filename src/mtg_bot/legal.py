@@ -185,6 +185,67 @@ def _can_cast_paying_life(
     )
 
 
+def unblocked_attackers(state: GameState, player_id: int) -> list:
+    """Attacking creatures ``player_id`` controls that no creature
+    blocked, once blockers have been declared (the declare blockers
+    step) -- Ninjutsu's cost (CR 702.49a)."""
+    from mtg_bot.turn import Step
+
+    if state.step != Step.DECLARE_BLOCKERS:
+        return []
+    return [
+        o for o in state.battlefield
+        if o.attacking and o.controller_id == player_id and not o.blocked_by
+    ]
+
+
+def permission_cost(card: GameObject) -> ManaCost:
+    """The mana cost of casting ``card`` under an exile play permission:
+    its mana cost, with every colored pip payable by any type of mana
+    when ``may_play_any_mana`` is set."""
+    cost = card.printing.mana_cost
+    if card.may_play_any_mana:
+        cost = ManaCost(generic=cost.total, x_pips=cost.x_pips)
+    return cost
+
+
+def _exile_play_permission_actions(
+    state: GameState, player_id: int,
+) -> list:
+    """PlayLand / CastSpell actions for exiled cards ``player_id`` may
+    play this turn (``GameObject.may_play_by``). Lands need a land drop
+    at sorcery timing; instants and flash spells are castable whenever
+    the player has priority; everything else at sorcery timing."""
+    p = state.player_by_id(player_id)
+    sorcery = _is_sorcery_timing(state, player_id)
+    out: list = []
+    for owner in state.players:
+        for card in owner.exile:
+            if card.may_play_by != player_id:
+                continue
+            pr = card.printing
+            if pr.is_land:
+                max_lands = 1 + sum(
+                    o.printing.grants_additional_land_per_turn
+                    for o in state.battlefield if o.controller_id == player_id
+                )
+                if sorcery and p.lands_played_this_turn < max_lands:
+                    out.append(PlayLand(card.id))
+                continue
+            if not (pr.is_instant or "flash" in pr.keywords or sorcery):
+                continue
+            if not (
+                _targets_are_satisfiable(state, player_id, card)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                continue
+            if card.may_play_free:
+                out.append(CastSpell(card.id, cast_for_free=True))
+            elif _can_cast(state, player_id, card, permission_cost(card)):
+                out.append(CastSpell(card.id))
+    return out
+
+
 def _can_cast(
     state: GameState, player_id: int, card: GameObject, cost: ManaCost,
 ) -> bool:
@@ -639,6 +700,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             key = (card.printing.name, idx)
             if key in seen_hand_abilities:
                 continue
+            if ability.cost.return_unblocked_attacker and not (
+                unblocked_attackers(state, player_id)
+            ):
+                continue
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
                 continue
             if (
@@ -762,6 +827,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 actions.append(CastSpell(gcard.id))
 
     _emit_graveyard_permission_casts(instant_speed=True)
+    # "You may play those cards this turn [without paying their mana
+    # costs]" on exiled cards, in any player's exile (Fallen Shinobi,
+    # Urza, Dauthi Voidwalker). Checks its own timing.
+    actions.extend(_exile_play_permission_actions(state, player_id))
 
     # W/G graveyard permissions (Six's retrace, Serra Paragon;
     # ``mtg_bot.graveyard_casting_wg``): instant-speed spells now, the
@@ -1544,6 +1613,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     if o2.controller_id == player_id
                     and o2.id != obj.id
                     and not o2.tapped
+                    and (
+                        not ability.cost.tap_permanent_type
+                        or ability.cost.tap_permanent_type
+                        in o2.printing.card_types
+                    )
                 )
                 if not has_untapped_other:
                     continue
