@@ -83,6 +83,9 @@ Shapes:
   :class:`LookAtHandExileNonlandOwnerMayPlayTaxed` (Elite Spellbinder)
 * ``mill N cards. You may put a land card from among them into your
   hand`` -> :class:`MillThenMayPutLandIntoHand` (Six)
+* ``[if this creature is a <Subtype>, it | this creature] becomes a
+  <Subtypes> with base power and toughness P/T[ and <keywords>]`` ->
+  :class:`BecomeTypesWithBasePT` (Figure of Fable)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -218,6 +221,11 @@ _LOOK_HAND_EXILE_MAY_PLAY_TAXED_RE = re.compile(
 _MILL_MAY_PUT_LAND_RE = re.compile(
     r"^mill (?P<n>two|three|four|five|\d+) cards\. You may put a land card "
     r"from among them into your hand$"
+)
+_BECOMES_TYPES_WITH_BASE_PT_RE = re.compile(
+    r"^(?:if this creature is an? (?P<cond>[A-Z][a-z]+), it|this creature) "
+    r"becomes an? (?P<types>[A-Z][a-z]+(?: [A-Z][a-z]+)*) with base power "
+    r"and toughness (?P<p>\d+)/(?P<t>\d+)(?: and (?P<kw>.+))?$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -474,6 +482,17 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         if counters is not None and spec is not None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
+            )
+    m = _BECOMES_TYPES_WITH_BASE_PT_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _keywords
+
+        kws = _keywords(m.group("kw"))
+        if kws is not None:
+            return wg.BecomeTypesWithBasePT(
+                subtypes=tuple(m.group("types").split(" ")),
+                power=int(m.group("p")), toughness=int(m.group("t")),
+                keywords=kws, if_subtype=m.group("cond"),
             )
     m = _MILL_MAY_PUT_LAND_RE.match(phrase)
     if m is not None:

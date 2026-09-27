@@ -400,3 +400,36 @@ def test_spellbinder_effect_edges():
     eff.resolve(state, 0, (("player", 1),))
     assert not state.players[1].exile
     assert "{2}" in eff.describe()
+
+
+def test_figure_of_fable_levels_up():
+    from mtg_bot.effects.generic.cube_creatures_wg import BecomeTypesWithBasePT
+    from mtg_bot.game import effective_power, effective_subtypes, effective_toughness
+
+    pr = cube()["Figure of Fable"]
+    scout, soldier, avatar = (a.effect for a in pr.activated_abilities)
+    assert isinstance(avatar, BecomeTypesWithBasePT)
+    assert avatar.if_subtype == "Soldier" and avatar.keywords
+    state = make_state()
+    fig = put(state, 0, pr)
+    add_lands(state, 0, "Forest", 6)
+    add_lands(state, 0, "Plains", 6)
+
+    def act(i):
+        apply_action(state, 0, ActivateAbility(source_id=fig.id, ability_index=i))
+        drain(state)
+
+    act(1)  # not a Scout yet: nothing
+    assert (effective_power(state, fig), effective_toughness(state, fig)) == (1, 1)
+    act(0)
+    assert effective_subtypes(state, fig) == ("Kithkin", "Scout")
+    assert (effective_power(state, fig), effective_toughness(state, fig)) == (2, 3)
+    act(1)
+    assert effective_subtypes(state, fig) == ("Kithkin", "Soldier")
+    assert (effective_power(state, fig), effective_toughness(state, fig)) == (4, 5)
+    act(2)
+    assert (effective_power(state, fig), effective_toughness(state, fig)) == (7, 8)
+    assert "protection from each of your opponents" in effective_keywords(state, fig)
+    assert "Avatar" in avatar.describe()
+    state.resolving_source = None
+    avatar.resolve(state, 0)

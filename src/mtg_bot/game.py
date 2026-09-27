@@ -1771,7 +1771,9 @@ def effective_subtypes(
     layer4: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
         if ce.layer == 4
-        and ce.kind in ("add_subtype", "set_basic_land_subtype")
+        and ce.kind in (
+            "add_subtype", "set_basic_land_subtype", "set_creature_subtypes",
+        )
         and ce.target_id == obj.id
     ]
     # Synthesize Magus-of-the-Moon / Blood Moon entries: nonbasic
@@ -1868,6 +1870,10 @@ def effective_subtypes(
             sub = ce.params[0] if ce.params else None
             if sub and sub not in subtypes:
                 subtypes.append(sub)
+        elif ce.kind == "set_creature_subtypes":
+            # "<This> becomes a Kithkin Scout ..." (Figure of Fable; cube
+            # W/G bucket): the new creature types replace the old ones.
+            subtypes = list(ce.params)
     return tuple(subtypes)
 
 
