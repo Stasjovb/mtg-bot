@@ -1987,14 +1987,25 @@ def _cast_spell(
                 )
     elif (
         not use_warp
-        and p.may_play_from_graveyard_this_turn
         and (
             yw_card := next(
                 (c for c in p.graveyard if c.id == card_id), None
             )
         ) is not None
+        and (
+            p.may_play_from_graveyard_this_turn
+            or _lurrus_permission_for(state, player_id, yw_card) is not None
+        )
     ):
         # Yawgmoth's Will: cast from the graveyard for the normal cost.
+        # Otherwise a Lurrus-style once-per-turn permission (spent now).
+        if not p.may_play_from_graveyard_this_turn:
+            granter = _lurrus_permission_for(state, player_id, yw_card)
+            granter.graveyard_cast_used_turn = state.turn_number
+            state.log.append(
+                f"{granter.printing.name} lets P{player_id} cast "
+                f"{yw_card.printing.name} from the graveyard"
+            )
         card = yw_card
         cost = card.printing.mana_cost
         cast_from_outside_hand = True
@@ -2878,7 +2889,12 @@ def _effective_ability_mana_cost(
                 f"ability cost reduced by {reduction} "
                 f"({type(rule.condition).__name__})"
             )
-    return cost
+    # Zirda-style "Abilities you activate ... cost {N} less" statics.
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        activation_cost_reduction,
+    )
+
+    return activation_cost_reduction(state, source.controller_id, ability, cost)
 
 
 def _choose_ability_targets(
@@ -3003,6 +3019,12 @@ def _activate_hand_ability(
     )
 
 
+def _lurrus_permission_for(state: GameState, player_id: int, card):
+    from mtg_bot.effects.generic.cube_creatures_rmc import lurrus_castable
+
+    return lurrus_castable(state, player_id, card)
+
+
 def _activate_graveyard_ability(
     state: GameState, player_id: int, card: "GameObject", ability_index: int,
 ) -> None:
@@ -3019,9 +3041,10 @@ def _activate_graveyard_ability(
         return
     ability = abilities[ability_index]
     if ability.cost.mana is not None:
-        if not can_pay_cost(state, player_id, ability.cost.mana):
+        mana = _effective_ability_mana_cost(state, card, ability)
+        if not can_pay_cost(state, player_id, mana):
             return
-        auto_tap_for_cost(state, player_id, ability.cost.mana, spell_kind="spell")
+        auto_tap_for_cost(state, player_id, mana, spell_kind="spell")
     targets = _choose_ability_targets(state, player_id, card, ability.effect)
     cost_paid_objects: list[GameObject] = []
     if ability.cost.extra_costs:

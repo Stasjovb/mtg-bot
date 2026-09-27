@@ -857,6 +857,11 @@ class GameObject:
     # Boast (CR 702.142): ``state.turn_number`` of the last activation of
     # this permanent's boast ability (0 = never).
     boasted_turn: int = 0
+    # Monstrosity (CR 701.37): this permanent is monstrous.
+    monstrous: bool = False
+    # Lurrus-style "Once during each of your turns, you may cast ... from
+    # your graveyard": ``state.turn_number`` of the last use (0 = never).
+    graveyard_cast_used_turn: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -2848,6 +2853,10 @@ class Player:
     # "<player> can't gain life for the rest of the game" (Screaming
     # Nemesis); ``gain_life`` gains nothing while set.
     cant_gain_life: bool = False
+    # Ids of this player's graveyard cards with a "put into a graveyard
+    # from anywhere" trigger as of the last graveyard-watch sweep; a new
+    # id is a fresh arrival (``cube_creatures_rmc.sweep_graveyard_watch``).
+    graveyard_arrival_watch: tuple = ()
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this

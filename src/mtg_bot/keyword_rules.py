@@ -53,6 +53,9 @@ PROTECTION_QUALITIES: frozenset[str] = frozenset(
         # player. Resolved against the protected object in
         # ``is_protected_from``.
         "the chosen player", "each of your opponents",
+        # Emrakul, the Aeons Torn: protection from spells that are one or
+        # more colors (a spell = the object on the stack / resolving).
+        "spells that are one or more colors",
     }
 )
 
@@ -111,6 +114,11 @@ def source_has_quality(state: "GameState", source: "GameObject", quality: str) -
     """Whether ``source`` has the quality a protection keyword names."""
     if quality == "everything":
         return True
+    if quality == "spells that are one or more colors":
+        from mtg_bot.game import Zone
+
+        is_spell = source.zone == Zone.STACK or source is state.resolving_spell
+        return is_spell and bool(_source_colors(state, source))
     if quality in _TYPE_QUALITIES:
         return _source_is_type(state, source, _TYPE_QUALITIES[quality])
     colors = _source_colors(state, source)

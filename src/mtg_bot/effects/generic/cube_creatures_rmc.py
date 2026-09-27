@@ -1750,31 +1750,322 @@ def graveyard_self_replacement_destination(state: "GameState", card: "GameObject
     return out.get("destination", "graveyard")
 
 
-def sweep_graveyard_self_replacements(state: "GameState") -> bool:
-    """Catch-all for "would be put into a graveyard from anywhere"
-    self-replacements on permanents (Blightsteel Colossus) reaching the
-    graveyard by a path that doesn't consult them (discard, mill, ...):
-    such a card found in a graveyard is shuffled into its owner's
-    library. ``move_off_battlefield`` and spells leaving the stack
-    redirect before the card lands."""
+def sweep_graveyard_watch(state: "GameState") -> bool:
+    """State-based sweep over graveyard cards whose printing sets
+    ``watched_in_graveyard`` (the "... put into a graveyard from
+    anywhere" family; cheap no-op for every other card):
+
+    * a "would be put into a graveyard from anywhere, ... shuffle it
+      into its owner's library instead" permanent (Blightsteel Colossus)
+      that got there by a path that doesn't consult the replacement
+      (discard, mill, ...) is shuffled into its owner's library
+      (``move_off_battlefield`` redirects before the card lands);
+    * a card with a "When <this> is put into a graveyard from anywhere"
+      trigger (Emrakul, the Aeons Torn) that newly arrived since the
+      last sweep (``Player.graveyard_arrival_watch``) has that trigger
+      put on the stack.
+    """
     from mtg_bot.game import Zone, shuffle_library
 
     changed = False
     for p in state.players:
-        movers = [
-            c for c in p.graveyard
-            if c.printing.is_permanent
-            and c.printing.static_abilities
-            and graveyard_self_replacement_destination(state, c) == "library"
-        ]
-        for c in movers:
+        watched = [c for c in p.graveyard if c.printing.watched_in_graveyard]
+        if not watched and not p.graveyard_arrival_watch:
+            continue
+        for c in watched:
+            if (
+                c.printing.is_permanent
+                and graveyard_self_replacement_destination(state, c) == "library"
+            ):
+                p.graveyard.remove(c)
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+                shuffle_library(state, p.id)
+                state.log.append(
+                    f"{c.printing.name} is shuffled into P{p.id}'s library "
+                    f"instead of staying in the graveyard"
+                )
+                changed = True
+        current = tuple(
+            c.id for c in p.graveyard
+            if c.printing.watched_in_graveyard
+            and any(_is_graveyard_arrival_ability(a) for a in c.printing.triggered_abilities)
+        )
+        if current == p.graveyard_arrival_watch:
+            continue
+        previous = set(p.graveyard_arrival_watch)
+        p.graveyard_arrival_watch = current
+        for c in p.graveyard:
+            if c.id not in current or c.id in previous:
+                continue
+            _push_graveyard_arrival_triggers(state, c)
+            changed = True
+    return changed
+
+
+class PutIntoGraveyardFromAnywhere(_TriggerPredicate):
+    """Marker predicate of a "When <this> is put into a graveyard from
+    anywhere" trigger. Never matches a regular dispatch — the graveyard
+    watch sweep stacks these abilities itself when the card arrives."""
+
+    def matches(self, state, subjects, source):
+        return False
+
+    def __eq__(self, other):
+        return isinstance(other, PutIntoGraveyardFromAnywhere)
+
+    def __hash__(self):
+        return hash("PutIntoGraveyardFromAnywhere")
+
+    def __repr__(self):
+        return "PutIntoGraveyardFromAnywhere()"
+
+
+def _is_graveyard_arrival_ability(ability) -> bool:
+    return isinstance(ability.predicate, PutIntoGraveyardFromAnywhere)
+
+
+def _push_graveyard_arrival_triggers(state, card) -> None:
+    from mtg_bot.actions import push_triggered_ability
+
+    for idx, ability in enumerate(card.printing.triggered_abilities):
+        if _is_graveyard_arrival_ability(ability):
+            push_triggered_ability(
+                state, source=card, ability=ability, ability_index=idx,
+                controller_id=card.owner_id, label="put into graveyard",
+            )
+
+
+@dataclass(frozen=True)
+class OwnerShufflesGraveyardIntoLibrary(Effect):
+    """"its owner shuffles their graveyard into their library" — the
+    source card's owner (Emrakul, the Aeons Torn)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, shuffle_library
+
+        src = state.resolving_source
+        owner_id = src.owner_id if src is not None else controller_id
+        p = state.player_by_id(owner_id)
+        cards = list(p.graveyard)
+        for c in cards:
             p.graveyard.remove(c)
             c.zone = Zone.LIBRARY
             p.library.append(c)
-            shuffle_library(state, p.id)
+        shuffle_library(state, owner_id)
+        state.log.append(
+            f"P{owner_id} shuffles their graveyard ({len(cards)} cards) into "
+            f"their library"
+        )
+
+    def describe(self) -> str:
+        return "its owner shuffles their graveyard into their library"
+
+
+# ---------------------------------------------------------------------------
+# Batch 5: annihilator, monstrosity, connive, sacrifice-a-permanent,
+# activation cost reduction, Lurrus's graveyard casting
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DefendingPlayerSacrificesPermanents(Effect):
+    """Annihilator N (CR 702.86a): "Whenever this creature attacks,
+    defending player sacrifices N permanents." The defending player
+    (the single opponent) chooses which (``choose_sacrifice``)."""
+
+    count: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import sacrifice
+
+        opp = next(
+            (pl for pl in state.players
+             if pl.id != controller_id and not pl.has_lost),
+            None,
+        )
+        if opp is None:
+            return
+        for _ in range(self.count):
+            options = [o for o in state.battlefield if o.controller_id == opp.id]
+            if not options:
+                break
+            pick = options[0]
+            if opp.agent is not None:
+                picked = opp.agent.choose_sacrifice(
+                    state, opp.id, [o.id for o in options],
+                )
+                pick = next((o for o in options if o.id == picked), options[0])
+            state.log.append(f"P{opp.id} sacrifices {pick.printing.name} (annihilator)")
+            sacrifice(state, pick)
+
+    def describe(self) -> str:
+        return f"defending player sacrifices {self.count} permanents"
+
+
+@dataclass(frozen=True)
+class Monstrosity(Effect):
+    """Monstrosity N (CR 701.37): "If this creature isn't monstrous, put
+    N +1/+1 counters on it and it becomes monstrous." Becoming monstrous
+    dispatches ``Event.BECOMES_MONSTROUS``."""
+
+    count: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import dispatch_event
+        from mtg_bot.effects.predicates import Event
+        from mtg_bot.game import add_plus_one_counters
+
+        src = state.resolving_source
+        me = next(
+            (o for o in state.battlefield if src is not None and o.id == src.id),
+            None,
+        )
+        if me is None or me.monstrous:
+            return
+        add_plus_one_counters(state, me, self.count)
+        me.monstrous = True
+        state.log.append(f"{me.printing.name} becomes monstrous")
+        dispatch_event(state, Event.BECOMES_MONSTROUS, label="monstrous", obj=me)
+
+    def describe(self) -> str:
+        return f"monstrosity {self.count}"
+
+
+@dataclass(frozen=True)
+class CountAttackingCreatures(_Formula):
+    """"the number of attacking creatures"."""
+
+    def value(self, state, controller_id):
+        return sum(1 for o in state.battlefield if o.attacking)
+
+
+@dataclass(frozen=True)
+class TargetConnives(Effect):
+    """"target <creature> connives X" (CR 701.50): its controller draws
+    X cards, then discards X cards; for each nonland card discarded this
+    way, put a +1/+1 counter on that creature (if it's still on the
+    battlefield — the draw and discard happen regardless)."""
+
+    amount: object = None
+    targets: tuple = ()
+    attacking_only: bool = True
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsAttacking, IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+
+        pred = IsCreature() & IsAttacking() if self.attacking_only else IsCreature()
+        object.__setattr__(self, "targets", (TargetSpec(pred),))
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import add_plus_one_counters
+        from mtg_bot.turn import draw_n_cards
+
+        for _kind, tid in targets:
+            obj = next((o for o in state.battlefield if o.id == tid), None)
+            if obj is None:
+                return
+            x = self.amount.value(state, controller_id)
+            who = obj.controller_id
+            draw_n_cards(state, who, x)
+            discarded = _discard_chosen(state, who, x)
+            nonland = sum(1 for c in discarded if not c.printing.is_land)
+            if nonland and obj in state.battlefield:
+                add_plus_one_counters(state, obj, nonland)
             state.log.append(
-                f"{c.printing.name} is shuffled into P{p.id}'s library "
-                f"instead of staying in the graveyard"
+                f"{obj.printing.name} connives {x} ({nonland} counter(s))"
             )
-            changed = True
-    return changed
+
+    def describe(self) -> str:
+        return "target attacking creature connives X"
+
+
+@dataclass(frozen=True)
+class SacrificeAPermanent(Effect):
+    """"sacrifice [another ]<permanent descriptor>" as an effect (the
+    first half of "You may sacrifice ... If you do, ..." — Gut, True-Soul
+    Zealot). Returns False when there was nothing to sacrifice."""
+
+    permanent_filter: object = None
+    another: bool = False
+    label: str = "a permanent"
+
+    def resolve(self, state, controller_id, targets=()):
+        cost = SacrificePermanentsCost(
+            permanent_filter=self.permanent_filter, another=self.another,
+            label=self.label,
+        )
+        src = state.resolving_source
+        if not cost.payable(state, controller_id, src):
+            return False
+        cost.pay(state, controller_id, src)
+        return True
+
+    def describe(self) -> str:
+        return f"sacrifice {self.label}"
+
+
+def activation_cost_reduction(state: "GameState", activator_id: int, ability, cost):
+    """Zirda, the Dawnwaker: "Abilities you activate that aren't mana
+    abilities cost {N} less to activate. This effect can't reduce the
+    mana in that cost to less than one mana." Returns ``cost`` reduced by
+    every such static the activator controls."""
+    if cost is None or ability.is_mana_ability:
+        return cost
+    n = 0
+    for o in state.battlefield:
+        if o.controller_id != activator_id:
+            continue
+        for sa in o.printing.static_abilities:
+            n += sa.activation_cost_reduction
+    if n <= 0:
+        return cost
+    reducible = min(n, cost.generic, max(0, cost.total - 1))
+    return cost.reduced(reducible) if reducible > 0 else cost
+
+
+def lurrus_casters(state: "GameState", player_id: int) -> list:
+    """Permanents ``player_id`` controls whose "Once during each of your
+    turns, you may cast a permanent spell with mana value N or less from
+    your graveyard" permission is unused this turn (it's only usable
+    during their own turn)."""
+    if state.active_player().id != player_id:
+        return []
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and any(sa.graveyard_permanent_cast_mv_max >= 0 for sa in o.printing.static_abilities)
+        and o.graveyard_cast_used_turn != state.turn_number
+    ]
+
+
+def lurrus_castable(state: "GameState", player_id: int, card) -> "GameObject | None":
+    """The unused Lurrus-style permission that lets ``player_id`` cast
+    ``card`` (a permanent card in their graveyard), or ``None``."""
+    pr = card.printing
+    if not pr.is_permanent or pr.is_land:
+        return None
+    for o in lurrus_casters(state, player_id):
+        cap = max(
+            sa.graveyard_permanent_cast_mv_max for sa in o.printing.static_abilities
+        )
+        if pr.mana_cost.total <= cap:
+            return o
+    return None
+
+
+from mtg_bot.effects.state_predicates import StatePredicate as _StatePredicate  # noqa: E402
+
+
+@dataclass(frozen=True)
+class OpponentHasMoreCardsInHand(_StatePredicate):
+    """"if defending player has more cards in hand than you" (Robber of
+    the Rich) — the viewer's (single) opponent holds more cards."""
+
+    def test(self, state, viewer_id):
+        mine = len(state.player_by_id(viewer_id).hand)
+        return any(
+            len(p.hand) > mine for p in state.players
+            if p.id != viewer_id and not p.has_lost
+        )

@@ -810,6 +810,13 @@ class StaticAbility:
     # card types (``"Artifact"``, ``"Creature"``) of permanents entering
     # under an opponent's control that enter tapped.
     opponents_enter_tapped_types: tuple = ()
+    # "Abilities you activate that aren't mana abilities cost {N} less to
+    # activate. This effect can't reduce the mana in that cost to less
+    # than one mana." (Zirda) — ``cube_creatures_rmc.activation_cost_reduction``.
+    activation_cost_reduction: int = 0
+    # "Once during each of your turns, you may cast a permanent spell
+    # with mana value N or less from your graveyard." (Lurrus): N, or -1.
+    graveyard_permanent_cast_mv_max: int = -1
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,

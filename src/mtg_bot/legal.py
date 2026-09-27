@@ -334,10 +334,14 @@ def _graveyard_ability_activations(
                 continue
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
                 continue
-            if ability.cost.mana is not None and not can_pay_cost(
-                state, player_id, ability.cost.mana,
-            ):
-                continue
+            if ability.cost.mana is not None:
+                from mtg_bot.actions import _effective_ability_mana_cost
+
+                if not can_pay_cost(
+                    state, player_id,
+                    _effective_ability_mana_cost(state, card, ability),
+                ):
+                    continue
             if ability.cost.extra_costs and not _extra_costs_payable(
                 state, player_id, card, ability.cost,
             ):
@@ -703,12 +707,21 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     # Yawgmoth's Will: cast spells from the graveyard for their normal
     # cost (instant-speed ones now, the rest at sorcery timing below).
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        lurrus_casters as _lurrus_casters,
+        lurrus_castable as _lurrus_castable,
+    )
+
     def _emit_graveyard_permission_casts(instant_speed: bool) -> None:
-        if not p.may_play_from_graveyard_this_turn:
+        yawgmoth = p.may_play_from_graveyard_this_turn
+        # Lurrus-style once-per-turn permanent casts from the graveyard.
+        if not yawgmoth and not _lurrus_casters(state, player_id):
             return
         for gcard in p.graveyard:
             pr = gcard.printing
             if pr.is_land:
+                continue
+            if not yawgmoth and _lurrus_castable(state, player_id, gcard) is None:
                 continue
             if (pr.is_instant or "flash" in pr.keywords) != instant_speed:
                 continue

@@ -27,7 +27,10 @@ BUCKET_CARDS = [
     "Spider-Woman, Stunning Savior", "Painter's Servant",
     "Raph & Mikey, Troublemakers", "Atraxa, Grand Unifier",
     "Witherbloom Apprentice", "Wolverine, Fierce Fighter", "Chaos Defiler",
-    "Figure of Destiny", "Blightsteel Colossus",
+    "Figure of Destiny", "Blightsteel Colossus", "Emrakul, the Aeons Torn",
+    "Alpha Deathclaw", "Robber of the Rich", "Raffine, Scheming Seer",
+    "Gut, True Soul Zealot", "Zirda, the Dawnwaker", "Lurrus of the Dream-Den",
+    "Cogwork Librarian",
 ]
 BASICS = ["Mountain", "Forest", "Plains", "Island", "Swamp"]
 

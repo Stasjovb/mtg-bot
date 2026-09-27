@@ -167,6 +167,10 @@ class Event(str, Enum):
     # (``len(unlocked_halves) == len(printing.room_halves)``). Subject is
     # the Room ``GameObject`` (``"room"``).
     ROOM_FULLY_UNLOCKED = "room_fully_unlocked"
+    # A permanent has just become monstrous (CR 701.37b). Subject is the
+    # permanent (``"obj"``). Alpha Deathclaw's "When this creature enters
+    # or becomes monstrous".
+    BECOMES_MONSTROUS = "becomes_monstrous"
     # The active player has just declared one or more attackers in this
     # combat phase. Subject is the attacking Player (the active player —
     # ``"player"``). Distinct from ``ATTACKS`` (per-attacker, fires once
@@ -267,6 +271,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.CARD_DISCARDED: ("player", "card"),
     Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
+    Event.BECOMES_MONSTROUS: ("obj",),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
     Event.WOULD_DRAW_CARDS: ("player",),

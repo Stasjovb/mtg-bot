@@ -222,7 +222,7 @@ _RETURN_THIS_CARD_FROM_GRAVEYARD = re.compile(
 # ``_PERMISSIONS``; Caves of Chaos Adventurer's two-branch form ("If
 # <gate>, <free permission>. Otherwise, <permission>.") is its own arm.
 _EXILE_TOP_WITH_PERMISSION = re.compile(
-    rf"^exile the top (?:(?P<n>{_N}) )?cards? of (?P<whose>your|that player's) "
+    rf"^exile the top (?:(?P<n>{_N}) )?cards? of (?P<whose>your|that player's|their) "
     r"library(?P<face_down> face down)?\. (?P<perm>.+)$"
 )
 _CONDITIONAL_FREE_PERMISSION = re.compile(
@@ -268,7 +268,24 @@ _DAMAGE_2_PLUS_SACRIFICED_MV = re.compile(
 def _permission_kwargs(sentence: str) -> dict | None:
     """ExilePlayPermission kwargs for a printed permission sentence."""
     key = sentence[0].lower() + sentence[1:] if sentence else sentence
+    m = _ATTACKED_WITH_SUBTYPE_PERMISSION.match(key)
+    if m is not None:
+        return {
+            "cast_only": True,
+            "requires_attacked_with_subtype": m.group("sub"),
+            "any_color_mana": bool(m.group("any")),
+        }
     return _PERMISSIONS.get(key)
+
+
+# Robber of the Rich: "During any turn you attacked with a <Subtype>, you
+# may cast that card[ and you may spend mana as though it were mana of
+# any color to cast that spell]."
+_ATTACKED_WITH_SUBTYPE_PERMISSION = re.compile(
+    r"^during any turn you attacked with an? (?P<sub>[A-Z][a-z]+), you may "
+    r"cast that card(?P<any> and you may spend mana as though it were mana "
+    r"of any color to cast that spell)?$"
+)
 
 
 def _gate_state_predicate(gate: str):
@@ -317,7 +334,10 @@ def parse_rmc_effect(phrase: str) -> Effect | None:
 
         base = dict(
             count=_n(m.group("n")) if m.group("n") else 1,
-            whose="you" if m.group("whose") == "your" else "that_player",
+            whose={
+                "your": "you", "that player's": "that_player",
+                "their": "defending_player",
+            }[m.group("whose")],
             face_down=bool(m.group("face_down")),
         )
         perm = m.group("perm")
@@ -619,6 +639,39 @@ def _parse_counts_and_hand_effect(phrase: str) -> Effect | None:
             keywords=kws,
             requires_subtype=m.group("req") or "",
         )
+    return _parse_batch5_effect(phrase)
+
+
+_CONNIVES_X_ATTACKING = (
+    "target attacking creature connives X, where X is the number of "
+    "attacking creatures"
+)
+_SACRIFICE_EFFECT = re.compile(
+    r"^sacrifice (?P<another>another )?(?P<noun>(?:an? )?[a-z]+(?: or an? [a-z]+)*)$"
+)
+_MONSTROSITY = re.compile(rf"^monstrosity (?P<n>{_N}|\d+)$")
+
+
+def _parse_batch5_effect(phrase: str) -> Effect | None:
+    from mtg_bot.effects.generic import cube_creatures_rmc as rmc
+
+    if phrase == _CONNIVES_X_ATTACKING:
+        return rmc.TargetConnives(amount=rmc.CountAttackingCreatures())
+    m = _SACRIFICE_EFFECT.match(phrase)
+    if m is not None:
+        noun = re.sub(r"\ban? ", "", m.group("noun"))
+        pred = _permanent_noun_predicate(noun, plural=False)
+        if pred is None:
+            return None
+        return rmc.SacrificeAPermanent(
+            permanent_filter=pred, another=bool(m.group("another")),
+            label=f"{m.group('another') or ''}{m.group('noun')}",
+        )
+    m = _MONSTROSITY.match(phrase)
+    if m is not None:
+        return rmc.Monstrosity(count=_n(m.group("n")))
+    if phrase == "its owner shuffles their graveyard into their library":
+        return rmc.OwnerShufflesGraveyardIntoLibrary()
     return _parse_sentence_sequence(phrase)
 
 
@@ -748,6 +801,25 @@ _DASH_LINE = re.compile(r"^Dash (?P<cost>(?:\{[^}]+\})+)$")
 # ---------------------------------------------------------------------------
 
 
+def parse_rmc_intervening_if(phrase: str):
+    """Trigger-time gate predicates of the bucket (after the triggers
+    module's own phrasebook declined):
+
+    * ``defending player has more cards in hand than you`` (Robber of
+      the Rich) -> the opponent's hand is larger than the controller's.
+    """
+    if _DISABLED[0]:
+        return None
+    if phrase == "defending player has more cards in hand than you":
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            OpponentHasMoreCardsInHand,
+        )
+        from mtg_bot.effects.predicates import StateBound
+
+        return StateBound(OpponentHasMoreCardsInHand())
+    return None
+
+
 def parse_rmc_trigger_phrase(phrase: str):
     """``(Event, Predicate)`` for trigger conditions of the bucket, tried
     after the predicate-trigger phrasebook and the planeswalker
@@ -770,6 +842,8 @@ def parse_rmc_trigger_phrase(phrase: str):
     from mtg_bot.effects.object_predicates import HasSubtype, IsCreature
     from mtg_bot.effects.predicates import YOU, Controlled, Subject
 
+    if phrase == "this creature becomes monstrous":
+        return (Event.BECOMES_MONSTROUS, IsSelf())
     if phrase == "this creature attack":
         # A plural-named source ("Whenever Raph & Mikey attack").
         return (Event.ATTACKS, IsSelf())
@@ -950,6 +1024,64 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
         return RmcLine(statics=(StaticAbility(
             scope=scope, grants_ward_life_cost=int(m.group("n")),
         ),))
+    kw_line = _parse_extended_keyword_line(line)
+    if kw_line is not None:
+        return kw_line
+    if _OUTSIDE_THE_GAME_LINE.match(line):
+        # Companion (CR 702.139) / "Choose a Background" (commander
+        # deck construction) / Conspiracy draft abilities (CR 905): they
+        # work only outside a game — in a deck this engine plays they do
+        # nothing (see SEARCH_LIMITATIONS, cube creatures bucket).
+        return RmcLine()
+    m = _GRAVEYARD_ARRIVAL_TRIGGER.match(
+        _substitute_name_for_line(line, name)
+    )
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            PutIntoGraveyardFromAnywhere,
+        )
+        from mtg_bot.effects.predicates import Event
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None:
+            return None
+        return RmcLine(
+            triggers=(TriggeredAbility(
+                event=Event.DIES, predicate=PutIntoGraveyardFromAnywhere(),
+                effect=effect,
+            ),),
+            printing_fields={"watched_in_graveyard": True},
+        )
+    m = _WHEN_THIS_A_OR_B.match(_substitute_name_for_line(line, name))
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect_phrase
+        from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+        from mtg_bot.effects.base import TriggeredAbility
+
+        effect = _parse_effect_phrase(m.group("eff"))
+        if effect is None:
+            return None
+        arms = []
+        for arm in (m.group("a"), m.group("b")):
+            parsed = _parse_predicate_trigger_phrase(f"this creature {arm}")
+            if parsed is None:
+                return None
+            arms.append(TriggeredAbility(
+                event=parsed[0], predicate=parsed[1], effect=effect,
+            ))
+        return RmcLine(triggers=tuple(arms))
+    if line == _ZIRDA_ACTIVATION_REDUCTION:
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.SELF, activation_cost_reduction=2,
+        ),))
+    m = _LURRUS_GRAVEYARD_CAST.match(line)
+    if m is not None:
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.SELF,
+            graveyard_permanent_cast_mv_max=int(m.group("mv")),
+        ),))
     m = _SUBTYPE_LORD.match(line)
     if m is not None:
         subtype = _singular(m.group("subs"))
@@ -1020,7 +1152,10 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
 
         statics = _detect_shuffle_self_statics(line, name)
         if statics:
-            return RmcLine(statics=statics)
+            return RmcLine(
+                statics=statics,
+                printing_fields={"watched_in_graveyard": True},
+            )
         return None
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
@@ -1073,6 +1208,78 @@ _STATIC_CONDITIONS = {
     "you have one or fewer cards in hand": _hand_at_most_one,
     "there are four or more card types among cards in your graveyard": _delirium,
 }
+_OUTSIDE_THE_GAME_LINE = re.compile(
+    r"^(?:Companion — .+|Choose a Background|Draft this card face up\.|"
+    r"As you draft a card, you may draft an additional card from that "
+    r"booster pack\. If you do, put this card into that booster pack\.)$"
+)
+_GRAVEYARD_ARRIVAL_TRIGGER = re.compile(
+    r"^When this creature is put into a graveyard from anywhere, (?P<eff>.+)\.$"
+)
+_WHEN_THIS_A_OR_B = re.compile(
+    r"^When this creature (?P<a>enters|dies|attacks) or "
+    r"(?P<b>becomes monstrous), (?P<eff>.+)\.$"
+)
+_ZIRDA_ACTIVATION_REDUCTION = (
+    "Abilities you activate that aren't mana abilities cost {2} less to "
+    "activate. This effect can't reduce the mana in that cost to less than "
+    "one mana."
+)
+_LURRUS_GRAVEYARD_CAST = re.compile(
+    r"^Once during each of your turns, you may cast a permanent spell with "
+    r"mana value (?P<mv>\d+) or less from your graveyard\.$"
+)
+
+
+def _substitute_name_for_line(line: str, name: str) -> str:
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    return _substitute_self_name(line, name) if name else line
+
+
+def _parse_extended_keyword_line(line: str) -> RmcLine | None:
+    """A comma-separated keyword line using pieces the base keyword
+    grammar lacks: ``annihilator N`` (an attack trigger, CR 702.86) and
+    ``protection from spells that are one or more colors``. Every piece
+    must be recognized."""
+    from mtg_bot.cards.parser.keywords import _parse_keyword_piece
+    from mtg_bot.keyword_rules import protection_keyword
+
+    pieces = [p.strip() for p in line.rstrip(".").split(", ")]
+    if not any(
+        p.lower().startswith(("annihilator ", "protection from spells"))
+        for p in pieces
+    ):
+        return None
+    keywords: list[str] = []
+    triggers: list = []
+    for piece in pieces:
+        low = piece.lower()
+        m = re.fullmatch(r"annihilator (\d+)", low)
+        if m is not None:
+            from mtg_bot.effects.base import TriggeredAbility
+            from mtg_bot.effects.generic.cube_creatures_rmc import (
+                DefendingPlayerSacrificesPermanents,
+            )
+            from mtg_bot.effects.predicates import Event, IsSelf
+
+            n = int(m.group(1))
+            keywords.append(f"annihilator {n}")
+            triggers.append(TriggeredAbility(
+                event=Event.ATTACKS, predicate=IsSelf(),
+                effect=DefendingPlayerSacrificesPermanents(count=n),
+            ))
+            continue
+        if low == "protection from spells that are one or more colors":
+            keywords.append(protection_keyword("spells that are one or more colors"))
+            continue
+        parsed = _parse_keyword_piece(piece[:1].upper() + piece[1:])
+        if parsed is None:
+            return None
+        keywords.extend(parsed)
+    return RmcLine(keywords=tuple(keywords), triggers=tuple(triggers))
+
+
 # "[<Ability word> — ]<Types> your opponents control enter tapped."
 _OPPONENTS_ENTER_TAPPED = re.compile(
     r"^(?:[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — )?(?P<types>[A-Z][a-z]+(?:(?:,| and|, and) "

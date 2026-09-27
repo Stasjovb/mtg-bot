@@ -1535,7 +1535,15 @@ _TRAILING_IF_PHRASES: dict[str, Predicate] = {
 
 
 def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
-    return _INTERVENING_IF_PHRASES.get(phrase.strip())
+    pred = _INTERVENING_IF_PHRASES.get(phrase.strip())
+    if pred is not None:
+        return pred
+    # Cube creatures (R / multicolor / colorless) bucket gates.
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        parse_rmc_intervening_if,
+    )
+
+    return parse_rmc_intervening_if(phrase.strip())
 
 
 # Intervening-``while`` gate phrases. The DSK Delirium "while X"
