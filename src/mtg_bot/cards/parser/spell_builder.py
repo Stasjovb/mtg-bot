@@ -640,10 +640,28 @@ _FREE_CAST_CONDITIONS = {
 }
 
 
+# "You may exile a <filter> card from your hand rather than pay this
+# spell's mana cost." — pitch alternative cost (Pyrokinesis) ->
+# ``alt_cost_exile_from_hand``.
+_PITCH_ALT_COST_LINE_RE = re.compile(
+    r"^You may exile (?P<desc>an? .+? card) from your hand rather than "
+    r"pay this spell's mana cost\.$"
+)
+
+
 def _casting_keyword_fields(clause: str) -> dict | None:
     """``CardPrinting`` fields for a casting-keyword line, or ``None``
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
+
+    m = _PITCH_ALT_COST_LINE_RE.match(clause.strip())
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        f = parse_card_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return {"alt_cost_exile_from_hand": f}
 
     m = _FREE_CAST_IF_LINE_RE.match(clause.strip())
     if m is not None:

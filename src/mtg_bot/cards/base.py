@@ -1189,6 +1189,11 @@ class CardPrinting:
     # "Storm" (CR 702.40): when cast, copy it for each spell cast before
     # it this turn (``actions._cast_spell`` pushes the trigger).
     has_storm: bool = False
+    # "You may exile a <filter> card from your hand rather than pay this
+    # spell's mana cost." (Pyrokinesis) — an alternative cost offered as
+    # ``CastSpell(cast_for_free=True)``; a ``CardFilter`` over the other
+    # cards in hand.
+    alt_cost_exile_from_hand: "object | None" = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

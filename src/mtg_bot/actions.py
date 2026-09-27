@@ -1510,6 +1510,7 @@ def _effective_spell_effect_for_targets(
 def _select_spell_targets(
     state: GameState, player_id: int, card: GameObject,
     mode_indices: tuple[int, ...] = (),
+    x_hint: "int | None" = None,
 ) -> tuple[tuple[str, int], ...]:
     """Pick target(s) for a spell about to be cast. Mirrors CR
     601.2c-d (mode/target choices happen BEFORE total cost is
@@ -1532,6 +1533,11 @@ def _select_spell_targets(
             spell_effect, mode_indices,
         )
         min_t, max_t = spell_effect.target_count_range()
+        # Divided damage (CR 601.2d): each target must get at least 1,
+        # so a known total caps the number of targets.
+        division_total = getattr(spell_effect, "division_total", None)
+        if division_total is not None and x_hint is not None:
+            max_t = min(max_t, max(1, division_total(state, player_id, x_hint)))
         if max_t > 0:
             legal = filter_targetable(
                 state, spell_effect.legal_targets(state, player_id),
@@ -1849,8 +1855,20 @@ def _cast_spell(
     # the chosen target visible to the cost-reduction layer. The
     # ``targets`` tuple flows into ``apply_cost_reductions`` below and
     # later onto the StackItem unchanged.
+    # "Pay X life" additional cost: X is announced with the other
+    # cast-time choices (CR 601.2b, before targets) and paid with the
+    # total cost below; the resolving effect reads it as X.
+    life_x_paid: int | None = None
+    if card.printing.additional_cost_pay_x_life:
+        from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
+
+        life_x_paid = _choose_life_x(state, player_id, card)
     targets: tuple[tuple[str, int], ...] = _select_spell_targets(
         state, player_id, card, mode_indices=chosen_modes,
+        x_hint=(
+            life_x_paid if life_x_paid is not None
+            else (0 if card.printing.mana_cost.x_pips == 0 else None)
+        ),
     )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
@@ -1912,6 +1930,18 @@ def _cast_spell(
     if cast_for_free:
         cost = ManaCost(generic=0, colored=(), x_pips=0)
         x_value = 0
+        # A pitch alternative cost (Pyrokinesis) is paid unless a free
+        # permission (Weftwalking / the card's own condition) applies.
+        from mtg_bot.alt_casting import (
+            free_cast_permission as _free_permission,
+            pay_pitch_cost as _pay_pitch,
+        )
+
+        if (
+            card.printing.alt_cost_exile_from_hand is not None
+            and not _free_permission(state, player_id, card)
+        ):
+            _pay_pitch(state, player_id, card)
     # Build the set of spend-restriction context tags for this cast.
     # A spell can match more than one (e.g., a legendary artifact
     # spell satisfies both "artifact_spell" and "legendary_spell"
@@ -1952,14 +1982,6 @@ def _cast_spell(
         from mtg_bot.alt_casting import pay_delve as _pay_delve
 
         cost = _pay_delve(state, player_id, card, cost)
-    # "As an additional cost to cast this spell, pay X life" — X is
-    # announced with the other cast-time choices (CR 601.2b) and paid
-    # with the total cost; the resolving effect reads it as X.
-    life_x_paid: int | None = None
-    if card.printing.additional_cost_pay_x_life:
-        from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
-
-        life_x_paid = _choose_life_x(state, player_id, card)
     cost = _activate_sac_for_mana_for_cost(
         state, player_id, cost, frozenset(spell_kinds),
     )
@@ -2097,6 +2119,20 @@ def _cast_spell(
     card.zone = Zone.STACK
     card.controller_id = player_id
 
+    # Divided damage (CR 601.2d): announce the split now that X is known.
+    division: tuple[int, ...] = ()
+    effect_for_division = card.printing.spell_effect
+    division_total_fn = getattr(effect_for_division, "division_total", None)
+    if division_total_fn is not None and targets:
+        from mtg_bot.effects.generic.divided_damage import choose_damage_division
+
+        total = division_total_fn(state, player_id, x_value)
+        if total < len(targets):
+            targets = targets[:total]
+        division = choose_damage_division(
+            state, player_id, card.printing.name, len(targets), total,
+        )
+
     # Targets were already selected up-front (before cost reductions)
     # so cost-reduction rules that key off the chosen target — e.g.
     # Dark Endurance's "costs {1} less if it targets a blocking
@@ -2112,6 +2148,7 @@ def _cast_spell(
             buyback_paid=bool(
                 use_buyback and card.printing.buyback_cost is not None
             ),
+            division=division,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -3612,12 +3649,14 @@ def resolve_top_of_stack(state: GameState) -> None:
             zone_before = card.zone
             if card.printing.spell_effect is not None:
                 state.resolving_spell = card
+                state.resolving_division = item.division
                 try:
                     card.printing.spell_effect.resolve(
                         state, item.controller_id, item.targets
                     )
                 finally:
                     state.resolving_spell = None
+                    state.resolving_division = ()
             if card.zone != zone_before:
                 # The spell's own effect already moved it (Time
                 # Spiral's "Exile Time Spiral.").

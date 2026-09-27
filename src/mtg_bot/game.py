@@ -2495,6 +2495,9 @@ class StackItem:
     # Buyback (CR 702.27) was paid: the spell returns to its owner's
     # hand as it resolves instead of going to the graveyard.
     buyback_paid: bool = False
+    # Divided damage (CR 601.2d): the per-target split announced while
+    # casting, aligned with ``targets``.
+    division: tuple[int, ...] = ()
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
@@ -2901,6 +2904,8 @@ class GameState:
     # Read by effects that refer to "this spell" as an object, e.g.
     # Time Spiral's "Exile Time Spiral." (``ExileThisSpell``).
     resolving_spell: Optional[GameObject] = None
+    # The resolving spell's announced damage division (``StackItem.division``).
+    resolving_division: tuple[int, ...] = ()
     # Number of cards moved by the most recent
     # ``MoveEachExiledWithSourceToOwnersGraveyard`` resolve in the
     # current resolving ability. Lets a follow-up
@@ -3590,6 +3595,7 @@ class GameState:
         )
         new_state.resolving_counter_amount = self.resolving_counter_amount
         new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
+        new_state.resolving_division = self.resolving_division
         new_state.resolving_spell = (
             clone_obj(self.resolving_spell)
             if self.resolving_spell is not None else None

@@ -402,6 +402,13 @@ def _parse_distribute(m: re.Match, count) -> Effect | None:
     return LookAtTopCardsDistribute(count=count, piles=tuple(piles))
 
 
+# Divided damage (Pyrokinesis, Fire Covenant, Shatterskull Smashing).
+_DIVIDED_DAMAGE_RE = re.compile(
+    r"^deals (?P<n>\d+|X) damage divided as you choose among "
+    r"(?:any number of|up to (?P<k>\w+)) target "
+    r"(?P<kinds>creatures|creatures and/or planeswalkers)$"
+)
+
 # The Flashback card.
 _GRANT_FLASHBACK_RE = re.compile(
     r"^target (?P<desc>.+? card) in your graveyard gains flashback until "
@@ -709,6 +716,22 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
                 any_types=(_PLURAL_PERMANENT_TYPES[m.group("what")],),
             ),
             ability=ability,
+        )
+    m = _DIVIDED_DAMAGE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.divided_damage import (
+            DealDamageDividedAmongTargets,
+        )
+
+        max_targets = None
+        if m.group("k") is not None:
+            k = _CARDINALS.get(m.group("k"))
+            if k is None:
+                return None
+            max_targets = k
+        return DealDamageDividedAmongTargets(
+            amount=_amount(m.group("n")), max_targets=max_targets,
+            include_planeswalkers=m.group("kinds") != "creatures",
         )
     m = _GRANT_FLASHBACK_RE.match(phrase)
     if m is not None:

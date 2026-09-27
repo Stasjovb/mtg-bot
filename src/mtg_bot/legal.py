@@ -323,9 +323,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         )
     )
 
+    from mtg_bot.alt_casting import pitch_options as _pitch_options
+
     def _own_free_cast(card) -> bool:
         cond = card.printing.free_cast_condition
-        return cond is not None and cond.matches(state, player_id)
+        if cond is not None and cond.matches(state, player_id):
+            return True
+        # Pitch alternative cost (Pyrokinesis): exile another card.
+        return bool(_pitch_options(state, player_id, card))
 
     # Instant-speed-castable: instants AND any permanent spell with flash.
     # Hand-zone PlayLand / CastSpell dedup: two same-printing copies in hand
