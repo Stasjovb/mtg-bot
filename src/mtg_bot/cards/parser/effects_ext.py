@@ -554,13 +554,48 @@ def parse_ext_effect(phrase: str) -> Effect | None:
         )
 
         body = m.group("body")
-        parsed = _parse_triggered_ability_line(body)
+        parsed = _parse_spell_targets_gain_control_trigger(body)
+        if parsed is None:
+            parsed = _parse_triggered_ability_line(body)
         if parsed is not None:
             arms = parsed if isinstance(parsed, tuple) else (parsed,)
             return CreateEmblemWithAbilities(
                 name=f'emblem: "{body}"', triggered_abilities=arms,
             )
     return None
+
+
+# "Whenever you cast a spell that targets one or more <nouns>, gain
+# control of those <nouns>." -- a whole trigger line because the effect's
+# "those <nouns>" is anaphoric to the condition (the triggering spell's
+# targets); neither half is meaningful alone. Dack Fayden's emblem.
+_SPELL_TARGETS_GAIN_CONTROL_TRIGGER = re.compile(
+    r"^Whenever you cast a spell that targets one or more "
+    r"(?P<noun>permanents|creatures|artifacts), gain control of those "
+    r"(?P=noun)\.$"
+)
+
+
+def _parse_spell_targets_gain_control_trigger(line: str):
+    m = _SPELL_TARGETS_GAIN_CONTROL_TRIGGER.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.cube_walkers import (
+        GainControlOfTriggeringSpellTargets,
+        SpellTargetsMatching,
+    )
+    from mtg_bot.effects.predicates import YOU, Controlled, Event, Subject
+
+    noun_filter = parse_target_noun_phrase(m.group("noun")[:-1])
+    return TriggeredAbility(
+        event=Event.IS_CAST,
+        predicate=(
+            Subject("spell", SpellTargetsMatching(noun_filter))
+            & Controlled(YOU, subject="controller")
+        ),
+        effect=GainControlOfTriggeringSpellTargets(noun_filter),
+    )
 
 
 # ---------------------------------------------------------------------------

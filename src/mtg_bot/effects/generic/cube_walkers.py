@@ -994,7 +994,87 @@ class CreateEmblemWithAbilities(Effect):
         return f"you get an emblem ({self.name})"
 
 
+# ---------------------------------------------------------------------------
+# "Whenever you cast a spell that targets ..." (Dack Fayden's emblem)
+# ---------------------------------------------------------------------------
+
+
+def _spell_stack_item(state: "GameState", spell):
+    """The StackItem for ``spell`` (a cast spell, not an ability)."""
+    for item in state.stack:
+        if item.source is spell and item.ability is None:
+            return item
+    return None
+
+
+def _spell_targets_matching(state, spell, noun_filter) -> tuple:
+    item = _spell_stack_item(state, spell)
+    if item is None:
+        return ()
+    out = []
+    for kind, target_id in item.targets:
+        if kind == "player":
+            continue
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is not None and noun_filter.test(obj, state):
+            out.append((kind, target_id))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class SpellTargetsMatching(ObjectPredicate):
+    """A spell (on the stack) with at least one target that is a
+    battlefield object matching ``noun_filter`` -- "a spell that targets
+    one or more permanents". Reads the spell's ``StackItem.targets``."""
+
+    noun_filter: ObjectPredicate
+
+    def test(self, obj, state):
+        return bool(_spell_targets_matching(state, obj, self.noun_filter))
+
+
+@dataclass(frozen=True)
+class GainControlOfTriggeringSpellTargets(Effect):
+    """"...gain control of those permanents." -- the anaphoric body of
+    "Whenever you cast a spell that targets one or more permanents"
+    (Dack Fayden's emblem). "Those permanents" are the triggering
+    spell's matching targets, bound when the trigger fires through the
+    ``targets_from_event`` hook ``dispatch_event`` consults (they are
+    not targets of the trigger itself). The control change lasts
+    indefinitely (CR 611.2a)."""
+
+    noun_filter: ObjectPredicate
+
+    def targets_from_event(self, state: "GameState", subjects) -> tuple:
+        spell = subjects.get("spell")
+        if spell is None:
+            return ()
+        return _spell_targets_matching(state, spell, self.noun_filter)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        for _kind, target_id in targets:
+            obj = next(
+                (o for o in state.battlefield if o.id == target_id), None,
+            )
+            if obj is None or obj.controller_id == controller_id:
+                continue
+            obj.controller_id = controller_id
+            obj.summoning_sick = True
+            state._invalidate_layered_cache()
+            state.log.append(
+                f"P{controller_id} gains control of {obj.printing.name}"
+            )
+
+    def describe(self) -> str:
+        return "gain control of the triggering spell's targeted permanents"
+
+
 __all__ = [
+    "GainControlOfTriggeringSpellTargets",
+    "SpellTargetsMatching",
     "AtBeginningOfNextEndStep",
     "CreateEmblemWithAbilities",
     "IsColorless",

@@ -3794,6 +3794,14 @@ def dispatch_event(
                 etb_trigger_multiplier(state, source.controller_id)
                 if event is _Event.ENTERS else 1
             )
+            # Effects whose objects are fixed by the triggering event
+            # itself (not targets of the trigger) bind them here --
+            # e.g. "gain control of those permanents" for "Whenever you
+            # cast a spell that targets one or more permanents".
+            ability_fixed_targets = fixed_targets
+            bind = getattr(ability.effect, "targets_from_event", None)
+            if bind is not None:
+                ability_fixed_targets = bind(state, subjects)
             for _ in range(firings):
                 push_triggered_ability(
                     state,
@@ -3807,7 +3815,7 @@ def dispatch_event(
                         combat_damage_source_controller_id
                     ),
                     counter_amount=counter_amount,
-                    fixed_targets=fixed_targets,
+                    fixed_targets=ability_fixed_targets,
                 )
 
 

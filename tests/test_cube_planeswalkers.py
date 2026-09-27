@@ -142,7 +142,7 @@ def test_bucket_planeswalker_is_claimed(name):
 
 
 @pytest.mark.parametrize("name", [
-    "Dack Fayden",
+    "Wrenn and Six",
     "Oko, Thief of Crowns",
     "Karn, Scion of Urza",
     "Chandra, Torch of Defiance",
@@ -882,3 +882,69 @@ def test_teferi_hod_emblem_exiles_on_each_draw():
     _library(s, 1, 2)
     draw_card(s, 1)
     assert not s.stack
+
+
+# ---------------------------------------------------------------------------
+# Dack Fayden
+# ---------------------------------------------------------------------------
+
+
+def test_dack_plus_one_target_player_draws_two_discards_two():
+    s = _state()
+    dack = _put(s, _P["Dack Fayden"], 0)
+    _library(s, 1, 3)
+    s.player_by_id(0).agent.target_pick = ("player", 1)
+    s.player_by_id(1).agent = RandomAgent()
+    _activate(s, 0, dack, +1)
+    opp = s.player_by_id(1)
+    assert opp.hand == [] and len(opp.graveyard) == 2
+    assert dack.loyalty_counters == 4
+
+
+def test_dack_minus_two_steals_artifact_permanently():
+    from mtg_bot.cards.base import make_artifact
+    s = _state()
+    dack = _put(s, _P["Dack Fayden"], 0)
+    rock = _put(s, make_artifact("Rock", "{2}"), 1)
+    bear = _put(s, _creature(), 1)
+    _activate(s, 0, dack, -2)
+    offered = s.player_by_id(0).agent.picks_seen[-1]
+    assert offered == [("permanent", rock.id)]
+    assert rock.controller_id == 0
+    run_cleanup_step(s)
+    dack.loyalty_counters = 0
+    state_based_actions(s)
+    assert rock.controller_id == 0  # indefinite, survives Dack leaving
+    assert bear.controller_id == 1
+
+
+def test_dack_emblem_steals_permanents_your_spells_target():
+    from mtg_bot.effects.generic import PumpTargetCreatureUntilEOT
+    s = _state()
+    dack = _put(s, _P["Dack Fayden"], 0)
+    dack.loyalty_counters = 6
+    _activate(s, 0, dack, -6)
+    assert len(s.emblems) == 1
+    bear = _put(s, _creature(), 1)
+    _put(s, BASIC_LANDS["Mountain"], 0)
+    pump = make_instant(
+        "Giant Growth", "{R}",
+        PumpTargetCreatureUntilEOT(power_bonus=1, toughness_bonus=1),
+    )
+    card = s.new_object(pump, 0, Zone.HAND)
+    s.player_by_id(0).hand.append(card)
+    s.player_by_id(0).agent.target_pick = ("creature", bear.id)
+    from mtg_bot.actions import apply_action
+    apply_action(s, 0, CastSpell(card.id))
+    assert len(s.stack) == 2  # spell + emblem trigger
+    _drain(s)
+    assert bear.controller_id == 0
+    # An opponent's spell doesn't trigger your emblem.
+    _put(s, BASIC_LANDS["Mountain"], 1)
+    card2 = s.new_object(pump, 1, Zone.HAND)
+    s.player_by_id(1).hand.append(card2)
+    s.player_by_id(1).agent.target_pick = ("creature", bear.id)
+    s.active_player_idx = 1
+    s.priority_player_idx = 1
+    apply_action(s, 1, CastSpell(card2.id))
+    assert len(s.stack) == 1

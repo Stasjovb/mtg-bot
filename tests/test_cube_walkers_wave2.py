@@ -308,6 +308,37 @@ def test_create_emblem_with_abilities_describe():
     assert "probe emblem" in eff.describe()
 
 
+def test_spell_target_binding_edge_cases():
+    from mtg_bot.effects.generic.cube_walkers import (
+        GainControlOfTriggeringSpellTargets,
+        IsPermanent,
+        SpellTargetsMatching,
+    )
+    from mtg_bot.game import StackItem
+
+    s = _state()
+    rock = _bf(s, make_artifact("Rock", "{2}"), 1)
+    mine = _bf(s, make_artifact("Mine", "{2}"), 0)
+    spell = s.new_object(make_artifact("Spell", "{1}"), 0, Zone.STACK)
+    pred = SpellTargetsMatching(IsPermanent())
+    assert not pred.test(spell, s)  # not on the stack
+    s.stack.append(StackItem(
+        source=spell, controller_id=0,
+        targets=(("player", 1), ("permanent", 999), ("permanent", rock.id),
+                 ("permanent", mine.id)),
+    ))
+    assert pred.test(spell, s)
+    eff = GainControlOfTriggeringSpellTargets(IsPermanent())
+    bound = eff.targets_from_event(s, {"spell": spell})
+    assert bound == (("permanent", rock.id), ("permanent", mine.id))
+    assert eff.targets_from_event(s, {}) == ()
+    s.battlefield.remove(mine)
+    eff.resolve(s, 0, bound + (("permanent", mine.id),))
+    assert rock.controller_id == 0
+    eff.resolve(s, 0, (("permanent", rock.id),))  # already yours: no-op
+    assert "targeted permanents" in eff.describe()
+
+
 def test_draws_card_event_fires_once_per_card():
     from mtg_bot.cards.base import make_emblem
     from mtg_bot.effects.base import TriggeredAbility
