@@ -529,6 +529,27 @@ def move_off_battlefield(
             obj=obj,
         )
 
+    # Earthbend's return rider (Badgermole Cub).
+    if obj.earthbent:
+        obj.earthbent = False
+        if destination in ("graveyard", "exile") and not obj.printing.is_token:
+            from mtg_bot.actions import push_triggered_ability
+            from mtg_bot.effects.base import TriggeredAbility
+            from mtg_bot.effects.generic.cube_creatures_wg import (
+                ReturnEarthbentLandTapped,
+            )
+            from mtg_bot.effects.predicates import Always, Event
+
+            push_triggered_ability(
+                state, source=obj,
+                ability=TriggeredAbility(
+                    event=Event.DIES, predicate=Always(),
+                    effect=ReturnEarthbentLandTapped(),
+                ),
+                ability_index=-1, controller_id=obj.controller_id,
+                label="earthbend return",
+            )
+
     # Serra Paragon's granted rider ("When this permanent is put into a
     # graveyard from the battlefield, exile it and you gain 2 life.").
     if obj.leaves_to_graveyard_exile_gain_life:

@@ -3986,6 +3986,12 @@ def _activate_ability(
         state.log.append(
             f"P{player_id} activates {source.printing.name}'s mana ability"
         )
+        if ability.cost.tap_self:
+            # "Whenever you tap a creature for mana, add an additional
+            # {G}." (Badgermole Cub; a triggered mana ability).
+            from mtg_bot.creature_statics_wg import extra_mana_for_creature_tap
+
+            extra_mana_for_creature_tap(state, player_id, source)
         return
 
     # Put the ability on the stack using the existing StackItem shape.

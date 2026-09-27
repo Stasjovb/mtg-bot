@@ -231,6 +231,25 @@ def _card_types_now(obj) -> set:
     return types
 
 
+def extra_mana_for_creature_tap(
+    state: "GameState", player_id: int, tapped: "GameObject",
+) -> None:
+    """``tapped`` was just tapped for mana by ``player_id``: each "Whenever
+    you tap a creature for mana, add an additional {C}." permanent they
+    control adds its coin(s) (a triggered mana ability, no stack)."""
+    from mtg_bot.game import ManaCoin, is_creature_now
+
+    if not is_creature_now(tapped):
+        return
+    p = state.player_by_id(player_id)
+    for o in state.battlefield:
+        if o.controller_id != player_id:
+            continue
+        for color in o.printing.extra_mana_when_you_tap_creature_for_mana:
+            p.mana_pool.append(ManaCoin(color=color))
+            state.log.append(f"{o.printing.name} adds an additional {{{color}}}")
+
+
 def activation_locked(state: "GameState", obj: "GameObject") -> bool:
     """"Activated abilities of <types> can't be activated." -- does a
     permanent on the battlefield lock ``obj``'s activated abilities?"""

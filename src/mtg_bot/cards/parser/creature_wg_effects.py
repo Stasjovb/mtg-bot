@@ -93,6 +93,7 @@ Shapes:
   control. If you do, create a token that's a copy of that creature. If
   you didn't create a token this way, create <token>`` ->
   :class:`PayToCopyEnchantedCreatureElseToken` (Springheart Nantuko)
+* ``earthbend N`` -> :class:`Earthbend` (Badgermole Cub)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -244,6 +245,7 @@ _PAY_TO_COPY_ENCHANTED_ELSE_TOKEN_RE = re.compile(
     r"that creature\. If you didn't create a token this way, create "
     r"(?P<tok>an? .+? creature token)$"
 )
+_EARTHBEND_RE = re.compile(r"^earthbend (?P<n>\d+)$")
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
     r"becomes the monarch$"
@@ -500,6 +502,9 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _EARTHBEND_RE.match(phrase)
+    if m is not None:
+        return wg.Earthbend(n=int(m.group("n")))
     m = _PAY_TO_COPY_ENCHANTED_ELSE_TOKEN_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.base import parse_mana_cost

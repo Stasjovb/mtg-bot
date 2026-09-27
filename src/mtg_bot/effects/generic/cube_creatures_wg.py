@@ -1691,3 +1691,90 @@ class PayToCopyEnchantedCreatureElseToken(Effect):
             f"you may pay {self.cost_str} to copy the enchanted creature; "
             f"otherwise create a {self.token_printing.name} token"
         )
+
+
+# ---------------------------------------------------------------------
+# Badgermole Cub (earthbend)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Earthbend(Effect):
+    """Earthbend N: "Target land you control becomes a 0/0 creature with
+    haste that's still a land. Put N +1/+1 counters on it. When it dies
+    or is exiled, return it to the battlefield tapped." The type change
+    is permanent and sourced by the land itself (it outlives the
+    earthbender); the return rider is ``GameObject.earthbent`` (fired
+    from ``move_off_battlefield``)."""
+
+    n: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("permanent", o.id) for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_land
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.become_type import BecomeType
+        from mtg_bot.game import add_plus_one_counters
+
+        if not targets:
+            return
+        land = next(
+            (o for o in state.battlefield
+             if o.id == targets[0][1] and o.printing.is_land
+             and o.controller_id == controller_id),
+            None,
+        )
+        if land is None:
+            return
+        prior = state.resolving_source
+        state.resolving_source = land
+        try:
+            BecomeType(types_to_add=("creature",), base_pt=(0, 0)).resolve(
+                state, controller_id,
+            )
+        finally:
+            state.resolving_source = prior
+        state.add_continuous_effect(
+            source_id=land.id, layer=6, kind="grant_keyword",
+            target_id=land.id, params=("haste",),
+            description=f"{land.printing.name} has haste (earthbend)",
+        )
+        add_plus_one_counters(state, land, self.n)
+        land.earthbent = True
+        state.log.append(f"P{controller_id} earthbends {land.printing.name}")
+
+    def describe(self) -> str:
+        return f"earthbend {self.n}"
+
+
+@dataclass(frozen=True)
+class ReturnEarthbentLandTapped(Effect):
+    """Earthbend's "When it dies or is exiled, return it to the
+    battlefield tapped." -- the resolving source is the land card."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.turn import _reset_left_battlefield_object
+
+        card = state.resolving_source
+        if card is None:
+            return
+        owner = state.player_by_id(card.owner_id)
+        for zone in (owner.graveyard, owner.exile):
+            if card in zone:
+                zone.remove(card)
+                _reset_left_battlefield_object(card)
+                card.permanent_is_creature = False
+                put_into_battlefield(state, card, owner.id)
+                card.tapped = True
+                state.log.append(f"{card.printing.name} returns tapped")
+                return
+
+    def describe(self) -> str:
+        return "return it to the battlefield tapped"

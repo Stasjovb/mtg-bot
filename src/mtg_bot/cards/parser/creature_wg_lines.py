@@ -551,6 +551,23 @@ def _parse_bestow_lines(line: str, card: dict) -> WGLine | None:
     return None
 
 
+_EXTRA_MANA_WHEN_TAP_CREATURE_RE = re.compile(
+    r"^Whenever you tap a creature for mana, add an additional "
+    r"(?P<pips>(?:\{[WUBRGC]\})+)\.$"
+)
+
+
+def _parse_extra_mana_on_creature_tap(line: str, card: dict) -> WGLine | None:
+    m = _EXTRA_MANA_WHEN_TAP_CREATURE_RE.match(line)
+    if m is None:
+        return None
+    return WGLine(fields={
+        "extra_mana_when_you_tap_creature_for_mana": tuple(
+            re.findall(r"\{([WUBRGC])\}", m.group("pips")),
+        ),
+    })
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -571,6 +588,7 @@ _RECOGNIZERS = (
     _parse_reconfigure_line,
     _parse_equipped_per_own_counter_line,
     _parse_bestow_lines,
+    _parse_extra_mana_on_creature_tap,
 )
 
 

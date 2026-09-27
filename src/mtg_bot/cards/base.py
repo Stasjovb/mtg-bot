@@ -1384,6 +1384,9 @@ class CardPrinting:
     bestow_cost: "ManaCost | None" = None
     bestow_cost_str: str = ""
     bestow_enchanted_bonus: tuple = ()
+    # "Whenever you tap a creature for mana, add an additional {G}."
+    # (Badgermole Cub): the extra coin colors (a triggered mana ability).
+    extra_mana_when_you_tap_creature_for_mana: tuple = ()
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

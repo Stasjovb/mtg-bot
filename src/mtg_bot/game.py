@@ -923,6 +923,10 @@ class GameObject:
     # creature it's an Aura, not a creature. Cleared when it leaves the
     # battlefield or resolves unattached.
     bestowed: bool = False
+    # Earthbend (Badgermole Cub): "When it dies or is exiled, return it
+    # to the battlefield tapped." -- set on the earthbent land; fired and
+    # cleared by ``move_off_battlefield``.
+    earthbent: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

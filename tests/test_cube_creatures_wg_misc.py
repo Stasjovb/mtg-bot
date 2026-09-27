@@ -576,3 +576,49 @@ def test_springheart_bestow_needs_a_creature():
         if isinstance(t.effect, PayToCopyEnchantedCreatureElseToken)
     )
     assert "Insect" in eff.describe()
+
+
+def test_badgermole_cub_earthbends_and_boosts_creature_mana():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        Earthbend,
+        ReturnEarthbentLandTapped,
+    )
+    from mtg_bot.game import effective_power, is_creature_now
+    from mtg_bot.turn import move_off_battlefield, sacrifice
+
+    pr = cube()["Badgermole Cub"]
+    assert pr.extra_mana_when_you_tap_creature_for_mana == ("G",)
+    state = make_state()
+    cub = put(state, 0, pr, Zone.HAND)
+    lands = add_lands(state, 0, "Forest", 2)
+    state.players[0].agent.scripts["target"] = [("permanent", lands[0].id)]
+    cast_and_resolve(state, 0, cub)
+    land = lands[0]
+    assert is_creature_now(land) and land.earthbent
+    assert effective_power(state, land) == 1
+    assert "haste" in effective_keywords(state, land)
+    # The earthbent land dies: it returns tapped as a plain land.
+    sacrifice(state, land)
+    drain(state)
+    assert land in state.battlefield and land.tapped
+    assert not is_creature_now(land) and not land.earthbent
+    # Tapping a creature for mana adds an extra {G}.
+    elves = put(state, 0, "Llanowar Elves")
+    apply_action(state, 0, ActivateAbility(source_id=elves.id, ability_index=0))
+    assert [c.color for c in state.players[0].mana_pool] == ["G", "G"]
+    # Tapping a land for mana doesn't.
+    state.players[0].mana_pool.clear()
+    from mtg_bot.creature_statics_wg import extra_mana_for_creature_tap
+
+    extra_mana_for_creature_tap(state, 0, lands[1])
+    assert state.players[0].mana_pool == []
+    # Bounced earthbent lands don't return; edges.
+    eb = Earthbend(n=2)
+    eb.resolve(state, 0, ())
+    eb.resolve(state, 0, (("permanent", elves.id),))  # not a land
+    state.players[0].agent.scripts["target"] = []
+    eb.resolve(state, 0, (("permanent", lands[1].id),))
+    move_off_battlefield(state, lands[1], destination="hand")
+    assert not state.stack and not lands[1].earthbent
+    ReturnEarthbentLandTapped().resolve(state, 0)
+    assert "earthbend 2" == eb.describe() and ReturnEarthbentLandTapped().describe()
