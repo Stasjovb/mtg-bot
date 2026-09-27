@@ -25,7 +25,6 @@ from mtg_bot.effects.generic import (
     EachOpponentSacrificesN,
     OpponentGainsControlOfSource,
     ReanimateTargetCreatureCardFromAGraveyard,
-    SearchLibraryForCard,
     TakeExtraTurnAfterThisOne,
 )
 from mtg_bot.game import Zone, counter_count, effective_subtypes
@@ -69,10 +68,11 @@ def test_compound_sentence_fallback_when_then_split_fails():
         "search your library for a card, put it into your hand, then "
         "shuffle. An opponent gains control of this artifact"
     )
-    assert eff == Sequence(effects=(
-        SearchLibraryForCard(filter_name="any", may_fail=False, reveal=False),
-        OpponentGainsControlOfSource(),
-    ))
+    # The tutor half is the base card-flow grammar's unrevealed search.
+    assert isinstance(eff, Sequence)
+    assert type(eff.effects[0]).__name__ == "SearchLibrary"
+    assert eff.effects[0].reveal is False
+    assert eff.effects[1] == OpponentGainsControlOfSource()
     # still rejects when no split works
     assert _parse_effect("frobnicate, then shuffle. Wibble") is None
 
@@ -102,7 +102,7 @@ def test_portal_and_wishclaw_shapes():
         "each opponent sacrifices two lands of their choice"
     ) == EachOpponentSacrificesN(amount=2, card_type="Land")
     wish = build_ok("Wishclaw Talisman")
-    assert wish.enters_with_counters == (("wish", 3),)
+    assert wish.enters_with_named_counters == (("wish", 3),)
     (ability,) = wish.activated_abilities
     assert ability.activate_only_during_your_turn
     assert ability.cost.remove_named_counter_from_self == "wish"

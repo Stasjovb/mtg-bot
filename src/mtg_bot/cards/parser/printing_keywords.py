@@ -1223,7 +1223,7 @@ def _parse_discard_land_to_enter_line(line: str) -> bool:
 # ``This artifact enters with three wish counters on it.`` (Wishclaw
 # Talisman) / ``This Vehicle enters with three charge counters on it.``
 # (Reckoner Bankbuster) — an entry replacement placing named counters.
-# Returns ``(kind, amount)`` for ``CardPrinting.enters_with_counters``.
+# Returns ``(kind, amount)`` for ``CardPrinting.enters_with_named_counters``.
 # ``+1/+1`` counters on creatures keep their dedicated recognizers in
 # ``triggers.py``; this one is consulted by the artifact builder only.
 _ENTERS_WITH_NAMED_COUNTERS_LINE = re.compile(

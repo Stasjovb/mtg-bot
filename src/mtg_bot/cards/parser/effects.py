@@ -1113,8 +1113,6 @@ _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER: dict[str, tuple[str, bool]] = {
     # put it into your hand, then shuffle." The ``may_fail=True``
     # flag preserves graceful behaviour when the library has no Slivers.
     "Sliver": ("sliver", True),
-    # ``a land card`` — Expedition Map's tutor (any land, basic or not).
-    "land": ("land", True),
 }
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger

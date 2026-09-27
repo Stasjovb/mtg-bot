@@ -460,7 +460,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         printing = replace(printing, enters_only_by_discarding_land=True)
     if enters_with_counters:
         printing = replace(
-            printing, enters_with_counters=tuple(enters_with_counters),
+            printing, enters_with_named_counters=tuple(enters_with_counters),
         )
     if skip_turn_to_untap:
         printing = replace(printing, may_skip_turn_to_untap=True)

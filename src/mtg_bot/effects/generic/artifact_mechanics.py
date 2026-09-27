@@ -495,54 +495,6 @@ class LookAtRandomCardInTargetPlayersHand(Effect):
 
 
 @dataclass(frozen=True)
-class LookAtTopNPutBackInAnyOrder(Effect):
-    """"Look at the top N cards of your library, then put them back in
-    any order." (Sensei's Divining Top). The controller learns the
-    cards and reorders them: ``Agent.choose_card_from_library`` picks
-    the card to put on top first, then the next, and so on (``None``
-    keeps the remaining cards in their current order)."""
-
-    amount: int = 3
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import reveal_to
-
-        p = state.player_by_id(controller_id)
-        _own_zone(p.library)
-        top = p.library[: self.amount]
-        if not top:
-            return
-        for card in top:
-            reveal_to(card, controller_id)
-        remaining = list(top)
-        ordered: list = []
-        while len(remaining) > 1 and p.agent is not None:
-            pick = p.agent.choose_card_from_library(
-                state, controller_id, [c.id for c in remaining],
-            )
-            chosen = next((c for c in remaining if c.id == pick), None)
-            if chosen is None:
-                break
-            ordered.append(chosen)
-            remaining.remove(chosen)
-        ordered.extend(remaining)
-        p.library[: len(top)] = ordered
-        state.log.append(
-            f"P{controller_id} looks at the top {len(top)} card(s) of their "
-            f"library and puts them back in any order"
-        )
-
-    def describe(self) -> str:
-        return (
-            f"look at the top {self.amount} cards of your library, then put "
-            f"them back in any order"
-        )
-
-
-@dataclass(frozen=True)
 class PutSourceOnTopOfOwnersLibrary(Effect):
     """"Put this artifact on top of its owner's library." (Sensei's
     Divining Top). Moves the resolving source from the battlefield to
@@ -1437,3 +1389,45 @@ class ExileThatCreature(Effect):
 
     def describe(self) -> str:
         return "exile that creature"
+
+
+@dataclass(frozen=True)
+class CreateTokenThenMayAttachSelf(Effect):
+    """"Create <token>. You may attach this Equipment to it." (Cori-Steel
+    Cutter's Flurry trigger). The token is created through
+    ``CreateToken`` (doublers / ETBs apply); if the Equipment is still on
+    the battlefield the controller may attach it (``choose_yes_no``) to
+    the token just created (the first new token if a doubler made more).
+    """
+
+    create: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        before = {o.id for o in state.battlefield}
+        self.create.resolve(state, controller_id, targets)
+        new = [
+            o for o in state.battlefield
+            if o.id not in before and o.printing.is_token
+            and o.controller_id == controller_id
+        ]
+        source = state.resolving_source
+        if not new or source is None or source not in state.battlefield:
+            return
+        if "Equipment" not in source.printing.subtypes:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Attach {source.printing.name} to {new[0].printing.name}?",
+        ):
+            return
+        source.attached_to = new[0].id
+        state.log.append(
+            f"{source.printing.name} is attached to {new[0].printing.name}"
+        )
+
+    def describe(self) -> str:
+        return f"{self.create.describe()}; you may attach this Equipment to it"

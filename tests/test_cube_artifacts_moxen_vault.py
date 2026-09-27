@@ -326,7 +326,7 @@ def test_enters_with_counters_and_reset_on_entry():
     state = arena()
     box = replace(
         make_artifact("Test Box", "{1}"),
-        enters_with_counters=(("wish", 3), ("charge", 1)),
+        enters_with_named_counters=(("wish", 3), ("charge", 1)),
     )
     obj = state.new_object(box, owner_id=0, zone=Zone.STACK)
     obj.named_counters = (("story", 9),)

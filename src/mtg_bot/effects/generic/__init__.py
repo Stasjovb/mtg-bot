@@ -205,7 +205,6 @@ from mtg_bot.effects.generic.artifact_mechanics import (
     EachPlayerExilesHandDrawsNReturnsLater,
     LookAtRandomCardInTargetPlayersHand,
     LookAtTopCardOfTargetPlayersLibrary,
-    LookAtTopNPutBackInAnyOrder,
     MayTapOrUntapTarget,
     MillTwoRepeatWhileShareColor,
     PutSourceOnTopOfOwnersLibrary,
@@ -228,6 +227,7 @@ from mtg_bot.effects.generic.artifact_mechanics import (
     ReturnExiledWithSourceToGraveyardThenToken,
     ReturnThisCardFromGraveyardThenAttachToThatCreature,
     ExileThatCreature,
+    CreateTokenThenMayAttachSelf,
     UntapXTargets,
 )
 
@@ -607,7 +607,6 @@ __all__ = [
     "EachPlayerExilesHandDrawsNReturnsLater",
     "LookAtRandomCardInTargetPlayersHand",
     "LookAtTopCardOfTargetPlayersLibrary",
-    "LookAtTopNPutBackInAnyOrder",
     "MayTapOrUntapTarget",
     "MillTwoRepeatWhileShareColor",
     "PutSourceOnTopOfOwnersLibrary",
@@ -630,5 +629,6 @@ __all__ = [
     "ReturnExiledWithSourceToGraveyardThenToken",
     "ReturnThisCardFromGraveyardThenAttachToThatCreature",
     "ExileThatCreature",
+    "CreateTokenThenMayAttachSelf",
     "UntapXTargets",
 ]

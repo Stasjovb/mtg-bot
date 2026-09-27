@@ -129,6 +129,10 @@ def _parse_artifact_effect_phrase(phrase: str) -> Effect | None:
         )
         if m.group(1) == "X":
             return AddManaInAnyCombination(options=options, amount_is_x=True)
+        if colors == "colors":
+            # "Add N mana in any combination of colors" is the base
+            # grammar's shape (N ``any`` coins, Manamorphose).
+            return None
         return AddManaInAnyCombination(
             amount=_amount(m.group(1)), options=options,
         )
@@ -189,7 +193,10 @@ def _parse_artifact_effect_phrase(phrase: str) -> Effect | None:
     ex = _parse_exiled_with_phrase(phrase)
     if ex is not None:
         return ex
-    return _parse_graveyard_return_phrase(phrase)
+    gy = _parse_graveyard_return_phrase(phrase)
+    if gy is not None:
+        return gy
+    return _parse_create_then_attach_phrase(phrase)
 
 
 # "Untap [another] target <type>." — Voltaic Key (artifact), Manifold
@@ -260,12 +267,6 @@ _LOOK_AT_RANDOM_CARD_IN_TARGET_PLAYERS_HAND = re.compile(
 _AT_NEXT_TURNS_UPKEEP = re.compile(
     r"^(?:you )?(.+) at the beginning of the next turn's upkeep$"
 )
-# "Look at the top N cards of your library, then put them back in any
-# order." (Sensei's Divining Top)
-_LOOK_AT_TOP_N_PUT_BACK_ANY_ORDER = re.compile(
-    rf"^look at the top ({_CARDINAL}) cards of your library, then put "
-    r"them back in any order$"
-)
 # "Put this artifact on top of its owner's library." (Sensei's Top)
 _PUT_SELF_ON_TOP_OF_OWNERS_LIBRARY = re.compile(
     r"^put this (?:artifact|creature|permanent) on top of its owner's "
@@ -299,7 +300,6 @@ def _parse_library_and_delay_phrase(phrase: str) -> Effect | None:
         EachPlayerExilesHandDrawsNReturnsLater,
         LookAtRandomCardInTargetPlayersHand,
         LookAtTopCardOfTargetPlayersLibrary,
-        LookAtTopNPutBackInAnyOrder,
         MayTapOrUntapTarget,
         MillTwoRepeatWhileShareColor,
         PutSourceOnTopOfOwnersLibrary,
@@ -318,9 +318,6 @@ def _parse_library_and_delay_phrase(phrase: str) -> Effect | None:
         if inner is None or inner.requires_target():
             return None
         return ScheduleDelayedEffect(inner=inner, step="upkeep")
-    m = _LOOK_AT_TOP_N_PUT_BACK_ANY_ORDER.match(phrase)
-    if m is not None:
-        return LookAtTopNPutBackInAnyOrder(amount=_amount(m.group(1)))
     if _PUT_SELF_ON_TOP_OF_OWNERS_LIBRARY.match(phrase):
         return PutSourceOnTopOfOwnersLibrary()
     m = _EXILE_HANDS_DRAW_N_RETURN_AT_END_STEP.match(phrase)
@@ -353,11 +350,6 @@ _REANIMATE_FROM_A_GRAVEYARD = re.compile(
     r"under your control(?:\. It's an? ([A-Z][a-z]+) in addition to its "
     r"other types)?$"
 )
-# "Search your library for a card, put it into your hand, then
-# shuffle." — unrestricted tutor with no reveal (Wishclaw Talisman).
-_SEARCH_ANY_CARD_TO_HAND = re.compile(
-    r"^search your library for a card, put it into your hand, then shuffle$"
-)
 # "An opponent gains control of this artifact." (Wishclaw Talisman)
 _OPPONENT_GAINS_CONTROL_OF_SELF = re.compile(
     r"^an opponent gains control of this (?:artifact|creature|permanent)$"
@@ -369,7 +361,6 @@ def _parse_control_and_graveyard_phrase(phrase: str) -> Effect | None:
         EachOpponentSacrificesN,
         OpponentGainsControlOfSource,
         ReanimateTargetCreatureCardFromAGraveyard,
-        SearchLibraryForCard,
     )
 
     m = _EACH_OPPONENT_SACRIFICES_N.match(phrase)
@@ -382,20 +373,11 @@ def _parse_control_and_graveyard_phrase(phrase: str) -> Effect | None:
         return ReanimateTargetCreatureCardFromAGraveyard(
             add_subtype=m.group(1) or "",
         )
-    if _SEARCH_ANY_CARD_TO_HAND.match(phrase):
-        return SearchLibraryForCard(
-            filter_name="any", may_fail=False, reveal=False,
-        )
     if _OPPONENT_GAINS_CONTROL_OF_SELF.match(phrase):
         return OpponentGainsControlOfSource()
     return None
 
 
-# "Sacrifice this <permanent>." as an effect body (The Fantasticar's
-# "you may sacrifice The Fantasticar" after name substitution).
-_SACRIFICE_SELF_EFFECT = re.compile(
-    r"^sacrifice this (?:creature|artifact|Vehicle|Equipment|permanent)$"
-)
 # "You may have this <permanent> become an artifact creature until end
 # of turn." (The Fantasticar).
 _MAY_BECOME_ARTIFACT_CREATURE_UEOT = re.compile(
@@ -420,11 +402,8 @@ def _parse_vehicle_phrase(phrase: str) -> Effect | None:
     from mtg_bot.effects.generic import (
         BecomeType,
         CreateTokenCopyOfTargetTokenYouControl,
-        SacrificeSelf,
     )
 
-    if _SACRIFICE_SELF_EFFECT.match(phrase):
-        return SacrificeSelf()
     if _MAY_BECOME_ARTIFACT_CREATURE_UEOT.match(phrase):
         return MayDo(inner=ApplyEffect(
             BecomeType(types_to_add=("creature",)), ends_at=EndOfTurn(),
@@ -685,3 +664,24 @@ def _functions_from_graveyard(effect) -> bool:
     inner = getattr(effect, "inner", effect)
     return bool(getattr(inner, "functions_from_graveyard", False))
 
+
+
+# "Create <token>. You may attach this Equipment to it." — Cori-Steel
+# Cutter's Flurry body; the create half parses through the unified
+# token grammar.
+_CREATE_TOKEN_MAY_ATTACH_SELF = re.compile(
+    r"^(create .+ tokens?(?: with .+)?)\. You may attach this Equipment to it$"
+)
+
+
+def _parse_create_then_attach_phrase(phrase: str) -> Effect | None:
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import CreateToken, CreateTokenThenMayAttachSelf
+
+    m = _CREATE_TOKEN_MAY_ATTACH_SELF.match(phrase)
+    if m is None:
+        return None
+    create = _parse_effect(m.group(1))
+    if not isinstance(create, CreateToken):
+        return None
+    return CreateTokenThenMayAttachSelf(create=create)

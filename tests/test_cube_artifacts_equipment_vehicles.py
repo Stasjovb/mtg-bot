@@ -125,7 +125,7 @@ def test_equipment_builder_rejects_unmodeled_lines():
     base = {"name": "Test Gear", "mana_cost": "{1}",
             "type_line": "Artifact — Equipment"}
     assert _build_equipment_printing({
-        **base, "oracle_text": "Equipped creature has haste and shroud.\nEquip {0}",
+        **base, "oracle_text": "Equipped creature has haste and banding.\nEquip {0}",
     }) is None
     assert _build_equipment_printing({
         **base, "oracle_text": "Frobnicate.\nEquip {1}",
@@ -166,7 +166,7 @@ def test_vehicle_shapes():
         CreateTokenCopyOfTargetTokenYouControl()
     )
     bank = build_ok("Reckoner Bankbuster")
-    assert bank.enters_with_counters == (("charge", 3),)
+    assert bank.enters_with_named_counters == (("charge", 3),)
     draw = bank.activated_abilities[0]
     assert isinstance(draw.effect.effects[1], IfSourceHasNoCounters)
     car = build_ok("The Fantasticar")
@@ -550,3 +550,71 @@ def test_granted_quoted_trigger_must_be_known():
             'creature."\nEquip {1}'
         ),
     }) is None
+
+
+# --- Lightning Greaves / Cori-Steel Cutter (keyword substrate) ------------
+
+def test_lightning_greaves_grants_haste_and_shroud():
+    from mtg_bot.game import effective_keywords
+    state = arena()
+    greaves = put(state, build_ok("Lightning Greaves"))
+    assert build_ok("Lightning Greaves").activated_abilities[-1].cost.mana_str == "{0}"
+    guy = put(state, _creature("Guy"), sick=True)
+    _equip(state, greaves, guy)
+    kws = effective_keywords(state, guy)
+    assert {"haste", "shroud"} <= kws
+    assert guy in eligible_attackers(state, 0)
+
+
+def test_cori_steel_cutter_flurry_monk_and_attach():
+    from mtg_bot.effects.generic import CreateTokenThenMayAttachSelf
+    state = arena()
+    cutter_printing = build_ok("Cori-Steel Cutter")
+    assert cutter_printing.equipment_bonuses == (
+        1, 1, frozenset({"trample", "haste"}),
+    )
+    (flurry,) = cutter_printing.triggered_abilities
+    assert isinstance(flurry.effect, CreateTokenThenMayAttachSelf)
+    cutter = put(state, cutter_printing)
+    spell = make_instant("Test Gift", "{0}", GainLife(amount=1))
+    for _ in range(2):
+        c = to_hand(state, spell)
+        apply(state, CastSpell(card_id=c.id), 0)
+        drain_stack(state)
+    monk = next(o for o in state.battlefield if o.printing.name == "Monk")
+    assert "prowess" in monk.printing.keywords
+    assert monk.printing.color_indicator == frozenset({"W"})
+    assert cutter.attached_to == monk.id
+
+
+def test_cori_steel_cutter_attach_is_optional():
+    state = arena()
+    cutter = put(state, build_ok("Cori-Steel Cutter"))
+    agent(state).yes = False
+    spell = make_instant("Test Gift", "{0}", GainLife(amount=1))
+    for _ in range(2):
+        c = to_hand(state, spell)
+        apply(state, CastSpell(card_id=c.id), 0)
+        drain_stack(state)
+    assert any(o.printing.name == "Monk" for o in state.battlefield)
+    assert cutter.attached_to is None
+
+
+def test_create_then_attach_edge_cases():
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import CreateTokenThenMayAttachSelf
+    state = arena()
+    eff = _parse_effect(
+        "create a 1/1 white Monk creature token with prowess. You may attach "
+        "this Equipment to it"
+    )
+    assert isinstance(eff, CreateTokenThenMayAttachSelf)
+    eff.resolve(state, 0)  # no source: token made, nothing attached
+    assert any(o.printing.name == "Monk" for o in state.battlefield)
+    state.resolving_source = put(state, make_artifact("Not Gear", "{1}"))
+    eff.resolve(state, 0)
+    assert state.resolving_source.attached_to is None
+    assert "attach" in eff.describe()
+    assert _parse_effect(
+        "draw a card. You may attach this Equipment to it"
+    ) is None

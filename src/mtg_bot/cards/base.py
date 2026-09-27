@@ -809,10 +809,6 @@ class CardPrinting:
     # its controller's untap step. Other untap effects (its own
     # ``{N}: Untap this artifact.`` ability, Voltaic Key) still work.
     doesnt_untap_during_untap_step: bool = False
-    # "This <permanent> enters with N <kind> counters on it." (Reckoner
-    # Bankbuster's charge counters, Wishclaw Talisman's wish counters).
-    # Applied by ``actions.put_into_battlefield`` as the object enters.
-    enters_with_counters: tuple[tuple[str, int], ...] = ()
     # Mox Diamond: "If this artifact would enter, you may discard a land
     # card instead. If you do, put this artifact onto the battlefield.
     # If you don't, put it into its owner's graveyard." Replacement
@@ -913,9 +909,12 @@ class CardPrinting:
     # the permanent that type (``effective_subtypes``; its intrinsic
     # mana ability follows via ``effective_land_produces``).
     is_chosen_basic_land_type: bool = False
-    # "This land enters with three mining counters on it." — ETB
-    # replacement placing ``named_counters`` kinds (``((kind, n), ...)``)
-    # as the land enters (``actions.apply_land_etb_replacements``).
+    # "This <permanent> enters with N <kind> counters on it." — ETB
+    # replacement ``((kind, n), ...)``: Gemstone Mine's mining counters
+    # (lands, ``actions.apply_land_etb_replacements``), Wishclaw
+    # Talisman's wish / Reckoner Bankbuster's charge counters (every
+    # other entry, ``actions.put_into_battlefield``). Kinds with a
+    # dedicated ``GameObject`` field (charge, ...) land in that field.
     enters_with_named_counters: tuple = ()
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches

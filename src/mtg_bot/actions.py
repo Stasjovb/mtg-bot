@@ -1412,8 +1412,13 @@ def apply_land_etb_replacements(
         card.tapped = not any_low
     # "This land enters with N <kind> counters on it." (Gemstone Mine).
     for kind, n in card.printing.enters_with_named_counters:
-        from mtg_bot.game import set_named_counters
-        set_named_counters(card, kind, n)
+        from mtg_bot.game import (
+            _DEDICATED_COUNTER_FIELDS, add_counters, set_named_counters,
+        )
+        if kind in _DEDICATED_COUNTER_FIELDS:
+            add_counters(state, card, kind, n)
+        else:
+            set_named_counters(card, kind, n)
     # Generic "This land enters tapped unless <condition>." (fast
     # lands, check lands). Deterministic state check, no agent choice.
     unless = card.printing.enters_tapped_unless
@@ -2659,7 +2664,7 @@ def _activate_hand_ability(
             f"P{player_id} discards {card.printing.name} "
             f"(cost for its ability)"
         )
-        fire_opponent_discards_triggers(state, player_id, card=discarded)
+        fire_opponent_discards_triggers(state, player_id, card=card)
         cost_paid_objects.append(card)
     elif ability.cost.exile_self:
         # "Exile this card from your hand" (Simian Spirit Guide shape).
@@ -4219,9 +4224,9 @@ def put_into_battlefield(
     # harnessed designation.
     obj.named_counters = ()
     obj.harnessed = False
-    if obj.printing.enters_with_counters:
+    if obj.printing.enters_with_named_counters:
         from mtg_bot.game import add_counters
-        for kind, amount in obj.printing.enters_with_counters:
+        for kind, amount in obj.printing.enters_with_named_counters:
             add_counters(state, obj, kind, amount)
     # Sunburst (CR 702.44a): a +1/+1 counter per color of mana spent to
     # cast it if it's a creature, otherwise a charge counter. Zero when

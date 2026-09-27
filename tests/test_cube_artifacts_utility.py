@@ -28,13 +28,11 @@ from mtg_bot.effects.generic import (
     EachPlayerExilesHandDrawsNReturnsLater,
     LookAtRandomCardInTargetPlayersHand,
     LookAtTopCardOfTargetPlayersLibrary,
-    LookAtTopNPutBackInAnyOrder,
     MayTapOrUntapTarget,
     MillTwoRepeatWhileShareColor,
     PutSourceOnTopOfOwnersLibrary,
     ReturnTargetCreatureToOwnersHand,
     ScheduleDelayedEffect,
-    SearchLibraryForCard,
     Untap,
     UntapXTargets,
 )
@@ -95,10 +93,11 @@ def test_pronoun_damage_and_land_tutor():
         "{R}, Sacrifice this artifact: It deals 2 damage to any target."
     )
     assert ability.effect == DealDamageAnyTarget(amount=2)
-    assert _parse_effect(
+    # Expedition Map's land tutor is the base card-flow grammar's.
+    assert type(_parse_effect(
         "search your library for a land card, reveal it, put it into your "
         "hand, then shuffle"
-    ) == SearchLibraryForCard(filter_name="land", may_fail=True)
+    )).__name__ == "SearchLibrary"
 
 
 @pytest.mark.parametrize("phrase,expected", [
@@ -133,11 +132,9 @@ def test_token_synthesis_shapes():
 
 
 @pytest.mark.parametrize("phrase", [
-    "create a 1/1 white Monk creature token with prowess",
+    "create a 1/1 white Monk creature token with banding",
     "create a 1/1 colorless Pilot creature token with \"This token crews "
     "Vehicles as though its power were 2 greater and has flying.\"",
-    "create a 2/2 white Cat enchantment creature token",
-    "create a 1/1 red Goblin creature token that's tapped and attacking",
 ])
 def test_token_synthesis_refuses_unmodeled_riders(phrase):
     assert _parse_effect(phrase) is None
@@ -193,11 +190,6 @@ def test_new_cost_atoms():
         ScheduleDelayedEffect(inner=DrawCards(amount=1), step="upkeep"),
     ),
     (
-        "look at the top three cards of your library, then put them back in "
-        "any order",
-        LookAtTopNPutBackInAnyOrder(amount=3),
-    ),
-    (
         "put this artifact on top of its owner's library",
         PutSourceOnTopOfOwnersLibrary(),
     ),
@@ -231,7 +223,7 @@ def test_spellbomb_and_map_shapes():
     assert pyrite.activated_abilities[0].effect == DealDamageAnyTarget(amount=2)
     emap = build_ok("Expedition Map")
     (ability,) = emap.activated_abilities
-    assert ability.effect == SearchLibraryForCard(filter_name="land")
+    assert type(ability.effect).__name__ == "SearchLibrary"
     assert ability.cost.sacrifice_self and ability.cost.tap_self
 
 
@@ -279,16 +271,6 @@ def test_expedition_map_fetches_a_land():
     resolve_top_of_stack(state)
     assert land in state.players[0].hand
     assert 1 in land.publicly_known_to  # revealed
-
-
-def test_search_without_reveal_keeps_card_hidden():
-    state = arena()
-    card = to_library(state, _bear())
-    SearchLibraryForCard(filter_name="any", may_fail=False, reveal=False).resolve(
-        state, 0,
-    )
-    assert card in state.players[0].hand
-    assert 1 not in card.publicly_known_to
 
 
 def test_voltaic_key_untaps_an_artifact():
@@ -462,7 +444,6 @@ def test_look_effects_handle_empty_zones_and_bad_targets():
     for eff in (
         LookAtTopCardOfTargetPlayersLibrary(),
         LookAtRandomCardInTargetPlayersHand(),
-        LookAtTopNPutBackInAnyOrder(),
         PutSourceOnTopOfOwnersLibrary(),
         MillTwoRepeatWhileShareColor(),
         MayTapOrUntapTarget(),
@@ -511,7 +492,6 @@ def test_put_on_top_noop_when_source_gone():
     PutSourceOnTopOfOwnersLibrary().resolve(state, 0)
     assert state.players[0].library == []
     state.resolving_source = None
-    LookAtTopNPutBackInAnyOrder().resolve(state, 0)  # empty library
 
 
 def test_move_off_battlefield_rejects_unknown_destination():
