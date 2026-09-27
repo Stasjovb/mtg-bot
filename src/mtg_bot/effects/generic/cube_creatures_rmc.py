@@ -2094,7 +2094,14 @@ def fire_becomes_target(
     ``source_obj``) just got its targets: dispatch
     ``Event.BECOMES_TARGET`` once per distinct targeted player /
     permanent, and stack the "Whenever this creature becomes the target
-    ..." abilities granted by statics (Nadu, Winged Wisdom)."""
+    ..." abilities granted by statics (Nadu, Winged Wisdom).
+
+    A targeted spell on the stack (``"stack"`` / ``"stack_spell"``
+    targets) dispatches with the spell card as the ``target_spell``
+    subject instead of ``target`` -- so "a permanent you control
+    becomes the target" observers never see it, while "a creature
+    spell you control becomes the target" ones (Surrak, Elusive Hunter;
+    cube W/G bucket) do."""
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
@@ -2112,7 +2119,15 @@ def fire_becomes_target(
             subject = next((o for o in state.battlefield if o.id == tid), None)
             if subject is None:
                 continue
-        else:  # stack / graveyard / exile / card targets aren't permanents
+        elif kind in ("stack", "stack_spell"):
+            spell = _targeted_spell(state, kind, tid)
+            if spell is not None:
+                dispatch_event(
+                    state, Event.BECOMES_TARGET, label="becomes-target",
+                    target_spell=spell, controller=caster,
+                )
+            continue
+        else:  # graveyard / exile / card targets aren't permanents
             continue
         dispatch_event(
             state, Event.BECOMES_TARGET, label="becomes-target",
@@ -2120,6 +2135,20 @@ def fire_becomes_target(
         )
         if kind != "player":
             _fire_granted_becomes_target_triggers(state, subject)
+
+
+def _targeted_spell(state, kind: str, tid: int):
+    """The spell card a ``"stack"`` (stack index) / ``"stack_spell"``
+    (card id) target names, or ``None`` (an ability, or gone)."""
+    if kind == "stack":
+        if not 0 <= tid < len(state.stack):
+            return None
+        item = state.stack[tid]
+    else:
+        item = next((i for i in state.stack if i.source.id == tid), None)
+    if item is None or item.ability is not None:
+        return None
+    return item.source
 
 
 def _fire_granted_becomes_target_triggers(state, creature) -> None:

@@ -543,6 +543,53 @@ def _parse_extra_mana_on_creature_tap(line: str, card: dict) -> WGLine | None:
     })
 
 
+# ---------------------------------------------------------------------
+# Eternalize / Kicker (keyword lines with a cost)
+# ---------------------------------------------------------------------
+
+_ETERNALIZE_RE = re.compile(r"^Eternalize (?P<cost>(?:\{[^}]+\})+)$")
+_KICKER_RE = re.compile(r"^Kicker (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def _parse_eternalize_line(line: str, card: dict) -> WGLine | None:
+    """``Eternalize {cost}`` (CR 702.129a): "{cost}, Exile this card from
+    your graveyard: Create a token that's a copy of it, except it's a 4/4
+    black Zombie ... with no mana cost. Eternalize only as a sorcery." ->
+    a graveyard-activated ability (the R/multi/colorless bucket's
+    ``graveyard_activated_abilities`` + ``ExileSelfFromGraveyardCost``)."""
+    m = _ETERNALIZE_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.cube_creatures_rmc import ExileSelfFromGraveyardCost
+    from mtg_bot.effects.generic.cube_creatures_wg import CreateTokenCopyOfSource
+
+    cost_str = m.group("cost")
+    return WGLine(fields={"graveyard_activated_abilities": (ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost(cost_str), mana_str=cost_str,
+            extra_costs=(ExileSelfFromGraveyardCost(),),
+        ),
+        effect=CreateTokenCopyOfSource(eternalize=True),
+        sorcery_speed=True,
+    ),)})
+
+
+def _parse_kicker_line(line: str, card: dict) -> WGLine | None:
+    """``Kicker {cost}`` on a creature (CR 702.33a; Sowing Mycospawn) ->
+    ``kicker_cost`` (the cast pipeline's kicked-cast offer)."""
+    m = _KICKER_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.base import parse_mana_cost
+
+    return WGLine(fields={
+        "kicker_cost": parse_mana_cost(m.group("cost")),
+        "kicker_cost_str": m.group("cost"),
+    })
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -563,6 +610,8 @@ _RECOGNIZERS = (
     _parse_equipped_per_own_counter_line,
     _parse_bestow_lines,
     _parse_extra_mana_on_creature_tap,
+    _parse_eternalize_line,
+    _parse_kicker_line,
 )
 
 

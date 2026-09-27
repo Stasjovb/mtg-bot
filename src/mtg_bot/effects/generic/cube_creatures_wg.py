@@ -446,6 +446,24 @@ def token_copy_printing(base, extra_card_types: tuple = ()):
     )
 
 
+def eternalized_printing(base):
+    """Eternalize's token (CR 702.129a): "a copy of it, except it's a 4/4
+    black Zombie <its other creature types> with no mana cost"."""
+    import dataclasses as _dc
+
+    from mtg_bot.cards.base import ManaCost
+
+    tok = token_copy_printing(base)
+    subtypes = ("Zombie",) + tuple(s for s in tok.subtypes if s != "Zombie")
+    left = tok.type_line.split(" — ")[0]
+    return _dc.replace(
+        tok, power=4, toughness=4, subtypes=subtypes,
+        type_line=f"{left} — {' '.join(subtypes)}",
+        mana_cost=ManaCost(), mana_cost_str="",
+        color_indicator=frozenset({"B"}),
+    )
+
+
 @dataclass(frozen=True)
 class CreateTokenCopyOfSource(Effect):
     """"Create a token that's a copy of it[, except it's an <type> in
@@ -453,6 +471,9 @@ class CreateTokenCopyOfSource(Effect):
     (Vaultborn Tyrant's dies trigger: last known copiable values)."""
 
     extra_card_types: tuple = ()
+    # Eternalize (Fanatic of Rhonas): "..., except it's a 4/4 black
+    # Zombie <types> with no mana cost" (``eternalized_printing``).
+    eternalize: bool = False
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.effects.generic.tokens import CreateToken
@@ -460,13 +481,18 @@ class CreateTokenCopyOfSource(Effect):
         source = state.resolving_source
         if source is None:
             return
-        CreateToken(
-            token_printing=token_copy_printing(
-                source.printing, self.extra_card_types,
-            ),
-        ).resolve(state, controller_id)
+        if self.eternalize:
+            printing = eternalized_printing(source.printing)
+        else:
+            printing = token_copy_printing(source.printing, self.extra_card_types)
+        CreateToken(token_printing=printing).resolve(state, controller_id)
 
     def describe(self) -> str:
+        if self.eternalize:
+            return (
+                "create a token that's a copy of it, except it's a 4/4 black "
+                "Zombie with no mana cost"
+            )
         extra = " and ".join(t.lower() for t in self.extra_card_types)
         tail = f", except it's also {extra}" if extra else ""
         return f"create a token that's a copy of it{tail}"
@@ -1606,3 +1632,75 @@ class ReturnEarthbentLandTapped(Effect):
 
     def describe(self) -> str:
         return "return it to the battlefield tapped"
+
+
+# ---------------------------------------------------------------------
+# "When you cast this spell" riders (Sage of the Skies, Sowing Mycospawn)
+# ---------------------------------------------------------------------
+
+
+def _own_spell_item(state, source):
+    """The stack item of ``source`` as a spell (not an ability), or
+    ``None`` once it has left the stack."""
+    return next(
+        (
+            i for i in state.stack
+            if i.ability is None and i.source is source
+        ),
+        None,
+    )
+
+
+@dataclass(frozen=True)
+class ThisSpellWasKicked(TriggerPredicate):
+    """Intervening-if "if it was kicked" on a "When you cast this spell"
+    trigger (Sowing Mycospawn): the source spell's stack item was cast
+    with its kicker paid."""
+
+    def matches(self, state, subjects, source):
+        item = _own_spell_item(state, source)
+        return item is not None and bool(item.kicked or item.kick_count)
+
+
+@dataclass(frozen=True)
+class CastAnotherSpellThisTurn(TriggerPredicate):
+    """Intervening-if "if you've cast another spell this turn" on a
+    "When you cast this spell" trigger (Sage of the Skies). Those
+    triggers are stacked before the cast is counted
+    (``actions._cast_spell``), so any spell already counted this turn
+    is "another" spell."""
+
+    def matches(self, state, subjects, source):
+        try:
+            player = state.player_by_id(source.controller_id)
+        except (KeyError, AttributeError):
+            return False
+        return getattr(player, "spells_cast_this_turn", 0) >= 1
+
+
+@dataclass(frozen=True)
+class CopyThisSpell(Effect):
+    """"Copy this spell." -- the ability's source spell, if it's still on
+    the stack (CR 707.10: the copy isn't cast; it keeps the spell's
+    targets and X). A copy of a permanent spell becomes a token
+    (CR 707.10f): the copy is put on the stack with the token printing
+    (``token_copy_printing``), so it resolves into a token."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import push_spell_copy
+
+        source = state.resolving_source
+        item = _own_spell_item(state, source) if source is not None else None
+        if item is None:
+            state.log.append("copy this spell: the spell is gone")
+            return
+        printing = item.source.printing
+        if printing.is_permanent:
+            printing = token_copy_printing(printing)
+        push_spell_copy(
+            state, printing, controller_id, item.targets,
+            x_value=item.x_value,
+        )
+
+    def describe(self) -> str:
+        return "copy this spell"

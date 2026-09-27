@@ -404,6 +404,8 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         return None
     from mtg_bot.effects.generic import cube_creatures_wg as wg
 
+    if phrase == "copy this spell":
+        return wg.CopyThisSpell()
     m = _GRAVEYARD_ON_BOTTOM_RE.match(phrase)
     if m is not None:
         return wg.TargetPlayerPutsGraveyardOnBottomRandom(
@@ -667,6 +669,30 @@ def trigger_subject(noun: str):
     return pred, controlled
 
 
+_CREATURE_OR_CREATURE_SPELL_BECOMES_TARGET = (
+    "a creature you control or a creature spell you control becomes the "
+    "target of a spell or ability an opponent controls"
+)
+
+
+def parse_wg_intervening_if(phrase: str):
+    """Intervening-if gates of "When you cast this spell" triggers:
+
+    * ``it was kicked`` -> :class:`ThisSpellWasKicked` (Sowing Mycospawn)
+    * ``you've cast another spell this turn`` ->
+      :class:`CastAnotherSpellThisTurn` (Sage of the Skies)
+    """
+    if _DISABLED[0]:
+        return None
+    from mtg_bot.effects.generic import cube_creatures_wg as wg
+
+    if phrase == "it was kicked":
+        return wg.ThisSpellWasKicked()
+    if phrase == "you've cast another spell this turn":
+        return wg.CastAnotherSpellThisTurn()
+    return None
+
+
 def parse_wg_trigger_phrase(phrase: str):
     """``(Event, Predicate)`` for W/G bucket trigger conditions:
 
@@ -682,6 +708,10 @@ def parse_wg_trigger_phrase(phrase: str):
       composed noun phrase (Guide of Souls).
     * ``this creature deals combat damage to an opponent`` (Questing
       Beast).
+    * ``a creature you control or a creature spell you control becomes
+      the target of a spell or ability an opponent controls`` ->
+      ``BECOMES_TARGET`` (a targeted spell is the event's
+      ``target_spell`` subject; Surrak, Elusive Hunter).
     """
     if _DISABLED[0]:
         return None
@@ -701,6 +731,21 @@ def parse_wg_trigger_phrase(phrase: str):
             Event.DEALS_COMBAT_DAMAGE,
             IsSelf(subject="source") & Subject("target", IsPlayer())
             & Controlled(OPPONENT, subject="target"),
+        )
+    if phrase == _CREATURE_OR_CREATURE_SPELL_BECOMES_TARGET:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.predicates import OPPONENT
+
+        return (
+            Event.BECOMES_TARGET,
+            (
+                (Subject("target", IsCreature()) & Controlled(YOU, subject="target"))
+                | (
+                    Subject("target_spell", IsCreature())
+                    & Controlled(YOU, subject="target_spell")
+                )
+            )
+            & Controlled(OPPONENT, subject="controller"),
         )
     m = _YOU_SACRIFICE_RE.match(phrase)
     if m is not None:
@@ -734,4 +779,4 @@ def parse_wg_trigger_phrase(phrase: str):
     return None
 
 
-__all__ = ["parse_wg_effect", "parse_wg_trigger_phrase"]
+__all__ = ["parse_wg_effect", "parse_wg_intervening_if", "parse_wg_trigger_phrase"]

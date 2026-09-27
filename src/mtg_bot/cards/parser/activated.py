@@ -754,6 +754,14 @@ _INLINE_ACTIVATE_ONLY_IF_CONTROL_N_ARTIFACTS_RIDER = re.compile(
     r" Activate only if you control (\d+|one|two|three|four|five|six|seven"
     r"|eight|nine|ten) or more artifacts\.$"
 )
+# ``Activate only if you control a creature with power <N> or greater.``
+# -> ``ActivationCost.requires_own_creature_power_at_least=N`` (Fanatic
+# of Rhonas's Ferocious mana ability; the legal-actions gate the utility
+# lands' ``_PAID_EFFECT_RIDERS`` entry already uses).
+_INLINE_ACTIVATE_ONLY_IF_CONTROL_CREATURE_POWER_RIDER = re.compile(
+    r" Activate only if you control a creature with power (\d+|one|two"
+    r"|three|four|five|six|seven|eight|nine|ten) or greater\.$"
+)
 # ``<Ability Word> — {cost}: <effect>.`` — an ability word (CR 207.2c:
 # no rules meaning; Mox Opal's ``Metalcraft —``) or a flavor word in
 # front of an activation. Stripped before the cost/effect split; the
@@ -1004,6 +1012,7 @@ def _parse_activated_ability_line(
     activate_only_as_instant = False
     activate_only_during_your_turn = False
     requires_artifact_count = 0
+    requires_creature_power = 0
     # The timing / condition riders are independent of each other and of
     # the sorcery / once riders above; strip whichever trail the line
     # (at most one of each).
@@ -1037,6 +1046,18 @@ def _parse_activated_ability_line(
                 int(token) if token.isdigit() else _RIDER_CARDINALS[token]
             )
             stripped = stripped[: artifact_rider.start()]
+            continue
+        power_rider = (
+            _INLINE_ACTIVATE_ONLY_IF_CONTROL_CREATURE_POWER_RIDER.search(stripped)
+        )
+        if power_rider is not None:
+            if requires_creature_power:
+                return None
+            token = power_rider.group(1)
+            requires_creature_power = (
+                int(token) if token.isdigit() else _RIDER_CARDINALS[token]
+            )
+            stripped = stripped[: power_rider.start()]
             continue
         break
     activate_only_if = None
@@ -1115,6 +1136,10 @@ def _parse_activated_ability_line(
     if requires_artifact_count:
         cost = replace(
             cost, requires_own_artifact_count_at_least=requires_artifact_count,
+        )
+    if requires_creature_power:
+        cost = replace(
+            cost, requires_own_creature_power_at_least=requires_creature_power,
         )
     phrase = _normalize_activated_effect_phrase(m.group(2))
     effect = _parse_effect(phrase)

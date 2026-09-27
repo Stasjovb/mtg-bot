@@ -19409,3 +19409,33 @@ claimed in both pools).
 17. **Ascend** is checked with the state-based actions
     (`creature_statics_wg.apply_ascend`), i.e. before the next priority --
     equivalent for every cube card with Ascend on a permanent.
+18. **Eternalize** (Fanatic of Rhonas; `creature_wg_lines._parse_eternalize_line`,
+    `cube_creatures_wg.eternalized_printing`) is a graveyard-activated
+    ability on the R/multi/colorless bucket's `graveyard_activated_abilities`
+    substrate. The token is built from the card's printed characteristics
+    at resolution (its copiable values; nothing modifies a card in exile)
+    and keeps the Eternalize ability, which is inert on a token. Kicker on
+    a creature (Sowing Mycospawn, `_parse_kicker_line`) reuses the spell
+    kicker pipeline; its `{C}` pip is paid as generic (the engine-wide
+    `parse_mana_cost` treatment of `{C}`).
+19. **"Copy this spell"** (Sage of the Skies, `cube_creatures_wg.CopyThisSpell`)
+    of a permanent spell puts a copy whose printing already carries the
+    Token supertype on the stack (CR 707.10f makes it a token "as it
+    resolves"); the only difference is a Token supertype while the copy
+    is on the stack, which nothing in the pool reads.
+20. **"When you cast this spell" intervening-ifs** (`ThisSpellWasKicked`,
+    `CastAnotherSpellThisTurn`) are checked only as the trigger is put on
+    the stack (the engine's general intervening-if treatment); for these
+    two the resolution-time recheck can't come out differently.
+    `CastAnotherSpellThisTurn` reads `Player.spells_cast_this_turn >= 1`,
+    relying on `actions._cast_spell` stacking the spell's own cast
+    triggers before it counts the cast.
+21. **Targeted spells and "becomes the target"** (Surrak, Elusive Hunter):
+    `cube_creatures_rmc.fire_becomes_target` now also dispatches
+    `BECOMES_TARGET` for a spell targeted on the stack, with the spell as
+    the `target_spell` subject (not `target`), so the existing "a
+    permanent you control becomes the target" observers never see spells.
+    The "Activate only if you control a creature with power N or greater"
+    rider (Fanatic of Rhonas) is a `legal_actions` gate
+    (`ActivationCost.requires_own_creature_power_at_least`), like the
+    utility lands that already carry it.

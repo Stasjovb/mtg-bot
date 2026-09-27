@@ -976,5 +976,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     if rmc_printing_fields:
         printing = replace(printing, **rmc_printing_fields)
     if wg_fields:
+        if "graveyard_activated_abilities" in wg_fields:
+            wg_fields["graveyard_activated_abilities"] = (
+                tuple(printing.graveyard_activated_abilities)
+                + tuple(wg_fields["graveyard_activated_abilities"])
+            )
         printing = replace(printing, **wg_fields)
     return printing

@@ -279,7 +279,9 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.BECOMES_MONSTROUS: ("obj",),
-    Event.BECOMES_TARGET: ("target", "controller"),
+    # ``target_spell`` replaces ``target`` when a spell on the stack is
+    # targeted (``cube_creatures_rmc.fire_becomes_target``).
+    Event.BECOMES_TARGET: ("target", "controller", "target_spell"),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
     Event.WOULD_DRAW_CARDS: ("player",),

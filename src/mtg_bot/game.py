@@ -1067,7 +1067,7 @@ def is_creature_now(obj: GameObject) -> bool:
     if obj.attached_to is not None and obj.printing.reconfigure_cost is not None:
         return False
     # Bestow (CR 702.103b): an attached bestowed permanent is an Aura.
-    if obj.bestowed and obj.attached_to is not None:
+    if obj.attached_to is not None and getattr(obj, "bestowed", False):
         return False
     return (
         obj.printing.is_creature
