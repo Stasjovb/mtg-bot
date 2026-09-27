@@ -894,6 +894,10 @@ class GameObject:
     # when that trigger resolves (``ShuffleSourceIntoOwnersLibrary`` and
     # peers), so the next arrival triggers again.
     graveyard_arrival_pending: bool = False
+    # ``(turn number, count)`` of this permanent's "this ability has
+    # resolved N times this turn" ability (Scythecat Cub); ``()`` until
+    # it first resolves.
+    resolutions_this_turn: tuple = ()
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -1466,7 +1470,21 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     # / ``time_counters`` / ``charge_counters``).
     if obj.flying_counters > 0:
         kws.add("flying")
+    # Keyword counters (CR 122.1b) kept as named counters -- Arwen's
+    # indestructible / lifelink counters, Leatherhead's hexproof counter
+    # (cube W/G bucket).
+    for kind, n in obj.named_counters:
+        if n > 0 and kind in KEYWORD_COUNTER_KINDS:
+            kws.add(kind)
     return frozenset(kws)
+
+
+# CR 122.1b keyword counters (``flying`` has its own field).
+KEYWORD_COUNTER_KINDS: frozenset[str] = frozenset({
+    "first strike", "double strike", "deathtouch", "haste", "hexproof",
+    "indestructible", "lifelink", "menace", "reach", "shadow", "trample",
+    "vigilance",
+})
 
 
 def is_cant_be_blocked(state: GameState, obj: GameObject) -> bool:

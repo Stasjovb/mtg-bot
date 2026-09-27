@@ -44,6 +44,19 @@ Shapes:
 * ``deals that much damage to target <type> that player controls`` ->
   :class:`DealCombatDamageAmountToTarget` (Questing Beast; "that player"
   is the damaged opponent -- in two-player games, the opponent)
+* ``[another ]target <noun> gains <keywords> until end of turn. Put
+  <counters> on that creature and <counters> on this creature`` ->
+  :class:`GrantKeywordsUEOTAndPutCounters` (Arwen)
+* ``double the number of +1/+1 counters on each <noun>`` ->
+  :class:`DoublePlusOneCountersOnEach` (Bristly Bill)
+* ``put a +1/+1 counter on target <noun>. If this is the second time this
+  ability has resolved this turn, double ... instead`` ->
+  :class:`PutCounterDoublingOnSecondResolution` (Scythecat Cub)
+* ``you may remove a counter from this creature|pay {E}... . When you
+  do, <effect>[ that player controls]`` -> :class:`ReflexiveWhenYouDo`
+  (Leatherhead, Guide of Souls)
+* ``put <counters> on target <noun>. It becomes a <Subtype> in addition
+  to its other types`` -> :class:`PutCountersOnTargetAndAddSubtype`
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -115,6 +128,31 @@ _SHUFFLE_IT_INTO_LIBRARY_RE = re.compile(
 _THAT_MUCH_DAMAGE_TO_TARGET_RE = re.compile(
     r"^deals that much damage to target (?P<noun>[a-z]+) that player controls$"
 )
+_GAINS_UEOT_THEN_COUNTERS_RE = re.compile(
+    r"^(?P<other>another )?target (?P<noun>.+?) gains (?P<kw>.+?) until end "
+    r"of turn\. Put (?P<tc>.+?) on that creature and (?P<sc>.+?) on this "
+    r"creature$"
+)
+_DOUBLE_COUNTERS_ON_EACH_RE = re.compile(
+    r"^double the number of \+1/\+1 counters on each (?P<noun>.+)$"
+)
+_COUNTER_OR_DOUBLE_ON_SECOND_RESOLUTION_RE = re.compile(
+    r"^put a \+1/\+1 counter on target (?P<noun>.+?)\. If this is the "
+    r"second time this ability has resolved this turn, double the number "
+    r"of \+1/\+1 counters on that creature instead$"
+)
+_COUNTER_PIECE_RE = re.compile(
+    r"^(?P<n>a|an|one|two|three|four|five|\d+) "
+    r"(?P<kind>\+1/\+1|[a-z]+(?: [a-z]+)?) counters?$"
+)
+_REFLEXIVE_WHEN_YOU_DO_RE = re.compile(
+    r"^you may (?P<cost>remove a counter from (?:this creature|it|her|him)|pay "
+    r"(?P<energy>(?:\{E\})+))\. When you do, (?P<eff>.+)$"
+)
+_COUNTERS_ON_TARGET_BECOMES_SUBTYPE_RE = re.compile(
+    r"^put (?P<counters>.+?) on target (?P<noun>.+?)\. It becomes an? "
+    r"(?P<sub>[A-Z][a-z]+) in addition to its other types$"
+)
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
     r"becomes the monarch$"
@@ -151,6 +189,11 @@ EOE_PINNED_NAMES: frozenset[str] = frozenset({
     # "... you may put a permanent card from your hand onto the
     # battlefield." (Survival) -- the put-from-hand shape.
     "Kona, Rescue Beastie",
+    # "Whenever another creature you control enters, it gets +2/+0 and
+    # gains haste until end of turn." -- the generic enters trigger would
+    # claim it, but "it" (the entering creature) would bind to the
+    # source through the creature-effect normalizer.
+    "Enduring Courage",
 })
 
 _DISABLED = [False]
@@ -193,6 +236,53 @@ def _controlled(noun: str):
             words[i] = w[:-1]
             break
     return parse_target_noun_phrase(" ".join(words))
+
+
+def parse_counter_list(text: str):
+    """``a +1/+1 counter and a lifelink counter`` / ``two +1/+1 counters
+    and a flying counter`` -> ``(("+1/+1", 1), ("lifelink", 1))``.
+    Kinds are ``+1/+1`` or a keyword-counter / named-counter word;
+    ``None`` when any piece doesn't parse."""
+    from mtg_bot.game import KEYWORD_COUNTER_KINDS
+
+    out = []
+    for piece in text.split(" and "):
+        m = _COUNTER_PIECE_RE.match(piece.strip())
+        if m is None:
+            return None
+        kind = m.group("kind")
+        if kind not in KEYWORD_COUNTER_KINDS and kind not in ("+1/+1", "flying"):
+            return None
+        n = m.group("n")
+        count = 1 if n in ("a", "an") else (int(n) if n.isdigit() else _WORD_NUMBERS[n])
+        out.append((kind, count))
+    return tuple(out)
+
+
+_THAT_PLAYER_CONTROLS = " that player controls"
+
+
+def _reflexive(m):
+    """``you may <cost>. When you do, <effect>`` -> ``ReflexiveWhenYouDo``;
+    a trailing "that player controls" on the effect's target binds it to
+    the player the triggering event fixed (the damaged player)."""
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import cube_creatures_wg as wg
+
+    if m.group("energy"):
+        cost = wg.PayEnergy(amount=m.group("energy").count("{E}"))
+    else:
+        cost = wg.RemoveACounterFromSelf()
+    body = m.group("eff")
+    event_player = body.endswith(_THAT_PLAYER_CONTROLS)
+    if event_player:
+        body = body[: -len(_THAT_PLAYER_CONTROLS)]
+    effect = _parse_effect(body)
+    if effect is None:
+        return None
+    return wg.ReflexiveWhenYouDo(
+        cost=cost, effect=effect, event_player_controls=event_player,
+    )
 
 
 def _instead_if_rider(m):
@@ -278,6 +368,42 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCardFromHandOntoBattlefield(
                 card_filter=f, optional=False, tapped=bool(m.group("tapped")),
             )
+    m = _REFLEXIVE_WHEN_YOU_DO_RE.match(phrase)
+    if m is not None:
+        reflexive = _reflexive(m)
+        if reflexive is not None:
+            return reflexive
+    m = _COUNTERS_ON_TARGET_BECOMES_SUBTYPE_RE.match(phrase)
+    if m is not None:
+        counters = parse_counter_list(m.group("counters"))
+        spec = _target_spec(m.group("noun"), False)
+        if counters is not None and spec is not None:
+            return wg.PutCountersOnTargetAndAddSubtype(
+                targets=(spec,), counters=counters, subtype=m.group("sub"),
+            )
+    m = _GAINS_UEOT_THEN_COUNTERS_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _keywords
+
+        spec = _target_spec(m.group("noun"), False, bool(m.group("other")))
+        kws = _keywords(m.group("kw"))
+        tc = parse_counter_list(m.group("tc"))
+        sc = parse_counter_list(m.group("sc"))
+        if None not in (spec, kws, tc, sc):
+            return wg.GrantKeywordsUEOTAndPutCounters(
+                targets=(spec,), keywords=kws,
+                target_counters=tc, self_counters=sc,
+            )
+    m = _DOUBLE_COUNTERS_ON_EACH_RE.match(phrase)
+    if m is not None:
+        f = _controlled(m.group("noun"))
+        if f is not None:
+            return wg.DoublePlusOneCountersOnEach(permanent_filter=f)
+    m = _COUNTER_OR_DOUBLE_ON_SECOND_RESOLUTION_RE.match(phrase)
+    if m is not None:
+        spec = _target_spec(m.group("noun"), False)
+        if spec is not None:
+            return wg.PutCounterDoublingOnSecondResolution(targets=(spec,))
     m = _INSTEAD_IF_RIDER_RE.match(phrase)
     if m is not None:
         rider = _instead_if_rider(m)
@@ -339,6 +465,7 @@ _PERMANENT_PUT_INTO_GRAVEYARD_RE = re.compile(
     r"^an? (?P<noun>[a-z]+) you control is put into a graveyard from the "
     r"battlefield$"
 )
+_NOUN_ENTERS_RE = re.compile(r"^(?:(?P<another>another)|an?) (?P<noun>.+) enters$")
 _DEALS_COMBAT_DAMAGE_TO_OPPONENT = (
     "this creature deals combat damage to an opponent"
 )
@@ -384,6 +511,10 @@ def parse_wg_trigger_phrase(phrase: str):
       that type under your control (Titania, Protector of Argoth).
     * ``this creature or another <noun> enters`` -> ``ENTERS`` for the
       source or another matching permanent (Vaultborn Tyrant).
+    * ``a[n]|another <noun> enters`` -> ``ENTERS`` filtered by the
+      composed noun phrase (Guide of Souls).
+    * ``this creature deals combat damage to an opponent`` (Questing
+      Beast).
     """
     if _DISABLED[0]:
         return None
@@ -404,6 +535,19 @@ def parse_wg_trigger_phrase(phrase: str):
             IsSelf(subject="source") & Subject("target", IsPlayer())
             & Controlled(OPPONENT, subject="target"),
         )
+    m = _NOUN_ENTERS_RE.match(phrase)
+    if m is not None and not m.group("noun").startswith("or "):
+        subject = trigger_subject(m.group("noun"))
+        if subject is not None:
+            from mtg_bot.effects.predicates import IsSelf
+
+            pred, controlled = subject
+            predicate = Subject(None, pred)
+            if controlled is not None:
+                predicate = predicate & controlled
+            if m.group("another"):
+                predicate = predicate & ~IsSelf()
+            return (Event.ENTERS, predicate)
     m = _SELF_OR_ANOTHER_ENTERS_RE.match(phrase)
     if m is not None:
         subject = trigger_subject(m.group("noun"))

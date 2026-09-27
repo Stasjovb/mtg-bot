@@ -251,6 +251,29 @@ def _parse_graveyard_arrival_line(line: str, card: dict) -> WGLine | None:
     ),)})
 
 
+# ---------------------------------------------------------------------
+# Enters with named / keyword counters
+# ---------------------------------------------------------------------
+
+_ENTERS_WITH_COUNTERS_RE = re.compile(
+    r"^this creature enters with (?P<counters>.+?) on (?:it|her|him)\.$"
+)
+
+
+def _parse_enters_with_counters_line(line: str, card: dict) -> WGLine | None:
+    """``<This> enters with an indestructible counter on her.`` (Arwen,
+    Leatherhead) -> ``enters_with_named_counters``."""
+    m = _ENTERS_WITH_COUNTERS_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.creature_wg_effects import parse_counter_list
+
+    counters = parse_counter_list(m.group("counters"))
+    if counters is None:
+        return None
+    return WGLine(fields={"enters_with_named_counters": counters})
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -261,6 +284,7 @@ _RECOGNIZERS = (
     _parse_cant_be_blocked_by_line,
     _parse_your_creatures_damage_unpreventable_line,
     _parse_graveyard_arrival_line,
+    _parse_enters_with_counters_line,
 )
 
 

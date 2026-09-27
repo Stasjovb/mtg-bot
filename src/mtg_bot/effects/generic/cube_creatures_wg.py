@@ -709,3 +709,294 @@ class ShuffleSourceIntoOwnersLibrary(Effect):
 
     def describe(self) -> str:
         return "shuffle it into its owner's library"
+
+
+# ---------------------------------------------------------------------
+# Counters (Arwen, Bristly Bill, Scythecat Cub)
+# ---------------------------------------------------------------------
+
+
+def _put_counters(state, obj, counters) -> None:
+    from mtg_bot.game import add_counters
+
+    for kind, n in counters:
+        add_counters(state, obj, kind, n)
+
+
+def _target_object(state, slot, chosen):
+    from mtg_bot.effects.generic.targets_helpers import _slot_target_still_legal
+
+    if not _slot_target_still_legal(state, slot, chosen):
+        return None
+    return next((o for o in state.battlefield if o.id == chosen[1]), None)
+
+
+@dataclass(frozen=True)
+class GrantKeywordsUEOTAndPutCounters(Effect):
+    """"<Target> gains <keywords> until end of turn. Put <counters> on
+    that creature and <counters> on <this>." (Arwen, Mortal Queen.)
+    ``target_counters`` / ``self_counters`` are ``((kind, n), ...)``."""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+    target_counters: tuple = ()
+    self_counters: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.grant_keywords import GrantKeywords
+
+        source = state.resolving_source
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = (
+                _target_object(state, self.targets[0], targets[0])
+                if targets else None
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if obj is not None:
+            if self.keywords:
+                ApplyEffect(
+                    inner=GrantKeywords(keywords=self.keywords),
+                    ends_at=EndOfTurn(),
+                ).resolve(state, controller_id, (("creature", obj.id),))
+            _put_counters(state, obj, self.target_counters)
+        if source is not None and source in state.battlefield:
+            _put_counters(state, source, self.self_counters)
+
+    def describe(self) -> str:
+        return (
+            "target gains keywords until end of turn; put counters on it "
+            "and on this creature"
+        )
+
+
+@dataclass(frozen=True)
+class DoublePlusOneCountersOnEach(Effect):
+    """"Double the number of +1/+1 counters on each <permanent>."
+    (Bristly Bill.) Doubling puts that many more counters (CR 122.7)."""
+
+    permanent_filter: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import add_plus_one_counters
+
+        for o in _matching_permanents(state, controller_id, self.permanent_filter):
+            if o.plus_one_counters > 0:
+                add_plus_one_counters(state, o, o.plus_one_counters)
+
+    def describe(self) -> str:
+        return "double the number of +1/+1 counters on each matching permanent"
+
+
+def _bump_resolution_count(state, source) -> int:
+    """Count this resolution of ``source``'s ability for the current
+    turn (``GameObject.resolutions_this_turn``); returns the new count."""
+    turn, n = source.resolutions_this_turn or (state.turn_number, 0)
+    n = n + 1 if turn == state.turn_number else 1
+    source.resolutions_this_turn = (state.turn_number, n)
+    return n
+
+
+@dataclass(frozen=True)
+class PutCounterDoublingOnSecondResolution(Effect):
+    """"Put a +1/+1 counter on <target>. If this is the second time this
+    ability has resolved this turn, double the number of +1/+1 counters
+    on that creature instead." (Scythecat Cub.) The source counts its
+    ability's resolutions per turn."""
+
+    targets: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import add_plus_one_counters
+
+        source = state.resolving_source
+        n = _bump_resolution_count(state, source) if source is not None else 1
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = _target_object(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if obj is None:
+            return
+        if n == 2:
+            if obj.plus_one_counters > 0:
+                add_plus_one_counters(state, obj, obj.plus_one_counters)
+        else:
+            add_plus_one_counters(state, obj, 1)
+
+    def describe(self) -> str:
+        return (
+            "put a +1/+1 counter on target creature; on this ability's "
+            "second resolution this turn, double its counters instead"
+        )
+
+
+# ---------------------------------------------------------------------
+# Reflexive "you may <cost>. When you do, <effect>" (Leatherhead, Guide
+# of Souls)
+# ---------------------------------------------------------------------
+
+
+def _counter_kinds_on(obj) -> list:
+    from mtg_bot.game import _DEDICATED_COUNTER_FIELDS
+
+    kinds = [
+        kind for kind, attr in _DEDICATED_COUNTER_FIELDS.items()
+        if getattr(obj, attr, 0) > 0
+    ]
+    kinds += [k for k, n in obj.named_counters if n > 0]
+    return kinds
+
+
+@dataclass(frozen=True)
+class RemoveACounterFromSelf(Effect):
+    """"Remove a counter from <this>." -- any kind (the controller picks
+    the kind with ``choose_mode``). Returns whether one was removed."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import remove_counters
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return False
+        kinds = _counter_kinds_on(source)
+        if not kinds:
+            return False
+        idx = 0
+        p = state.player_by_id(controller_id)
+        if len(kinds) > 1 and p.agent is not None:
+            pick = p.agent.choose_mode(state, controller_id, kinds)
+            if isinstance(pick, int) and 0 <= pick < len(kinds):
+                idx = pick
+        remove_counters(source, kinds[idx], 1)
+        state.log.append(
+            f"P{controller_id} removes a {kinds[idx]} counter from "
+            f"{source.printing.name}"
+        )
+        return True
+
+    def describe(self) -> str:
+        return "remove a counter from this creature"
+
+
+@dataclass(frozen=True)
+class PayEnergy(Effect):
+    """"Pay {E}{E}{E}." -- returns whether the energy was paid (the
+    controller must have enough)."""
+
+    amount: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        if p.energy < self.amount:
+            return False
+        p.energy -= self.amount
+        state.log.append(f"P{controller_id} pays {self.amount} energy")
+        return True
+
+    def describe(self) -> str:
+        return f"pay {self.amount} energy"
+
+
+@dataclass(frozen=True)
+class ReflexiveWhenYouDo(Effect):
+    """"You may <cost>. When you do, <effect>." -- a reflexive triggered
+    ability (CR 603.12): if the optional ``cost`` is paid, ``effect``'s
+    targets are chosen then and it resolves. Engine shortcut: the
+    reflexive trigger resolves immediately instead of using the stack
+    (``docs/SEARCH_LIMITATIONS.md``).
+
+    ``event_player_controls``: the effect's target must be controlled by
+    the player the triggering event fixed as this ability's target
+    ("... that player controls" after "deals combat damage to a
+    player")."""
+
+    cost: Effect = None  # type: ignore[assignment]
+    effect: Effect = None  # type: ignore[assignment]
+    event_player_controls: bool = False
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.combinators import MayDo
+
+        paid = MayDo(inner=self.cost).resolve(state, controller_id, ())
+        if paid is False or paid is None:
+            return False
+        chosen: tuple = ()
+        if self.effect.target_count_range()[1] > 0:
+            legal = self.effect.legal_targets(state, controller_id)
+            if self.event_player_controls:
+                pid = next((t[1] for t in targets if t[0] == "player"), None)
+                legal = [
+                    t for t in legal
+                    if t[0] != "player" and any(
+                        o.id == t[1] and o.controller_id == pid
+                        for o in state.battlefield
+                    )
+                ]
+            from mtg_bot.keyword_rules import filter_targetable
+
+            legal = filter_targetable(
+                state, legal, state.resolving_source, controller_id,
+            )
+            if not legal:
+                state.log.append("reflexive trigger has no legal targets")
+                return True
+            p = state.player_by_id(controller_id)
+            pick = legal[0]
+            if p.agent is not None:
+                choice = p.agent.choose_target(state, controller_id, legal)
+                if choice in legal:
+                    pick = choice
+            chosen = (pick,)
+        self.effect.resolve(state, controller_id, chosen)
+        return True
+
+    def describe(self) -> str:
+        return (
+            f"you may {self.cost.describe()}; when you do, "
+            f"{self.effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
+class PutCountersOnTargetAndAddSubtype(Effect):
+    """"Put <counters> on target <creature>. It becomes a <Subtype> in
+    addition to its other types." (Guide of Souls.) The subtype is a
+    permanent layer-4 addition."""
+
+    targets: tuple = ()
+    counters: tuple = ()
+    subtype: str = ""
+
+    def resolve(self, state, controller_id, targets=()):
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = _target_object(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if obj is None:
+            return
+        _put_counters(state, obj, self.counters)
+        if self.subtype:
+            # Sourced by the creature itself so the type change outlasts
+            # the ability's source (it ends only when the creature
+            # leaves the battlefield).
+            state.add_continuous_effect(
+                source_id=obj.id,
+                layer=4, kind="add_subtype", target_id=obj.id,
+                params=(self.subtype,), expires_at=None,
+                description=f"{obj.printing.name} becomes a {self.subtype}",
+            )
+
+    def describe(self) -> str:
+        return f"put counters on target creature; it becomes a {self.subtype}"
