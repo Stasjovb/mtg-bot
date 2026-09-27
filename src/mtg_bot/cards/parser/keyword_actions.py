@@ -30,6 +30,67 @@ def _investigate_count(raw: str | None) -> int:
     return int(raw.split()[0])
 
 
+# ``[another ]target creature you control gains protection from
+# [colorless or from ]the color of your choice until end of turn``.
+_PROTECTION_OF_CHOICE = re.compile(
+    r"^(?P<another>another )?target creature you control gains protection "
+    r"from (?P<colorless>colorless or from )?the color of your choice "
+    r"until end of turn$"
+)
+# ``target creature you control gains <keywords> until end of turn``.
+_TARGET_YOU_CONTROL_GAINS = re.compile(
+    r"^target creature you control gains (?P<body>.+) until end of turn$"
+)
+# ``[other ]creatures you control gain <keywords> until end of turn`` /
+# ``creature tokens you control gain <keywords> until end of turn``.
+_GROUP_GAINS = re.compile(
+    r"^(?P<other>other )?creature(?P<tokens> tokens)?s? you control gain "
+    r"(?P<body>.+) until end of turn$"
+)
+
+
+def _parse_keyword_grant_effect(phrase: str) -> Effect | None:
+    """Keyword grants the older per-shape regexes in ``effects`` don't
+    cover: protection of a chosen color, a you-control target grant,
+    and whole-group grants."""
+    from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+    from mtg_bot.effects.generic.keyword_actions import (
+        GrantProtectionOfChoiceUEOT,
+    )
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesYouControlUntilEOT,
+        PumpTargetCreatureUntilEOT,
+    )
+
+    m = _PROTECTION_OF_CHOICE.match(phrase)
+    if m is not None:
+        return GrantProtectionOfChoiceUEOT(
+            exclude_self=m.group("another") is not None,
+            allow_colorless=m.group("colorless") is not None,
+        )
+    m = _TARGET_YOU_CONTROL_GAINS.match(phrase)
+    if m is not None:
+        kws = _parse_keyword_grant_body(m.group("body"))
+        if kws is None:
+            return None
+        return PumpTargetCreatureUntilEOT(
+            granted_keywords=kws, you_control_only=True,
+        )
+    m = _GROUP_GAINS.match(phrase)
+    if m is not None:
+        if m.group("other") and m.group("tokens"):
+            return None
+        kws = _parse_keyword_grant_body(m.group("body"))
+        if kws is None:
+            return None
+        return PumpCreaturesYouControlUntilEOT(
+            granted_keywords=kws,
+            exclude_source=m.group("other") is not None,
+            tokens_only=m.group("tokens") is not None,
+        )
+    return None
+
+
 def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     from mtg_bot.cards.tokens import TOKEN_PRINTINGS
     from mtg_bot.effects.generic.keyword_actions import (
@@ -51,4 +112,4 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
         return Explore()
     if phrase == "target creature you control explores":
         return Explore(target=True)
-    return None
+    return _parse_keyword_grant_effect(phrase)

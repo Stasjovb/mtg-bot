@@ -133,3 +133,76 @@ class TakeInitiative(Effect):
 
     def describe(self) -> str:
         return "you take the initiative"
+
+
+_COLOR_CHOICES = ("W", "U", "B", "R", "G")
+
+
+@dataclass(frozen=True)
+class GrantProtectionOfChoiceUEOT(Effect):
+    """``[another ]target creature you control gains protection from
+    [colorless or from ]the color of your choice until end of turn``
+    (Mother of Runes / Giver of Runes). The color (or colorless, when
+    ``allow_colorless``) is chosen on resolution via the agent's
+    ``choose_mana_color`` (``"C"`` = colorless)."""
+
+    you_control_only: bool = True
+    exclude_self: bool = False
+    allow_colorless: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state: "GameState", controller_id: int) -> list[Target]:
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source if self.exclude_self else None
+        source_id = source.id if source is not None else -1
+        return [
+            ("creature", o.id) for o in state.battlefield
+            if is_creature_now(o)
+            and (not self.you_control_only or o.controller_id == controller_id)
+            and o.id != source_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.keyword_rules import LETTER_TO_COLOR_WORD, protection_keyword
+
+        if not targets:
+            return
+        creature = next(
+            (o for o in state.battlefield if o.id == targets[0][1]), None,
+        )
+        if creature is None:
+            return
+        options = list(_COLOR_CHOICES) + (["C"] if self.allow_colorless else [])
+        p = state.player_by_id(controller_id)
+        choice = options[0]
+        if p.agent is not None:
+            picked = p.agent.choose_mana_color(state, controller_id, options)
+            if picked in options:
+                choice = picked
+        quality = "colorless" if choice == "C" else LETTER_TO_COLOR_WORD[choice]
+        src = state.resolving_source
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else creature.id,
+            layer=6, kind="grant_keyword", target_id=creature.id,
+            params=(protection_keyword(quality),),
+            description=f"{creature.printing.name} gains protection from {quality}",
+            expires_at="cleanup",
+        )
+        state.log.append(
+            f"{creature.printing.name} gains protection from {quality} "
+            f"until end of turn"
+        )
+
+    def describe(self) -> str:
+        who = "another target" if self.exclude_self else "target"
+        what = (
+            "colorless or from the color of your choice"
+            if self.allow_colorless else "the color of your choice"
+        )
+        return f"{who} creature you control gains protection from {what} until end of turn"

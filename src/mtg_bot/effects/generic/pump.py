@@ -724,6 +724,8 @@ class PumpCreaturesYouControlUntilEOT(Effect):
     exclude_source: bool = False
     attacking_only: bool = False
     also_untap_if_not_your_turn: bool = False
+    # "Creature tokens you control ..." (Ravenous Robots) — only tokens.
+    tokens_only: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -746,6 +748,8 @@ class PumpCreaturesYouControlUntilEOT(Effect):
                 if not obj.printing.is_creature:
                     continue
             if source is not None and obj is source:
+                continue
+            if self.tokens_only and "Token" not in obj.printing.supertypes:
                 continue
             if self.power_bonus or self.toughness_bonus:
                 src = state.resolving_source
