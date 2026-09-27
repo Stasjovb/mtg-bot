@@ -1064,10 +1064,12 @@ def is_creature_now(obj: GameObject) -> bool:
         return False
     # Reconfigure (CR 702.151b): an Equipment creature attached to a
     # creature isn't a creature.
-    if obj.attached_to is not None and obj.printing.reconfigure_cost is not None:
-        return False
     # Bestow (CR 702.103b): an attached bestowed permanent is an Aura.
-    if obj.attached_to is not None and getattr(obj, "bestowed", False):
+    # (``getattr``: lightweight test doubles carry neither slot.)
+    if getattr(obj, "attached_to", None) is not None and (
+        obj.printing.reconfigure_cost is not None
+        or getattr(obj, "bestowed", False)
+    ):
         return False
     return (
         obj.printing.is_creature
