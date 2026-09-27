@@ -93,7 +93,12 @@ def test_noun_keyword_qualifier():
 
 def test_noun_permanent_and_nonland_permanent():
     assert parse_target_noun_phrase("permanent") == IsPermanent()
-    assert parse_target_noun_phrase("nonland permanent") == ~IsLand()
+    assert parse_target_noun_phrase("nonland permanent") == (
+        IsPermanent() & ~IsLand()
+    )
+    assert parse_target_noun_phrase("permanent an opponent controls") == (
+        IsPermanent() & ControlledByOpponent()
+    )
     assert parse_target_noun_phrase("attacking creature") == (
         IsCreature() & IsAttacking()
     )

@@ -201,6 +201,11 @@ def draw_card(state: GameState, player_id: int) -> None:
     top.zone = Zone.HAND
     p.hand.append(top)
     p.cards_drawn_this_turn += 1
+    # "Whenever you draw a card" observers (CR 121.2: one event per card).
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(state, Event.DRAWS_CARD, player=p)
 
 
 def draw_n_cards(state: GameState, player_id: int, n: int) -> int:

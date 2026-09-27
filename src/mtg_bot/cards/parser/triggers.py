@@ -1543,7 +1543,11 @@ def _parse_predicate_trigger_phrase(
     """
     raw = _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
     if raw is None:
-        return None
+        # Parameterized fallbacks ("you draw a card", "you cast a[n]
+        # <filter> spell") -- see ``effects_ext.parse_ext_trigger_phrase``.
+        from mtg_bot.cards.parser.effects_ext import parse_ext_trigger_phrase
+
+        return parse_ext_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 

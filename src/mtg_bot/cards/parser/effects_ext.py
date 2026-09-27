@@ -55,6 +55,16 @@ import re
 
 from mtg_bot.effects.base import Effect
 from mtg_bot.effects.generic.cube_walkers import (
+    AtBeginningOfNextEndStep,
+    CreateEmblemWithAbilities,
+    IsColorless,
+    PutTargetIntoOwnersLibraryNthFromTop,
+    UntapUpToNPermanents,
+    ExileTargetPlayersLibraryThenShuffleHandIn,
+    GainControlOfTargetPermanently,
+    LookAtTopCardOfTargetPlayersLibraryMayBottom,
+    PutCardsFromHandOnTopOfLibrary,
+    TargetPlayerDrawsThenDiscards,
     HasPrintedCardType,
     IsPermanent,
     HasManaValueAtLeast,
@@ -193,22 +203,20 @@ def parse_target_noun_phrase(phrase: str) -> ObjectPredicate | None:
         # isn't modeled, so decline rather than over-apply it.
         return None
     type_preds = [_TYPE_NOUNS[t] for t in types]
-    result: ObjectPredicate | None
+    result: ObjectPredicate
     if any(p is None for p in type_preds):
-        # "permanent" anywhere in the union admits every permanent.
-        result = None
+        # "permanent" anywhere in the union admits every permanent --
+        # and ONLY permanents: players carry no printing, so negated
+        # adjectives ("nonland") or controller clauses can't let a
+        # player through.
+        result = IsPermanent()
     else:
         result = type_preds[0]
         for p in type_preds[1:]:
             result = result | p
     for extra in [*adjectives, controller, qualifier]:
-        if extra is None:
-            continue
-        result = extra if result is None else result & extra
-    if result is None:
-        # Bare "permanent": anything on the battlefield (players are
-        # rejected because they carry no printing).
-        result = IsPermanent()
+        if extra is not None:
+            result = result & extra
     return result
 
 
@@ -293,6 +301,39 @@ _SAC_CREATURE_DAMAGE_BY_POWER = re.compile(
     r"where X is that creature's power\. If the sacrificed creature was "
     r"an? (?P<sub>[A-Z][A-Za-z]*), draw X cards$"
 )
+
+# Jace, the Mind Sculptor's +2 -- only card in the pool with the
+# look-at-any-player's-top-card-may-bottom shape; literal until a second
+# printing varies the card count ("top N cards") or the destination.
+_LOOK_TOP_OF_TARGET_PLAYER_MAY_BOTTOM = re.compile(
+    r"^look at the top card of target player's library\. [Yy]ou may put "
+    r"that card on the bottom of that player's library$"
+)
+_PUT_CARDS_FROM_HAND_ON_TOP = re.compile(
+    rf"^put (?P<n>{_COUNT}) cards? from your hand on top of your library "
+    r"in any order$"
+)
+# Jace, the Mind Sculptor's -12 -- only card in the pool with this
+# library-exile + hand-shuffle shape; literal until a second printing.
+_EXILE_TARGET_LIBRARY_SHUFFLE_HAND_IN = re.compile(
+    r"^exile all cards from target player's library, then that player "
+    r"shuffles their hand into their library$"
+)
+_TARGET_PLAYER_DRAWS_THEN_DISCARDS = re.compile(
+    rf"^target player draws (?P<d>{_COUNT}) cards?, then discards "
+    rf"(?P<x>{_COUNT}) cards?$"
+)
+_GAIN_CONTROL_OF_TARGET = re.compile(r"^gain control of target (?P<noun>.+)$")
+_AT_BEGINNING_OF_NEXT_END_STEP = re.compile(
+    r"^at the beginning of the next end step, (?P<eff>.+)$"
+)
+_UNTAP_UP_TO_N = re.compile(rf"^untap up to (?P<n>{_COUNT}) (?P<noun>\w+)s$")
+_ORDINALS = {"second": 2, "third": 3, "fourth": 4, "fifth": 5}
+_PUT_TARGET_INTO_LIBRARY_NTH_FROM_TOP = re.compile(
+    r"^put target (?P<noun>.+) into its owner's library "
+    r"(?P<nth>second|third|fourth|fifth) from the top$"
+)
+_YOU_GET_AN_EMBLEM_WITH = re.compile(r'^you get an emblem with "(?P<body>.+)"$')
 
 # Closed condition phrasebook for the ``if <condition>, <effect>`` shape.
 _CONDITION_PHRASES = {
@@ -458,6 +499,120 @@ def parse_ext_effect(phrase: str) -> Effect | None:
         return SacrificeCreatureThenDamageEqualToItsPower(
             draw_if_subtype=m.group("sub"),
         )
+
+    if _LOOK_TOP_OF_TARGET_PLAYER_MAY_BOTTOM.match(phrase):
+        return LookAtTopCardOfTargetPlayersLibraryMayBottom()
+
+    m = _PUT_CARDS_FROM_HAND_ON_TOP.match(phrase)
+    if m is not None:
+        return PutCardsFromHandOnTopOfLibrary(amount=_count(m.group("n")))
+
+    if _EXILE_TARGET_LIBRARY_SHUFFLE_HAND_IN.match(phrase):
+        return ExileTargetPlayersLibraryThenShuffleHandIn()
+
+    m = _TARGET_PLAYER_DRAWS_THEN_DISCARDS.match(phrase)
+    if m is not None:
+        return TargetPlayerDrawsThenDiscards(
+            draw=_count(m.group("d")), discard=_count(m.group("x")),
+        )
+
+    m = _GAIN_CONTROL_OF_TARGET.match(phrase)
+    if m is not None:
+        spec = _target_spec(m.group("noun"), up_to_one=False)
+        if spec is not None:
+            return GainControlOfTargetPermanently(targets=(spec,))
+
+    m = _AT_BEGINNING_OF_NEXT_END_STEP.match(phrase)
+    if m is not None:
+        inner = _parse_effect(m.group("eff"))
+        # A delayed trigger's own targets would be chosen when it
+        # triggers; the scheduling pipeline can't do that, so only
+        # untargeted delayed effects are claimed.
+        if inner is not None and inner.target_count_range()[1] == 0:
+            return AtBeginningOfNextEndStep(inner=inner)
+
+    m = _UNTAP_UP_TO_N.match(phrase)
+    if m is not None:
+        pred = parse_target_noun_phrase(m.group("noun"))
+        if pred is not None:
+            return UntapUpToNPermanents(
+                n=_count(m.group("n")), permanent_filter=pred,
+            )
+
+    m = _PUT_TARGET_INTO_LIBRARY_NTH_FROM_TOP.match(phrase)
+    if m is not None:
+        spec = _target_spec(m.group("noun"), up_to_one=False)
+        if spec is not None:
+            return PutTargetIntoOwnersLibraryNthFromTop(
+                position=_ORDINALS[m.group("nth")], targets=(spec,),
+            )
+
+    m = _YOU_GET_AN_EMBLEM_WITH.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.triggers import (
+            _parse_triggered_ability_line,
+        )
+
+        body = m.group("body")
+        parsed = _parse_triggered_ability_line(body)
+        if parsed is not None:
+            arms = parsed if isinstance(parsed, tuple) else (parsed,)
+            return CreateEmblemWithAbilities(
+                name=f'emblem: "{body}"', triggered_abilities=arms,
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Trigger-condition phrases (fallback for triggers._parse_predicate_
+# trigger_phrase)
+# ---------------------------------------------------------------------------
+
+_YOU_CAST_A_SPELL = re.compile(r"^you cast an? (?:(?P<filter>.+) )?spell$")
+
+
+def _spell_filter(text: str) -> ObjectPredicate | None:
+    """Printed spell descriptor -> predicate over the spell object:
+    ``noncreature``, ``colorless``, ``creature``, ``instant or
+    sorcery`` ..."""
+    if text == "colorless":
+        return IsColorless()
+    pieces = text.split(" or ")
+    preds: list[ObjectPredicate] = []
+    for piece in pieces:
+        negated = piece.startswith("non")
+        noun = piece[3:] if negated else piece
+        if noun not in _CARD_TYPE_WORDS:
+            return None
+        pred = HasPrintedCardType(_CARD_TYPE_WORDS[noun])
+        preds.append(~pred if negated else pred)
+    out = preds[0]
+    for p in preds[1:]:
+        out = out | p
+    return out
+
+
+def parse_ext_trigger_phrase(phrase: str):
+    """``(Event, Predicate)`` for trigger conditions outside the
+    literal predicate-trigger phrasebook, or ``None``:
+
+    * ``you draw a card`` -> ``DRAWS_CARD`` for the source's controller
+    * ``you cast a spell`` / ``you cast a[n] <filter> spell`` ->
+      ``IS_CAST`` for spells the source's controller casts, filtered by
+      :func:`_spell_filter`
+    """
+    from mtg_bot.effects.predicates import YOU, Controlled, Event, Subject
+
+    if phrase == "you draw a card":
+        return (Event.DRAWS_CARD, Controlled(YOU))
+    m = _YOU_CAST_A_SPELL.match(phrase)
+    if m is not None:
+        yours = Controlled(YOU, subject="controller")
+        if m.group("filter") is None:
+            return (Event.IS_CAST, yours)
+        pred = _spell_filter(m.group("filter"))
+        if pred is not None:
+            return (Event.IS_CAST, Subject("spell", pred) & yours)
     return None
 
 

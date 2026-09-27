@@ -205,6 +205,10 @@ class Event(str, Enum):
     # sets ``payload["win_game"]`` and the draw site declares the win
     # instead of recording the empty-library loss.
     WOULD_DRAW_FROM_EMPTY_LIBRARY = "would_draw_from_empty_library"
+    # Subject ``(player,)``. Fired by ``turn.draw_card`` once per card
+    # actually drawn (post-replacement). "Whenever you draw a card" --
+    # Teferi, Hero of Dominaria's emblem.
+    DRAWS_CARD = "draws_card"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -237,6 +241,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.WOULD_PLACE_COUNTER: ("obj", "kind"),
     Event.WOULD_GO_TO_GRAVEYARD: ("card",),
     Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
+    Event.DRAWS_CARD: ("player",),
 }
 
 

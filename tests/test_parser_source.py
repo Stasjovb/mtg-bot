@@ -446,8 +446,11 @@ def test_parse_triggered_ability_line_accepts_whenever():
     # No "Whenever this creature enters" trigger phrase, but the
     # line-level structural match should still be tried — failure
     # comes from the condition parser, not the line regex.
+    # ("you draw a card" is a recognized condition since the cube
+    # planeswalker bucket added the DRAWS_CARD event, so the probe uses a
+    # condition that is still unknown.)
     assert _parse_triggered_ability_line(
-        "Whenever you draw a card, it deals 1 damage to any target."
+        "Whenever you frobnicate a widget, it deals 1 damage to any target."
     ) is None  # condition phrase unknown
 
 

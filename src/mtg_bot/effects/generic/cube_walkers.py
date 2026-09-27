@@ -65,6 +65,20 @@ class HasManaValueAtMost(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsColorless(ObjectPredicate):
+    """The object has no color (CR 105.2c) -- read through
+    ``effective_colors`` so color-setting effects are honored. Players
+    are rejected."""
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_colors
+
+        return not effective_colors(state, obj)
+
+
+@dataclass(frozen=True)
 class IsPermanent(ObjectPredicate):
     """"target permanent" -- any battlefield object (players, which
     carry no printing, are rejected)."""
@@ -530,7 +544,467 @@ class SacrificeCreatureThenDamageEqualToItsPower(Effect):
         )
 
 
+# ---------------------------------------------------------------------------
+# Library manipulation of a target player (library_lookat / draw_mill)
+# ---------------------------------------------------------------------------
+
+
+def _living_player_targets(state: "GameState") -> list[Target]:
+    return [("player", p.id) for p in state.players if not p.has_lost]
+
+
+def _target_player(state: "GameState", targets):
+    """The still-legal target player from ``targets`` (``None`` when
+    absent / not a player / has left the game)."""
+    if not targets:
+        return None
+    kind, pid = targets[0]
+    if kind != "player":
+        return None
+    p = state.player_by_id(pid)
+    return None if p.has_lost else p
+
+
+@dataclass(frozen=True)
+class LookAtTopCardOfTargetPlayersLibraryMayBottom(Effect):
+    """"Look at the top card of target player's library. You may put
+    that card on the bottom of that player's library." (Jace, the Mind
+    Sculptor's +2).
+
+    The controller looks (the card is not revealed) and decides via
+    ``choose_yes_no``."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return _living_player_targets(state)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        target = _target_player(state, targets)
+        if target is None or not target.library:
+            return
+        me = state.player_by_id(controller_id)
+        bottom = me.agent is None or me.agent.choose_yes_no(
+            state, controller_id,
+            f"Put the top card of P{target.id}'s library on the bottom?",
+        )
+        if bottom:
+            target.library.append(target.library.pop(0))
+            state.log.append(
+                f"P{controller_id} puts the top card of P{target.id}'s "
+                f"library on the bottom"
+            )
+        else:
+            state.log.append(
+                f"P{controller_id} leaves the top card of P{target.id}'s "
+                f"library on top"
+            )
+
+    def describe(self) -> str:
+        return (
+            "look at the top card of target player's library; you may "
+            "put it on the bottom"
+        )
+
+
+@dataclass(frozen=True)
+class PutCardsFromHandOnTopOfLibrary(Effect):
+    """"Put N cards from your hand on top of your library in any order."
+    (Jace, the Mind Sculptor's 0, after "Draw three cards, then").
+
+    The controller picks ``amount`` cards one at a time via
+    ``choose_card_from_hand`` (mandatory: a decline / unknown id takes
+    the first card); each pick goes on top of the previous one, so the
+    last card chosen ends up on top -- the pick order IS the chosen
+    order. With fewer cards in hand, all of them go back."""
+
+    amount: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        n = min(self.amount, len(p.hand))
+        for _ in range(n):
+            ids = [c.id for c in p.hand]
+            pick = None
+            if p.agent is not None:
+                pick = p.agent.choose_card_from_hand(state, controller_id, ids)
+            card = next((c for c in p.hand if c.id == pick), p.hand[0])
+            p.hand.remove(card)
+            card.zone = Zone.LIBRARY
+            p.library.insert(0, card)
+        state.log.append(
+            f"P{controller_id} puts {n} card(s) from hand on top of "
+            f"their library"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put {self.amount} cards from your hand on top of your "
+            f"library in any order"
+        )
+
+
+@dataclass(frozen=True)
+class ExileTargetPlayersLibraryThenShuffleHandIn(Effect):
+    """"Exile all cards from target player's library, then that player
+    shuffles their hand into their library." (Jace, the Mind Sculptor's
+    -12)."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return _living_player_targets(state)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        target = _target_player(state, targets)
+        if target is None:
+            return
+        exiled = list(target.library)
+        target.library.clear()
+        for c in exiled:
+            c.zone = Zone.EXILE
+            target.exile.append(c)
+        hand = list(target.hand)
+        target.hand.clear()
+        for c in hand:
+            c.zone = Zone.LIBRARY
+            target.library.append(c)
+        state.rng.shuffle(target.library)
+        state.log.append(
+            f"P{target.id} exiles {len(exiled)} library card(s) and "
+            f"shuffles {len(hand)} hand card(s) into their library"
+        )
+
+    def describe(self) -> str:
+        return (
+            "exile all cards from target player's library, then that "
+            "player shuffles their hand into their library"
+        )
+
+
+@dataclass(frozen=True)
+class TargetPlayerDrawsThenDiscards(Effect):
+    """"Target player draws N cards, then discards M cards." (Dack
+    Fayden's +1). The target player chooses the discards (their agent's
+    ``choose_discard``); discard observers fire as for any discard."""
+
+    draw: int = 2
+    discard: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return _living_player_targets(state)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.discard import DiscardSelf
+        from mtg_bot.turn import draw_n_cards
+
+        target = _target_player(state, targets)
+        if target is None:
+            return
+        draw_n_cards(state, target.id, self.draw)
+        DiscardSelf(amount=self.discard).resolve(state, target.id)
+
+    def describe(self) -> str:
+        return (
+            f"target player draws {self.draw} cards, then discards "
+            f"{self.discard} cards"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Control change (control cluster)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GainControlOfTargetPermanently(Effect):
+    """"Gain control of target <permanent filter>." with no duration --
+    the control change lasts indefinitely (CR 611.2a). Generalizes
+    ``GainControlOfTargetSliverPermanently`` to any composed target
+    filter (Dack Fayden's -2: "target artifact").
+
+    Sets ``controller_id`` directly (the same permanent-steal precedent
+    as the Sliver variant) and marks the permanent summoning-sick for
+    its new controller (CR 302.6)."""
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        chosen = targets[0]
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], chosen)
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(
+                _fizzle_message(state, chosen, action="control change")
+            )
+            return
+        obj = next(o for o in state.battlefield if o.id == chosen[1])
+        if obj.controller_id == controller_id:
+            return
+        obj.controller_id = controller_id
+        obj.summoning_sick = True
+        state._invalidate_layered_cache()
+        state.log.append(
+            f"P{controller_id} gains control of {obj.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return f"gain control of {_describe_targets(self.targets)}"
+
+
+# ---------------------------------------------------------------------------
+# Delayed triggers / untap (delayed_actions / tap cluster)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AtBeginningOfNextEndStep(Effect):
+    """"At the beginning of the next end step, <effect>." -- schedules
+    a delayed triggered ability (CR 603.7) that fires ``inner`` at the
+    beginning of the current turn's end step (Teferi, Hero of
+    Dominaria's +1 rider).
+
+    Rides the engine's ``state.delayed_triggers`` queue (see
+    ``turn.run_delayed_end_step_triggers``), which fires entries on the
+    scheduling controller's own end step. Every producer in the pool
+    schedules at sorcery timing (a loyalty ability), so "the next end
+    step" is always this turn's; an instant-speed producer scheduling
+    during another player's turn would need the queue to key entries on
+    the upcoming end step rather than the controller's turn (documented
+    in docs/SEARCH_LIMITATIONS.md)."""
+
+    inner: Effect
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> bool:
+        source = state.resolving_source
+        if source is None:
+            return False
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number,
+            "controller_id": controller_id,
+            "source_id": source.id,
+            "effect": self.inner,
+        })
+        state.log.append(
+            f"P{controller_id} schedules '{self.inner.describe()}' for "
+            f"the beginning of the next end step"
+        )
+        return True
+
+    def describe(self) -> str:
+        return (
+            f"at the beginning of the next end step, "
+            f"{self.inner.describe()}"
+        )
+
+
+@dataclass(frozen=True)
+class UntapUpToNPermanents(Effect):
+    """"Untap up to N <permanents>." (untargeted; Teferi, Hero of
+    Dominaria's "untap up to two lands"). The controller picks, one at
+    a time, among the matching TAPPED permanents via
+    ``choose_permanent_to_tap`` (``None`` stops early); untapping an
+    already-untapped permanent would be a no-op, so only tapped ones
+    are offered."""
+
+    n: int = 2
+    permanent_filter: ObjectPredicate | None = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        untapped = 0
+        for _ in range(self.n):
+            options = [
+                o for o in state.battlefield
+                if o.tapped and (
+                    self.permanent_filter is None
+                    or self.permanent_filter.test(o, state)
+                )
+            ]
+            if not options:
+                break
+            pick = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_permanent_to_tap(
+                    state, controller_id, [o.id for o in options],
+                )
+            obj = next((o for o in options if o.id == pick), None)
+            if obj is None:
+                break
+            obj.tapped = False
+            untapped += 1
+            state.log.append(f"P{controller_id} untaps {obj.printing.name}")
+        if not untapped:
+            state.log.append(f"P{controller_id} untaps nothing")
+
+    def describe(self) -> str:
+        return f"untap up to {self.n} matching permanents"
+
+
+@dataclass(frozen=True)
+class PutTargetIntoOwnersLibraryNthFromTop(Effect):
+    """"Put target <filter> into its owner's library Nth from the top."
+    (Teferi, Hero of Dominaria's -3: "third from the top").
+
+    Leaves the battlefield like a bounce (combat / damage / counters /
+    temp bonuses cleared, CR 400.7 new object); a token ceases to exist
+    (CR 704.5d / 111.8). With fewer than N-1 cards in the library the
+    card goes to the bottom (CR 401.4 -- as deep as it can)."""
+
+    position: int = 3
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        chosen = targets[0]
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], chosen)
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, chosen, action="tuck"))
+            return
+        obj = next(o for o in state.battlefield if o.id == chosen[1])
+        state.battlefield.remove(obj)
+        state.remove_continuous_effects_from_source(obj.id, only_static=True)
+        for attr, value in (
+            ("damage", 0), ("marked_lethal", False),
+            ("damaged_this_turn", False), ("tapped", False),
+            ("attacking", False), ("blocking", None), ("blocked_by", []),
+            ("plus_one_counters", 0), ("charge_counters", 0),
+            ("stun_counters", 0), ("loyalty_counters", 0),
+            ("temp_power_bonus", 0), ("temp_toughness_bonus", 0),
+            ("attached_to", None),
+        ):
+            setattr(obj, attr, value)
+        obj.controller_id = obj.owner_id
+        if not obj.printing.is_land:
+            state.permanent_left_battlefield_this_turn = True
+        if obj.printing.is_token:
+            state.log.append(
+                f"{obj.printing.name} token ceases to exist (tucked)"
+            )
+            return
+        owner = state.player_by_id(obj.owner_id)
+        obj.zone = Zone.LIBRARY
+        idx = min(self.position - 1, len(owner.library))
+        owner.library.insert(idx, obj)
+        state.log.append(
+            f"{obj.printing.name} is put into P{owner.id}'s library "
+            f"(position {idx + 1} from the top)"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put {_describe_targets(self.targets)} into its owner's "
+            f"library {self.position} from the top"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Emblems (emblem cluster)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CreateEmblemWithAbilities(Effect):
+    """"You get an emblem with '<ability>'." for an emblem whose quoted
+    ability parses through the unified grammar (CR 114).
+
+    The generic sibling of ``CreateEmblem`` (whose string ``emblem_kind``
+    is the cross-engine bridge for Tezzeret, Cruel Captain's emblem):
+    the emblem's triggered abilities are carried on the effect itself
+    and stamped onto a ``make_emblem`` printing at resolution, so any
+    parseable quoted trigger claims without a per-card emblem kind. The
+    emblem joins ``state.emblems`` (command zone), whose triggers
+    ``dispatch_event`` already scans."""
+
+    name: str = "emblem"
+    triggered_abilities: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards.base import make_emblem
+        from mtg_bot.game import Zone
+
+        printing = make_emblem(
+            name=self.name, triggered_abilities=self.triggered_abilities,
+        )
+        emblem = state.new_object(
+            printing, owner_id=controller_id, zone=Zone.COMMAND,
+        )
+        emblem.etb_timestamp = state.next_timestamp
+        state.next_timestamp += 1
+        state.emblems.append(emblem)
+        state.log.append(f"P{controller_id} gets an emblem ({self.name})")
+
+    def describe(self) -> str:
+        return f"you get an emblem ({self.name})"
+
+
 __all__ = [
+    "AtBeginningOfNextEndStep",
+    "CreateEmblemWithAbilities",
+    "IsColorless",
+    "PutTargetIntoOwnersLibraryNthFromTop",
+    "UntapUpToNPermanents",
+    "ExileTargetPlayersLibraryThenShuffleHandIn",
+    "GainControlOfTargetPermanently",
+    "LookAtTopCardOfTargetPlayersLibraryMayBottom",
+    "PutCardsFromHandOnTopOfLibrary",
+    "TargetPlayerDrawsThenDiscards",
     "HasManaValueAtLeast",
     "HasPrintedCardType",
     "IsPermanent",

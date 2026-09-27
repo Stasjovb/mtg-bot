@@ -142,7 +142,7 @@ def test_bucket_planeswalker_is_claimed(name):
 
 
 @pytest.mark.parametrize("name", [
-    "Jace, the Mind Sculptor",
+    "Dack Fayden",
     "Oko, Thief of Crowns",
     "Karn, Scion of Urza",
     "Chandra, Torch of Defiance",
@@ -715,3 +715,170 @@ def test_cards_drawn_counter_tracks_draws():
     _library(s, 0, 3)
     DrawCards(amount=2).resolve(s, 0)
     assert s.player_by_id(0).cards_drawn_this_turn == 2
+
+
+# ---------------------------------------------------------------------------
+# Jace, the Mind Sculptor
+# ---------------------------------------------------------------------------
+
+
+def test_jtms_plus_two_may_bottom_target_players_top_card():
+    s = _state()
+    jace = _put(s, _P["Jace, the Mind Sculptor"], 0)
+    lib = _library(s, 1, 3)
+    top = lib[0]
+    s.player_by_id(0).agent.target_pick = ("player", 1)
+    _activate(s, 0, jace, +2)
+    assert s.player_by_id(1).library[-1] is top
+    assert jace.loyalty_counters == 5
+
+
+def test_jtms_plus_two_may_keep_on_top():
+    s = _state()
+    jace = _put(s, _P["Jace, the Mind Sculptor"], 0)
+    lib = _library(s, 0, 3)
+    top = lib[0]
+    agent = s.player_by_id(0).agent
+    agent.target_pick = ("player", 0)
+    agent.yes = False
+    _activate(s, 0, jace, +2)
+    assert s.player_by_id(0).library[0] is top
+
+
+def test_jtms_zero_is_brainstorm():
+    s = _state()
+    jace = _put(s, _P["Jace, the Mind Sculptor"], 0)
+    _library(s, 0, 5)
+    _activate(s, 0, jace, 0)
+    p = s.player_by_id(0)
+    assert len(p.hand) == 1
+    assert len(p.library) == 4
+    assert jace.loyalty_counters == 3
+
+
+def test_jtms_minus_one_unsummons():
+    s = _state()
+    jace = _put(s, _P["Jace, the Mind Sculptor"], 0)
+    bear = _put(s, _creature(), 1)
+    _activate(s, 0, jace, -1)
+    assert bear in s.player_by_id(1).hand
+
+
+def test_jtms_ultimate_exiles_library_and_shuffles_hand_in():
+    s = _state()
+    jace = _put(s, _P["Jace, the Mind Sculptor"], 0)
+    jace.loyalty_counters = 12
+    _library(s, 1, 6)
+    opp = s.player_by_id(1)
+    for _ in range(2):
+        c = s.new_object(BASIC_LANDS["Island"], 1, Zone.HAND)
+        opp.hand.append(c)
+    s.player_by_id(0).agent.target_pick = ("player", 1)
+    _activate(s, 0, jace, -12)
+    assert len(opp.exile) == 6
+    assert opp.hand == []
+    assert len(opp.library) == 2
+    assert all(c.zone == Zone.LIBRARY for c in opp.library)
+
+
+# ---------------------------------------------------------------------------
+# Teferi, Hero of Dominaria
+# ---------------------------------------------------------------------------
+
+
+def test_teferi_hod_plus_one_draws_and_untaps_two_lands_at_end_step():
+    from mtg_bot.turn import run_delayed_end_step_triggers
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    lands = [_put(s, BASIC_LANDS["Island"], 0) for _ in range(3)]
+    for land in lands:
+        land.tapped = True
+    _library(s, 0, 2)
+    _activate(s, 0, teferi, +1)
+    assert len(s.player_by_id(0).hand) == 1
+    assert all(land.tapped for land in lands)  # not until the end step
+    s.step = Step.END
+    run_delayed_end_step_triggers(s)
+    while s.stack:
+        resolve_top_of_stack(s)
+    assert sum(1 for land in lands if not land.tapped) == 2
+
+
+def test_teferi_hod_delayed_untap_fires_even_if_teferi_left():
+    from mtg_bot.turn import run_delayed_end_step_triggers
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    land = _put(s, BASIC_LANDS["Island"], 0)
+    land.tapped = True
+    _library(s, 0, 1)
+    _activate(s, 0, teferi, +1)
+    teferi.loyalty_counters = 0
+    state_based_actions(s)
+    assert teferi not in s.battlefield
+    run_delayed_end_step_triggers(s)
+    while s.stack:
+        resolve_top_of_stack(s)
+    assert not land.tapped
+
+
+def test_teferi_hod_minus_three_tucks_third_from_top():
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    bear = _put(s, _creature(), 1)
+    land = _put(s, BASIC_LANDS["Forest"], 1)
+    lib = _library(s, 1, 4)
+    s.player_by_id(0).agent.target_pick = ("creature", bear.id)
+    _activate(s, 0, teferi, -3)
+    offered = s.player_by_id(0).agent.picks_seen[-1]
+    assert not any(t[1] == land.id for t in offered)
+    assert bear not in s.battlefield
+    assert s.player_by_id(1).library[2] is bear
+    assert bear.zone == Zone.LIBRARY
+    assert len(lib) == 5
+
+
+def test_teferi_hod_minus_three_short_library_goes_to_bottom():
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    bear = _put(s, _creature(), 1)
+    _library(s, 1, 1)
+    s.player_by_id(0).agent.target_pick = ("creature", bear.id)
+    _activate(s, 0, teferi, -3)
+    assert s.player_by_id(1).library[-1] is bear
+
+
+def test_teferi_hod_minus_three_token_ceases_to_exist():
+    from mtg_bot.cards.base import make_token_creature
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    tok = _put(s, make_token_creature("Germ", 0, 0), 1)
+    tok.plus_one_counters = 1
+    s.player_by_id(0).agent.target_pick = ("creature", tok.id)
+    _activate(s, 0, teferi, -3)
+    assert tok not in s.battlefield
+    assert tok not in s.player_by_id(1).library
+
+
+def test_teferi_hod_emblem_exiles_on_each_draw():
+    s = _state()
+    teferi = _put(s, _P["Teferi, Hero of Dominaria"], 0)
+    teferi.loyalty_counters = 8
+    bear = _put(s, _creature(), 1)
+    wall = _put(s, _creature("Wall"), 1)
+    _activate(s, 0, teferi, -8)
+    assert len(s.emblems) == 1
+    _library(s, 0, 3)
+    # Two draws -> two triggers, each targeting when put on the stack
+    # (both pick the first legal target; the second then fizzles).
+    draw_n_cards(s, 0, 2)
+    assert len(s.stack) == 2
+    _drain(s)
+    assert bear in s.player_by_id(1).exile
+    assert wall in s.battlefield
+    draw_card(s, 0)
+    _drain(s)
+    assert wall in s.player_by_id(1).exile
+    # The opponent's draws don't trigger it.
+    _library(s, 1, 2)
+    draw_card(s, 1)
+    assert not s.stack
