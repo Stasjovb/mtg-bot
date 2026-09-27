@@ -160,6 +160,70 @@ def pay_emerge_sacrifice(
 
 
 # ---------------------------------------------------------------------
+# Miracle (CR 702.94)
+# ---------------------------------------------------------------------
+
+_MIRACLE_ABILITY_INDEX = 2101
+
+
+def offer_miracle(state: "GameState", player, card: "GameObject") -> None:
+    """``card`` was just drawn as ``player``'s first card this turn: they
+    may reveal it (``choose_yes_no``); if they do, the miracle trigger
+    goes on the stack."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        MayCastSourceFromHandForMiracleCost,
+    )
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import reveal_to_all
+
+    if player.agent is not None and not player.agent.choose_yes_no(
+        state, player.id, f"Reveal {card.printing.name} for its miracle?",
+    ):
+        return
+    reveal_to_all(state, card)
+    state.log.append(f"P{player.id} reveals {card.printing.name} (miracle)")
+    push_triggered_ability(
+        state,
+        source=card,
+        ability=TriggeredAbility(
+            event=Event.DRAWS_CARD, effect=MayCastSourceFromHandForMiracleCost(),
+        ),
+        ability_index=_MIRACLE_ABILITY_INDEX,
+        controller_id=player.id,
+        label="miracle",
+    )
+
+
+def cast_from_hand_for(
+    state: "GameState", player_id: int, card: "GameObject", cost: ManaCost,
+) -> bool:
+    """Cast ``card`` from its owner's hand for the alternative mana cost
+    ``cost`` while an effect resolves (Miracle). Returns False when it
+    isn't in hand, can't be cast, or ``cost`` isn't payable."""
+    from mtg_bot.actions import _cast_spell, apply_cost_reductions, can_pay_cost
+    from mtg_bot.legal import _additional_costs_payable, _targets_are_satisfiable
+
+    p = state.player_by_id(player_id)
+    if card not in p.hand or card.printing.is_land:
+        return False
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        return False
+    if not can_pay_cost(
+        state, player_id,
+        apply_cost_reductions(card.printing, state, player_id, cost),
+        sac_for_mana=True,
+    ):
+        return False
+    _cast_spell(state, player_id, card.id, alt_mana_cost=cost)
+    return True
+
+
+# ---------------------------------------------------------------------
 # Spell origin for "spells you cast from anywhere other than your hand"
 # ---------------------------------------------------------------------
 

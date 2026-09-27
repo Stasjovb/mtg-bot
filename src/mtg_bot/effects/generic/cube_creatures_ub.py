@@ -655,6 +655,33 @@ class TargetOpponentExilesThreeMayCastOneFree(Effect):
         )
 
 
+@dataclass(frozen=True)
+class MayCastSourceFromHandForMiracleCost(Effect):
+    """The miracle trigger (CR 702.94a): "When you reveal it this way,
+    you may cast it by paying [miracle cost] rather than its mana
+    cost." The source is the revealed card in hand."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import cast_from_hand_for
+
+        card = state.resolving_source
+        if card is None or card.printing.miracle_cost is None:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Cast {card.printing.name} for {card.printing.miracle_cost_str}?",
+        ):
+            return
+        cast_from_hand_for(state, controller_id, card, card.printing.miracle_cost)
+
+    def describe(self) -> str:
+        return "you may cast this card for its miracle cost"
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -1122,6 +1149,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "MayCastSourceFromHandForMiracleCost",
     "TargetOpponentExilesThreeMayCastOneFree",
     "ExileUntilNonlandThenCounterOrMayCastIt",
     "LootThenMayCastDiscardedFreeIfCounters",

@@ -1407,6 +1407,11 @@ class CardPrinting:
     emerge_cost: ManaCost | None = None
     emerge_cost_str: str = ""
     emerge_sacrifice_type: str = "Creature"
+    # "Miracle {cost}" (CR 702.94): if it's the first card its owner drew
+    # this turn, they may reveal it and cast it for this cost when the
+    # miracle trigger resolves.
+    miracle_cost: ManaCost | None = None
+    miracle_cost_str: str = ""
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

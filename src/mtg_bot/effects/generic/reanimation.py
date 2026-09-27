@@ -108,6 +108,9 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
     # "If that creature would leave the battlefield, exile it instead of
     # putting it anywhere else."
     exile_if_it_would_leave: bool = False
+    # "return up to one target ... card" (Metamorphosis Fanatic): the
+    # target is optional.
+    up_to_one: bool = False
 
     def __post_init__(self) -> None:
         if self.source not in REANIMATE_SOURCES:
@@ -116,7 +119,12 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
             raise ValueError(f"unknown haste rider {self.haste!r}")
 
     def requires_target(self) -> bool:
-        return self.source != "top_of_your_graveyard"
+        return self.source != "top_of_your_graveyard" and not self.up_to_one
+
+    def target_count_range(self) -> tuple[int, int]:
+        if self.source == "top_of_your_graveyard":
+            return (0, 0)
+        return (0 if self.up_to_one else 1, 1)
 
     def _candidates(self, state: "GameState", controller_id: int) -> list:
         if self.source == "target_any_graveyard":
@@ -126,7 +134,7 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
         return [c for c in pool if self.card_filter.matches(c.printing)]
 
     def legal_targets(self, state, controller_id):
-        if not self.requires_target():
+        if self.source == "top_of_your_graveyard":
             return []
         return [("graveyard_card", c.id) for c in self._candidates(state, controller_id)]
 

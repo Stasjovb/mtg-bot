@@ -772,7 +772,25 @@ def _parse_emerge_line(line: str) -> UBLine | None:
     })
 
 
+_MIRACLE = re.compile(r"^Miracle (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def _parse_miracle_line(line: str) -> UBLine | None:
+    """``Miracle {cost}`` (CR 702.94)."""
+    from mtg_bot.cards.base import parse_mana_cost
+
+    m = _MIRACLE.match(line)
+    if m is None:
+        return None
+    try:
+        cost = parse_mana_cost(m.group("cost"))
+    except ValueError:
+        return None
+    return UBLine(fields={"miracle_cost": cost, "miracle_cost_str": m.group("cost")})
+
+
 _LINE_PARSERS = (
+    _parse_miracle_line,
     _parse_emerge_line,
     _parse_void_replacement_line,
     _parse_ninjutsu_line,

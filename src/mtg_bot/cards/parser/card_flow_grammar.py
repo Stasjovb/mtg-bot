@@ -266,6 +266,9 @@ _REANIMATE_RE = re.compile(
     r"on it)?|return target (?P<your_desc>.+? card(?: with mana value \d+ "
     r"or less)?) "
     r"from your graveyard to the battlefield|return the top "
+    r"on it)?|return (?P<upto>up to one )?target (?P<your_desc>.+? card) "
+    r"from your graveyard to the battlefield(?: with an? "
+    r"(?P<your_counter>[a-z]+) counter on it)?|return the top "
     r"(?P<top_desc>.+? card) of your graveyard to the battlefield)"
     r"(?:\. (?P<riders>.+))?$"
 )
@@ -323,6 +326,10 @@ def _parse_reanimate(m: re.Match) -> Effect | None:
     kwargs: dict = {}
     if m.group("counter") is not None:
         kwargs["with_counter"] = m.group("counter")
+    if m.group("your_counter") is not None:
+        kwargs["with_counter"] = m.group("your_counter")
+    if m.group("upto") is not None:
+        kwargs["up_to_one"] = True
     extra: list = []
     riders = m.group("riders")
     if riders is not None:

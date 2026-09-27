@@ -1533,6 +1533,8 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     # Keyword counters (CR 122.1b) kept as named counters -- Arwen's
     # indestructible / lifelink counters, Leatherhead's hexproof counter
     # (cube W/G bucket).
+    # Keyword counters (CR 122.1b) kept as named counters ("with a
+    # lifelink counter on it", Metamorphosis Fanatic).
     for kind, n in obj.named_counters:
         if n > 0 and kind in KEYWORD_COUNTER_KINDS:
             kws.add(kind)
@@ -1544,6 +1546,11 @@ KEYWORD_COUNTER_KINDS: frozenset[str] = frozenset({
     "first strike", "double strike", "deathtouch", "haste", "hexproof",
     "indestructible", "lifelink", "menace", "reach", "shadow", "trample",
     "vigilance",
+# CR 122.1b keyword counters: a permanent with one has that keyword.
+KEYWORD_COUNTER_KINDS = frozenset({
+    "flying", "first strike", "double strike", "deathtouch", "decayed",
+    "exalted", "haste", "hexproof", "indestructible", "lifelink",
+    "menace", "reach", "shadow", "trample", "vigilance",
 })
 
 

@@ -2015,6 +2015,7 @@ def _cast_spell(
     graveyard_permission: "str | None" = None,
     use_bestow: bool = False,
     use_emerge: bool = False,
+    alt_mana_cost: "ManaCost | None" = None,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -2087,6 +2088,9 @@ def _cast_spell(
             from mtg_bot.creature_casting_ub import pay_emerge_sacrifice
 
             cost = pay_emerge_sacrifice(state, player_id, card)
+        elif alt_mana_cost is not None:
+            # An alternative cost chosen by an effect (Miracle).
+            cost = alt_mana_cost
         elif use_impending:
             cost = card.printing.impending_cost
         elif use_dash:

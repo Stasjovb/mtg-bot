@@ -237,6 +237,13 @@ def draw_card(state: GameState, player_id: int) -> None:
         from mtg_bot.effects.predicates import Event
 
         dispatch_event(state, Event.DRAWS_CARD, player=p)
+        if (
+            top.printing.miracle_cost is not None
+            and p.cards_drawn_this_turn == 1
+        ):
+            from mtg_bot.creature_casting_ub import offer_miracle
+
+            offer_miracle(state, p, top)
     finally:
         p.drawing_first_in_draw_step = False
 
