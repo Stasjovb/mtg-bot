@@ -938,6 +938,17 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     # "As this creature enters, choose a color." only means something
     # together with the line that uses the chosen color (Painter's
     # Servant): claim both or neither.
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        assemble_die_roll_trigger,
+    )
+
+    die_trigger = assemble_die_roll_trigger(rmc_printing_fields)
+    if die_trigger == "invalid":
+        return None
+    if die_trigger is not None:
+        rmc_printing_fields["triggered_abilities"] = (
+            tuple(printing.triggered_abilities) + (die_trigger,)
+        )
     chooses_color = rmc_printing_fields.pop("_chooses_color", False)
     if chooses_color != rmc_printing_fields.get(
         "paints_all_objects_chosen_color_at_etb", False,

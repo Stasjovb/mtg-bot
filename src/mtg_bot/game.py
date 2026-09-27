@@ -865,6 +865,12 @@ class GameObject:
     # This permanent resolved from a (non-copy) spell — "if you cast it"
     # on its ETB trigger (Lutri). Reset when it leaves the battlefield.
     entered_via_cast: bool = False
+    # The zone this permanent came from as it last entered the
+    # battlefield (``Zone.value``: "stack", "graveyard", "exile", ...).
+    entered_from_zone: str = ""
+    # Number of times the spell this permanent resolved from was kicked
+    # (multikicker; Batroc the Leaper).
+    kick_count: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -2747,6 +2753,8 @@ class StackItem:
     # ``event_subject_id(subjects)``; mirrored to
     # ``state.resolving_event_subject_id`` during resolution. -1 = none.
     event_subject_id: int = -1
+    # Multikicker: how many times the kicker cost was paid.
+    kick_count: int = 0
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
@@ -2860,6 +2868,10 @@ class Player:
     # from anywhere" trigger as of the last graveyard-watch sweep; a new
     # id is a fresh arrival (``cube_creatures_rmc.sweep_graveyard_watch``).
     graveyard_arrival_watch: tuple = ()
+    # Ids of this player's library + graveyard cards at the last
+    # library/graveyard-exile watch sweep (only kept while a watcher such
+    # as Laelia is on the battlefield).
+    library_graveyard_watch: frozenset = frozenset()
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this

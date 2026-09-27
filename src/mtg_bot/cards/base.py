@@ -1299,6 +1299,17 @@ class CardPrinting:
     # the card has a "... put into a graveyard from anywhere"
     # replacement or trigger (Blightsteel Colossus, Emrakul).
     watched_in_graveyard: bool = False
+    # "Whenever one or more cards are put into exile from your library
+    # and/or your graveyard" watcher (Laelia) — fast-path flag for
+    # ``cube_creatures_rmc.sweep_library_graveyard_exile_watch``.
+    watches_library_graveyard_exile: bool = False
+    # Multikicker (CR 702.33c): the kicker cost (``kicker_cost``) may be
+    # paid any number of times; the count rides ``StackItem.kick_count``
+    # onto ``GameObject.kick_count``.
+    multikicker: bool = False
+    # "<This> enters with a +1/+1 counter on it for each time it was
+    # kicked." (Batroc the Leaper)
+    enters_with_counter_per_kick: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -449,6 +449,7 @@ def move_off_battlefield(
     obj.dashed = False
     obj.monstrous = False
     obj.entered_via_cast = False
+    obj.kick_count = 0
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
@@ -1478,9 +1479,14 @@ def state_based_actions(state: GameState) -> bool:
         any_changed = True
     # "... would be put into a graveyard from anywhere" permanents that
     # reached a graveyard by discard / mill (cube creatures bucket).
-    from mtg_bot.effects.generic.cube_creatures_rmc import sweep_graveyard_watch
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        sweep_graveyard_watch,
+        sweep_library_graveyard_exile_watch,
+    )
 
     if sweep_graveyard_watch(state):
+        any_changed = True
+    if sweep_library_graveyard_exile_watch(state):
         any_changed = True
     return any_changed
 

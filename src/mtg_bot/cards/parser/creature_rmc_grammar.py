@@ -1240,6 +1240,9 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
                 printing_fields={"watched_in_graveyard": True},
             )
         return None
+    batch7 = _parse_batch7_line(line, name)
+    if batch7 is not None:
+        return batch7
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
     m = _ENTERS_AND_WHENEVER.match(_substitute_self_name(line, name))
@@ -1317,6 +1320,157 @@ _LURRUS_GRAVEYARD_CAST = re.compile(
     r"^Once during each of your turns, you may cast a permanent spell with "
     r"mana value (?P<mv>\d+) or less from your graveyard\.$"
 )
+
+
+# --- Multikicker (Batroc the Leaper) --------------------------------------
+_MULTIKICKER_LINE = re.compile(r"^Multikicker (?P<cost>(?:\{[^}]+\})+)$")
+_PRONOUN = r"(?:it|he|she|they)"
+_POSSESSIVE = r"(?:its|his|her|their)"
+_ENTERS_WITH_COUNTER_PER_KICK = re.compile(
+    r"^this creature enters with a \+1/\+1 counter on (?:it|him|her|them) "
+    rf"for each time {_PRONOUN} (?:was|were) kicked\.$"
+)
+_ETB_POWER_DAMAGE_PER_KICK = re.compile(
+    rf"^When this creature enters, {_PRONOUN} deals? damage equal to "
+    rf"{_POSSESSIVE} power to each of up to X targets, where X is the number "
+    rf"of times {_PRONOUN} (?:was|were) kicked\.$"
+)
+# --- "Name Sticker" Goblin's die-roll ETB --------------------------------
+_ENTERS_NOT_FROM_ROLL_DIE = re.compile(
+    r"^When this creature enters from anywhere other than a graveyard or "
+    r"exile, if it's on the battlefield and you control (?P<n>\w+) or fewer "
+    r"creatures named (?P<named>.+), roll a (?P<sides>\d+)-sided die\.$"
+)
+_DIE_TABLE_ROW = re.compile(r"^(?P<lo>\d+)(?:-(?P<hi>\d+))? \| (?P<eff>.+)\.$")
+# --- Laelia's library / graveyard exile watcher ---------------------------
+_CARDS_EXILED_FROM_LIBRARY_OR_GRAVEYARD = re.compile(
+    r"^Whenever one or more cards are put into exile from your library "
+    r"and/or your graveyard, (?P<eff>.+)\.$"
+)
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _self_referenced(line: str, name: str) -> str:
+    """``_substitute_self_name`` plus the bare first-word short name
+    ("Batroc" for "Batroc the Leaper"), lower-casing a sentence-initial
+    "This creature"."""
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    out = _substitute_self_name(line, name) if name else line
+    short = name.split(",")[0].split(" ")[0] if name else ""
+    if short and len(short) > 2:
+        out = re.sub(rf"\b{re.escape(short)}\b", "this creature", out)
+    if out.startswith("This creature "):
+        out = "this creature " + out[len("This creature "):]
+    return out
+
+
+def _parse_batch7_line(line: str, name: str) -> RmcLine | None:
+    """Multikicker + per-kick lines, die-roll tables and the
+    library/graveyard exile watcher."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import cube_creatures_rmc as rmc
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    m = _MULTIKICKER_LINE.match(line)
+    if m is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        return RmcLine(printing_fields={
+            "kicker_cost": parse_mana_cost(m.group("cost")),
+            "kicker_cost_str": m.group("cost"),
+            "multikicker": True,
+        })
+    own = _self_referenced(line, name)
+    if _ENTERS_WITH_COUNTER_PER_KICK.match(own):
+        return RmcLine(printing_fields={"enters_with_counter_per_kick": True})
+    if _ETB_POWER_DAMAGE_PER_KICK.match(own):
+        return RmcLine(triggers=(TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=rmc.DealPowerDamageToEachOfUpToKickedTargets(),
+        ),))
+    m = _ENTERS_NOT_FROM_ROLL_DIE.match(_substitute_name_for_line(line, name))
+    if m is not None:
+        n = _NUMBER_WORDS.get(m.group("n"), None)
+        if n is None and m.group("n").isdigit():
+            n = int(m.group("n"))
+        if n is None:
+            return None
+        named = m.group("named").strip()
+        # The printing's own name is swapped for "this creature" by the
+        # self-name substitution; the gate names the card itself.
+        if named == "this creature":
+            named = name
+        return RmcLine(printing_fields={"_die_roll": (
+            int(m.group("sides")), n, named,
+        )})
+    m = _DIE_TABLE_ROW.match(line)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        eff = m.group("eff")
+        effect = _parse_effect(eff[:1].lower() + eff[1:])
+        if effect is None or effect.target_count_range()[1] > 0:
+            return None
+        lo = int(m.group("lo"))
+        hi = int(m.group("hi") or lo)
+        return RmcLine(printing_fields={f"_die_row_{lo:03d}": (lo, hi, effect)})
+    m = _CARDS_EXILED_FROM_LIBRARY_OR_GRAVEYARD.match(own)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None:
+            return None
+        return RmcLine(
+            triggers=(TriggeredAbility(
+                event=Event.DIES,
+                predicate=rmc.CardsExiledFromLibraryOrGraveyard(),
+                effect=effect,
+            ),),
+            printing_fields={"watches_library_graveyard_exile": True},
+        )
+    return None
+
+
+def assemble_die_roll_trigger(fields: dict):
+    """Builder epilogue: pop the ``_die_roll`` header and its
+    ``_die_row_NNN`` rows out of ``fields`` and return the assembled
+    ``TriggeredAbility`` — ``None`` when there is no die roll, the string
+    ``"invalid"`` when the header / rows don't form a complete table
+    covering 1..N exactly."""
+    rows = sorted(
+        fields.pop(k) for k in [k for k in fields if k.startswith("_die_row_")]
+    )
+    header = fields.pop("_die_roll", None)
+    if header is None and not rows:
+        return None
+    if header is None or not rows:
+        return "invalid"
+    sides, at_most, named = header
+    expected = 1
+    for lo, hi, _eff in rows:
+        if lo != expected or hi < lo:
+            return "invalid"
+        expected = hi + 1
+    if expected != sides + 1:
+        return "invalid"
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import cube_creatures_rmc as rmc
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    return TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf() & rmc.EnteredNotFromZones()
+        & rmc.ControlsAtMostNamed(name=named, at_most=at_most),
+        effect=rmc.RollDieTable(
+            sides=sides, table=tuple(rows),
+            gate=rmc.NameStickerGate(name=named, at_most=at_most),
+        ),
+    )
 
 
 def _substitute_name_for_line(line: str, name: str) -> str:

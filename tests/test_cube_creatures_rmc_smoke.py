@@ -32,6 +32,7 @@ BUCKET_CARDS = [
     "Gut, True Soul Zealot", "Zirda, the Dawnwaker", "Lurrus of the Dream-Den",
     "Cogwork Librarian", "Leovold, Emissary of Trest", "Nadu, Winged Wisdom",
     "Lutri, the Spellchaser", "Goblin Welder", "Inti, Seneschal of the Sun",
+    "Batroc the Leaper", "\"Name Sticker\" Goblin", "Laelia, the Blade Reforged",
 ]
 BASICS = ["Mountain", "Forest", "Plains", "Island", "Swamp"]
 

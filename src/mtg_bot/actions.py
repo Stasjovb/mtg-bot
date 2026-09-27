@@ -2256,6 +2256,18 @@ def _cast_spell(
             f"P{player_id} kicks {card.printing.name} for "
             f"{card.printing.kicker_cost_str}"
         )
+        kick_count = 1
+        if card.printing.multikicker:
+            # Multikicker (CR 702.33c): pay the kicker cost any number of
+            # additional times (the agent picks how many via choose_x).
+            from mtg_bot.effects.generic.cube_creatures_rmc import (
+                choose_extra_kicks,
+            )
+
+            cost, extra = choose_extra_kicks(state, player_id, card, cost)
+            kick_count += extra
+    else:
+        kick_count = 0
     # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
     # one mana of its color before the rest of the payment.
     if cost.phyrexian:
@@ -2587,6 +2599,7 @@ def _cast_spell(
             alt_cost=(
                 "dash" if use_dash else "escape" if use_escape else ""
             ),
+            kick_count=kick_count,
         )
     )
     if targets:
@@ -4490,6 +4503,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             card.dashed = item.alt_cost == "dash"
             card.escaped = item.alt_cost == "escape"
             card.entered_via_cast = not card.is_spell_copy
+            card.kick_count = item.kick_count
             put_into_battlefield(state, card, item.controller_id)
             if card.cast_without_sorcery_timing:
                 # Necromancy: cast when a sorcery couldn't have been ->
@@ -4730,6 +4744,7 @@ def put_into_battlefield(
     if obj.printing.enters_only_by_discarding_land:
         if not _discard_land_to_enter(state, obj, controller_id):
             return
+    obj.entered_from_zone = obj.zone.value if obj.zone is not None else ""
     obj.zone = Zone.BATTLEFIELD
     obj.controller_id = controller_id
     # A permanent entering the battlefield is a new object (CR 400.7):
@@ -4874,6 +4889,9 @@ def put_into_battlefield(
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's
     # state sees the counters already in place.
+    if obj.printing.enters_with_counter_per_kick and obj.kick_count > 0:
+        from mtg_bot.game import add_plus_one_counters
+        add_plus_one_counters(state, obj, obj.kick_count)
     mode = obj.printing.enters_with_counters_from_x
     if mode == "x":
         from mtg_bot.game import add_plus_one_counters
@@ -5066,6 +5084,10 @@ def push_triggered_ability(
     else:
         targets = ()
         min_t, max_t = effect.target_count_range()
+        dynamic = getattr(effect, "dynamic_target_count_range", None)
+        if dynamic is not None:
+            # "each of up to X targets, where X is ..." (Batroc).
+            min_t, max_t = dynamic(state, source)
         if max_t > 0:
             state.resolving_source = source
             state.resolving_combat_damage_amount = combat_damage_amount

@@ -2328,3 +2328,222 @@ def _contains_identity(pred, needle) -> bool:
         if isinstance(p, And):
             stack.extend((p.left, p.right))
     return False
+
+
+# ---------------------------------------------------------------------------
+# Batch 7: library/graveyard -> exile watcher (Laelia), die rolls
+# ("Name Sticker" Goblin), multikicker (Batroc the Leaper)
+# ---------------------------------------------------------------------------
+
+
+class CardsExiledFromLibraryOrGraveyard(_TriggerPredicate):
+    """Marker predicate of "Whenever one or more cards are put into exile
+    from your library and/or your graveyard" (Laelia). Never matches a
+    regular dispatch; ``sweep_library_graveyard_exile_watch`` stacks the
+    ability once per state-based-action pass that sees one or more of
+    the controller's library / graveyard cards newly in exile."""
+
+    def matches(self, state, subjects, source):
+        return False
+
+    def __eq__(self, other):
+        return isinstance(other, CardsExiledFromLibraryOrGraveyard)
+
+    def __hash__(self):
+        return hash("CardsExiledFromLibraryOrGraveyard")
+
+    def __repr__(self):
+        return "CardsExiledFromLibraryOrGraveyard()"
+
+
+def sweep_library_graveyard_exile_watch(state: "GameState") -> bool:
+    """For every permanent with a library/graveyard-exile watcher
+    (``CardPrinting.watches_library_graveyard_exile``): if some card that
+    was in its controller's library or graveyard at the previous sweep
+    is now in exile, stack the watcher's trigger (one per sweep = one per
+    batch). ``Player.library_graveyard_watch`` holds the snapshot and is
+    cleared while no watcher is on the battlefield."""
+    from mtg_bot.actions import push_triggered_ability
+
+    watchers = [o for o in state.battlefield if o.printing.watches_library_graveyard_exile]
+    fired = False
+    for p in state.players:
+        mine = [o for o in watchers if o.controller_id == p.id]
+        if not mine:
+            if p.library_graveyard_watch:
+                p.library_graveyard_watch = frozenset()
+            continue
+        prev = p.library_graveyard_watch
+        current = frozenset(c.id for c in p.library) | frozenset(
+            c.id for c in p.graveyard
+        )
+        moved = bool(prev) and any(c.id in prev for c in p.exile)
+        if current != prev:
+            p.library_graveyard_watch = current
+        if not moved:
+            continue
+        for watcher in mine:
+            for idx, ability in enumerate(watcher.printing.triggered_abilities):
+                if isinstance(ability.predicate, CardsExiledFromLibraryOrGraveyard):
+                    fired = push_triggered_ability(
+                        state, source=watcher, ability=ability,
+                        ability_index=idx, controller_id=p.id,
+                        label="cards exiled",
+                    ) or fired
+    return fired
+
+
+@dataclass(frozen=True)
+class RollDieTable(Effect):
+    """"Roll a d<N>." followed by a result table ``((lo, hi, effect),
+    ...)`` ("1-6 | Add {R}{R}{R}{R}.") — the matching row's effect
+    resolves. ``gate`` (a ``Condition``) is rechecked on resolution
+    ("if it's on the battlefield and you control 9 or fewer ...")."""
+
+    sides: int = 20
+    table: tuple = ()
+    gate: object = None
+
+    def resolve(self, state, controller_id, targets=()):
+        if self.gate is not None and not self.gate.matches(state, controller_id):
+            return
+        roll = state.rng.randint(1, self.sides)
+        state.log.append(f"P{controller_id} rolls a d{self.sides}: {roll}")
+        for lo, hi, effect in self.table:
+            if lo <= roll <= hi:
+                effect.resolve(state, controller_id, targets)
+                return
+
+    def describe(self) -> str:
+        return f"roll a d{self.sides}"
+
+
+@dataclass(frozen=True)
+class NameStickerGate(_Condition):
+    """"if it's on the battlefield and you control N or fewer creatures
+    named <name>" — rechecked on resolution against the resolving
+    source."""
+
+    name: str = ""
+    at_most: int = 9
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        from mtg_bot.game import is_creature_now
+
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return False
+        n = sum(
+            1 for o in state.battlefield
+            if o.controller_id == viewer_id and is_creature_now(o)
+            and o.printing.name == self.name
+        )
+        return n <= self.at_most
+
+
+@dataclass(frozen=True)
+class EnteredNotFromZones(_TriggerPredicate):
+    """"enters from anywhere other than a graveyard or exile" — the
+    entering source's previous zone (``GameObject.entered_from_zone``)
+    isn't one of ``zones``."""
+
+    zones: tuple = ("graveyard", "exile")
+
+    def matches(self, state, subjects, source):
+        return getattr(source, "entered_from_zone", "") not in self.zones
+
+
+@dataclass(frozen=True)
+class ControlsAtMostNamed(_TriggerPredicate):
+    """Trigger-time half of the "you control N or fewer creatures named
+    <name>" gate."""
+
+    name: str = ""
+    at_most: int = 9
+
+    def matches(self, state, subjects, source):
+        from mtg_bot.game import is_creature_now
+
+        n = sum(
+            1 for o in state.battlefield
+            if o.controller_id == source.controller_id and is_creature_now(o)
+            and o.printing.name == self.name
+        )
+        return n <= self.at_most
+
+
+@dataclass(frozen=True)
+class DealPowerDamageToEachOfUpToKickedTargets(Effect):
+    """Batroc the Leaper: "<it> deals damage equal to <its> power to each
+    of up to X targets, where X is the number of times <it> was kicked."
+    The target cap is read off the source (``GameObject.kick_count``) by
+    ``dynamic_target_count_range`` when the trigger is put on the
+    stack."""
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        object.__setattr__(self, "targets", (TargetSpec(
+            any_target_filter(), count_min=0, count_max=1,
+        ),))
+
+    def dynamic_target_count_range(self, state, source) -> tuple[int, int]:
+        return (0, max(0, getattr(source, "kick_count", 0)))
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.game import effective_power
+
+        src = state.resolving_source
+        me = next(
+            (o for o in state.battlefield if src is not None and o.id == src.id),
+            None,
+        )
+        power = effective_power(state, me) if me is not None else (
+            (src.printing.power or 0) + src.plus_one_counters if src is not None else 0
+        )
+        if power <= 0:
+            return
+        spec = self.targets[0]
+        from mtg_bot.effects.generic.targets_helpers import _slot_target_still_legal
+
+        for chosen in dict.fromkeys(targets):
+            if _slot_target_still_legal(state, spec, chosen):
+                _apply_damage(state, chosen, power)
+
+    def describe(self) -> str:
+        return "deals damage equal to its power to each of up to X targets"
+
+
+def choose_extra_kicks(state: "GameState", player_id: int, card, cost):
+    """Multikicker (CR 702.33c): ``cost`` already includes one kicker
+    payment; ask the caster (``choose_x`` over the affordable range, capped
+    at 10) how many additional times to pay it. Returns ``(new_cost,
+    extra)``."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.alt_casting import cost_plus
+
+    kc = card.printing.kicker_cost
+    upper = 0
+    total = cost
+    while upper < 10:
+        nxt = cost_plus(total, kc)
+        if not can_pay_cost(state, player_id, nxt, sac_for_mana=True):
+            break
+        total = nxt
+        upper += 1
+    extra = 0
+    agent = state.player_by_id(player_id).agent
+    if agent is not None and upper > 0:
+        extra = max(0, min(upper, agent.choose_x(
+            state, player_id, f"{card.printing.name} (multikicker)", upper,
+        )))
+    for _ in range(extra):
+        cost = cost_plus(cost, kc)
+    if extra:
+        state.log.append(
+            f"P{player_id} kicks {card.printing.name} {extra} more time(s)"
+        )
+    return cost, extra
