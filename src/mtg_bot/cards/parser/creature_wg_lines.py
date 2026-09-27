@@ -167,12 +167,100 @@ def _parse_static_flag_line(line: str, card: dict) -> WGLine | None:
     return WGLine(fields={flag: True})
 
 
+# ---------------------------------------------------------------------
+# Cost increases / combat statics / graveyard-arrival triggers
+# ---------------------------------------------------------------------
+
+_SPELLS_COST_MORE_RE = re.compile(
+    r"^(?P<desc>[A-Z][a-z]+(?:, [a-z]+)*) spells cost \{(?P<n>\d+)\} more to "
+    r"cast\.$"
+)
+
+
+def _parse_spells_cost_more_line(line: str, card: dict) -> WGLine | None:
+    """``<Filter> spells cost {N} more to cast.`` (Thalia) ->
+    ``spell_cost_increases`` (every player's matching spells)."""
+    m = _SPELLS_COST_MORE_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.card_flow_grammar import _parse_descriptor_body
+
+    f = _parse_descriptor_body(m.group("desc").lower())
+    if f is None:
+        return None
+    return WGLine(fields={"spell_cost_increases": ((f, int(m.group("n"))),)})
+
+
+_CANT_BE_BLOCKED_BY_RE = re.compile(
+    r"^this creature can't be blocked by (?P<noun>creatures with .+)\.$"
+)
+
+
+def _parse_cant_be_blocked_by_line(line: str, card: dict) -> WGLine | None:
+    """``<This> can't be blocked by creatures with <qualifier>.``
+    (Questing Beast) -> ``cant_be_blocked_by``."""
+    m = _CANT_BE_BLOCKED_BY_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.creature_wg_effects import trigger_subject
+
+    subject = trigger_subject(m.group("noun"))
+    if subject is None or subject[1] is not None:
+        return None
+    return WGLine(fields={"cant_be_blocked_by": subject[0]})
+
+
+_YOUR_CREATURES_DAMAGE_UNPREVENTABLE = (
+    "Combat damage that would be dealt by creatures you control can't be "
+    "prevented."
+)
+
+
+def _parse_your_creatures_damage_unpreventable_line(
+    line: str, card: dict,
+) -> WGLine | None:
+    if line != _YOUR_CREATURES_DAMAGE_UNPREVENTABLE:
+        return None
+    return WGLine(fields={
+        "your_creatures_combat_damage_cant_be_prevented": True,
+    })
+
+
+_PUT_INTO_GRAVEYARD_FROM_ANYWHERE_RE = re.compile(
+    r"^When this creature is put into a graveyard from anywhere, "
+    r"(?P<eff>.+)\.$"
+)
+
+
+def _parse_graveyard_arrival_line(line: str, card: dict) -> WGLine | None:
+    """``When <this> is put into a graveyard from anywhere, <effect>.``
+    (Worldspine Wurm) -> ``graveyard_arrival_triggers`` (the triggers
+    fire from the graveyard, not the battlefield dispatch)."""
+    m = _PUT_INTO_GRAVEYARD_FROM_ANYWHERE_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always, Event
+
+    effect = _parse_effect_phrase(m.group("eff"))
+    if effect is None or not getattr(effect, "rearms_graveyard_arrival", False):
+        return None
+    return WGLine(fields={"graveyard_arrival_triggers": (TriggeredAbility(
+        event=Event.DIES, predicate=Always(), effect=effect,
+    ),)})
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
     _parse_mobilize_line,
     _parse_static_flag_line,
     _parse_one_or_more_enter_once_per_turn,
+    _parse_spells_cost_more_line,
+    _parse_cant_be_blocked_by_line,
+    _parse_your_creatures_damage_unpreventable_line,
+    _parse_graveyard_arrival_line,
 )
 
 
@@ -222,6 +310,36 @@ def link_exile_abilities(
                 )
 
 
+# ---------------------------------------------------------------------
+# Hand-activated abilities (``source._split_hand_abilities``)
+# ---------------------------------------------------------------------
+
+_EXILE_FROM_HAND_ABILITY_RE = re.compile(
+    r"^Exile this card from your hand: (?P<eff>.+)\.$"
+)
+
+
+def parse_wg_hand_ability_line(line: str):
+    """``Exile this card from your hand: <effect>.`` (Elvish Spirit Guide)
+    -> a hand-activated ``ActivatedAbility`` paying ``exile_self`` (a
+    mana effect makes it a mana ability, CR 605)."""
+    m = _EXILE_FROM_HAND_ABILITY_RE.match(line.strip())
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.activated import _is_mana_ability_effect
+    from mtg_bot.cards.parser.effects import _parse_effect_phrase
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+
+    effect = _parse_effect_phrase(m.group("eff")[0].lower() + m.group("eff")[1:])
+    if effect is None:
+        return None
+    return ActivatedAbility(
+        cost=ActivationCost(exile_self=True),
+        effect=effect,
+        is_mana_ability=_is_mana_ability_effect(effect),
+    )
+
+
 def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
     """The :class:`WGLine` for ``line`` (one reminder-stripped oracle line
     of ``card``), or ``None`` when no W/G bucket recognizer claims it."""
@@ -229,6 +347,9 @@ def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
 
     if wg_grammar_disabled():
         return None
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    line = _substitute_self_name(line, card["name"])
     for recognizer in _RECOGNIZERS:
         out = recognizer(line, card)
         if out is not None:

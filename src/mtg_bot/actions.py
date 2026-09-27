@@ -601,6 +601,16 @@ def apply_cost_reductions(
     generic.
     """
     cost = base_cost
+    # "<Filter> spells cost {N} more to cast." (Thalia; cube W/G
+    # bucket): increases apply before reductions (CR 601.2f).
+    from mtg_bot.creature_statics_wg import spell_cost_increase
+
+    increase = spell_cost_increase(state, printing)
+    if increase:
+        cost = ManaCost(
+            generic=cost.generic + increase, colored=cost.colored,
+            x_pips=cost.x_pips, hybrid=cost.hybrid, phyrexian=cost.phyrexian,
+        )
     cost = _apply_external_cost_reductions(state, caster_id, cost)
     for rule in printing.cost_reductions:
         reduction = _evaluate_cost_reduction(

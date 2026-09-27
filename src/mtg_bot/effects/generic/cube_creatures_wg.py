@@ -637,3 +637,75 @@ class UntapAllMatching(Effect):
 
     def describe(self) -> str:
         return "untap all matching permanents"
+
+
+# ---------------------------------------------------------------------
+# Questing Beast / Worldspine Wurm
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DealCombatDamageAmountToTarget(Effect):
+    """"<It> deals that much damage to target <X>." -- the amount is the
+    triggering combat damage (``state.resolving_combat_damage_amount``);
+    Questing Beast's planeswalker redirect."""
+
+    targets: tuple = ()
+
+    def targets_from_event(self, state, subjects):
+        """The trigger's own target (a planeswalker), not the damaged
+        player the combat-damage dispatch would pre-wire: returning
+        ``None`` lets ``push_triggered_ability`` prompt for it."""
+        return None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        amount = state.resolving_combat_damage_amount
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            for slot, chosen in zip(self.targets, targets):
+                if amount > 0 and _slot_target_still_legal(state, slot, chosen):
+                    _apply_damage(state, chosen, amount)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return "deals that much damage to the target"
+
+
+@dataclass(frozen=True)
+class ShuffleSourceIntoOwnersLibrary(Effect):
+    """"Shuffle it into its owner's library." -- the resolving source
+    card, if it's still in its owner's graveyard (Worldspine Wurm's
+    put-into-a-graveyard trigger). Re-arms the card's graveyard-arrival
+    trigger."""
+
+    # The only effects a "put into a graveyard from anywhere" trigger
+    # may carry: each clears ``graveyard_arrival_pending``.
+    rearms_graveyard_arrival = True
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, shuffle_library
+
+        card = state.resolving_source
+        if card is None:
+            return
+        card.graveyard_arrival_pending = False
+        owner = state.player_by_id(card.owner_id)
+        if card not in owner.graveyard:
+            return
+        owner.graveyard.remove(card)
+        card.zone = Zone.LIBRARY
+        owner.library.append(card)
+        shuffle_library(state, owner.id)
+        state.log.append(
+            f"{card.printing.name} is shuffled into P{owner.id}'s library"
+        )
+
+    def describe(self) -> str:
+        return "shuffle it into its owner's library"

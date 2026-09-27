@@ -78,6 +78,11 @@ def can_block(
             return False
     if is_cant_be_blocked(state, attacker):
         return False
+    # "<This> can't be blocked by <creatures with ...>." (Questing Beast).
+    from mtg_bot.creature_statics_wg import blocking_forbidden
+
+    if blocking_forbidden(state, blocker, attacker):
+        return False
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
             return False
@@ -378,9 +383,13 @@ def _source_bypasses_prevention(state: GameState, source_id: int) -> bool:
     damage prevention effects (e.g. Darkness) when the creature's oracle
     text says "Combat damage can't be prevented." (Frenzied Baloth).
     """
+    from mtg_bot.creature_statics_wg import combat_damage_unpreventable
+
     for obj in state.battlefield:
         if obj.id == source_id:
-            return obj.printing.combat_damage_cant_be_prevented
+            # Also "Combat damage that would be dealt by creatures you
+            # control can't be prevented." (Questing Beast).
+            return combat_damage_unpreventable(state, obj)
     return False
 
 
@@ -397,7 +406,9 @@ def _prevented_by_protection(
     source = next((o for o in state.battlefield if o.id == source_id), None)
     if target is None or source is None:
         return False
-    if source.printing.combat_damage_cant_be_prevented:
+    from mtg_bot.creature_statics_wg import combat_damage_unpreventable
+
+    if combat_damage_unpreventable(state, source):
         return False
     if is_protected_from(state, target, source):
         state.log.append(

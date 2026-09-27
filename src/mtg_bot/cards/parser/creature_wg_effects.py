@@ -39,6 +39,11 @@ Shapes:
 * ``add <N> {C}`` -> ``AddManaToPool``; ``untap a <noun>`` /
   ``untap all <nouns>`` -> :class:`UntapChosenPermanents` /
   :class:`UntapAllMatching`
+* ``shuffle it into its owner's library`` ->
+  :class:`ShuffleSourceIntoOwnersLibrary` (Worldspine Wurm)
+* ``deals that much damage to target <type> that player controls`` ->
+  :class:`DealCombatDamageAmountToTarget` (Questing Beast; "that player"
+  is the damaged opponent -- in two-player games, the opponent)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -104,6 +109,12 @@ _ADD_N_OF_ONE_COLOR_RE = re.compile(
 )
 _UNTAP_A_RE = re.compile(r"^untap (?:a|an|one) (?P<noun>.+)$")
 _UNTAP_ALL_RE = re.compile(r"^untap all (?P<noun>.+)$")
+_SHUFFLE_IT_INTO_LIBRARY_RE = re.compile(
+    r"^shuffle it into its owner's library$"
+)
+_THAT_MUCH_DAMAGE_TO_TARGET_RE = re.compile(
+    r"^deals that much damage to target (?P<noun>[a-z]+) that player controls$"
+)
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
     r"becomes the monarch$"
@@ -289,6 +300,13 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         f = _controlled(m.group("noun"))
         if f is not None:
             return wg.UntapAllMatching(permanent_filter=f)
+    if _SHUFFLE_IT_INTO_LIBRARY_RE.match(phrase):
+        return wg.ShuffleSourceIntoOwnersLibrary()
+    m = _THAT_MUCH_DAMAGE_TO_TARGET_RE.match(phrase)
+    if m is not None:
+        spec = _target_spec(m.group("noun") + " an opponent controls", False)
+        if spec is not None:
+            return wg.DealCombatDamageAmountToTarget(targets=(spec,))
     m = _TOKEN_COPY_OF_IT_RE.match(phrase)
     if m is not None:
         t = m.group("type")
@@ -320,6 +338,9 @@ def parse_wg_effect(phrase: str) -> Effect | None:
 _PERMANENT_PUT_INTO_GRAVEYARD_RE = re.compile(
     r"^an? (?P<noun>[a-z]+) you control is put into a graveyard from the "
     r"battlefield$"
+)
+_DEALS_COMBAT_DAMAGE_TO_OPPONENT = (
+    "this creature deals combat damage to an opponent"
 )
 _SELF_OR_ANOTHER_ENTERS_RE = re.compile(
     r"^this creature or another (?P<noun>.+) enters$"
@@ -374,6 +395,15 @@ def parse_wg_trigger_phrase(phrase: str):
         pred = parse_target_noun_phrase(m.group("noun"))
         if pred is not None:
             return (Event.DIES, Subject(None, pred) & Controlled(YOU))
+    if phrase == _DEALS_COMBAT_DAMAGE_TO_OPPONENT:
+        from mtg_bot.effects.object_predicates import IsPlayer
+        from mtg_bot.effects.predicates import OPPONENT, IsSelf
+
+        return (
+            Event.DEALS_COMBAT_DAMAGE,
+            IsSelf(subject="source") & Subject("target", IsPlayer())
+            & Controlled(OPPONENT, subject="target"),
+        )
     m = _SELF_OR_ANOTHER_ENTERS_RE.match(phrase)
     if m is not None:
         subject = trigger_subject(m.group("noun"))

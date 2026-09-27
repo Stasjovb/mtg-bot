@@ -1329,6 +1329,22 @@ class CardPrinting:
     opponents_cant_cast_spells_during_your_turn: bool = False
     each_player_one_spell_per_turn: bool = False
     opponents_nonbasic_lands_enter_tapped: bool = False
+    # "<Filter> spells cost {N} more to cast." (Thalia, Guardian of
+    # Thraben): ``((CardFilter, N), ...)`` applied to every player's
+    # matching spells while this permanent is on the battlefield.
+    spell_cost_increases: tuple = ()
+    # "<This> can't be blocked by <creatures with ...>." (Questing
+    # Beast): an ObjectPredicate over would-be blockers.
+    cant_be_blocked_by: "object | None" = None
+    # "Combat damage that would be dealt by creatures you control can't
+    # be prevented." (Questing Beast).
+    your_creatures_combat_damage_cant_be_prevented: bool = False
+    # "When <this> is put into a graveyard from anywhere, <effect>."
+    # (Worldspine Wurm): triggered abilities that fire as the card
+    # arrives in a graveyard from any zone (detected by
+    # ``creature_statics_wg.fire_graveyard_arrival_triggers`` during
+    # state-based-action checks, i.e. before the next priority).
+    graveyard_arrival_triggers: tuple = ()
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast
