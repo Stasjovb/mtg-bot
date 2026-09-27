@@ -106,6 +106,12 @@ class CastSpell(Action):
     # spells. legal_actions emits one ``CastSpell(card_id,
     # cast_room_half=name)`` per half whose cost is payable.
     cast_room_half: "str | None" = None
+    # Flashback (CR 702.34): cast the card from its owner's graveyard
+    # for its flashback cost; it is exiled when it leaves the stack.
+    use_flashback: bool = False
+    # Buyback (CR 702.27): pay the optional buyback cost; the spell
+    # returns to its owner's hand as it resolves.
+    use_buyback: bool = False
 
 
 @dataclass(frozen=True)
@@ -1073,6 +1079,8 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             cast_for_free=action.cast_for_free,
             use_impending=action.use_impending,
             cast_room_half=action.cast_room_half,
+            use_flashback=action.use_flashback,
+            use_buyback=action.use_buyback,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1496,6 +1504,8 @@ def _cast_spell(
     cast_for_free: bool = False,
     use_impending: bool = False,
     cast_room_half: "str | None" = None,
+    use_flashback: bool = False,
+    use_buyback: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -1509,7 +1519,24 @@ def _cast_spell(
     # ability is usable only for these casts).
     cast_from_outside_hand = False
     card = next((c for c in p.hand if c.id == card_id), None)
-    if card is not None:
+    if use_flashback:
+        # Flashback (CR 702.34): cast from the graveyard for the
+        # flashback cost. ``legal_actions`` gates the offer; the card
+        # is exiled when it leaves the stack (``move_spell_off_stack``).
+        from mtg_bot.alt_casting import flashback_cost as _fb_cost
+
+        card = next((c for c in p.graveyard if c.id == card_id), None)
+        if card is None or _fb_cost(card) is None:  # pragma: no cover - legal_actions gates
+            raise ValueError(
+                f"card {card_id} not flashback-castable by P{player_id}"
+            )
+        cost = _fb_cost(card)
+        cast_from_outside_hand = True
+        p.graveyard.remove(card)
+        card.cast_via_flashback = True
+        card.cast_via_warp = False
+        card.cast_via_hand = False
+    elif card is not None:
         # Cost selection cascade: Room half wins first (Rooms are always
         # cast for one half's cost, never the printing's combined
         # mana_cost). Then Impending alt-cost (DSK Overlord cycle).
@@ -1731,6 +1758,16 @@ def _cast_spell(
             f"P{player_id} kicks {card.printing.name} for "
             f"{card.printing.kicker_cost_str}"
         )
+    # Buyback (CR 702.27): the optional additional cost joins the total
+    # cost before X is resolved.
+    if use_buyback and card.printing.buyback_cost is not None:
+        from mtg_bot.alt_casting import cost_plus as _cost_plus
+
+        cost = _cost_plus(cost, card.printing.buyback_cost)
+        state.log.append(
+            f"P{player_id} pays buyback {card.printing.buyback_cost_str} "
+            f"for {card.printing.name}"
+        )
     # X-cost spells: ask the agent how much X to pay, fold X*x_pips into
     # generic, then zero x_pips so the payment step sees a concrete cost.
     x_value = 0
@@ -1782,6 +1819,20 @@ def _cast_spell(
     # here OR convoke below, never both: sacing removes it before
     # convoke runs; if it survives this step, convoke taps it and
     # the {T} portion of the sac cost is no longer payable.
+    # Delve (CR 702.66): exile graveyard cards to pay generic mana
+    # before the mana payment proper.
+    if card.printing.has_delve:
+        from mtg_bot.alt_casting import pay_delve as _pay_delve
+
+        cost = _pay_delve(state, player_id, card, cost)
+    # "As an additional cost to cast this spell, pay X life" — X is
+    # announced with the other cast-time choices (CR 601.2b) and paid
+    # with the total cost; the resolving effect reads it as X.
+    life_x_paid: int | None = None
+    if card.printing.additional_cost_pay_x_life:
+        from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
+
+        life_x_paid = _choose_life_x(state, player_id, card)
     cost = _activate_sac_for_mana_for_cost(
         state, player_id, cost, frozenset(spell_kinds),
     )
@@ -1870,6 +1921,22 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
+    # Additional cost: sacrifice a permanent matching the printing's
+    # ``additional_cost_sacrifice_filter`` (Tinker / Natural Order /
+    # Crop Rotation).
+    if card.printing.additional_cost_sacrifice_filter is not None:
+        from mtg_bot.alt_casting import (
+            pay_additional_sacrifice as _pay_additional_sacrifice,
+        )
+
+        _pay_additional_sacrifice(state, player_id, card)
+    if life_x_paid is not None:
+        p.life -= life_x_paid
+        x_value = life_x_paid
+        state.log.append(
+            f"additional cost: P{player_id} pays {life_x_paid} life "
+            f"(life: {p.life})"
+        )
     # Additional cost: designate a creature you control or a warped
     # creature card you own in exile (Close Encounter). Ungated by
     # sacrifice/tap — just a choice. The chosen id lands on the StackItem
@@ -1915,9 +1982,14 @@ def _cast_spell(
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
             cast_room_half=cast_room_half,
+            buyback_paid=bool(
+                use_buyback and card.printing.buyback_cost is not None
+            ),
         )
     )
     mode = " (warp)" if use_warp else ""
+    if use_flashback:
+        mode = " (flashback)"
     if cast_room_half is not None:
         mode = f" ({cast_room_half})"
     state.log.append(
@@ -3152,6 +3224,43 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     owner.graveyard.append(card)
 
 
+def move_spell_off_stack(
+    state: GameState, card, destination: str = "graveyard",
+) -> None:
+    """Route a spell card leaving the stack without entering the
+    battlefield (resolved instant / sorcery, countered spell, spell
+    returned to hand).
+
+    * A spell cast with flashback is exiled instead of going anywhere
+      else (CR 702.34a).
+    * ``destination="hand"`` returns the card to its owner's hand
+      (buyback on resolution, Reprieve) and reveals it.
+    * Otherwise the card goes to its owner's graveyard through
+      ``_send_to_graveyard_or_library`` (so zone-change replacements
+      such as Nexus of Fate's shuffle still apply).
+    """
+    owner = state.player_by_id(card.owner_id)
+    if card.cast_via_flashback:
+        card.cast_via_flashback = False
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(
+            f"{card.printing.name} is exiled (flashback)"
+        )
+        return
+    if destination == "hand":
+        from mtg_bot.game import reveal_to_all
+
+        card.zone = Zone.HAND
+        owner.hand.append(card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} returns to P{card.owner_id}'s hand"
+        )
+        return
+    _send_to_graveyard_or_library(state, card)
+
+
 def drain_stack(state: GameState) -> None:
     """Resolve every StackItem until empty, interleaving SBAs.
 
@@ -3174,7 +3283,7 @@ def resolve_top_of_stack(state: GameState) -> None:
     # graveyard (permanents and non-permanents alike) per rule 701.5a.
     if item.countered:
         state.log.append(f"{item.source.printing.name} is countered")
-        _send_to_graveyard_or_library(state, item.source)
+        move_spell_off_stack(state, item.source)
         return
 
     # Triggered- or activated-ability resolution. StackItem.ability holds
@@ -3317,14 +3426,27 @@ def resolve_top_of_stack(state: GameState) -> None:
             return
         if card.printing.is_instant or card.printing.is_sorcery:
             state.log.append(f"{card.printing.name} resolves")
+            zone_before = card.zone
             if card.printing.spell_effect is not None:
-                card.printing.spell_effect.resolve(
-                    state, item.controller_id, item.targets
-                )
+                state.resolving_spell = card
+                try:
+                    card.printing.spell_effect.resolve(
+                        state, item.controller_id, item.targets
+                    )
+                finally:
+                    state.resolving_spell = None
+            if card.zone != zone_before:
+                # The spell's own effect already moved it (Time
+                # Spiral's "Exile Time Spiral.").
+                return
             # Non-permanent spells go to their owner's graveyard —
             # unless a zone-change replacement routes them elsewhere
-            # (Nexus of Fate + Green Sun's Zenith shuffle back in).
-            _send_to_graveyard_or_library(state, card)
+            # (Nexus of Fate + Green Sun's Zenith shuffle back in),
+            # buyback returns them to hand, or flashback exiles them.
+            move_spell_off_stack(
+                state, card,
+                destination="hand" if item.buyback_paid else "graveyard",
+            )
             return
         raise ValueError(f"don't know how to resolve {card.printing.name}")
     finally:

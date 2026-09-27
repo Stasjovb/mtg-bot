@@ -1635,3 +1635,56 @@ class ConditionalIfCastFromHand(Effect):
 
 
 
+
+
+@dataclass(frozen=True)
+class IfConditionElse(Effect):
+    """Resolve ``then_effect`` if ``condition`` holds for the controller
+    at resolve time, else ``else_effect`` (which may be ``None``).
+
+    The generic "<effect> instead if <condition>" replacement rider
+    (Cabal Ritual's ``Threshold — Add {B}{B}{B}{B}{B} instead if there
+    are seven or more cards in your graveyard``): ``then_effect`` is the
+    rider's effect, ``else_effect`` the base clause. Targeting delegates
+    to whichever branch requires a target (the branches of an
+    "instead" rider share the base clause's targets).
+    """
+
+    condition: Condition
+    then_effect: Effect
+    else_effect: "Effect | None" = None
+
+    def _targeting_branch(self) -> "Effect | None":
+        for eff in (self.then_effect, self.else_effect):
+            if eff is not None and eff.requires_target():
+                return eff
+        return None
+
+    def requires_target(self) -> bool:
+        return self._targeting_branch() is not None
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        branch = self._targeting_branch()
+        return branch.legal_targets(state, controller_id) if branch else []
+
+    def target_count_range(self) -> tuple[int, int]:
+        branch = self._targeting_branch()
+        return branch.target_count_range() if branch else (0, 0)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ):
+        if self.condition.matches(state, controller_id):
+            return self.then_effect.resolve(state, controller_id, targets)
+        if self.else_effect is not None:
+            return self.else_effect.resolve(state, controller_id, targets)
+        return None
+
+    def describe(self) -> str:
+        text = f"if {self.condition!r}: {self.then_effect.describe()}"
+        if self.else_effect is not None:
+            text += f"; otherwise {self.else_effect.describe()}"
+        return text

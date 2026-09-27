@@ -236,14 +236,42 @@ def run_draw_step(state: GameState) -> None:
     draw_n_cards(state, state.active_player().id, 1)
 
 
+def _reset_left_battlefield_object(obj: "GameObject") -> None:
+    """Clear per-permanent state on an object that left the battlefield
+    for a hidden zone (hand / library): counters, temporary P/T bonuses,
+    regeneration shield. CR 400.7 — it is a new object there."""
+    obj.plus_one_counters = 0
+    obj.minus_one_counters = 0
+    obj.charge_counters = 0
+    obj.stun_counters = 0
+    obj.time_counters = 0
+    obj.loyalty_counters = 0
+    obj.lore_counters = 0
+    obj.flying_counters = 0
+    obj.temp_power_bonus = 0
+    obj.temp_toughness_bonus = 0
+    obj.regeneration_shield = False
+    obj.impending_active = False
+    obj.face_down = False
+
+
 def move_off_battlefield(
-    state: GameState, obj: "GameObject", destination: str = "graveyard"
+    state: GameState, obj: "GameObject", destination: str = "graveyard",
+    library_index: int = 0,
 ) -> None:
     """Remove ``obj`` from the battlefield and place it in ``destination``.
 
-    ``destination`` is ``"graveyard"`` or ``"exile"``. Tokens cease to exist
-    per rule 704.5d regardless of destination. Combat state (damage, tapped,
-    attacking, blocking) is cleared.
+    ``destination`` is ``"graveyard"``, ``"exile"``, ``"hand"`` or
+    ``"library"``. Tokens cease to exist per rule 704.5d regardless of
+    destination. Combat state (damage, tapped, attacking, blocking) is
+    cleared.
+
+    ``"hand"`` (bounce — Upheaval) reveals the card to every player.
+    ``"library"`` inserts the card at ``library_index`` of its owner's
+    library (0 = top; Oust's "second from the top" = 1; Unexpectedly
+    Absent's "just beneath the top X cards" = X; clamped to the library
+    size). Both hidden-zone destinations drop counters and temporary
+    bonuses — the card becomes a new object (CR 400.7).
 
     If the object was a creature (or a stationed Spacecraft) and
     ``destination`` is ``"graveyard"``, its "when this creature dies"
@@ -352,6 +380,19 @@ def move_off_battlefield(
     elif destination == "exile":
         obj.zone = Zone.EXILE
         state.player_by_id(obj.owner_id).exile.append(obj)
+    elif destination in ("hand", "library"):
+        _reset_left_battlefield_object(obj)
+        owner = state.player_by_id(obj.owner_id)
+        if destination == "hand":
+            from mtg_bot.game import reveal_to_all
+
+            obj.zone = Zone.HAND
+            owner.hand.append(obj)
+            reveal_to_all(state, obj)
+        else:
+            obj.zone = Zone.LIBRARY
+            idx = max(0, min(library_index, len(owner.library)))
+            owner.library.insert(idx, obj)
     else:
         raise ValueError(f"unknown destination: {destination!r}")
 

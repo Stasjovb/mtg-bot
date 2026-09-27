@@ -211,8 +211,14 @@ def _additional_costs_payable(
 ) -> bool:
     """Check that any cast-time additional costs on ``card`` can be paid.
     Currently: additional_cost_sacrifice_creature_or_artifact requires a
-    creature or artifact the caster controls.
+    creature or artifact the caster controls; the casting-substrate
+    costs (``additional_cost_sacrifice_filter`` etc.) are checked by
+    ``alt_casting.additional_costs_payable``.
     """
+    from mtg_bot.alt_casting import additional_costs_payable as _alt_payable
+
+    if not _alt_payable(state, player_id, card):
+        return False
     if card.printing.additional_cost_sacrifice_creature_or_artifact:
         have_sac = any(
             o for o in state.battlefield
@@ -276,8 +282,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     from mtg_bot.actions import apply_cost_reductions
 
+    from mtg_bot.alt_casting import (
+        cost_plus as _cost_plus,
+        delve_affordability_cost as _delve_affordability_cost,
+        flashback_cost as _flashback_cost,
+    )
+
     def _effective_cost(card, base_cost):
-        return apply_cost_reductions(card.printing, state, player_id, base_cost)
+        # Delve (CR 702.66) only ever lowers the generic cost, so the
+        # affordability probe assumes the whole graveyard is available.
+        return _delve_affordability_cost(
+            state, player_id, card,
+            apply_cost_reductions(card.printing, state, player_id, base_cost),
+        )
 
     def _cost_plus_kicker(card, base_cost):
         """Combined base + kicker cost (colored pips merged)."""
@@ -329,6 +346,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             kwargs.get("cast_for_free", False),
             kwargs.get("use_impending", False),
             kwargs.get("cast_room_half", None),
+            kwargs.get("use_buyback", False),
         )
         if key in seen_instant:
             return
@@ -355,6 +373,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
             ):
                 _emit_hand_cast(card, kicked=True)
+            # Buyback variant (CR 702.27): base + buyback cost.
+            if card.printing.buyback_cost is not None and _can_cast(
+                state, player_id, card,
+                _cost_plus(
+                    _effective_cost(card, card.printing.mana_cost),
+                    card.printing.buyback_cost,
+                ),
+            ):
+                _emit_hand_cast(card, use_buyback=True)
         if (
             card.printing.warp_cost is not None
             and _can_cast(
@@ -439,6 +466,29 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 ActivateAbility(source_id=card.id, ability_index=idx)
             )
 
+    # Flashback (CR 702.34) from the graveyard. Instants are castable
+    # at any priority; everything else waits for sorcery timing (the
+    # second flashback block below).
+    def _emit_flashback_casts(instant_speed: bool) -> None:
+        for gcard in p.graveyard:
+            fb = _flashback_cost(gcard)
+            if fb is None:
+                continue
+            is_instant_speed = (
+                gcard.printing.is_instant
+                or "flash" in gcard.printing.keywords
+            )
+            if is_instant_speed != instant_speed:
+                continue
+            if (
+                _can_cast(state, player_id, gcard, _effective_cost(gcard, fb))
+                and _targets_are_satisfiable(state, player_id, gcard)
+                and _additional_costs_payable(state, player_id, gcard)
+            ):
+                actions.append(CastSpell(gcard.id, use_flashback=True))
+
+    _emit_flashback_casts(instant_speed=True)
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool
@@ -450,6 +500,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if _restricted_to_sorcery_speed_casts(state, player_id):
             actions = [a for a in actions if not isinstance(a, CastSpell)]
         return actions
+
+    _emit_flashback_casts(instant_speed=False)
 
     # Land plays per turn at sorcery speed. Base = 1, increased by
     # permanents granting "you may play an additional land" (Icetill
@@ -504,6 +556,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             kwargs.get("cast_for_free", False),
             kwargs.get("use_impending", False),
             kwargs.get("cast_room_half", None),
+            kwargs.get("use_buyback", False),
         )
         if key in seen_sorcery:
             return
@@ -540,6 +593,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
                 ):
                     _emit_hand_sorcery_cast(card, kicked=True)
+                if card.printing.buyback_cost is not None and _can_cast(
+                    state, player_id, card,
+                    _cost_plus(
+                        _effective_cost(card, card.printing.mana_cost),
+                        card.printing.buyback_cost,
+                    ),
+                ):
+                    _emit_hand_sorcery_cast(card, use_buyback=True)
             if (
                 card.printing.warp_cost is not None
                 and _can_cast(

@@ -191,7 +191,12 @@ def test_parse_effect_returns_none_for_malformed_add_mana():
     # via ``_ADD_N_COLORLESS_MANA`` (The Eternity Elevator's
     # ``{T}: Add {C}{C}{C}``), but three-or-more colored coins remain
     # unsupported.
-    assert _parse_effect("add {U}{U}{U}") is None
+    # Three-or-more pips now claim through the card-flow grammar's
+    # multi-pip recognizer (Dark Ritual's ``Add {B}{B}{B}``).
+    assert _parse_effect("add {U}{U}{U}") == AddManaToPool(
+        produces=(("U", 3),),
+    )
+    assert _parse_effect("add {U}{U}{Q}") is None
     # ``add one mana of any color`` IS recognized (All-Fates Scroll).
     # See ``test_parser_artifact_all_fates_scroll`` for the positive
     # case. Plural / amount-N shapes are not recognized:

@@ -1126,6 +1126,35 @@ class CardPrinting:
     # cycling-family line into a hand-activated ``ActivatedAbility``
     # with a ``discard_self`` cost and fills this tuple from it too).
     landcycling: tuple[str, str] | None = None
+    # ---- Spell casting substrate (cube spells-B bucket) -------------
+    # "Flashback {cost}" (CR 702.34): the card may be cast from its
+    # owner's graveyard for ``flashback_cost``; a spell cast this way
+    # is exiled instead of going anywhere else when it leaves the
+    # stack. ``legal_actions`` offers ``CastSpell(id, use_flashback=True)``
+    # for graveyard cards carrying it (instants at instant speed,
+    # everything else at sorcery speed).
+    flashback_cost: ManaCost | None = None
+    flashback_cost_str: str = ""
+    # "Delve" (CR 702.66): each card exiled from the caster's graveyard
+    # while casting pays for {1}. Handled at cost payment in
+    # ``actions._cast_spell`` (count chosen via ``choose_x``).
+    has_delve: bool = False
+    # "Buyback {cost}" (CR 702.27): optional additional cost; if paid,
+    # the spell returns to its owner's hand as it resolves instead of
+    # going to the graveyard. Offered as ``CastSpell(id,
+    # use_buyback=True)``.
+    buyback_cost: ManaCost | None = None
+    buyback_cost_str: str = ""
+    # "As an additional cost to cast this spell, sacrifice a <filter>."
+    # A ``mtg_bot.effects.generic.card_flow.CardFilter`` over the
+    # caster's permanents (Tinker: artifact; Natural Order: green
+    # creature; Crop Rotation: land). ``None`` = no such cost.
+    additional_cost_sacrifice_filter: "object | None" = None
+    # "As an additional cost to cast this spell, pay X life." The
+    # caster picks X at cast time (``choose_x``); X is stored on the
+    # StackItem's ``x_value`` and read at resolve through
+    # ``state.resolving_x_value`` (Toxic Deluge).
+    additional_cost_pay_x_life: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -295,11 +295,21 @@ def test_parse_effect_returns_none_for_truncated_search_phrase():
 
 
 def test_parse_effect_returns_none_for_search_with_wrong_filter():
-    # Different card-type filter (creature, land, etc.) isn't claimed
-    # by this artifact-specific regex. Other filter shapes would need
-    # their own regexes.
+    # Other card-type filters (creature, land, ...) now claim through
+    # the generic card-flow tutor grammar (``SearchLibrary``) rather
+    # than this artifact-specific regex; a descriptor outside that
+    # grammar (a creature subtype) still stays unclaimed.
+    from mtg_bot.effects.generic.card_flow import CardFilter, SearchLibrary
+
     assert _parse_effect(
         "search your library for a creature card, "
+        "reveal it, put it into your hand, then shuffle"
+    ) == SearchLibrary(
+        card_filter=CardFilter(any_types=("Creature",)),
+        destination="hand", reveal=True,
+    )
+    assert _parse_effect(
+        "search your library for a Wizard card, "
         "reveal it, put it into your hand, then shuffle"
     ) is None
 

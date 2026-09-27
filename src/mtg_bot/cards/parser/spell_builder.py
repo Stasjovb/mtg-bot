@@ -1336,6 +1336,9 @@ def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     return tuple(rules)
 
 
+_PHYREXIAN_MANA_SYMBOL_RE = re.compile(r"\{[WUBRG2]/P\}")
+
+
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
@@ -1349,6 +1352,12 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         return None
     text = card.get("oracle_text", "").strip()
     if not text:
+        return None
+    if _PHYREXIAN_MANA_SYMBOL_RE.search(card.get("mana_cost", "")):
+        # Phyrexian mana ({U/P}: pay {U} or 2 life) has no payment path
+        # in the engine — ``parse_mana_cost`` folds it into a generic-1
+        # hybrid pip, so the life option would silently vanish. Leave
+        # such spells unclaimed until the cost substrate exists.
         return None
     effect = _parse_spell_oracle_text(text, card["name"])
     if effect is None:

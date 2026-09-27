@@ -6919,9 +6919,18 @@ def _parse_effect(phrase: str) -> Effect | None:
         # activated-ability layer (``sorcery_speed=True``), not in the
         # effect body.
         return LockOrUnlockDoorOfTargetRoomYouControl()
-    # Last-resort extension recognizers (cube planeswalker bucket). Run
-    # after every recognizer above so they only claim phrases nothing
-    # else understood -- see ``effects_ext`` for the shape list.
+    # Card-flow grammar (targeted draw, tutors, hand disruption,
+    # look-at-top selection, wheels, mass zone moves) and then the
+    # planeswalker-bucket extension recognizers — both tried after every
+    # recognizer above, so no phrase an older recognizer claims changes
+    # meaning. Card-flow first: its shapes are the more specific ones
+    # (effects_ext carries broad ``you may <effect>`` / ``if <cond>,
+    # <effect>`` wrappers).
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
+
+    card_flow = parse_card_flow_effect(phrase)
+    if card_flow is not None:
+        return card_flow
     from mtg_bot.cards.parser.effects_ext import parse_ext_effect
 
     return parse_ext_effect(phrase)
@@ -6987,6 +6996,12 @@ def _normalize_spell_effect_phrase(phrase: str, name: str) -> str:
         phrase = phrase.replace(marker, replacement)
     if phrase and phrase[0].isupper():
         phrase = phrase[0].lower() + phrase[1:]
+    # ``Exile <Name>.`` — the spell exiling itself as part of its own
+    # resolution (Time Spiral). The name is the object, not the
+    # subject, so the prefix strip above doesn't apply; rewrite it to
+    # the name-agnostic ``exile this spell`` surface.
+    if phrase == "exile " + name:
+        phrase = "exile this spell"
     return phrase
 
 

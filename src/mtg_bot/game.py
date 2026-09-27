@@ -758,6 +758,10 @@ class GameObject:
     # its registry entry expires. Indefinite-lifetime entries persist
     # across cleanup so a permanent type-change survives.
     permanent_is_creature: bool = False
+    # CR 702.34a: set while a spell cast with flashback is on the stack;
+    # the card is exiled instead of going anywhere else when it leaves
+    # the stack (``actions.move_spell_off_stack``).
+    cast_via_flashback: bool = False
 
 
 # Fast shallow cloner generated once at module load. ``blocked_by`` is the
@@ -2479,6 +2483,9 @@ class StackItem:
     # activations with no discrete-object cost atom (pure mana / tap)
     # and for spells.
     cost_paid_objects: tuple["GameObject", ...] = ()
+    # Buyback (CR 702.27) was paid: the spell returns to its owner's
+    # hand as it resolves instead of going to the graveyard.
+    buyback_paid: bool = False
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
@@ -2868,6 +2875,10 @@ class GameState:
     # built). Used by ``MVOfCostPaidObjectPlus`` and any future formula
     # that reads a per-object property of a cost-paid object.
     resolving_cost_paid_objects: tuple[GameObject, ...] = ()
+    # The instant / sorcery card currently resolving (None otherwise).
+    # Read by effects that refer to "this spell" as an object, e.g.
+    # Time Spiral's "Exile Time Spiral." (``ExileThisSpell``).
+    resolving_spell: Optional[GameObject] = None
     # Number of cards moved by the most recent
     # ``MoveEachExiledWithSourceToOwnersGraveyard`` resolve in the
     # current resolving ability. Lets a follow-up
@@ -3557,6 +3568,10 @@ class GameState:
         )
         new_state.resolving_counter_amount = self.resolving_counter_amount
         new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
+        new_state.resolving_spell = (
+            clone_obj(self.resolving_spell)
+            if self.resolving_spell is not None else None
+        )
         new_state.last_exile_recall_count = self.last_exile_recall_count
         new_state.suppress_exiled_by_source_on_leave_for = (
             self.suppress_exiled_by_source_on_leave_for
