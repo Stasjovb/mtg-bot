@@ -19439,3 +19439,66 @@ claimed in both pools).
     rider (Fanatic of Rhonas) is a `legal_actions` gate
     (`ActivationCost.requires_own_creature_power_at_least`), like the
     utility lands that already carry it.
+## PowerLSV cube blue / black creatures — deliberate simplifications (2026-09-27, `feature/cube-creatures-ub`)
+
+New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `src/mtg_bot/creature_casting_ub.py` and the parser module `src/mtg_bot/cards/parser/cube_creatures_ub.py`; the hooks it adds to shared paths are listed per entry.
+
+### Cast-time optional costs (Squad, Offspring) and Emerge are prompts / an uncoded `CastSpell` field
+
+**Where:** `creature_casting_ub.offer_creature_additional_costs` (called from `actions._cast_spell`), `creature_casting_ub.emerge_cast_actions` / `pay_emerge_sacrifice`, `CastSpell.use_emerge`.
+
+**What the shortcut is.** Squad payments (`choose_x`, 0..affordable, capped at 10) and the Offspring payment (`choose_yes_no`) are asked while the spell is cast, splice-style, rather than being separate `CastSpell` variants, so the search can only branch on them through those agent hooks. `CastSpell(use_emerge=True)` is a new field the policy codec doesn't encode (it collides with the normal hand-cast slot, like `use_escape`). The emerge sacrifice is paid when the cost is determined (CR 601.2f/h collapsed), before targets are chosen.
+
+**Impact / fix scope.** Small (Sicarian Infiltrator, Thundertrap Trainer, Crabomination). First-class cast variants + codec slots would expose the choices to the NN policy.
+
+### Casting spells while an effect resolves reuses the per-card permissions
+
+**Where:** `creature_casting_ub.cast_now` / `can_cast_now` / `cast_from_hand_for` (Malcolm, Crabomination, Bilbo, Miracle).
+
+**What the shortcut is.** The card is given a one-shot graveyard / exile permission (or an alternative mana cost for Miracle) and cast through the normal `_cast_spell` pipeline, so it lands on the stack above the resolving ability (CR 608.2g) and timing is ignored, as the rules require. Which card to cast is asked through `choose_card_from_library` (a generic "pick one of these ids" hook) and consent through `choose_yes_no`.
+
+### Exile play permissions cover any player's exile; "mana of any type" becomes generic
+
+**Where:** `GameObject.may_play_by / may_play_free / may_play_any_mana`, `legal._exile_play_permission_actions`, `legal.permission_cost`, the exile branches of `actions._cast_spell` / `_play_land`; cleared in `turn.run_cleanup_step`.
+
+**What the shortcut is.** "You may play those cards this turn" (Fallen Shinobi, Urza, Dauthi Voidwalker, Black Widow) is a per-card grant readable in every exile zone. Black Widow's "mana of any type can be spent to cast that spell" is modeled by converting the colored part of the cost to generic mana (equivalent for payment). Lands played this way use the normal land drop.
+
+### Dauthi Voidwalker's replacement: redirect on the main paths, SBA catch-all elsewhere
+
+**Where:** `game.void_exile_replacement_active` / `exile_with_void_counter`, `turn.move_off_battlefield`, `actions._send_to_graveyard_or_library`, `turn.apply_void_exile_replacement` (run by `state_based_actions`), `Player.void_graveyard_snapshot`.
+
+**What the shortcut is.** Permanents leaving the battlefield and spells leaving the stack are exiled with a void counter before they reach the graveyard (they never "die"). Cards that reach an opponent's graveyard through other paths (discard, mill, surveil, look-at-top "into your graveyard") land there first and are swept to exile at the next state-based-action check — the same precedent as Yawgmoth's Will — so a trigger that looks at the graveyard in between can briefly see them. Cards already in the graveyard when a void source enters are snapshotted and stay.
+
+**Fix scope.** A single "put into graveyard" choke point for every zone move (touches ~30 sites).
+
+### "Cards are put into a library from anywhere" fires per zone-change call
+
+**Where:** `turn.note_cards_put_into_library` + `Event.CARDS_PUT_INTO_LIBRARY`, called from every zone change into a library (battlefield tucks, stack -> library, hand / graveyard shuffles and put-backs, exile -> library).
+
+**What the shortcut is.** Wan Shi Tong's "one or more cards" trigger fires once per effect batch, but `move_off_battlefield` moves one permanent per call, so a hypothetical effect tucking several permanents at once would trigger once per permanent. Library-internal moves (looks, scry, "put the rest on the bottom") correctly don't fire. The mulligan's bottoming isn't instrumented (no permanent can observe it).
+
+### Draw-step "first card" bookkeeping
+
+**Where:** `Player.draw_step_first_draw_pending / drawing_first_in_draw_step` (`turn.run_draw_step`, `turn.draw_card`), `object_predicates.DrawIsFirstInOwnDrawStep`, `Event.WOULD_DRAW_A_CARD` + `modifiers.InsteadForSourceController`, `ReplacementEffect.affects`.
+
+**What the shortcut is.** Only the draw performed by the turn-based action counts as "the first one they draw in each of their draw steps" (Orcish Bowmasters, Hullbreacher); if another effect replaced that draw (none in the pool can while the exemption applies), the next draw in the step would not be treated as the first. Per-card draw replacements apply once per card inside a multi-card draw (CR 121.6).
+
+### Printing-level statics ignore "loses all abilities"
+
+**Where:** `CardPrinting.min_blockers` (Troll of Khazad-dûm), `blocks_only_with_subtype` (Wan Shi Tong's Spirits), `squad_cost` / `offspring_cost` / `emerge_cost` / `miracle_cost`, `artifact_ability_cost_reduction` (Forensic Gadgeteer, which does check the wipe), `void_exile_replacement` (checks the wipe).
+
+**What the shortcut is.** A few new printing flags are read directly rather than through the layer-6 ability walk, so an effect that makes the permanent lose all abilities (The Wondrous Wasp, Tishana's Tidebinder) doesn't switch off Troll's blocking restriction or a Spirit token's block restriction. Dauthi's replacement and Gadgeteer's reduction do honor the wipe.
+
+**Fix scope.** Move these to `StaticAbility` / `ContinuousModifier` declarations when a second card needs them.
+
+### Modal ETBs pick targets before modes; "choose up to one" adds a no-mode option
+
+**Where:** `creature_builder._parse_modal_trigger_block` (Ertai Resurrected), `ModalChooseOne` + `ChooseNoMode`, `ModalChooseOneNotYetChosen` (Gollum).
+
+**What the shortcut is.** As for every modal trigger in the engine, the target is chosen from the union of the modes' pools when the trigger is put on the stack and the mode at resolution (a mismatch fizzles). "Choose up to one" is modeled as an extra "choose no mode" mode. Gollum's "choose one that hasn't been chosen" records the used modes on the permanent (a new object after a zone change starts fresh).
+
+### Improvise, Saddle and clones
+
+**Where:** `actions._apply_improvise` / `_improvise_max_contribution`, `Agent.choose_improvise_artifacts`; `creature_casting_ub.pay_saddle_cost`; `creature_casting_ub.apply_copy_on_entry`.
+
+**What the shortcut is.** Improvise is checked like convoke (upper-bound affordability) and the default agent taps artifacts without mana abilities first. Saddle picks riders one at a time through `choose_permanent_to_tap` (plain power; crew-only bonuses don't apply). Phyrexian Metamorph / Superior Spider-Man copy the target's printing (its copiable values); Superior Spider-Man's "When you do, exile that card." is a trigger put on the stack right after it enters.
