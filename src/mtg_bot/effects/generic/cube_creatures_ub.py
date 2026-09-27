@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.conditions import Condition
+from mtg_bot.effects.formulas import Formula
+from mtg_bot.effects.predicates import TriggerPredicate
 
 if TYPE_CHECKING:
     from mtg_bot.game import GameState
@@ -732,7 +735,7 @@ class BecomeSaddled(Effect):
 
 
 @dataclass(frozen=True)
-class SpellMVHasSourceParity:
+class SpellMVHasSourceParity(TriggerPredicate):
     """Trigger predicate: the cast spell's mana value is odd / even per
     the source's ``chosen_parity`` ("a spell with mana value of the
     chosen quality"; 0 is even). No choice -> never."""
@@ -744,16 +747,6 @@ class SpellMVHasSourceParity:
             return False
         mv = spell.printing.mana_cost.total
         return (mv % 2 == 1) == (parity == "odd")
-
-    def __and__(self, other):
-        from mtg_bot.effects.predicates import And
-
-        return And(self, other)
-
-    def __rand__(self, other):
-        from mtg_bot.effects.predicates import And
-
-        return And(other, self)
 
 
 @dataclass(frozen=True)
@@ -1209,7 +1202,7 @@ class CreateTokenCopiesOfSelf(Effect):
 
 
 @dataclass(frozen=True)
-class DevotionTo:
+class DevotionTo(Formula):
     """Formula: your devotion to ``color`` (CR 700.5) -- the number of
     that color's mana symbols (hybrid and Phyrexian included) among the
     mana costs of permanents you control."""
@@ -1273,7 +1266,7 @@ class LookTopNKeepUpToOneOnTopRestBottom(Effect):
 
 
 @dataclass(frozen=True)
-class FormulaCoversLibrary:
+class FormulaCoversLibrary(Condition):
     """Condition: ``formula`` >= the number of cards in your library
     ("If X is greater than or equal to the number of cards in your
     library")."""
