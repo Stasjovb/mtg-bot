@@ -152,6 +152,11 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     """
     from mtg_bot.game import Zone, reveal_to_all
 
+    if obj.exile_instead_of_leaving:
+        from mtg_bot.turn import move_off_battlefield
+
+        move_off_battlefield(state, obj, destination="exile")
+        return
     state.battlefield.remove(obj)
     from mtg_bot.game import restore_mdfc_front
 

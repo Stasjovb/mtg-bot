@@ -367,3 +367,36 @@ def offer_splices(
             f"for {pr.splice_cost_str}"
         )
     return cost, tuple(spliced)
+
+
+# ---------------------------------------------------------------------
+# Escape (CR 702.138)
+# ---------------------------------------------------------------------
+
+
+def escape_payable(state: "GameState", player_id: int, card: "GameObject") -> bool:
+    """Enough *other* cards in the graveyard for the escape exile part."""
+    p = state.player_by_id(player_id)
+    others = sum(1 for c in p.graveyard if c.id != card.id)
+    return others >= card.printing.escape_exile_count
+
+
+def pay_escape_exile(state: "GameState", player_id: int, card: "GameObject") -> None:
+    """Exile ``escape_exile_count`` other graveyard cards (cards without
+    flashback / escape first, oldest first — which cards is not offered
+    as a choice, like delve; ``docs/SEARCH_LIMITATIONS.md``)."""
+    from mtg_bot.game import Zone
+
+    p = state.player_by_id(player_id)
+    pool = [c for c in p.graveyard if c.id != card.id]
+    pool.sort(key=lambda c: (
+        c.printing.flashback_cost is not None or c.printing.escape_cost is not None
+    ))
+    for c in pool[: card.printing.escape_exile_count]:
+        p.graveyard.remove(c)
+        c.zone = Zone.EXILE
+        p.exile.append(c)
+    state.log.append(
+        f"P{player_id} exiles {card.printing.escape_exile_count} other card(s) "
+        f"to escape {card.printing.name}"
+    )

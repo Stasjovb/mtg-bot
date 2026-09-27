@@ -1212,6 +1212,13 @@ class CardPrinting:
     # ``CastSpell(id, cast_for_free=True)`` from exile.
     plot_cost: ManaCost | None = None
     plot_cost_str: str = ""
+    # "Escape—{cost}, Exile N other cards from your graveyard." (CR
+    # 702.138): cast from the graveyard for ``escape_cost`` plus exiling
+    # ``escape_exile_count`` other graveyard cards. Offered as
+    # ``CastSpell(id, use_escape=True)``.
+    escape_cost: ManaCost | None = None
+    escape_cost_str: str = ""
+    escape_exile_count: int = 0
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -499,6 +499,26 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     _emit_flashback_casts(instant_speed=True)
 
+    from mtg_bot.alt_casting import escape_payable as _escape_payable
+
+    def _emit_escape_casts(instant_speed: bool) -> None:
+        for gcard in p.graveyard:
+            ec = gcard.printing.escape_cost
+            if ec is None:
+                continue
+            fast = gcard.printing.is_instant or "flash" in gcard.printing.keywords
+            if fast != instant_speed:
+                continue
+            if (
+                _escape_payable(state, player_id, gcard)
+                and _can_cast(state, player_id, gcard, _effective_cost(gcard, ec))
+                and _targets_are_satisfiable(state, player_id, gcard)
+                and _additional_costs_payable(state, player_id, gcard)
+            ):
+                actions.append(CastSpell(gcard.id, use_escape=True))
+
+    _emit_escape_casts(instant_speed=True)
+
     # Yawgmoth's Will: cast spells from the graveyard for their normal
     # cost (instant-speed ones now, the rest at sorcery timing below).
     def _emit_graveyard_permission_casts(instant_speed: bool) -> None:
@@ -532,6 +552,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         return actions
 
     _emit_flashback_casts(instant_speed=False)
+    _emit_escape_casts(instant_speed=False)
     _emit_graveyard_permission_casts(instant_speed=False)
 
     # Plot (CR 702.170): the special action from hand (sorcery timing),

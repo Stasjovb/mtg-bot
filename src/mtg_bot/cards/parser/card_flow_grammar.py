@@ -250,7 +250,8 @@ _ADD_N_MANA_ANY_COMBINATION_RE = re.compile(
 # Reanimation: base sentence + optional anaphoric rider sentences.
 _REANIMATE_RE = re.compile(
     r"^(?:put target (?P<any_desc>.+? card) from a graveyard onto the "
-    r"battlefield under your control|return target (?P<your_desc>.+? card) "
+    r"battlefield under your control(?: with an? (?P<counter>[a-z]+) counter "
+    r"on it)?|return target (?P<your_desc>.+? card) "
     r"from your graveyard to the battlefield|return the top "
     r"(?P<top_desc>.+? card) of your graveyard to the battlefield)"
     r"(?:\. (?P<riders>.+))?$"
@@ -264,6 +265,8 @@ _REANIMATE_RIDERS: dict[str, tuple[str, object]] = {
     "you lose life equal to that card's mana value": (
         "lose_life_equal_mv", True,
     ),
+    "if that creature would leave the battlefield, exile it instead of "
+    "putting it anywhere else": ("exile_if_it_would_leave", True),
 }
 _EACH_PLAYER_REANIMATES_RE = re.compile(
     r"^each player puts (?P<desc>an? .+? card) from their graveyard onto "
@@ -305,17 +308,35 @@ def _parse_reanimate(m: re.Match) -> Effect | None:
     if f is None:
         return None
     kwargs: dict = {}
+    if m.group("counter") is not None:
+        kwargs["with_counter"] = m.group("counter")
+    extra: list = []
     riders = m.group("riders")
     if riders is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
         for sentence in riders.split(". "):
             key = sentence[0].lower() + sentence[1:]
             rider = _REANIMATE_RIDERS.get(key)
-            if rider is None or rider[0] in kwargs:
+            if rider is not None:
+                if rider[0] in kwargs:
+                    return None
+                kwargs[rider[0]] = rider[1]
+                continue
+            # A sentence that isn't about the returned card ("You take
+            # the initiative.") is an ordinary effect of the spell.
+            other = _parse_effect(key)
+            if other is None:
                 return None
-            kwargs[rider[0]] = rider[1]
-    return ReturnCardFromGraveyardToBattlefield(
+            extra.append(other)
+    base = ReturnCardFromGraveyardToBattlefield(
         card_filter=f, source=source, **kwargs,
     )
+    if not extra:
+        return base
+    from mtg_bot.cards.base import Sequence
+
+    return Sequence(effects=(base, *extra))
 
 
 # Expressive Iteration's distribution sentence: one card per pile.

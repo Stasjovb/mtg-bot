@@ -116,6 +116,8 @@ class CastSpell(Action):
     # plot cost, exile the card from hand face up). Encoded as a
     # CastSpell variant so the existing action vocabulary covers it.
     use_plot: bool = False
+    # Escape (CR 702.138): cast from the graveyard for the escape cost.
+    use_escape: bool = False
 
 
 @dataclass(frozen=True)
@@ -1187,6 +1189,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             cast_room_half=action.cast_room_half,
             use_flashback=action.use_flashback,
             use_buyback=action.use_buyback,
+            use_escape=action.use_escape,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1648,6 +1651,7 @@ def _cast_spell(
     cast_room_half: "str | None" = None,
     use_flashback: bool = False,
     use_buyback: bool = False,
+    use_escape: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
 
@@ -1661,7 +1665,20 @@ def _cast_spell(
     # ability is usable only for these casts).
     cast_from_outside_hand = False
     card = next((c for c in p.hand if c.id == card_id), None)
-    if use_flashback:
+    if use_escape:
+        # Escape (CR 702.138): cast from the graveyard for the escape
+        # cost; the "exile N other cards" part is paid with the other
+        # additional costs below.
+        card = next((c for c in p.graveyard if c.id == card_id), None)
+        if card is None or card.printing.escape_cost is None:  # pragma: no cover - legal_actions gates
+            raise ValueError(f"card {card_id} not escape-castable by P{player_id}")
+        cost = card.printing.escape_cost
+        cast_from_outside_hand = True
+        p.graveyard.remove(card)
+        card.cast_via_warp = False
+        card.cast_via_hand = False
+        card.flashback_granted_until_eot = False
+    elif use_flashback:
         # Flashback (CR 702.34): cast from the graveyard for the
         # flashback cost. ``legal_actions`` gates the offer; the card
         # is exiled when it leaves the stack (``move_spell_off_stack``).
@@ -2127,6 +2144,10 @@ def _cast_spell(
         )
 
         _pay_additional_sacrifice(state, player_id, card)
+    if use_escape and card.printing.escape_exile_count:
+        from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
+
+        _pay_escape_exile(state, player_id, card)
     if life_x_paid is not None:
         p.life -= life_x_paid
         x_value = life_x_paid

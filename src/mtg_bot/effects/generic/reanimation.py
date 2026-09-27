@@ -35,6 +35,8 @@ HASTE_RIDERS = (None, "until_end_of_turn", "permanent")
 def _reset_for_battlefield(card: "GameObject") -> None:
     """A card entering from the graveyard is a new object (CR 400.7):
     drop counters / damage left over from a previous battlefield stint."""
+    card.named_counters = ()
+    card.exile_instead_of_leaving = False
     card.plus_one_counters = 0
     card.minus_one_counters = 0
     card.charge_counters = 0
@@ -101,6 +103,11 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
     haste: "str | None" = None
     exile_at_next_end_step: bool = False
     lose_life_equal_mv: bool = False
+    # "... with a <name> counter on it" (From the Catacombs: corpse).
+    with_counter: "str | None" = None
+    # "If that creature would leave the battlefield, exile it instead of
+    # putting it anywhere else."
+    exile_if_it_would_leave: bool = False
 
     def __post_init__(self) -> None:
         if self.source not in REANIMATE_SOURCES:
@@ -142,6 +149,12 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
         reanimate_card(state, card, controller_id)
         if card not in state.battlefield:  # pragma: no cover - defensive
             return
+        if self.with_counter is not None:
+            from mtg_bot.game import add_named_counters
+
+            add_named_counters(card, self.with_counter)
+        if self.exile_if_it_would_leave:
+            card.exile_instead_of_leaving = True
         if self.haste is not None:
             _grant_haste(
                 state, controller_id, card,

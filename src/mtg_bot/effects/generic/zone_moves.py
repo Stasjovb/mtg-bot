@@ -95,6 +95,11 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
 
         # Strip the permanent off the battlefield with the same
         # housekeeping as other bounce-style effects.
+        if obj.exile_instead_of_leaving:
+            from mtg_bot.turn import move_off_battlefield
+
+            move_off_battlefield(state, obj, destination="exile")
+            return
         state.battlefield.remove(obj)
         from mtg_bot.game import restore_mdfc_front
 

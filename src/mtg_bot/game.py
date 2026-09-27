@@ -777,6 +777,21 @@ class GameObject:
     # Plot: the turn number the card was plotted (exiled face up) on;
     # -1 when not plotted. Castable for free from exile on a later turn.
     plotted_turn: int = -1
+    # Counters with no dedicated field ("a corpse counter"), as a sorted
+    # tuple of ``(name, count)`` pairs (immutable, so shallow clones are
+    # safe). Cleared when the object leaves the battlefield.
+    named_counters: tuple = ()
+    # "If that creature would leave the battlefield, exile it instead of
+    # putting it anywhere else." (From the Catacombs) — honored by every
+    # leave-battlefield path while the object stays on the battlefield.
+    exile_instead_of_leaving: bool = False
+
+
+def add_named_counters(obj: "GameObject", name: str, n: int = 1) -> None:
+    """Put ``n`` counters named ``name`` on ``obj``."""
+    counts = dict(obj.named_counters)
+    counts[name] = counts.get(name, 0) + n
+    obj.named_counters = tuple(sorted(counts.items()))
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

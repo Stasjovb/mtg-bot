@@ -650,6 +650,14 @@ _PITCH_ALT_COST_LINE_RE = re.compile(
 )
 
 
+# "Escape—{cost}, Exile N other cards from your graveyard." (CR
+# 702.138) -> ``escape_cost`` / ``escape_exile_count``.
+_ESCAPE_LINE_RE = re.compile(
+    r"^Escape—(?P<cost>(?:\{[^}]+\})+), [Ee]xile (?P<n>\w+) other cards "
+    r"from your graveyard\.$"
+)
+
+
 # "Plot {cost}" (CR 702.170) -> ``plot_cost``.
 _PLOT_LINE_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
 
@@ -666,6 +674,19 @@ def _casting_keyword_fields(clause: str) -> dict | None:
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
+    m = _ESCAPE_LINE_RE.match(clause.strip())
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
+
+        tok = m.group("n")
+        n = int(tok) if tok.isdigit() else _SMALL_CARDINAL_WORDS.get(tok)
+        if n is None:
+            return None
+        cost = m.group("cost")
+        return {
+            "escape_cost": parse_mana_cost(cost), "escape_cost_str": cost,
+            "escape_exile_count": n,
+        }
     m = _PLOT_LINE_RE.match(clause.strip())
     if m is not None:
         cost = m.group("cost")

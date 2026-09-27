@@ -256,6 +256,11 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             )
             if obj is None:
                 continue
+            if obj.exile_instead_of_leaving:
+                from mtg_bot.turn import move_off_battlefield
+
+                move_off_battlefield(state, obj, destination="exile")
+                continue
             state.battlefield.remove(obj)
             from mtg_bot.game import restore_mdfc_front
 

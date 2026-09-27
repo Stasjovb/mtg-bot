@@ -283,6 +283,10 @@ def move_off_battlefield(
     """
     if obj not in state.battlefield:
         return
+    if obj.exile_instead_of_leaving and destination != "exile":
+        # From the Catacombs: "If that creature would leave the
+        # battlefield, exile it instead of putting it anywhere else."
+        destination = "exile"
     if (
         destination == "graveyard"
         and not obj.printing.is_token
@@ -372,6 +376,8 @@ def move_off_battlefield(
     from mtg_bot.game import restore_mdfc_front
 
     restore_mdfc_front(obj)
+    obj.named_counters = ()
+    obj.exile_instead_of_leaving = False
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
