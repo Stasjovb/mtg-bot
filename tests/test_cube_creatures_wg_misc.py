@@ -190,3 +190,117 @@ def test_mole_man_moloid_tokens_mill_on_attack():
     moloid.summoning_sick = False
     attack(state, 0, [moloid.id])
     assert len(state.players[0].graveyard) == 1
+
+
+def test_ursine_monstrosity_combat_trigger():
+    from mtg_bot.designations import forced_attackers
+    from mtg_bot.effects.generic.cube_creatures_wg import MillChooseOpponentAttackPump
+    from mtg_bot.game import effective_power
+    from mtg_bot.turn import run_beginning_of_combat_triggers
+
+    pr = cube()["Ursine Monstrosity"]
+    eff = pr.triggered_abilities[0].effect
+    assert isinstance(eff, MillChooseOpponentAttackPump)
+    state = make_state()
+    ursine = put(state, 0, pr)
+    put(state, 0, "Lightning Bolt", Zone.GRAVEYARD)
+    put(state, 0, "Forest", Zone.LIBRARY)
+    state.step = Step.BEGINNING_OF_COMBAT
+    run_beginning_of_combat_triggers(state)
+    drain(state)
+    # Milled a land: instant + land = 2 card types.
+    assert effective_power(state, ursine) == 5
+    assert "indestructible" in effective_keywords(state, ursine)
+    assert ursine.id in forced_attackers(state, 0)
+    state.turn_number += 1
+    assert ursine.id not in forced_attackers(state, 0)
+    # Forced into the attack even if not declared.
+    state.turn_number -= 1
+    attack(state, 0, [])
+    assert ursine.attacking
+    assert "random" in eff.describe()
+
+
+def test_ursine_effect_edges():
+    from mtg_bot.effects.generic.cube_creatures_wg import MillChooseOpponentAttackPump
+
+    state = make_state()
+    eff = MillChooseOpponentAttackPump(mill=1)
+    eff.resolve(state, 0)  # empty library, no source: no crash
+    state.players[1].has_lost = True
+    ursine = put(state, 0, "Ursine Monstrosity")
+    state.resolving_source = ursine
+    eff.resolve(state, 0)
+    assert ursine.must_attack_turn == -1  # no opponent to attack
+
+
+def test_okoye_monarch_and_attack_bonus():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        CounterThenWhenItAttacksMonarch,
+        DefendingPlayerIsMonarch,
+    )
+    from mtg_bot.designations import become_monarch
+    from mtg_bot.turn import run_beginning_of_combat_triggers
+
+    pr = cube()["Okoye, Mighty and Adored"]
+    state = make_state()
+    okoye = put(state, 0, pr, Zone.HAND)
+    add_lands(state, 0, "Forest", 2)
+    add_lands(state, 0, "Plains", 2)
+    cast_and_resolve(state, 0, okoye)
+    assert state.players[0].is_monarch
+    ally = put(state, 0, bear("Ally"))
+    state.players[0].agent.scripts["target"] = [("creature", ally.id)]
+    state.step = Step.BEGINNING_OF_COMBAT
+    run_beginning_of_combat_triggers(state)
+    drain(state)
+    assert ally.plus_one_counters == 1
+    # Attacking a non-monarch: no bonus.
+    attack(state, 0, [ally.id])
+    assert "double strike" not in effective_keywords(state, ally)
+    ally.attacking = False
+    ally.tapped = False
+    become_monarch(state, 1)
+    attack(state, 0, [ally.id])
+    assert {"double strike", "trample"} <= effective_keywords(state, ally)
+    eff = next(
+        t.effect for t in pr.triggered_abilities
+        if isinstance(t.effect, CounterThenWhenItAttacksMonarch)
+    )
+    eff.resolve(state, 0, ())
+    assert "monarch" in eff.describe()
+    assert not DefendingPlayerIsMonarch().matches(state, {}, okoye)
+
+
+def test_backup_counters_and_keyword_grant():
+    from mtg_bot.cards.parser.creature_wg_lines import parse_wg_creature_line
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        Backup,
+        GrantKeywordsToObjectUEOT,
+    )
+
+    card = {
+        "name": "Champion",
+        "oracle_text": "Backup 1 (reminder.)\nDouble strike",
+    }
+    wg = parse_wg_creature_line("Backup 1", card)
+    eff = wg.triggers[0].effect
+    assert eff == Backup(n=1, keywords=frozenset({"double strike"}), targets=eff.targets)
+    assert parse_wg_creature_line(
+        "Backup 1", {"name": "C", "oracle_text": "Backup 1\nDraw a card."},
+    ) is None
+    assert parse_wg_creature_line("Backup 1", {"name": "C", "oracle_text": ""}) is None
+    state = make_state()
+    champ = put(state, 0, bear("Champion", "{2}{R}", 2, 1))
+    ally = put(state, 0, bear("Ally"))
+    state.resolving_source = champ
+    eff.resolve(state, 0, (("creature", ally.id),))
+    assert ally.plus_one_counters == 1
+    assert "double strike" in effective_keywords(state, ally)
+    eff.resolve(state, 0, (("creature", champ.id),))
+    assert champ.plus_one_counters == 1  # itself: counters only
+    eff.resolve(state, 0, ())
+    state.resolving_source = None
+    assert "backup" in eff.describe()
+    GrantKeywordsToObjectUEOT(obj_id=999).resolve(state, 0)
+    assert "gains" in GrantKeywordsToObjectUEOT().describe()

@@ -902,6 +902,10 @@ class GameObject:
     # paid for with mana that makes it uncounterable (Delighted
     # Halfling); honored by ``CounterTargetSpell._is_uncounterable``.
     cast_uncounterable: bool = False
+    # Turn number in which this creature "attacks that player this
+    # combat if able" (Ursine Monstrosity); -1 otherwise. Read by
+    # ``designations.forced_attackers``.
+    must_attack_turn: int = -1
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

@@ -76,7 +76,13 @@ def forced_attackers(state: "GameState", player_id: int) -> list[int]:
     from mtg_bot.combat import eligible_attackers
 
     eligible = eligible_attackers(state, player_id)
-    forced = [o.id for o in eligible if o.goaded_by is not None]
+    forced = [
+        o.id for o in eligible
+        if o.goaded_by is not None
+        # "This creature attacks that player this combat if able."
+        # (Ursine Monstrosity; cube W/G bucket).
+        or o.must_attack_turn == state.turn_number
+    ]
     # "... attacks each combat if able." statics (cube creatures bucket).
     from mtg_bot.effects.generic.cube_creatures_rmc import must_attack_ids
 

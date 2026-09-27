@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target, TriggeredAbility
 from mtg_bot.effects.conditions import Condition
+from mtg_bot.effects.object_predicates import ObjectPredicate
 from mtg_bot.effects.predicates import TriggerPredicate
 
 if TYPE_CHECKING:
@@ -1113,3 +1114,198 @@ class CreateAttackingTokenForEachOpponent(Effect):
             f"for each opponent, create a {self.token_printing.name} token "
             f"that's tapped and attacking"
         )
+
+
+# ---------------------------------------------------------------------
+# Ursine Monstrosity
+# ---------------------------------------------------------------------
+
+
+def _card_types_in_graveyard(player) -> int:
+    seen = set()
+    for card in player.graveyard:
+        seen.update(t for t in card.printing.card_types if t in _CARD_TYPES)
+    return len(seen)
+
+
+@dataclass(frozen=True)
+class MillChooseOpponentAttackPump(Effect):
+    """Ursine Monstrosity's beginning-of-combat body: "Mill a card and
+    choose an opponent at random. This creature attacks that player
+    this combat if able. Until end of turn, this creature gains
+    <keywords> and gets +1/+1 for each card type among cards in your
+    graveyard." The opponent is chosen with ``state.rng`` (two players:
+    the opponent); the attack requirement is
+    ``GameObject.must_attack_turn`` (``designations.forced_attackers``);
+    the bonus is counted as the ability resolves."""
+
+    mill: int = 1
+    keywords: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        for _ in range(self.mill):
+            if p.library:
+                card = p.library.pop(0)
+                card.zone = Zone.GRAVEYARD
+                p.graveyard.append(card)
+        opponents = [
+            o for o in state.players if o.id != controller_id and not o.has_lost
+        ]
+        if opponents:
+            chosen = state.rng.choice(opponents)
+            state.log.append(f"P{controller_id} chooses P{chosen.id} at random")
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if opponents:
+            source.must_attack_turn = state.turn_number
+        n = _card_types_in_graveyard(p)
+        PumpSelfUntilEOT(
+            power_bonus=n, toughness_bonus=n, granted_keywords=self.keywords,
+        ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"mill {self.mill}; this creature attacks a random opponent if "
+            f"able and gets +1/+1 per card type in your graveyard UEOT"
+        )
+
+
+# ---------------------------------------------------------------------
+# Okoye, Mighty and Adored
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IsObjectWithId(ObjectPredicate):
+    """The object is the one with id ``obj_id`` ("that creature")."""
+
+    obj_id: int = -1
+
+    def test(self, obj, state):
+        return getattr(obj, "id", None) == self.obj_id
+
+
+@dataclass(frozen=True)
+class DefendingPlayerIsMonarch(TriggerPredicate):
+    """The attacking creature attacks the monarch: its defending player
+    (an opponent of its controller -- the engine's one defending
+    player) is the monarch."""
+
+    def matches(self, state, subjects, source):
+        attacker = subjects.get("attacker")
+        if attacker is None:
+            return False
+        return any(
+            p.is_monarch and p.id != attacker.controller_id
+            for p in state.players
+        )
+
+
+@dataclass(frozen=True)
+class GrantKeywordsToObjectUEOT(Effect):
+    """"<That creature> gains <keywords> until end of turn." for a fixed
+    object id (a delayed trigger's "that creature")."""
+
+    obj_id: int = -1
+    keywords: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.grant_keywords import GrantKeywords
+
+        if not any(o.id == self.obj_id for o in state.battlefield):
+            return
+        ApplyEffect(
+            inner=GrantKeywords(keywords=self.keywords), ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", self.obj_id),))
+
+    def describe(self) -> str:
+        return "that creature gains keywords until end of turn"
+
+
+@dataclass(frozen=True)
+class CounterThenWhenItAttacksMonarch(Effect):
+    """"Put a +1/+1 counter on target creature. Whenever that creature
+    attacks the monarch this turn, it gains <keywords> until end of
+    turn." (Okoye.) The delayed trigger is a this-turn command-zone
+    holder (``spell_misc.CreateThisTurnTriggeredAbility``)."""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.spell_misc import (
+            CreateThisTurnTriggeredAbility,
+        )
+        from mtg_bot.effects.predicates import Event, Subject
+        from mtg_bot.game import add_plus_one_counters
+
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = _target_object(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if obj is None:
+            return
+        add_plus_one_counters(state, obj, 1)
+        CreateThisTurnTriggeredAbility(triggered_abilities=(TriggeredAbility(
+            event=Event.ATTACKS,
+            predicate=Subject("attacker", IsObjectWithId(obj.id))
+            & DefendingPlayerIsMonarch(),
+            effect=GrantKeywordsToObjectUEOT(obj_id=obj.id, keywords=self.keywords),
+        ),)).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "put a +1/+1 counter on target creature; when it attacks the "
+            "monarch this turn it gains keywords"
+        )
+
+
+# ---------------------------------------------------------------------
+# Backup N (CR 702.165)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Backup(Effect):
+    """Backup N: "When this creature enters, put N +1/+1 counters on
+    target creature. If that's another creature, it gains the following
+    abilities until end of turn." ``keywords`` are the keyword abilities
+    printed after the Backup line."""
+
+    n: int = 1
+    keywords: frozenset = frozenset()
+    targets: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import add_plus_one_counters
+
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = _target_object(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if obj is None:
+            return
+        add_plus_one_counters(state, obj, self.n)
+        source = state.resolving_source
+        if self.keywords and (source is None or obj.id != source.id):
+            GrantKeywordsToObjectUEOT(
+                obj_id=obj.id, keywords=self.keywords,
+            ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return f"backup {self.n}"

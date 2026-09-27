@@ -68,6 +68,11 @@ Shapes:
   legendary spell, and that spell can't be countered`` -> restricted
   ``AddManaToPool`` whose coins make the spell uncounterable (Delighted
   Halfling)
+* Ursine Monstrosity's mill / random-opponent attack requirement /
+  per-card-type pump body -> :class:`MillChooseOpponentAttackPump`
+* ``put a +1/+1 counter on target <noun>. Whenever that creature attacks
+  the monarch this turn, it gains <keywords> until end of turn`` ->
+  :class:`CounterThenWhenItAttacksMonarch` (Okoye)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -179,6 +184,17 @@ _NAMED_TOKEN_WITH_TRIGGER_RE = re.compile(
 _ANY_COLOR_UNCOUNTERABLE_RESTRICTED_RE = re.compile(
     r"^add one mana of any color\. Spend this mana only to cast an? "
     r"(?P<kind>legendary|artifact) spell, and that spell can't be countered$"
+)
+_MILL_CHOOSE_OPPONENT_ATTACK_PUMP_RE = re.compile(
+    r"^mill a card and choose an opponent at random\. This creature attacks "
+    r"that player this combat if able\. Until end of turn, this creature "
+    r"gains (?P<kw>.+?) and gets \+1/\+1 for each card type among cards in "
+    r"your graveyard$"
+)
+_COUNTER_THEN_ATTACKS_MONARCH_RE = re.compile(
+    r"^put a \+1/\+1 counter on target (?P<noun>.+?)\. Whenever that "
+    r"creature attacks the monarch this turn, it gains (?P<kw>.+) until end "
+    r"of turn$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -436,6 +452,21 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _MILL_CHOOSE_OPPONENT_ATTACK_PUMP_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _keywords
+
+        kws = _keywords(m.group("kw"))
+        if kws:
+            return wg.MillChooseOpponentAttackPump(mill=1, keywords=kws)
+    m = _COUNTER_THEN_ATTACKS_MONARCH_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _keywords
+
+        spec = _target_spec(m.group("noun"), False)
+        kws = _keywords(m.group("kw"))
+        if spec is not None and kws:
+            return wg.CounterThenWhenItAttacksMonarch(targets=(spec,), keywords=kws)
     m = _ANY_COLOR_UNCOUNTERABLE_RESTRICTED_RE.match(phrase)
     if m is not None:
         from mtg_bot.effects.generic.mana import AddManaToPool

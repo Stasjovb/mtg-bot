@@ -371,6 +371,51 @@ def _parse_activation_lock_line(line: str, card: dict) -> WGLine | None:
     })
 
 
+# ---------------------------------------------------------------------
+# Backup N (CR 702.165)
+# ---------------------------------------------------------------------
+
+_BACKUP_RE = re.compile(r"^Backup (?P<n>\d+)$")
+
+
+def _parse_backup_line(line: str, card: dict) -> WGLine | None:
+    """``Backup N``: the ETB trigger putting N +1/+1 counters on target
+    creature; if it's another creature it gains "the following
+    abilities" -- every line printed after Backup, which must all be
+    keyword lines (those keywords are also the card's own)."""
+    m = _BACKUP_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_wg import Backup
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.targets import TargetSpec
+
+    lines = [
+        _strip_reminder_text(raw) for raw in card.get("oracle_text", "").split("\n")
+    ]
+    stripped = [ln for ln in lines if ln]
+    if line not in stripped:
+        return None
+    following = stripped[stripped.index(line) + 1:]
+    keywords: list[str] = []
+    for ln in following:
+        kws = _parse_keyword_line(ln)
+        if kws is None:
+            return None
+        keywords.extend(kws)
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=Backup(
+            n=int(m.group("n")), keywords=frozenset(keywords),
+            targets=(TargetSpec(filter=IsCreature()),),
+        ),
+    ),))
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -385,6 +430,7 @@ _RECOGNIZERS = (
     _parse_exiled_with_card_types_static,
     _parse_quote_final_line,
     _parse_activation_lock_line,
+    _parse_backup_line,
 )
 
 
