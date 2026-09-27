@@ -1010,8 +1010,10 @@ class CardPrinting:
     #   "emissary_escort": +X/+0 where X is the greatest mana value
     #     among OTHER artifacts the controller controls; base stays
     #     printed (0/4).
+    # A structured formula object with a ``base_pt(state, obj)`` method
+    # (cube W/G bucket: ``PowerEqualsCount`` -- Adeline) computes itself.
     # None = use printed P/T (default).
-    dynamic_pt_formula: str | None = None
+    dynamic_pt_formula: "str | object | None" = None
     # Spell-cast restriction: when any permanent with this flag is on
     # the battlefield (regardless of controller), each player may cast
     # at most one noncreature spell per turn. Matches Deafening Silence.

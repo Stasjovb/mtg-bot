@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target, TriggeredAbility
+from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.predicates import TriggerPredicate
 
 if TYPE_CHECKING:
@@ -1033,3 +1034,82 @@ class GrantKeywordsUEOTThenExplores(Effect):
 
     def describe(self) -> str:
         return "target creature gains keywords until end of turn; it explores"
+
+
+# ---------------------------------------------------------------------
+# Keen-Eyed Curator
+# ---------------------------------------------------------------------
+
+_CARD_TYPES = (
+    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
+    "Land", "Planeswalker", "Sorcery",
+)
+
+
+
+@dataclass(frozen=True)
+class CardTypesAmongExiledWithSourceAtLeast(Condition):
+    """"As long as there are N or more card types among cards exiled
+    with this creature" -- a source-aware static condition
+    (``StaticAbility.applies_to`` calls :meth:`matches_for_source`). Its
+    presence links the card's exiling abilities (CR 607.2a)."""
+
+    consumes_exile_link = True
+
+    n: int = 4
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return False  # only meaningful with a source
+
+    def matches_for_source(self, state, source) -> bool:
+        seen = set()
+        for card in cards_exiled_with(state, source):
+            seen.update(t for t in card.printing.card_types if t in _CARD_TYPES)
+        return len(seen) >= self.n
+
+
+# ---------------------------------------------------------------------
+# Adeline, Resplendent Cathar
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PowerEqualsCount:
+    """Structured ``dynamic_pt_formula``: "<This>'s power is equal to
+    the number of <permanents>" -- base power is the count of
+    battlefield permanents matching ``count_filter`` (evaluated for the
+    creature's controller); toughness stays printed. Read by
+    ``game._dynamic_base_pt`` through :meth:`base_pt`."""
+
+    count_filter: "object" = None
+
+    def base_pt(self, state, obj) -> tuple[int, int]:
+        n = len(_matching_permanents(state, obj.controller_id, self.count_filter))
+        return n, obj.printing.toughness or 0
+
+
+@dataclass(frozen=True)
+class CreateAttackingTokenForEachOpponent(Effect):
+    """"For each opponent, create <token> that's tapped and attacking that
+    player or a planeswalker they control." (Adeline.) The engine's
+    attack model has one defending player; each token attacks that
+    player (attacking a planeswalker instead isn't offered)."""
+
+    token_printing: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        opponents = [
+            p for p in state.players if p.id != controller_id and not p.has_lost
+        ]
+        for _ in opponents:
+            CreateToken(
+                token_printing=self.token_printing, tapped=True, attacking=True,
+            ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"for each opponent, create a {self.token_printing.name} token "
+            f"that's tapped and attacking"
+        )

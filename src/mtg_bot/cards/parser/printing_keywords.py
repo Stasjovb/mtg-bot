@@ -580,7 +580,8 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
 
     Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``;
     parameterized shapes (any name) fall back to
-    ``creature_rmc_grammar.parse_rmc_dynamic_pt_line``.
+    ``creature_rmc_grammar.parse_rmc_dynamic_pt_line`` and then
+    ``creature_wg_lines.parse_wg_dynamic_pt_line`` (cube W/G bucket).
     """
     key = _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
     if key is not None:
@@ -589,7 +590,12 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
         parse_rmc_dynamic_pt_line,
     )
 
-    return parse_rmc_dynamic_pt_line(line.strip())
+    rmc = parse_rmc_dynamic_pt_line(line.strip())
+    if rmc is not None:
+        return rmc
+    from mtg_bot.cards.parser.creature_wg_lines import parse_wg_dynamic_pt_line
+
+    return parse_wg_dynamic_pt_line(line.strip())
 
 
 def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:

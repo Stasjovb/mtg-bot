@@ -882,7 +882,13 @@ class StaticAbility:
         if self.condition is not None:
             if state is None:
                 return False
-            if not self.condition.matches(
+            # A source-aware condition ("cards exiled with this
+            # creature" -- Keen-Eyed Curator) reads the static's source.
+            source_check = getattr(self.condition, "matches_for_source", None)
+            if source_check is not None:
+                if not source_check(state, source):
+                    return False
+            elif not self.condition.matches(
                 state, source.controller_id, chosen_targets=None,
             ):
                 return False

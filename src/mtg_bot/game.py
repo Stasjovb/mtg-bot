@@ -1584,6 +1584,11 @@ def _dynamic_base_pt(
     formula = obj.printing.dynamic_pt_formula
     if formula is None:
         return None
+    # Structured formulas (cube W/G bucket: Adeline's "power is equal to
+    # the number of creatures you control") compute themselves.
+    compute = getattr(formula, "base_pt", None)
+    if compute is not None:
+        return compute(state, obj)
     if formula == "cosmogoyf":
         # Cards owned in exile (by the creature's controller).
         controller = state.player_by_id(obj.controller_id)

@@ -112,3 +112,81 @@ def test_guerrilla_gorilla_and_haywire_mite():
     drain(state)
     assert vault in state.players[1].exile
     assert state.players[0].life == 22  # Mite's dies trigger
+
+
+def test_keen_eyed_curator_grows_with_four_exiled_card_types():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        CardTypesAmongExiledWithSourceAtLeast,
+        LinkExiledCardsToSource,
+    )
+    from mtg_bot.game import effective_power
+
+    pr = cube()["Keen-Eyed Curator"]
+    assert isinstance(pr.activated_abilities[0].effect, LinkExiledCardsToSource)
+    state = make_state()
+    cur = put(state, 0, pr)
+    add_lands(state, 0, "Forest", 4)
+    cards = [
+        put(state, 1, n, Zone.GRAVEYARD)
+        for n in ("Forest", "Lightning Bolt", "Llanowar Elves", "Sol Ring")
+    ]
+    agent = state.players[0].agent
+    for i, card in enumerate(cards):
+        agent.scripts["target"] = [("card_in_graveyard", card.id)]
+        apply_action(state, 0, ActivateAbility(source_id=cur.id, ability_index=0))
+        drain(state)
+        if i < 3:
+            assert effective_power(state, cur) == 3
+    assert all(c in state.players[1].exile for c in cards)
+    assert effective_power(state, cur) == 7
+    assert "trample" in effective_keywords(state, cur)
+    assert not CardTypesAmongExiledWithSourceAtLeast(4).matches(state, 0)
+
+
+def test_adeline_power_and_attack_tokens():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        CreateAttackingTokenForEachOpponent,
+        PowerEqualsCount,
+    )
+    from mtg_bot.game import effective_power
+
+    pr = cube()["Adeline, Resplendent Cathar"]
+    assert isinstance(pr.dynamic_pt_formula, PowerEqualsCount)
+    assert "vigilance" in pr.keywords
+    state = make_state()
+    adeline = put(state, 0, pr)
+    assert effective_power(state, adeline) == 1
+    other = put(state, 0, bear("Other"))
+    put(state, 1, bear("Theirs"))
+    assert effective_power(state, adeline) == 2
+    attack(state, 0, [adeline.id, other.id])
+    humans = [o for o in state.battlefield if o.printing.name == "Human"]
+    assert len(humans) == 1
+    assert humans[0].tapped and humans[0].attacking
+    assert humans[0].printing.color_indicator == frozenset({"W"})
+    assert effective_power(state, adeline) == 3
+    eff = next(
+        t.effect for t in pr.triggered_abilities
+        if isinstance(t.effect, CreateAttackingTokenForEachOpponent)
+    )
+    assert "each opponent" in eff.describe()
+
+
+def test_mole_man_moloid_tokens_mill_on_attack():
+    pr = cube()["Mole Man, Moloid Master"]
+    assert pr.grants_play_lands_from_graveyard
+    state = make_state()
+    put(state, 0, pr)
+    for _ in range(2):
+        put(state, 0, "Forest", Zone.LIBRARY)
+    land = put(state, 0, "Forest", Zone.HAND)
+    state.players[0].hand.remove(land)
+    put_into_battlefield(state, land, 0)
+    drain(state)
+    moloids = [o for o in state.battlefield if o.printing.name == "Moloid"]
+    assert len(moloids) == 1
+    moloid = moloids[0]
+    assert moloid.printing.subtypes == ("Minion",)
+    moloid.summoning_sick = False
+    attack(state, 0, [moloid.id])
+    assert len(state.players[0].graveyard) == 1

@@ -226,7 +226,9 @@ def test_synthesized_creature_tokens(phrase, name, count, pt, kws, colors, flags
 @pytest.mark.parametrize(
     "phrase",
     [
-        'create a 1/1 green Minion creature token named Moloid with "Whenever this token attacks, you may mill a card."',
+        # A named token's quoted trigger parses since the cube W/G bucket
+        # (Mole Man's Moloid); an unparseable quoted trigger still refuses.
+        'create a 1/1 green Minion creature token named Moloid with "Whenever this token attacks, dance wildly."',
         "create a 1/1 red Goblin creature token with banding",
         'create a 1/1 black Rat creature token with "This creature can\'t block."',
     ],

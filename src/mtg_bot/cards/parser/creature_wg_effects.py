@@ -59,6 +59,11 @@ Shapes:
   to its other types`` -> :class:`PutCountersOnTargetAndAddSubtype`
 * ``target <noun> gains <keywords> until end of turn. It explores`` ->
   :class:`GrantKeywordsUEOTThenExplores` (Seasoned Dungeoneer)
+* ``for each opponent, create <a token> that's tapped and attacking that
+  player or a planeswalker they control`` ->
+  :class:`CreateAttackingTokenForEachOpponent` (Adeline)
+* ``create a P/T <color> <Subtypes> creature token named <Name> with
+  "<trigger>"`` -> ``CreateToken`` carrying the trigger (Mole Man)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -157,6 +162,15 @@ _COUNTERS_ON_TARGET_BECOMES_SUBTYPE_RE = re.compile(
 )
 _GAINS_UEOT_THEN_EXPLORES_RE = re.compile(
     r"^target (?P<noun>.+?) gains (?P<kw>.+?) until end of turn\. It explores$"
+)
+_FOR_EACH_OPPONENT_ATTACKING_TOKEN_RE = re.compile(
+    r"^for each opponent, create (?P<tok>an? .+? creature token) that's "
+    r"tapped and attacking that player or a planeswalker they control$"
+)
+_NAMED_TOKEN_WITH_TRIGGER_RE = re.compile(
+    r"^create an? (?P<p>\d+)/(?P<t>\d+) (?P<color>white|blue|black|red|green|"
+    r"colorless) (?P<sub>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature token named "
+    r"(?P<name>[A-Z][A-Za-z' ]*?) with \"(?P<ability>.+)\"$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -262,6 +276,34 @@ def parse_counter_list(text: str):
         count = 1 if n in ("a", "an") else (int(n) if n.isdigit() else _WORD_NUMBERS[n])
         out.append((kind, count))
     return tuple(out)
+
+
+def _named_token_with_trigger(m):
+    """``create a P/T <color> <Subtypes> creature token named <Name> with
+    "<triggered ability>"`` (Mole Man's Moloid) -> ``CreateToken`` whose
+    printing carries the quoted trigger ("this token" reads as the
+    token itself)."""
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    from mtg_bot.effects.generic.tokens import CreateToken
+
+    body = m.group("ability").replace("this token", "this creature")
+    if not body.endswith("."):
+        body += "."
+    parsed = _parse_triggered_ability_line(body)
+    if parsed is None:
+        return None
+    arms = parsed if isinstance(parsed, tuple) else (parsed,)
+    color = _COLOR_LETTERS.get(m.group("color"))
+    printing = make_token_creature(
+        name=m.group("name"), power=int(m.group("p")),
+        toughness=int(m.group("t")),
+        subtypes=tuple(m.group("sub").split(" ")),
+        colors=(color,) if color else (),
+    )
+    from dataclasses import replace
+
+    return CreateToken(token_printing=replace(printing, triggered_abilities=arms))
 
 
 _THAT_PLAYER_CONTROLS = " that player controls"
@@ -385,6 +427,21 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         if counters is not None and spec is not None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
+            )
+    m = _NAMED_TOKEN_WITH_TRIGGER_RE.match(phrase)
+    if m is not None:
+        token = _named_token_with_trigger(m)
+        if token is not None:
+            return token
+    m = _FOR_EACH_OPPONENT_ATTACKING_TOKEN_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        base = _parse_effect("create " + m.group("tok"))
+        if isinstance(base, CreateToken) and base.count == 1:
+            return wg.CreateAttackingTokenForEachOpponent(
+                token_printing=base.token_printing,
             )
     m = _GAINS_UEOT_THEN_EXPLORES_RE.match(phrase)
     if m is not None:

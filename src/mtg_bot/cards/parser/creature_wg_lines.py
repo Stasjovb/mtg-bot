@@ -278,6 +278,72 @@ def _parse_enters_with_counters_line(line: str, card: dict) -> WGLine | None:
     return WGLine(fields=fields)
 
 
+# ---------------------------------------------------------------------
+# "As long as ... cards exiled with this creature" (Keen-Eyed Curator)
+# ---------------------------------------------------------------------
+
+_EXILED_WITH_CARD_TYPES_STATIC_RE = re.compile(
+    r"^As long as there are (?P<n>two|three|four|five|\d+) or more card "
+    r"types among cards exiled with this creature, it gets "
+    r"\+(?P<p>\d+)/\+(?P<t>\d+)(?: and has (?P<kw>.+))?\.$"
+)
+_SMALL_NUMBERS = {"two": 2, "three": 3, "four": 4, "five": 5}
+
+
+def _parse_exiled_with_card_types_static(line: str, card: dict) -> WGLine | None:
+    """``As long as there are N or more card types among cards exiled with
+    this creature, it gets +P/+T[ and has <keywords>].`` -> a SELF static
+    gated by :class:`CardTypesAmongExiledWithSourceAtLeast` (which also
+    links the card's exiling abilities)."""
+    m = _EXILED_WITH_CARD_TYPES_STATIC_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.effects_ext import _keywords
+    from mtg_bot.effects.base import StaticAbility, StaticScope
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        CardTypesAmongExiledWithSourceAtLeast,
+    )
+
+    kws = _keywords(m.group("kw"))
+    if kws is None:
+        return None
+    n = m.group("n")
+    return WGLine(statics=(StaticAbility(
+        scope=StaticScope.SELF,
+        power_bonus=int(m.group("p")),
+        toughness_bonus=int(m.group("t")),
+        granted_keywords=kws,
+        condition=CardTypesAmongExiledWithSourceAtLeast(
+            n=int(n) if n.isdigit() else _SMALL_NUMBERS[n],
+        ),
+    ),))
+
+
+# ---------------------------------------------------------------------
+# Lines ending in a quoted ability
+# ---------------------------------------------------------------------
+
+
+def _parse_quote_final_line(line: str, card: dict) -> WGLine | None:
+    """A line whose last sentence is a quoted ability ends in ``."``
+    (the period inside the quote -- Mole Man's ``... with "Whenever this
+    token attacks, you may mill a card."``); the clause grammar expects
+    the sentence period last. Re-parse with the period moved outside."""
+    if not line.endswith('."'):
+        return None
+    from mtg_bot.cards.parser.clause import _parse_clause
+
+    parsed = _parse_clause(line[:-2] + '".', name=card["name"])
+    if parsed is None:
+        return None
+    return WGLine(
+        keywords=tuple(parsed.keywords),
+        triggers=tuple(parsed.triggers),
+        activated=(parsed.activated,) if parsed.activated is not None else (),
+        statics=tuple(parsed.statics),
+    )
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -289,6 +355,8 @@ _RECOGNIZERS = (
     _parse_your_creatures_damage_unpreventable_line,
     _parse_graveyard_arrival_line,
     _parse_enters_with_counters_line,
+    _parse_exiled_with_card_types_static,
+    _parse_quote_final_line,
 )
 
 
@@ -366,6 +434,38 @@ def parse_wg_hand_ability_line(line: str):
         effect=effect,
         is_mana_ability=_is_mana_ability_effect(effect),
     )
+
+
+# ---------------------------------------------------------------------
+# Dynamic P/T (``printing_keywords._parse_dynamic_pt_formula_line``)
+# ---------------------------------------------------------------------
+
+_POWER_EQUALS_COUNT_RE = re.compile(
+    r"^(?:This creature|[A-Z][^.]*?)'s power is equal to the number of "
+    r"(?P<noun>[a-z][a-z ]*)\.$"
+)
+
+
+def parse_wg_dynamic_pt_line(line: str):
+    """``<This>'s power is equal to the number of <permanents you
+    control>.`` (Adeline) -> a structured ``dynamic_pt_formula``
+    (:class:`PowerEqualsCount`); ``None`` otherwise."""
+    from mtg_bot.cards.parser.creature_wg_effects import (
+        _controlled,
+        wg_grammar_disabled,
+    )
+
+    if wg_grammar_disabled():
+        return None
+    m = _POWER_EQUALS_COUNT_RE.match(line)
+    if m is None:
+        return None
+    f = _controlled(m.group("noun"))
+    if f is None:
+        return None
+    from mtg_bot.effects.generic.cube_creatures_wg import PowerEqualsCount
+
+    return PowerEqualsCount(count_filter=f)
 
 
 def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
