@@ -364,6 +364,11 @@ def _parse_affinity_line(line: str) -> CostReduction | None:
     m = _AFFINITY_FOR_LINE.match(line.strip())
     if m is None:
         return None
+    if m.group(1).strip() == "artifacts":
+        # A card type, not a subtype (Emry, Lurker of the Loch).
+        from mtg_bot.effects.object_predicates import IsArtifact
+
+        return CostReduction(amount=1, condition=PerControlled(IsArtifact()))
     subtype = m.group(1).strip().rstrip("s")  # normalize plural → singular
     # Scryfall prints the subtype in plural form: ``Affinity for Slivers``.
     # ``HasSubtype`` tests against the singular subtype name (``"Sliver"``),

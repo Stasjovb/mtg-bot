@@ -26,6 +26,10 @@ _DRAWS_TRIGGER = re.compile(
 )
 
 
+# "this creature or another <noun> you control enters" (Kappa Cannoneer)
+_SELF_OR_ANOTHER_ENTERS = re.compile(
+    r"^this creature or another (?P<noun>[a-z ]+?) you control enters$"
+)
 # "[another|a] <noun>[ you control] leaves the battlefield"
 _LEAVES_TRIGGER = re.compile(
     r"^(?P<det>a|an|another) (?P<noun>[a-z ]+?)(?P<mine> you control)? "
@@ -97,6 +101,15 @@ def parse_ub_trigger_phrase(phrase: str):
             IsSelf(subject="source")
             & Subject("target", IsPlayer() | IsPlaneswalker()),
         )
+    m = _SELF_OR_ANOTHER_ENTERS.match(phrase)
+    if m is not None:
+        noun = _leaves_noun(m.group("noun"))
+        if noun is None:
+            return None
+        return (
+            Event.ENTERS,
+            IsSelf() | (Subject(None, noun) & Controlled(YOU) & ~IsSelf()),
+        )
     m = _LEAVES_TRIGGER.match(phrase)
     if m is not None:
         noun = _leaves_noun(m.group("noun"))
@@ -141,6 +154,16 @@ def bind_event_player_anaphora(event, effect: Effect) -> Effect:
 
 
 _AMASS = re.compile(r"^amass (?P<type>[A-Z][a-z]+?)s? (?P<n>\d+)$")
+# Emry: "choose target <desc> card in your graveyard. You may cast that
+# card this turn"
+_CHOOSE_GY_CARD_MAY_CAST = re.compile(
+    r"^choose target (?P<desc>.+? card) in your graveyard\. You may cast "
+    r"that card this turn$"
+)
+# "<sentence ending in "this creature">. It <rest>" (Kappa Cannoneer).
+_SELF_SENTENCE_THEN_IT = re.compile(
+    r"^(?P<first>[^.]+ this creature)\. It (?P<rest>[^.]+)$"
+)
 # "<sentence about this creature>. Tap it." -- "it" is the source.
 _SELF_SENTENCE_THEN_TAP_IT = re.compile(
     r"^(?P<first>this creature [^.]+)\. [Tt]ap it$"
@@ -158,12 +181,35 @@ def parse_ub_effect(phrase: str) -> Effect | None:
     from mtg_bot.effects.generic.cube_creatures_ub import (
         Amass,
         RevealTopCardToHandLoseLifeEqualMV,
+        SourceCantBeBlockedThisTurn,
         TapSelf,
     )
 
     m = _AMASS.match(phrase)
     if m is not None:
         return Amass(subtype=m.group("type"), amount=int(m.group("n")))
+    m = _SELF_SENTENCE_THEN_IT.match(phrase)
+    if m is not None:
+        # "<... this creature>. It <verb ...>": "It" is the source.
+        first = _parse_effect(m.group("first"))
+        second = _parse_effect("this creature " + m.group("rest"))
+        if first is not None and second is not None:
+            return Sequence(effects=(first, second))
+    m = _CHOOSE_GY_CARD_MAY_CAST.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import (
+            parse_card_descriptor,
+        )
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            MayCastTargetGraveyardCardThisTurn,
+        )
+
+        f = parse_card_descriptor("a " + m.group("desc"))
+        if f is None:
+            return None
+        return MayCastTargetGraveyardCardThisTurn(card_filter=f)
+    if phrase == "this creature can't be blocked this turn":
+        return SourceCantBeBlockedThisTurn()
     m = _SELF_SENTENCE_THEN_TAP_IT.match(phrase)
     if m is not None:
         first = _parse_effect(m.group("first"))
@@ -276,18 +322,19 @@ class UBLine:
 
     __slots__ = (
         "keywords", "triggers", "activated", "statics", "hand_abilities",
-        "fields",
+        "cost_reductions", "fields",
     )
 
     def __init__(
         self, *, keywords=(), triggers=(), activated=(), statics=(),
-        hand_abilities=(), fields=None,
+        hand_abilities=(), cost_reductions=(), fields=None,
     ):
         self.keywords = tuple(keywords)
         self.triggers = tuple(triggers)
         self.activated = tuple(activated)
         self.statics = tuple(statics)
         self.hand_abilities = tuple(hand_abilities)
+        self.cost_reductions = tuple(cost_reductions)
         self.fields = dict(fields or {})
 
 
@@ -403,7 +450,21 @@ def _parse_squad_offspring_line(line: str) -> UBLine | None:
     )
 
 
+def _parse_cost_keyword_line(line: str) -> UBLine | None:
+    """``Improvise`` (CR 702.126) and ``Affinity for <quality>`` (CR
+    702.41) on a creature."""
+    from mtg_bot.cards.parser.cost_reduction import _parse_affinity_line
+
+    if line == "Improvise":
+        return UBLine(fields={"has_improvise": True})
+    affinity = _parse_affinity_line(line)
+    if affinity is not None:
+        return UBLine(cost_reductions=(affinity,))
+    return None
+
+
 _LINE_PARSERS = (
+    _parse_cost_keyword_line,
     _parse_squad_offspring_line,
     _parse_draw_replacement_line,
     _parse_hand_ability_line,

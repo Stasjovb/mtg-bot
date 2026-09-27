@@ -922,6 +922,9 @@ class GameObject:
     # is a new object whose costs weren't paid).
     squad_paid_count: int = 0
     offspring_paid: bool = False
+    # "You may cast that card this turn." (Emry, Lurker of the Loch):
+    # this graveyard card may be cast for its mana cost until cleanup.
+    castable_from_graveyard_this_turn: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

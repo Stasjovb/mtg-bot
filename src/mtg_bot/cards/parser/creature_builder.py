@@ -861,6 +861,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             activated.extend(ub_line.activated)
             statics.extend(ub_line.statics)
             ub_hand_abilities.extend(ub_line.hand_abilities)
+            cost_reductions.extend(ub_line.cost_reductions)
             ub_fields.update(ub_line.fields)
             continue
         # Pass the printing's own name to the clause dispatcher so the

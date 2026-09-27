@@ -1394,6 +1394,9 @@ class CardPrinting:
     # paid, a 1/1 token copy when it enters.
     offspring_cost: ManaCost | None = None
     offspring_cost_str: str = ""
+    # Improvise (CR 702.126): each untapped artifact the caster taps
+    # while paying pays for {1}.
+    has_improvise: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

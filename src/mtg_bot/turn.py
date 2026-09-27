@@ -1509,13 +1509,17 @@ def run_cleanup_step(state: GameState) -> None:
         p.cards_drawn_this_turn = 0
         p.may_play_from_graveyard_this_turn = False
         p.graveyard_exile_replacement_this_turn = False
-        if any(c.flashback_granted_until_eot for c in p.graveyard):
+        if any(
+            c.flashback_granted_until_eot or c.castable_from_graveyard_this_turn
+            for c in p.graveyard
+        ):
             from mtg_bot.game import _CowList
 
             if isinstance(p.graveyard, _CowList):
                 p.graveyard.fork()
             for c in p.graveyard:
                 c.flashback_granted_until_eot = False
+                c.castable_from_graveyard_this_turn = False
         p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0

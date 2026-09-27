@@ -200,6 +200,7 @@ def _can_cast(
         state, player_id, cost,
         spell_kind=_spell_kinds_for_card(card),
         convoke=card.printing.has_convoke,
+        improvise=card.printing.has_improvise,
         sac_for_mana=True,
     )
 
@@ -741,6 +742,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if not yawgmoth and not _lurrus_casters(state, player_id):
             return
         for gcard in p.graveyard:
+            if not (
+                p.may_play_from_graveyard_this_turn
+                or gcard.castable_from_graveyard_this_turn
+            ):
+                continue
             pr = gcard.printing
             if pr.is_land:
                 continue

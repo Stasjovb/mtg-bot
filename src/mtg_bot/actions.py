@@ -514,6 +514,7 @@ def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
     *, convoke: bool = False, sac_for_mana: bool = False,
+    improvise: bool = False,
 ) -> bool:
     """Check whether the player can pay ``cost`` by consuming floating
     mana in their pool (respecting spend restrictions for ``spell_kind``)
@@ -540,6 +541,8 @@ def can_pay_cost(
         )
     if convoke:
         cost = _convoke_max_contribution(state, player_id, cost)
+    if improvise:
+        cost = _improvise_max_contribution(state, player_id, cost)
     if sac_for_mana:
         cost = _sac_for_mana_max_contribution(state, player_id, cost)
     p = state.player_by_id(player_id)
@@ -754,6 +757,64 @@ def _convoke_candidates(
         and is_creature_now(o)
         and not o.tapped
     ]
+
+
+def _improvise_candidates(
+    state: GameState, player_id: int
+) -> list[GameObject]:
+    """Untapped artifacts ``player_id`` controls (CR 702.126a)."""
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and o.printing.is_artifact
+        and not o.tapped
+    ]
+
+
+def _improvise_max_contribution(
+    state: GameState, player_id: int, cost: ManaCost
+) -> ManaCost:
+    """``cost`` with its generic part lowered by one per untapped
+    artifact (improvise pays only generic mana)."""
+    n = min(cost.generic, len(_improvise_candidates(state, player_id)))
+    if n == 0:
+        return cost
+    return ManaCost(
+        generic=cost.generic - n, colored=cost.colored,
+        x_pips=cost.x_pips, hybrid=cost.hybrid, phyrexian=cost.phyrexian,
+    )
+
+
+def _apply_improvise(
+    state: GameState, player_id: int, cost: ManaCost,
+) -> ManaCost:
+    """Improvise during cost payment (CR 702.126a / 601.2h): the caster
+    picks untapped artifacts to tap (``choose_improvise_artifacts``);
+    each pays {1} of the generic part."""
+    p = state.player_by_id(player_id)
+    candidates = _improvise_candidates(state, player_id)
+    if p.agent is None or cost.generic == 0 or not candidates:
+        return cost
+    chosen = p.agent.choose_improvise_artifacts(
+        state, player_id, [o.id for o in candidates], cost.generic,
+    )
+    from mtg_bot.turn import tap_permanent
+
+    by_id = {o.id: o for o in candidates}
+    generic = cost.generic
+    for oid in dict.fromkeys(chosen):
+        obj = by_id.get(oid)
+        if obj is None or obj.tapped or generic == 0:
+            continue
+        tap_permanent(state, obj)
+        generic -= 1
+        state.log.append(
+            f"P{player_id} taps {obj.printing.name} for improvise"
+        )
+    return ManaCost(
+        generic=generic, colored=cost.colored, x_pips=cost.x_pips,
+        hybrid=cost.hybrid, phyrexian=cost.phyrexian,
+    )
 
 
 def _cost_is_zero(cost: ManaCost) -> bool:
@@ -2091,6 +2152,12 @@ def _cast_spell(
                 f"{granter.printing.name} lets P{player_id} cast "
                 f"{yw_card.printing.name} from the graveyard"
             )
+            or yw_card.castable_from_graveyard_this_turn
+        )
+    ):
+        # Yawgmoth's Will / a per-card "you may cast that card this
+        # turn" permission (Emry): cast from the graveyard for the
+        # normal cost.
         card = yw_card
         cost = card.printing.mana_cost
         cast_from_outside_hand = True
@@ -2098,6 +2165,7 @@ def _cast_spell(
         card.cast_via_warp = False
         card.cast_via_hand = False
         card.flashback_granted_until_eot = False
+        card.castable_from_graveyard_this_turn = False
     elif (
         use_warp
         and (
@@ -2505,6 +2573,8 @@ def _cast_spell(
     # there.
     if card.printing.has_convoke:
         cost = _apply_convoke(state, player_id, cost)
+    if card.printing.has_improvise:
+        cost = _apply_improvise(state, player_id, cost)
     haste_coins_before = sum(
         1 for c in p.mana_pool if c.grants_haste_to_creature_spell
     )

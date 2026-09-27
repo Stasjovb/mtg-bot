@@ -151,6 +151,81 @@ class TapSelf(Effect):
         return "tap this creature"
 
 
+@dataclass(frozen=True)
+class SourceCantBeBlockedThisTurn(Effect):
+    """"This creature can't be blocked this turn." -- the ability's own
+    source gets the layer-6 can't-be-blocked restriction until end of
+    turn (same registry entry ``GrantUnblockableUEOT`` writes)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        state.add_continuous_effect(
+            source_id=src.id, layer=6, kind="cant_be_blocked",
+            target_id=src.id, params=(), expires_at="cleanup",
+            description=f"{src.printing.name} can't be blocked this turn",
+        )
+        state.log.append(f"{src.printing.name} can't be blocked this turn")
+
+    def describe(self) -> str:
+        return "this creature can't be blocked this turn"
+
+
+# ---------------------------------------------------------------------------
+# Graveyard cast permissions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MayCastTargetGraveyardCardThisTurn(Effect):
+    """"Choose target artifact card in your graveyard. You may cast
+    that card this turn." (Emry, Lurker of the Loch). The permission
+    rides on the card (``castable_from_graveyard_this_turn``) until
+    cleanup; ``legal_actions`` offers the cast at its normal timing for
+    its mana cost."""
+
+    card_filter: object = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_card", c.id) for c in p.graveyard
+            if self.card_filter.matches(c.printing)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import _CowList
+
+        if not targets:
+            return
+        _, tid = targets[0]
+        p = state.player_by_id(controller_id)
+        if not any(c.id == tid for c in p.graveyard):
+            state.log.append("cast-permission target is gone")
+            return
+        if isinstance(p.graveyard, _CowList):
+            p.graveyard.fork()
+        card = next(c for c in p.graveyard if c.id == tid)
+        card.castable_from_graveyard_this_turn = True
+        state.log.append(
+            f"P{controller_id} may cast {card.printing.name} from their "
+            f"graveyard this turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"choose target {self.card_filter.describe()} in your graveyard; "
+            f"you may cast it this turn"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -326,6 +401,8 @@ class CreateTokenCopiesOfSelf(Effect):
 
 
 __all__ = [
+    "MayCastTargetGraveyardCardThisTurn",
+    "SourceCantBeBlockedThisTurn",
     "CreateTokenCopiesOfSelf",
     "TargetPlayerPerformsActions",
     "RevealTopCardToHandLoseLifeEqualMV",
