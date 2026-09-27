@@ -397,6 +397,54 @@ class MayMillDamageThenMayTakeCreature(Effect):
         )
 
 
+@dataclass(frozen=True)
+class ChooseOpponentsExiledCardWithCounterMayPlayFree(Effect):
+    """"Choose an exiled card an opponent owns with a <kind> counter on
+    it. You may play it this turn without paying its mana cost."
+    (Dauthi Voidwalker's sacrifice ability)."""
+
+    counter: str = "void"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import _CowList, named_counter_count
+
+        options = [
+            c for pl in state.players if pl.id != controller_id
+            for c in pl.exile if named_counter_count(c, self.counter) > 0
+        ]
+        if not options:
+            return
+        p = state.player_by_id(controller_id)
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            chosen = next((c for c in options if c.id == pick), None)
+        if chosen is None:
+            return
+        owner = state.player_by_id(chosen.owner_id)
+        if isinstance(owner.exile, _CowList):
+            owner.exile.fork()
+            chosen = next(c for c in owner.exile if c.id == chosen.id)
+        chosen.may_play_by = controller_id
+        chosen.may_play_free = True
+        state.log.append(
+            f"P{controller_id} chooses {chosen.printing.name}; may play it "
+            f"free this turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"choose an exiled card an opponent owns with a {self.counter} "
+            "counter on it; you may play it this turn without paying its "
+            "mana cost"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -864,6 +912,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "ChooseOpponentsExiledCardWithCounterMayPlayFree",
     "MayMillDamageThenMayTakeCreature",
     "ShuffleThenExileTopMayPlayFree",
     "PutSourceOntoBattlefieldTappedAndAttacking",

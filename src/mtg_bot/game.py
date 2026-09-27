@@ -1715,6 +1715,33 @@ _BASIC_LAND_TYPE_TO_COLOR: dict[str, str] = {
 }
 
 
+def void_exile_replacement_active(state: "GameState", owner_id: int) -> bool:
+    """Does an opponent of ``owner_id`` control a permanent whose
+    "if a card would be put into an opponent's graveyard from anywhere,
+    instead exile it with a void counter on it" applies (Dauthi
+    Voidwalker)? A source that lost all abilities doesn't apply."""
+    for o in state.battlefield:
+        if (
+            o.printing.void_exile_replacement
+            and o.controller_id != owner_id
+            and not _source_layer6_wiped(state, o)
+        ):
+            return True
+    return False
+
+
+def exile_with_void_counter(state: "GameState", card: "GameObject") -> None:
+    """Put ``card`` (already removed from its previous zone) into its
+    owner's exile with a void counter on it."""
+    card.zone = Zone.EXILE
+    state.player_by_id(card.owner_id).exile.append(card)
+    set_named_counters(card, "void", named_counter_count(card, "void") + 1)
+    state.log.append(
+        f"{card.printing.name} is exiled with a void counter instead of "
+        f"going to P{card.owner_id}'s graveyard"
+    )
+
+
 def named_counter_count(obj: "GameObject", kind: str) -> int:
     """How many ``kind`` counters (a ``named_counters`` kind) are on
     ``obj``."""
@@ -2918,6 +2945,11 @@ class Player:
     # Ids of cards already in the graveyard when that replacement began
     # (they stay; anything newer is exiled by the catch-all sweep).
     graveyard_exile_snapshot: frozenset = frozenset()
+    # Dauthi Voidwalker's replacement (``void_exile_replacement``): ids
+    # of cards already in this player's graveyard when an opponent's
+    # void source last started applying. The SBA catch-all exiles only
+    # cards that arrived later (see ``turn.apply_void_exile_replacement``).
+    void_graveyard_snapshot: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions

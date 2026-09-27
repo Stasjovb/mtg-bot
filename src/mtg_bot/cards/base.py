@@ -1397,6 +1397,10 @@ class CardPrinting:
     # Improvise (CR 702.126): each untapped artifact the caster taps
     # while paying pays for {1}.
     has_improvise: bool = False
+    # "If a card would be put into an opponent's graveyard from
+    # anywhere, instead exile it with a void counter on it." (Dauthi
+    # Voidwalker). See ``game.void_exile_replacement_active``.
+    void_exile_replacement: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

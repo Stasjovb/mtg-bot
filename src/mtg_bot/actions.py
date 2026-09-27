@@ -4477,6 +4477,13 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
         owner.exile.append(card)
         state.log.append(f"{card.printing.name} is exiled instead")
         return
+    from mtg_bot.game import exile_with_void_counter, void_exile_replacement_active
+
+    if not card.is_spell_copy and void_exile_replacement_active(
+        state, card.owner_id,
+    ):
+        exile_with_void_counter(state, card)
+        return
     out = dispatch_replacement(
         state, Event.WOULD_GO_TO_GRAVEYARD,
         affected_player_id=card.owner_id,
@@ -5189,6 +5196,14 @@ def put_into_battlefield(
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
     obj.cast_via_hand = False
+    # A "void" graveyard replacement source (Dauthi Voidwalker) applies
+    # only to cards put into its opponents' graveyards from now on.
+    if obj.printing.void_exile_replacement:
+        for pl in state.players:
+            if pl.id != controller_id:
+                pl.void_graveyard_snapshot = frozenset(
+                    c.id for c in pl.graveyard
+                )
     # Squad / Offspring payments belong to the spell that resolved into
     # this permanent; any other entry is a new object that paid nothing.
     if state.resolving_spell is not obj:

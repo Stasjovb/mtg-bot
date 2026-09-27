@@ -385,6 +385,14 @@ def move_off_battlefield(
 
             shuffle_library(state, obj.owner_id)
             return
+    void_redirect = False
+    if destination == "graveyard" and not obj.printing.is_token:
+        from mtg_bot.game import void_exile_replacement_active
+
+        if void_exile_replacement_active(state, obj.owner_id):
+            # Dauthi Voidwalker: exiled with a void counter (never dies).
+            destination = "exile"
+            void_redirect = True
     was_creature = is_creature_now(obj)
     if obj.exile_if_dies_this_turn:
         obj.exile_if_dies_this_turn = False
@@ -509,6 +517,10 @@ def move_off_battlefield(
     elif destination == "graveyard":
         obj.zone = Zone.GRAVEYARD
         state.player_by_id(obj.owner_id).graveyard.append(obj)
+    elif destination == "exile" and void_redirect:
+        from mtg_bot.game import exile_with_void_counter
+
+        exile_with_void_counter(state, obj)
     elif destination == "exile":
         obj.zone = Zone.EXILE
         state.player_by_id(obj.owner_id).exile.append(obj)
@@ -1583,12 +1595,38 @@ def state_based_actions(state: GameState) -> bool:
     if sweep_graveyard_watch(state):
         any_changed = True
     if sweep_library_graveyard_exile_watch(state):
+    if apply_void_exile_replacement(state):
         any_changed = True
     # Ascend (CR 702.131; ``mtg_bot.creature_statics_wg``).
     from mtg_bot.creature_statics_wg import apply_ascend
 
     apply_ascend(state)
     return any_changed
+
+
+def apply_void_exile_replacement(state: GameState) -> bool:
+    """Catch-all for Dauthi Voidwalker's replacement: cards that reached
+    an affected player's graveyard through a path that doesn't consult
+    it directly (discard / mill / ...) are exiled with a void counter.
+    Permanents leaving the battlefield and spells leaving the stack are
+    redirected before they land (so they never "die"). Cards already in
+    the graveyard when the replacement began applying
+    (``Player.void_graveyard_snapshot``, refreshed when a void source
+    enters) stay put."""
+    if not any(o.printing.void_exile_replacement for o in state.battlefield):
+        return False
+    from mtg_bot.game import exile_with_void_counter, void_exile_replacement_active
+
+    changed = False
+    for p in state.players:
+        if not void_exile_replacement_active(state, p.id):
+            continue
+        movers = [c for c in p.graveyard if c.id not in p.void_graveyard_snapshot]
+        for c in movers:
+            p.graveyard.remove(c)
+            exile_with_void_counter(state, c)
+            changed = True
+    return changed
 
 
 def apply_graveyard_exile_replacement(state: GameState) -> bool:

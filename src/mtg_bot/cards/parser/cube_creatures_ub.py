@@ -163,6 +163,14 @@ _THAT_PLAYER_EXILES_TOP_MAY_PLAY = re.compile(
     r"(?P<free> without paying their mana costs)?$"
 )
 _WORD_COUNTS = {"two": 2, "three": 3, "four": 4, "five": 5}
+# Dauthi Voidwalker: "choose an exiled card an opponent owns with a
+# <kind> counter on it. You may play it this turn without paying its
+# mana cost"
+_CHOOSE_EXILED_WITH_COUNTER = re.compile(
+    r"^choose an exiled card an opponent owns with an? (?P<kind>[a-z]+) "
+    r"counter on it\. You may play it this turn without paying its mana "
+    r"cost$"
+)
 # Thassa's Oracle
 _THASSA = re.compile(
     r"^look at the top X cards of your library, where X is your devotion to "
@@ -321,6 +329,15 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         )
 
         return MayMillDamageThenMayTakeCreature()
+    m = _CHOOSE_EXILED_WITH_COUNTER.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ChooseOpponentsExiledCardWithCounterMayPlayFree,
+        )
+
+        return ChooseOpponentsExiledCardWithCounterMayPlayFree(
+            counter=m.group("kind"),
+        )
     ub = _parse_ub_effect_batch5(phrase)
     if ub is not None:
         return ub
@@ -623,7 +640,20 @@ def _parse_ninjutsu_line(line: str) -> UBLine | None:
     ),))
 
 
+def _parse_void_replacement_line(line: str) -> UBLine | None:
+    """Dauthi Voidwalker's graveyard replacement. Literal: the only
+    card in the pool with this opponent-graveyard exile-with-counter
+    replacement; the printing flag names the counter kind implicitly."""
+    if line != (
+        "If a card would be put into an opponent's graveyard from anywhere, "
+        "instead exile it with a void counter on it."
+    ):
+        return None
+    return UBLine(fields={"void_exile_replacement": True})
+
+
 _LINE_PARSERS = (
+    _parse_void_replacement_line,
     _parse_ninjutsu_line,
     _parse_cost_keyword_line,
     _parse_squad_offspring_line,
