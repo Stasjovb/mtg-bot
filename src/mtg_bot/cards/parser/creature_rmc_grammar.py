@@ -408,7 +408,221 @@ def parse_rmc_effect(phrase: str) -> Effect | None:
             amount=MVOfCostPaidObjectPlus(constant=int(m.group("k"))),
             targets=(TargetSpec(any_target_filter()),),
         )
-    return None
+    return _parse_counts_and_hand_effect(phrase)
+
+
+# --- counts, hand shapes, back-references ---------------------------------
+
+_DISCARD_HAND = "discard your hand"
+_DISCARD_DRAW_TOKENS_PER_NONLAND = re.compile(
+    rf"^discard (?P<d>{_N}) cards, then draw (?P<r>{_N}) cards\. For each "
+    r"nonland card discarded this way, (?P<tok>create .+)$"
+)
+_DISCARD_UP_TO_DRAW_THAT_MANY = re.compile(
+    rf"^discard up to (?P<n>{_N}) cards, then draw that many cards$"
+)
+_GET_EXPERIENCE = "you get an experience counter"
+_CREATE_FOR_EACH_EXPERIENCE = re.compile(
+    r"^(?P<tok>create .+?) for each experience counter you have$"
+)
+_TARGET_GETS_MINUS_X = re.compile(
+    r"^target creature gets -X/-X until end of turn, where X is "
+    r"(?P<twice>twice )?the number of (?P<noun>.+) you control$"
+)
+_DAMAGE_DEFENDING_PER_THEIR = re.compile(
+    r"^deals damage to defending player equal to the number of "
+    r"(?P<noun>.+) they control$"
+)
+_MAY_THEN_REFLEXIVE = re.compile(
+    r"^you may (?P<a>[^.]+)\. When you do, (?P<b>.+)$"
+)
+_TARGET_OPPONENT_CREATES = re.compile(r"^target opponent creates (?P<tok>.+)$")
+_DAMAGE_EQUAL_SPELL_MV = (
+    "deals damage equal to that spell's mana value to any target"
+)
+_THAT_CREATURE_DAMAGE_EQUAL_POWER = (
+    "that creature deals damage equal to its power to any target"
+)
+_DAMAGE_THAT_MUCH_OTHER = re.compile(
+    r"^deals that much damage to any other target"
+    r"(?P<nolife>\. If a player is dealt damage this way, they can't gain "
+    r"life for the rest of the game)?$"
+)
+_SEARCH_ALTERNATION_TO_BATTLEFIELD = re.compile(
+    r"^search your library for an? (?P<desc>.+?) card, put (?:that card|it) "
+    r"onto the battlefield(?P<tapped> tapped)?, then shuffle$"
+)
+_THEN_IF_YOU_DO = re.compile(r"^(?P<a>[^.]+)\. If you do, (?P<b>.+)$")
+_EXILE_UP_TO_ONE_GRAVEYARD_CARD = "exile up to one target card from a graveyard"
+
+
+def _count_noun_predicate(noun: str):
+    """``Blood tokens`` / ``artifacts`` / ``Treasures`` / ``creatures``
+    (a plural permanent noun) -> ObjectPredicate, or ``None``."""
+    from mtg_bot.effects.object_predicates import HasSubtype, IsNontoken
+
+    words = noun.split(" ")
+    token_only = False
+    if words[-1] == "tokens":
+        token_only = True
+        words = words[:-1]
+        if not words:
+            return None
+        base = _permanent_noun_predicate(" ".join(words), plural=False)
+    else:
+        base = _permanent_noun_predicate(noun, plural=True)
+    if base is None:
+        return None
+    return base & ~IsNontoken() if token_only else base
+
+
+def _parse_counts_and_hand_effect(phrase: str) -> Effect | None:
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import cube_creatures_rmc as rmc
+
+    if phrase == _DISCARD_HAND:
+        return rmc.DiscardYourHand()
+    m = _DISCARD_DRAW_TOKENS_PER_NONLAND.match(phrase)
+    if m is not None:
+        tok = _parse_effect(m.group("tok"))
+        if tok is None or tok.target_count_range()[1] > 0:
+            return None
+        return rmc.DiscardThenDrawTokensPerNonland(
+            discard=_n(m.group("d")), draw=_n(m.group("r")), token_effect=tok,
+        )
+    m = _DISCARD_UP_TO_DRAW_THAT_MANY.match(phrase)
+    if m is not None:
+        return rmc.DiscardUpToNThenDrawThatMany(n=_n(m.group("n")))
+    if phrase == _GET_EXPERIENCE:
+        return rmc.GetExperienceCounter()
+    m = _CREATE_FOR_EACH_EXPERIENCE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        tok = _parse_effect(m.group("tok"))
+        if not isinstance(tok, CreateToken):
+            return None
+        return rmc.CreateTokenPerFormula(
+            token_effect=tok, amount=rmc.ExperienceCounters(),
+        )
+    m = _TARGET_GETS_MINUS_X.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.formulas import CountControlledMatching, Scaled
+
+        pred = _count_noun_predicate(m.group("noun"))
+        if pred is None:
+            return None
+        amount = CountControlledMatching(pred)
+        if m.group("twice"):
+            amount = Scaled(amount, factor=2)
+        return rmc.PumpTargetCreatureByFormulaUEOT(amount=amount)
+    m = _DAMAGE_DEFENDING_PER_THEIR.match(phrase)
+    if m is not None:
+        pred = _count_noun_predicate(m.group("noun"))
+        if pred is None:
+            return None
+        return rmc.DealDamageFromEvent(
+            amount=rmc.CountPermanentsOfPlayer(pred), to_defending_player=True,
+        )
+    m = _MAY_THEN_REFLEXIVE.match(phrase)
+    if m is not None:
+        first = _parse_effect(m.group("a"))
+        then = _parse_effect(m.group("b"))
+        if first is None or then is None or first.target_count_range()[1] > 0:
+            return None
+        return rmc.MayDoThenReflexive(first=first, then=then)
+    m = _TARGET_OPPONENT_CREATES.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        tok = _parse_effect("create " + m.group("tok"))
+        if not isinstance(tok, CreateToken):
+            return None
+        return rmc.TargetOpponentCreatesToken(token_effect=tok)
+    if phrase == _DAMAGE_EQUAL_SPELL_MV:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        return rmc.DealDamageFromEvent(
+            amount=rmc.EventSubjectManaValue(),
+            targets=(TargetSpec(any_target_filter()),),
+            subject_slot="spell",
+        )
+    if phrase == _THAT_CREATURE_DAMAGE_EQUAL_POWER:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        return rmc.DealDamageFromEvent(
+            amount=rmc.EventSubjectPower(),
+            targets=(TargetSpec(any_target_filter()),),
+            subject_slot="obj",
+        )
+    m = _DAMAGE_THAT_MUCH_OTHER.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.object_predicates import IsSource, ObjectAnd
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        return rmc.DealDamageFromEvent(
+            amount=rmc.ResolvingDamageAmount(),
+            targets=(TargetSpec(ObjectAnd(any_target_filter(), ~IsSource())),),
+            no_lifegain_if_player_hit=bool(m.group("nolife")),
+        )
+    m = _SEARCH_ALTERNATION_TO_BATTLEFIELD.match(phrase)
+    if m is not None:
+        desc = _alternation_card_filter(m.group("desc"))
+        if desc is None:
+            return None
+        from mtg_bot.effects.generic.card_flow import SearchLibrary
+
+        return SearchLibrary(
+            card_filter=desc, destination="battlefield",
+            tapped=bool(m.group("tapped")),
+        )
+    m = _THEN_IF_YOU_DO.match(phrase)
+    if m is not None and not m.group("a").startswith("you may "):
+        # Mandatory "<X>. If you do, <Y>." (the optional "you may"
+        # form belongs to the artifact bucket's fallback). One target
+        # slot at most across both halves.
+        from mtg_bot.effects.combinators import IfYouDo
+
+        do = _parse_effect(m.group("a"))
+        then = _parse_effect(m.group("b"))
+        if do is None or then is None or (
+            do.target_count_range()[1] > 0 and then.target_count_range()[1] > 0
+        ):
+            return None
+        return IfYouDo(do_action=do, then_action=then)
+    if phrase == _EXILE_UP_TO_ONE_GRAVEYARD_CARD:
+        return rmc.ExileUpToOneTargetCardFromGraveyard()
+    return _parse_sentence_sequence(phrase)
+
+
+def _parse_sentence_sequence(phrase: str) -> Effect | None:
+    """"<effect>. Then <effect>." — sentences resolved in order ("You get
+    an experience counter. Then create ..."). The compound splitter
+    declines these when an inner `` and `` belongs to one sentence
+    ("tapped and attacking"). Only the explicit ``Then`` sequencing
+    form is claimed (other multi-sentence phrases keep their owners);
+    every sentence must parse and at most one may target."""
+    from mtg_bot.cards.parser.effects import (
+        _EFFECT_SENTENCE_BOUNDARY,
+        _parse_effect,
+        _split_effect_sentences,
+    )
+    from mtg_bot.effects.combinators import Sequence
+
+    if not _EFFECT_SENTENCE_BOUNDARY.search(phrase) or ". Then " not in phrase:
+        return None
+    pieces = _split_effect_sentences(phrase)
+    if len(pieces) < 2:
+        return None
+    parsed = []
+    for piece in pieces:
+        eff = _parse_effect(piece)
+        if eff is None:
+            return None
+        parsed.append(eff)
+    if sum(1 for e in parsed if e.target_count_range()[1] > 0) > 1:
+        return None
+    return Sequence(effects=tuple(parsed))
 
 
 def _article(desc: str) -> str:
@@ -501,7 +715,35 @@ def parse_rmc_trigger_phrase(phrase: str):
         return (Event.IS_CAST, IsThisSpell())
     if phrase == "this creature is dealt damage":
         return (Event.DEALT_DAMAGE, IsSelf())
+    from mtg_bot.effects.object_predicates import HasSubtype, IsCreature
+    from mtg_bot.effects.predicates import YOU, Controlled, Subject
+
+    m = _SUBTYPE_BECOMES_TAPPED.match(phrase)
+    if m is not None:
+        return (
+            Event.BECOMES_TAPPED,
+            Subject(None, HasSubtype(m.group("sub"))) & Controlled(YOU),
+        )
+    m = _SELF_OR_ANOTHER_SUBTYPE_ENTERS.match(phrase)
+    if m is not None:
+        # One ability whose predicate covers both arms, so the trigger's
+        # "that creature" is the entering object either way.
+        return (
+            Event.ENTERS,
+            IsSelf() | (
+                Subject(None, IsCreature() & HasSubtype(m.group("sub")))
+                & Controlled(YOU)
+            ),
+        )
     return None
+
+
+_SUBTYPE_BECOMES_TAPPED = re.compile(
+    r"^an? (?P<sub>[A-Z][a-z]+) you control becomes tapped$"
+)
+_SELF_OR_ANOTHER_SUBTYPE_ENTERS = re.compile(
+    r"^this creature or another (?P<sub>[A-Z][a-z]+) creature you control enters$"
+)
 
 
 def _functions_from_graveyard(ability: ActivatedAbility) -> bool:
@@ -633,6 +875,116 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
         return RmcLine(statics=(StaticAbility(
             scope=scope, grants_ward_life_cost=int(m.group("n")),
         ),))
+    m = _SUBTYPE_LORD.match(line)
+    if m is not None:
+        subtype = _singular(m.group("subs"))
+        if not re.fullmatch(r"[A-Z][a-z]+", subtype):
+            return None
+        kws = frozenset()
+        if m.group("kw"):
+            from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+            kws = _parse_keyword_grant_body(m.group("kw"))
+            if not kws:
+                return None
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.subtype_you_control(
+                subtype, other=bool(m.group("other")),
+            ),
+            power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
+            granted_keywords=kws,
+        ),))
+    m = _AS_LONG_AS_SELF_GETS.match(line)
+    if m is not None:
+        cond = _STATIC_CONDITIONS.get(m.group("cond"))
+        if cond is None:
+            return None
+        kws: frozenset = frozenset()
+        if m.group("kw"):
+            from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+            kws = _parse_keyword_grant_body(m.group("kw"))
+            if not kws:
+                return None
+        return RmcLine(statics=(StaticAbility(
+            scope=StaticScope.SELF, condition=cond(),
+            power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
+            granted_keywords=kws,
+        ),))
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    m = _ENTERS_AND_WHENEVER.match(_substitute_self_name(line, name))
+    if m is not None:
+        from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+
+        second = m.group("second")
+        if second.startswith("it "):
+            second = "this creature " + second[len("it "):]
+        arms = []
+        for text in (
+            f"When {m.group('first')}, {m.group('eff')}.",
+            f"Whenever {second}, {m.group('eff')}.",
+        ):
+            parsed = _parse_triggered_ability_line(text)
+            if parsed is None or isinstance(parsed, tuple):
+                return None
+            arms.append(parsed)
+        return RmcLine(triggers=tuple(arms))
+    return None
+
+
+# "[Other ]<Subtype>s you control get +N/+M[ and have <keywords>]."
+_SUBTYPE_LORD = re.compile(
+    r"^(?P<other>Other )?(?P<subs>[A-Z][a-z]+) you control get "
+    r"\+(?P<p>\d+)/\+(?P<t>\d+)(?: and have (?P<kw>.+))?\.$"
+)
+# "As long as <condition>, this creature gets +N/+M[ and has <kws>]."
+_AS_LONG_AS_SELF_GETS = re.compile(
+    r"^As long as (?P<cond>.+?), this creature gets \+(?P<p>\d+)/\+(?P<t>\d+)"
+    r"(?: and has (?P<kw>[a-z ,]+))?\.$"
+)
+
+
+def _hand_at_most_one():
+    from mtg_bot.effects.conditions import HandSizeAtMost
+
+    return HandSizeAtMost(1)
+
+
+_STATIC_CONDITIONS = {
+    "you have one or fewer cards in hand": _hand_at_most_one,
+}
+# "When <this creature enters> and whenever <it does X>, <effect>."
+_ENTERS_AND_WHENEVER = re.compile(
+    r"^When (?P<first>this creature enters) and whenever (?P<second>[^,]+), "
+    r"(?P<eff>.+)\.$"
+)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic P/T lines
+# ---------------------------------------------------------------------------
+
+_LHURGOYF_PT = re.compile(
+    r"^.+?'s power is equal to the number of card types among cards in all "
+    r"graveyards and its toughness is equal to that number plus (?P<k>\d+)\.$"
+)
+_DOMAIN_PT = re.compile(
+    r"^(?:Domain — )?.+?'s power and toughness are each equal to the number "
+    r"of basic land types among lands you control\.$"
+)
+
+
+def parse_rmc_dynamic_pt_line(line: str) -> str | None:
+    """``dynamic_pt_formula`` key for a parameterized characteristic-
+    defining P/T line (any card name), or ``None``."""
+    if _DISABLED[0]:
+        return None
+    m = _LHURGOYF_PT.match(line)
+    if m is not None:
+        return f"card_types_in_all_graveyards+{int(m.group('k'))}"
+    if _DOMAIN_PT.match(line):
+        return "domain"
     return None
 
 

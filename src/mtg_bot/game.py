@@ -1556,7 +1556,11 @@ def _dynamic_base_pt(
         printed_p = obj.printing.power or 0
         printed_t = obj.printing.toughness or 0
         return printed_p + x, printed_t
-    return None  # pragma: no cover - defensive fallback
+    # Parameterized formulas of the cube creatures bucket (lhurgoyf
+    # card-type counts, domain).
+    from mtg_bot.effects.generic.cube_creatures_rmc import rmc_dynamic_base_pt
+
+    return rmc_dynamic_base_pt(state, obj, formula)
 
 
 def gain_life(state: "GameState", player_id: int, amount: int) -> int:
@@ -1571,6 +1575,9 @@ def gain_life(state: "GameState", player_id: int, amount: int) -> int:
     if amount <= 0:
         return 0
     p = state.player_by_id(player_id)
+    if p.cant_gain_life:
+        state.log.append(f"P{player_id} can't gain life")
+        return 0
     p.life += amount
     p.life_gained_this_turn += amount
     return amount
@@ -2727,6 +2734,11 @@ class StackItem:
     # (``"dash"`` / ``"escape"``; ``""`` otherwise). A permanent spell
     # stamps ``GameObject.dashed`` / ``escaped`` from it as it resolves.
     alt_cost: str = ""
+    # Id of the object an event-bound trigger refers back to ("that
+    # spell", "that creature"): set when the ability's effect exposes
+    # ``event_subject_id(subjects)``; mirrored to
+    # ``state.resolving_event_subject_id`` during resolution. -1 = none.
+    event_subject_id: int = -1
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
@@ -2830,6 +2842,12 @@ class Player:
     has_initiative: bool = False
     dungeon_room: Optional[str] = None
     dungeons_completed: int = 0
+    # Experience counters (CR 122.1; Otharri, Suns' Glory's "you get an
+    # experience counter").
+    experience_counters: int = 0
+    # "<player> can't gain life for the rest of the game" (Screaming
+    # Nemesis); ``gain_life`` gains nothing while set.
+    cant_gain_life: bool = False
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this
@@ -3136,6 +3154,10 @@ class GameState:
     # counters-added observer trigger (Terrasymbiosis: "draw that many
     # cards"). 0 outside such resolution.
     resolving_counter_amount: int = 0
+    # ``StackItem.event_subject_id`` of the resolving triggered ability
+    # (-1 outside such resolution): "that spell's mana value" (Thor),
+    # "that creature deals damage equal to its power" (Pyrogoyf).
+    resolving_event_subject_id: int = -1
     # GameObjects that were paid as part of the cost when the
     # currently-resolving activated ability was activated. Mirrors
     # ``StackItem.cost_paid_objects`` during resolution so effects /
@@ -3844,6 +3866,7 @@ class GameState:
             self.resolving_combat_damage_source_controller_id
         )
         new_state.resolving_counter_amount = self.resolving_counter_amount
+        new_state.resolving_event_subject_id = self.resolving_event_subject_id
         new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
         new_state.resolving_division = self.resolving_division
         new_state.last_exile_recall_count = self.last_exile_recall_count

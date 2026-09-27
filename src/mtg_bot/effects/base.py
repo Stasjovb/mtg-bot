@@ -728,6 +728,13 @@ class StaticScope:
     )
     # Slivers you control — Thrumming Hivepool.
     SLIVERS_YOU_CONTROL = "slivers_you_control"
+    # "[Other ]<Subtype>s you control" — ``subtype_you_control(...)``
+    # builds ``"subtype_you_control:<other|all>:<Subtype>"``.
+    SUBTYPE_PREFIX = "subtype_you_control:"
+
+    @staticmethod
+    def subtype_you_control(subtype: str, *, other: bool) -> str:
+        return f"subtype_you_control:{'other' if other else 'all'}:{subtype}"
 
 
 
@@ -865,6 +872,15 @@ class StaticAbility:
                 and target.tapped
                 and "Legendary" in target.printing.supertypes
             )
+        if self.scope.startswith(StaticScope.SUBTYPE_PREFIX):
+            # "[Other ]<Subtype>s you control ..." (Magda's Dwarf lord).
+            other, _, subtype = self.scope[len(StaticScope.SUBTYPE_PREFIX):].partition(":")
+            if other == "other" and target.id == source.id:
+                return False
+            if state is not None:
+                from mtg_bot.game import effective_subtypes
+                return subtype in effective_subtypes(state, target)
+            return subtype in target.printing.subtypes
         if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
             # Read effective_subtypes so a creature granted "Sliver"
             # by a layer-4 add_subtype effect (Conspiracy-style) is

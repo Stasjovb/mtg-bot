@@ -974,3 +974,425 @@ class DealDamageByFormula(Effect):
 
     def describe(self) -> str:
         return "deals damage equal to X to target"
+
+
+# ---------------------------------------------------------------------------
+# Event back-references, formulas and formula effects (batch 3)
+# ---------------------------------------------------------------------------
+
+
+def find_object_anywhere(state: "GameState", obj_id: int):
+    """The object with ``obj_id`` on the battlefield, the stack or in any
+    zone (last-known information for "that spell" / "that creature")."""
+    for o in state.battlefield:
+        if o.id == obj_id:
+            return o
+    for item in state.stack:
+        if item.source.id == obj_id:
+            return item.source
+    for pl in state.players:
+        for zone in (pl.graveyard, pl.exile, pl.hand, pl.library):
+            for o in zone:
+                if o.id == obj_id:
+                    return o
+    return None
+
+
+@dataclass(frozen=True)
+class EventSubjectManaValue(_Formula):
+    """"that spell's mana value" — the triggering spell (the resolving
+    ability's ``event_subject_id``)."""
+
+    def value(self, state, controller_id):
+        obj = find_object_anywhere(state, state.resolving_event_subject_id)
+        return obj.printing.mana_cost.total if obj is not None else 0
+
+
+@dataclass(frozen=True)
+class EventSubjectPower(_Formula):
+    """"its power" of the triggering creature ("that creature deals
+    damage equal to its power"); its last known power if it left."""
+
+    def value(self, state, controller_id):
+        from mtg_bot.game import effective_power
+
+        obj = find_object_anywhere(state, state.resolving_event_subject_id)
+        if obj is None:
+            return 0
+        if obj in state.battlefield:
+            return max(0, effective_power(state, obj))
+        return max(0, (obj.printing.power or 0) + obj.plus_one_counters)
+
+
+@dataclass(frozen=True)
+class ExperienceCounters(_Formula):
+    """"for each experience counter you have"."""
+
+    def value(self, state, controller_id):
+        return state.player_by_id(controller_id).experience_counters
+
+
+@dataclass(frozen=True)
+class CountPermanentsOfPlayer(_Formula):
+    """Number of permanents matching ``predicate`` that ``whose``
+    controls: ``"defending"`` = the (single) opponent of the controller
+    ("the number of artifacts they control" in an attack trigger)."""
+
+    predicate: object = None
+
+    def value(self, state, controller_id):
+        opp = next(
+            (pl.id for pl in state.players if pl.id != controller_id), None,
+        )
+        return sum(
+            1 for o in state.battlefield
+            if o.controller_id == opp and self.predicate.test(o, state)
+        )
+
+
+@dataclass(frozen=True)
+class DealDamageFromEvent(Effect):
+    """Formula damage with an event back-reference: ``subject_slot`` names
+    the dispatch subject the stack item remembers (``"spell"`` for
+    "that spell's mana value", ``"obj"`` for "that creature ... its
+    power"). ``targets`` is the chosen-target slot tuple (any target /
+    any other target); ``to_defending_player`` instead hits the
+    controller's opponent (no target). ``no_lifegain_if_player_hit``:
+    "If a player is dealt damage this way, they can't gain life for
+    the rest of the game." (Screaming Nemesis)."""
+
+    amount: object = None
+    targets: tuple = ()
+    subject_slot: str = ""
+    to_defending_player: bool = False
+    no_lifegain_if_player_hit: bool = False
+
+    def event_subject_id(self, subjects) -> int:
+        if not self.subject_slot:
+            return -1
+        obj = subjects.get(self.subject_slot)
+        return getattr(obj, "id", -1) if obj is not None else -1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        n = self.amount.value(state, controller_id)
+        if self.to_defending_player:
+            opp = next(
+                (pl.id for pl in state.players if pl.id != controller_id), None,
+            )
+            if opp is not None and n > 0:
+                _apply_damage(state, ("player", opp), n)
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(_fizzle_message(state, chosen))
+                    continue
+                if n <= 0:
+                    continue
+                _apply_damage(state, chosen, n)
+                if self.no_lifegain_if_player_hit and chosen[0] == "player":
+                    state.player_by_id(chosen[1]).cant_gain_life = True
+                    state.log.append(
+                        f"P{chosen[1]} can't gain life for the rest of the game"
+                    )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return "deals damage equal to X"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic P/T formulas (lhurgoyf card-type count, domain)
+# ---------------------------------------------------------------------------
+
+_GRAVEYARD_CARD_TYPES = (
+    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
+    "Land", "Planeswalker", "Sorcery", "Tribal",
+)
+_BASIC_TYPES = ("Plains", "Island", "Swamp", "Mountain", "Forest")
+
+
+def rmc_dynamic_base_pt(state: "GameState", obj: "GameObject", formula: str):
+    """``(power, toughness)`` for the bucket's ``dynamic_pt_formula``
+    keys, or ``None``:
+
+    * ``card_types_in_all_graveyards+K`` — P = card types among cards in
+      all graveyards, T = P + K (Pyrogoyf, Barrowgoyf).
+    * ``domain`` — P = T = basic land types among lands you control
+      (Territorial Kavu).
+    """
+    if formula.startswith("card_types_in_all_graveyards+"):
+        k = int(formula.rsplit("+", 1)[1])
+        types: set[str] = set()
+        for pl in state.players:
+            for c in pl.graveyard:
+                types.update(
+                    t for t in c.printing.card_types if t in _GRAVEYARD_CARD_TYPES
+                )
+        n = len(types)
+        return n, n + k
+    if formula == "domain":
+        from mtg_bot.game import effective_subtypes
+
+        seen: set[str] = set()
+        for o in state.battlefield:
+            if o.controller_id != obj.controller_id or not o.printing.is_land:
+                continue
+            seen.update(
+                s for s in effective_subtypes(state, o) if s in _BASIC_TYPES
+            )
+        n = len(seen)
+        return n, n
+    return None  # pragma: no cover - defensive fallback
+
+
+# ---------------------------------------------------------------------------
+# Hand / discard shapes
+# ---------------------------------------------------------------------------
+
+
+def _discard_chosen(state, player_id: int, n: int) -> list:
+    """Discard ``n`` cards chosen by ``player_id`` (fewer if the hand
+    runs out); returns the discarded cards."""
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import fire_opponent_discards_triggers
+
+    p = state.player_by_id(player_id)
+    out = []
+    for _ in range(n):
+        if not p.hand:
+            break
+        ids = [c.id for c in p.hand]
+        pick = p.agent.choose_discard(state, player_id, ids) if p.agent else ids[0]
+        card = next((c for c in p.hand if c.id == pick), p.hand[0])
+        p.hand.remove(card)
+        card.zone = Zone.GRAVEYARD
+        p.graveyard.append(card)
+        state.log.append(f"P{player_id} discards {card.printing.name}")
+        fire_opponent_discards_triggers(state, player_id, card=card)
+        out.append(card)
+    return out
+
+
+@dataclass(frozen=True)
+class DiscardYourHand(Effect):
+    """"discard your hand"."""
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        _discard_chosen(state, controller_id, len(p.hand))
+
+    def describe(self) -> str:
+        return "discard your hand"
+
+
+@dataclass(frozen=True)
+class DiscardThenDrawTokensPerNonland(Effect):
+    """"discard N cards, then draw M cards. For each nonland card
+    discarded this way, <create token>." (Seasoned Pyromancer)."""
+
+    discard: int = 2
+    draw: int = 2
+    token_effect: object = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import draw_n_cards
+
+        discarded = _discard_chosen(state, controller_id, self.discard)
+        draw_n_cards(state, controller_id, self.draw)
+        nonland = sum(1 for c in discarded if not c.printing.is_land)
+        for _ in range(nonland):
+            self.token_effect.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            f"discard {self.discard} cards, then draw {self.draw}; a token "
+            f"per nonland card discarded"
+        )
+
+
+@dataclass(frozen=True)
+class DiscardUpToNThenDrawThatMany(Effect):
+    """"discard up to N cards, then draw that many cards" (Tersa
+    Lightshatter). The count is the controller's ``choose_x``."""
+
+    n: int = 2
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import draw_n_cards
+
+        p = state.player_by_id(controller_id)
+        cap = min(self.n, len(p.hand))
+        k = cap
+        if p.agent is not None and cap > 0:
+            k = max(0, min(cap, p.agent.choose_x(
+                state, controller_id, "discard up to", cap,
+            )))
+        discarded = _discard_chosen(state, controller_id, k)
+        if discarded:
+            draw_n_cards(state, controller_id, len(discarded))
+
+    def describe(self) -> str:
+        return f"discard up to {self.n} cards, then draw that many"
+
+
+# ---------------------------------------------------------------------------
+# Counters / tokens / pumps
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GetExperienceCounter(Effect):
+    """"you get an experience counter"."""
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        p.experience_counters += 1
+        state.log.append(
+            f"P{controller_id} gets an experience counter "
+            f"({p.experience_counters})"
+        )
+
+    def describe(self) -> str:
+        return "you get an experience counter"
+
+
+@dataclass(frozen=True)
+class CreateTokenPerFormula(Effect):
+    """"create <token> for each <formula unit>" — the wrapped
+    ``CreateToken`` resolves with its count replaced by the formula."""
+
+    token_effect: object = None
+    amount: object = None
+
+    def resolve(self, state, controller_id, targets=()):
+        n = self.amount.value(state, controller_id)
+        if n <= 0:
+            return
+        replace(self.token_effect, count=n).resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return f"{self.token_effect.describe()} for each X"
+
+
+@dataclass(frozen=True)
+class TargetOpponentCreatesToken(Effect):
+    """"target opponent creates <token>" — the token is created under
+    the targeted opponent's control."""
+
+    token_effect: object = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", pl.id) for pl in state.players
+            if pl.id != controller_id and not pl.has_lost
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        pid = next((tid for kind, tid in targets if kind == "player"), None)
+        if pid is None:
+            return
+        self.token_effect.resolve(state, pid, ())
+
+    def describe(self) -> str:
+        return f"target opponent {self.token_effect.describe()}"
+
+
+@dataclass(frozen=True)
+class MayDoThenReflexive(Effect):
+    """"You may <first>. When you do, <then>." — a reflexive trigger
+    (CR 603.12). ``then``'s targets are chosen with the enclosing
+    ability (the Minsc & Boo precedent; see SEARCH_LIMITATIONS) and it
+    resolves right after ``first`` when the controller chose to."""
+
+    first: object = None
+    then: object = None
+
+    def requires_target(self) -> bool:
+        return self.then.requires_target()
+
+    def target_count_range(self):
+        return self.then.target_count_range()
+
+    def legal_targets(self, state, controller_id):
+        return self.then.legal_targets(state, controller_id)
+
+    def resolve(self, state, controller_id, targets=()):
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, f"You may {self.first.describe()}",
+        ):
+            return
+        self.first.resolve(state, controller_id, ())
+        self.then.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"you may {self.first.describe()}; when you do, {self.then.describe()}"
+
+
+@dataclass(frozen=True)
+class PumpTargetCreatureByFormulaUEOT(Effect):
+    """"Target creature gets <±X>/<±X> until end of turn, where X is
+    <formula>." ``power_sign`` / ``toughness_sign`` are -1/0/+1."""
+
+    amount: object = None
+    power_sign: int = -1
+    toughness_sign: int = -1
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+
+        object.__setattr__(self, "targets", (TargetSpec(IsCreature()),))
+
+    def resolve(self, state, controller_id, targets=()):
+        x = self.amount.value(state, controller_id)
+        for kind, tid in targets:
+            obj = next((o for o in state.battlefield if o.id == tid), None)
+            if obj is None:
+                continue
+            src = state.resolving_source
+            state.grant_pt_pump_ueot(
+                source_id=src.id if src is not None else -1,
+                target_id=obj.id,
+                power=self.power_sign * x, toughness=self.toughness_sign * x,
+                description=f"{obj.printing.name} gets X/X (X={x})",
+            )
+
+    def describe(self) -> str:
+        return "target creature gets ±X/±X until end of turn"
+
+
+from mtg_bot.effects.generic.exile import (  # noqa: E402
+    ExileTargetCardFromGraveyard as _ExileTargetCardFromGraveyard,
+)
+
+
+class ExileUpToOneTargetCardFromGraveyard(_ExileTargetCardFromGraveyard):
+    """"Exile up to one target card from a graveyard." — zero or one
+    target. ``requires_target`` stays True so a ``ModalChooseOne``
+    around it still surfaces the graveyard pool when the trigger is put
+    on the stack (the modal combinator keys "targeted mode" on it); the
+    ``(0, 1)`` count range lets the controller choose no target."""
+
+    def target_count_range(self):
+        return (0, 1)
+
+    def describe(self) -> str:
+        return "exile up to one target card from a graveyard"

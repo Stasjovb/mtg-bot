@@ -4291,6 +4291,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             item.combat_damage_source_controller_id
         )
         state.resolving_counter_amount = item.counter_amount
+        state.resolving_event_subject_id = item.event_subject_id
         state.resolving_modes = item.chosen_modes
         state.resolving_cost_paid_objects = item.cost_paid_objects
         state.last_exile_recall_count = 0
@@ -4304,6 +4305,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             state.resolving_combat_damage_amount = 0
             state.resolving_combat_damage_source_controller_id = None
             state.resolving_counter_amount = 0
+            state.resolving_event_subject_id = -1
             state.resolving_modes = ()
             state.resolving_cost_paid_objects = ()
             state.last_exile_recall_count = 0
@@ -4957,6 +4959,7 @@ def push_triggered_ability(
     combat_damage_source_controller_id: int | None = None,
     counter_amount: int = 0,
     fixed_targets: tuple[tuple[str, int], ...] | None = None,
+    event_subject_id: int = -1,
 ) -> bool:
     """Push a triggered ability onto the stack, picking targets if needed.
 
@@ -5089,6 +5092,7 @@ def push_triggered_ability(
                 combat_damage_source_controller_id
             ),
             counter_amount=counter_amount,
+            event_subject_id=event_subject_id,
         )
     )
     state.log.append(
@@ -5220,6 +5224,12 @@ def dispatch_event(
             bind = getattr(ability.effect, "targets_from_event", None)
             if bind is not None:
                 ability_fixed_targets = bind(state, subjects)
+            # "that spell" / "that creature" back-references (cube
+            # creatures bucket): the effect names which subject it keeps.
+            subject_bind = getattr(ability.effect, "event_subject_id", None)
+            ability_event_subject_id = (
+                subject_bind(subjects) if subject_bind is not None else -1
+            )
             for _ in range(firings):
                 push_triggered_ability(
                     state,
@@ -5234,6 +5244,7 @@ def dispatch_event(
                     ),
                     counter_amount=counter_amount,
                     fixed_targets=ability_fixed_targets,
+                    event_subject_id=ability_event_subject_id,
                 )
     # Triggered abilities granted by attached Equipment (Kaldra
     # Compleat) belong to the equipped creature: evaluate them with the

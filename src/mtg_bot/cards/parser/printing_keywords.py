@@ -578,9 +578,18 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
     reads it in ``game._dynamic_pt`` and computes the actual P/T at
     query time.
 
-    Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``.
+    Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``;
+    parameterized shapes (any name) fall back to
+    ``creature_rmc_grammar.parse_rmc_dynamic_pt_line``.
     """
-    return _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
+    key = _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
+    if key is not None:
+        return key
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        parse_rmc_dynamic_pt_line,
+    )
+
+    return parse_rmc_dynamic_pt_line(line.strip())
 
 
 def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
