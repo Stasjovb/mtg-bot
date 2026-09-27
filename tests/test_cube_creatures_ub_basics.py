@@ -260,3 +260,16 @@ def test_min_blockers_three_blockers_is_legal():
         assignments=tuple((b.id, troll.id) for b in blockers),
     ))
     assert len(troll.blocked_by) == 3
+
+
+def test_exhaust_is_not_stripped_as_an_ability_word():
+    # Exhaust (CR 702.177) restricts activation; stripping it like an
+    # ability word would silently drop that restriction.
+    from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+
+    assert _parse_activated_ability_line(
+        "Exhaust — {U}, {T}: Draw three cards."
+    ) is None
+    assert _parse_activated_ability_line(
+        "Metalcraft — {T}: Draw a card."
+    ) is not None
