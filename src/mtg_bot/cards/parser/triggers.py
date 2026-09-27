@@ -1739,7 +1739,15 @@ def _parse_predicate_trigger_phrase(
             parse_ub_trigger_phrase,
         )
 
-        return parse_ub_trigger_phrase(phrase.strip())
+        ub = parse_ub_trigger_phrase(phrase.strip())
+        if ub is not None:
+            return ub
+        # Cube layouts bucket conditions ("transforms into", ...).
+        from mtg_bot.cards.parser.layout_grammar import (
+            parse_layout_trigger_phrase,
+        )
+
+        return parse_layout_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 

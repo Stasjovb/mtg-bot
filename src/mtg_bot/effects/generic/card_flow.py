@@ -295,10 +295,18 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
     Every card in the revealed hand becomes known to the caster
     (``reveal_to``). The caster's pick goes through
     ``choose_card_from_opponent_hand`` (exposed to search).
+
+    ``optional`` models "You may choose a <filter> card from it. If you
+    do, that player discards that card" (Revealing Eye): the caster may
+    decline (``choose_yes_no``). ``then_draws`` is the discarding
+    player's ", then draws N card(s)" rider, drawn only when a card was
+    discarded.
     """
 
     card_filter: CardFilter = ANY_CARD
     opponent_only: bool = False
+    optional: bool = False
+    then_draws: int = 0
 
     def requires_target(self) -> bool:
         return True
@@ -322,6 +330,14 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
             )
             return
         caster = state.player_by_id(controller_id)
+        if (
+            self.optional and caster.agent is not None
+            and not caster.agent.choose_yes_no(
+                state, controller_id,
+                f"choose a {self.card_filter.describe()} for P{p.id} to discard?",
+            )
+        ):
+            return
         chosen = options[0]
         if caster.agent is not None:
             picked = caster.agent.choose_card_from_opponent_hand(
@@ -329,6 +345,10 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
             )
             chosen = _agent_pick(options, picked) or options[0]
         discard_card(state, p, chosen)
+        if self.then_draws:
+            from mtg_bot.turn import draw_n_cards
+
+            draw_n_cards(state, p.id, self.then_draws)
 
     def describe(self) -> str:
         who = "opponent" if self.opponent_only else "player"

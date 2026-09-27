@@ -1253,8 +1253,43 @@ class CardPrinting:
     # Modal double-faced card (CR 712): the back face's printing when it
     # is a land the card may be played as (Sink into Stupor // Soporific
     # Springs). ``legal_actions`` offers ``PlayLand`` for the card from
-    # hand; ``actions._play_land`` turns it to this face.
+    # hand; ``actions._play_land`` turns it to this face. When the back
+    # face is a castable permanent (The Sensational She-Hulk), the card
+    # may instead be cast as that face (``CastSpell(cast_face=<name>)``,
+    # ``mtg_bot.layouts``).
     mdfc_back_face: "CardPrinting | None" = None
+    # --- Non-normal layouts (cube layouts bucket; ``mtg_bot.layouts``) --
+    # Transforming double-faced card (CR 712 / 701.28): the back face's
+    # printing. ``layouts.transform_permanent`` turns a permanent to this
+    # face (and back); ``layouts.put_onto_battlefield_transformed`` puts
+    # the card onto the battlefield with it up. Also set on a modal DFC
+    # whose front face carries a "Transform ~" ability (the back is then
+    # both castable and transformable).
+    transform_back_face: "CardPrinting | None" = None
+    # The colors of a DFC back face (CR 204: its color indicator; no
+    # indicator = colorless). A transforming back face borrows the front
+    # face's mana cost for its mana value (CR 712.8e), so its colors
+    # can't be read off that cost: ``game.effective_colors`` uses this
+    # set instead of ``mana_cost.colors`` when it isn't ``None``.
+    face_colors: "frozenset[str] | None" = None
+    # Daybound / nightbound (CR 702.145): the front face of a daybound
+    # werewolf has ``daybound``, its back face ``nightbound``. The
+    # day/night cycle (``layouts.run_day_night_check``) transforms them.
+    daybound: bool = False
+    nightbound: bool = False
+    # Class enchantments (CR 716): this printing's class level (1 for
+    # the card as printed), and the printings for each further level in
+    # order (level 2, level 3, ...). Each level printing carries every
+    # ability of the levels below it plus its own; gaining a level turns
+    # the permanent to that printing (``layouts.gain_class_level``).
+    class_level: int = 0
+    class_levels: tuple["CardPrinting", ...] = ()
+    # Split card (CR 709): the two halves' printings. The card's own
+    # printing carries the combined characteristics it has outside the
+    # stack (CR 709.4); it's cast as one half
+    # (``CastSpell(cast_face=<half name>)``), which turns the spell to
+    # that half's printing until it leaves the stack.
+    split_faces: tuple["CardPrinting", ...] = ()
     # "Plot {cost}" (CR 702.170): as a sorcery, pay the plot cost and
     # exile the card from hand; on a later turn it may be cast from
     # exile without paying its mana cost, as a sorcery. The special

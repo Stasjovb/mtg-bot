@@ -3586,7 +3586,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     # the compositional grammar, so the base's shapes win.
     from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
 
-    return parse_wg_effect(phrase)
+    eff = parse_wg_effect(phrase)
+    if eff is not None:
+        return eff
+    # Cube layouts bucket (transform / Saga / Class / leveler shapes) --
+    # after every other grammar, so it only claims unparsed phrases.
+    from mtg_bot.cards.parser.layout_grammar import parse_layout_effect
+
+    return parse_layout_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

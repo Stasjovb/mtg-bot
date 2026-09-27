@@ -31,6 +31,7 @@ from mtg_bot.cards.parser.planeswalker_builder import (
     _build_planeswalker_printing,
 )
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
+from mtg_bot.cards.parser.layout_builder import _build_layout_printing
 
 
 def _load_scryfall_data(pool: str | None = None) -> list[dict]:
@@ -116,6 +117,7 @@ def _run_builders(card: dict) -> CardPrinting | None:
 
 def _build_printing_unpinned(card: dict) -> CardPrinting | None:
     for builder in (
+        _build_layout_printing,
         _build_room_printing,
         _build_enchantment_printing,
         _build_planeswalker_printing,

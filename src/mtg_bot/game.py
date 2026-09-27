@@ -955,8 +955,11 @@ class GameObject:
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
-    """Turn a modal DFC that was played as its back face front-face up
-    again (every zone but the battlefield / stack shows the front)."""
+    """Turn a double-faced card that was played, cast or transformed to
+    its back face front-face up again (every zone but the battlefield /
+    stack shows the front, CR 712.8a). The same snapshot restores a
+    split card cast as one half and a Class that gained levels
+    (``mtg_bot.layouts``)."""
     if obj.mdfc_front_printing is not None:
         obj.printing = obj.mdfc_front_printing
         obj.mdfc_front_printing = None
@@ -1985,6 +1988,10 @@ def effective_colors(
     base_cost_colors = (
         () if "devoid" in obj.printing.keywords
         else obj.printing.mana_cost.colors
+        if obj.printing.face_colors is None
+        # A DFC back face (CR 204 color indicator): its mana cost is the
+        # front face's, borrowed for mana value only.
+        else obj.printing.face_colors
     )
     colors: set[str] = set(base_cost_colors) | set(
         obj.printing.color_indicator

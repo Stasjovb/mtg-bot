@@ -262,6 +262,11 @@ class Event(str, Enum):
     # a library from anywhere"). Subject ``"player"`` is the library's
     # owner. Library-internal moves (look / reorder / bottom) don't fire.
     CARDS_PUT_INTO_LIBRARY = "cards_put_into_library"
+    # A double-faced permanent has just transformed (CR 701.28; fired by
+    # ``layouts.transform_permanent``). Subject is the permanent
+    # (``"obj"``), already showing its new face -- "When this creature
+    # transforms into <face>" lives on that face.
+    TRANSFORMS = "transforms"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -306,6 +311,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DRAWS_CARD: ("player",),
     Event.WOULD_DRAW_A_CARD: ("player",),
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
+    Event.TRANSFORMS: ("obj",),
 }
 
 

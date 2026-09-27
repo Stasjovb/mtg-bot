@@ -188,8 +188,13 @@ _TARGET_PLAYER_DISCARDS_AT_RANDOM_RE = re.compile(
 # recursively.
 _REVEAL_HAND_YOU_CHOOSE_DISCARD_RE = re.compile(
     r"^target (?P<who>player|opponent) reveals their hand\. "
-    r"[Yy]ou choose (?P<desc>.+?) from it(?P<mv> with mana value \d+ or less)?\. "
-    r"[Tt]hat player discards that card(?:\. (?P<rest>.+))?$"
+    r"[Yy]ou (?P<may>may )?choose (?P<desc>.+?) from it"
+    r"(?P<mv> with mana value \d+ or less)?\. "
+    # "You may choose ... If you do, that player discards that card, then
+    # draws a card." (Revealing Eye) -- the optional arm.
+    r"(?(may)[Ii]f you do, that player|[Tt]hat player) discards that card"
+    rf"(?(may)(?:, then draws (?P<draws>{_AMT}) cards?)?|)"
+    r"(?:\. (?P<rest>.+))?$"
 )
 _SEARCH_TO_ZONE_RE = re.compile(
     r"^search your library for (?P<desc>.+? card(?: with mana value \d+ "
@@ -610,8 +615,11 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         f = parse_card_descriptor(desc)
         if f is None:
             return None
+        draws = m.group("draws")
         eff = TargetPlayerRevealsHandYouChooseDiscard(
             card_filter=f, opponent_only=m.group("who") == "opponent",
+            optional=m.group("may") is not None,
+            then_draws=_amount(draws) if draws is not None else 0,
         )
         return _with_tail(eff, m.group("rest"))
     m = _SEARCH_TO_ZONE_RE.match(phrase)
