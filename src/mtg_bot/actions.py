@@ -124,6 +124,9 @@ class CastSpell(Action):
     # Evoke (CR 702.74; ``mtg_bot.evoke``): cast from hand for the evoke
     # cost; the permanent is sacrificed as it enters.
     use_evoke: bool = False
+    # Cast from the graveyard under a W/G graveyard permission
+    # (``mtg_bot.graveyard_casting_wg``): "retrace" or "paragon".
+    graveyard_permission: "str | None" = None
 
 
 @dataclass(frozen=True)
@@ -1270,6 +1273,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_escape=action.use_escape,
             use_dash=action.use_dash,
             use_evoke=action.use_evoke,
+            graveyard_permission=action.graveyard_permission,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1342,6 +1346,20 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         (c for c in p.graveyard if c.id == card_id), None
     )) is not None:
         p.graveyard.remove(card)
+        # Serra Paragon's once-per-turn permission covers the land only
+        # when no unlimited "play lands from your graveyard" does.
+        from mtg_bot.graveyard_casting_wg import (
+            consume_paragon,
+            paragon_land_playable,
+        )
+
+        unlimited = p.may_play_from_graveyard_this_turn or any(
+            o.controller_id == player_id
+            and o.printing.grants_play_lands_from_graveyard
+            for o in state.battlefield
+        )
+        if not unlimited and paragon_land_playable(state, player_id):
+            consume_paragon(state, player_id, card)
     elif p.library and p.library[0].id == card_id:
         # Bolas's Citadel: "You may play lands … from the top of your
         # library" (legal_actions gates on the grant).
@@ -1896,6 +1914,7 @@ def _cast_spell(
     use_escape: bool = False,
     use_dash: bool = False,
     use_evoke: bool = False,
+    graveyard_permission: "str | None" = None,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -2015,6 +2034,21 @@ def _cast_spell(
                     f"P{player_id} pays {life_cost} life for warp "
                     f"(life: {p.life})"
                 )
+    elif graveyard_permission is not None:
+        # Retrace (Six) / Serra Paragon: cast from the graveyard for the
+        # normal cost; the permission's extra cost is paid below.
+        card = next((c for c in p.graveyard if c.id == card_id), None)
+        if card is None:  # pragma: no cover - legal_actions gates
+            raise ValueError(f"card {card_id} not in P{player_id}'s graveyard")
+        cost = card.printing.mana_cost
+        cast_from_outside_hand = True
+        p.graveyard.remove(card)
+        card.cast_via_warp = False
+        card.cast_via_hand = False
+        card.flashback_granted_until_eot = False
+        from mtg_bot.graveyard_casting_wg import pay_graveyard_permission
+
+        pay_graveyard_permission(state, player_id, card, graveyard_permission)
     elif (
         not use_warp
         and (

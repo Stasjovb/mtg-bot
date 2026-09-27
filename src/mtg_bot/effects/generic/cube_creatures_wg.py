@@ -1401,3 +1401,74 @@ class LookAtHandExileNonlandOwnerMayPlayTaxed(Effect):
             f"look at target opponent's hand; you may exile a nonland card "
             f"from it, which its owner may cast for {{{self.surcharge}}} more"
         )
+
+
+# ---------------------------------------------------------------------
+# Six / Serra Paragon
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExileSourceCardGainLife(Effect):
+    """"Exile it and you gain N life." -- Serra Paragon's granted rider,
+    resolving with the card that went to the graveyard as its source."""
+
+    life: int = 2
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, gain_life
+
+        card = state.resolving_source
+        if card is not None:
+            owner = state.player_by_id(card.owner_id)
+            if card in owner.graveyard:
+                owner.graveyard.remove(card)
+                card.zone = Zone.EXILE
+                owner.exile.append(card)
+                state.log.append(f"{card.printing.name} is exiled")
+        gain_life(state, controller_id, self.life)
+
+    def describe(self) -> str:
+        return f"exile it and you gain {self.life} life"
+
+
+@dataclass(frozen=True)
+class MillThenMayPutLandIntoHand(Effect):
+    """"Mill N cards. You may put a land card from among them into your
+    hand." (Six.) Picked with ``choose_card_from_library`` (``None``
+    declines)."""
+
+    n: int = 3
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        milled = []
+        for _ in range(self.n):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            milled.append(card)
+        state.log.append(f"P{controller_id} mills {len(milled)} card(s)")
+        lands = [c for c in milled if c.printing.is_land and c in p.graveyard]
+        if not lands or p.agent is None:
+            return
+        pick = p.agent.choose_card_from_library(
+            state, controller_id, [c.id for c in lands],
+        )
+        card = next((c for c in lands if c.id == pick), None)
+        if card is None:
+            return
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(f"P{controller_id} puts {card.printing.name} into hand")
+
+    def describe(self) -> str:
+        return (
+            f"mill {self.n} cards; you may put a land card from among them "
+            f"into your hand"
+        )

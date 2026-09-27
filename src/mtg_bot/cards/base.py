@@ -1355,6 +1355,12 @@ class CardPrinting:
     # "If a nontoken creature would enter and it wasn't cast, exile it
     # instead." (Containment Priest).
     exiles_uncast_nontoken_creatures_entering: bool = False
+    # Graveyard play permissions (``mtg_bot.graveyard_casting_wg``):
+    # Six's "During your turn, nonland permanent cards in your graveyard
+    # have retrace." and Serra Paragon's once-per-turn land / permanent
+    # spell (mana value <= N) from your graveyard.
+    grants_retrace_to_nonland_permanents_during_your_turn: bool = False
+    grants_once_per_turn_graveyard_play_mv: int = 0
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

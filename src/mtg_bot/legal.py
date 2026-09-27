@@ -734,6 +734,27 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     _emit_graveyard_permission_casts(instant_speed=True)
 
+    # W/G graveyard permissions (Six's retrace, Serra Paragon;
+    # ``mtg_bot.graveyard_casting_wg``): instant-speed spells now, the
+    # rest at sorcery timing below.
+    from mtg_bot.graveyard_casting_wg import graveyard_cast_options
+
+    def _emit_wg_graveyard_casts(instant_speed: bool) -> None:
+        for gcard, permission in graveyard_cast_options(state, player_id):
+            pr = gcard.printing
+            if (pr.is_instant or "flash" in pr.keywords) != instant_speed:
+                continue
+            if (
+                _can_cast(state, player_id, gcard, _effective_cost(gcard, pr.mana_cost))
+                and _targets_are_satisfiable(state, player_id, gcard)
+                and _additional_costs_payable(state, player_id, gcard)
+            ):
+                actions.append(
+                    CastSpell(gcard.id, graveyard_permission=permission)
+                )
+
+    _emit_wg_graveyard_casts(instant_speed=True)
+
     # Bolas's Citadel: the top card of the library may be cast paying
     # life equal to its mana value (instant-speed spells here; the rest
     # below at sorcery timing).
@@ -789,6 +810,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     _emit_flashback_casts(instant_speed=False)
     _emit_escape_casts(instant_speed=False)
     _emit_graveyard_permission_casts(instant_speed=False)
+    _emit_wg_graveyard_casts(instant_speed=False)
 
     # Plot (CR 702.170): the special action from hand (sorcery timing),
     # and casting a card plotted on an earlier turn from exile for free
@@ -818,11 +840,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         for o in state.battlefield
         if o.controller_id == player_id
     )
+    from mtg_bot.graveyard_casting_wg import paragon_land_playable
+
     grants_play_from_graveyard = p.may_play_from_graveyard_this_turn or any(
         o.controller_id == player_id
         and o.printing.grants_play_lands_from_graveyard
         for o in state.battlefield
-    )
+    ) or paragon_land_playable(state, player_id)
     if p.lands_played_this_turn < max_lands:
         # Hand-zone PlayLand dedup; see rationale + invariant on the
         # instant-speed dedup block above.

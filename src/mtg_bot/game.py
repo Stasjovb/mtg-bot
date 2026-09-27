@@ -910,6 +910,12 @@ class GameObject:
     # card from exile under the "its owner may play it for as long as it
     # remains exiled" permission (Elite Spellbinder: {2} total).
     exile_cast_extra_surcharge: int = 0
+    # Serra Paragon: turn number its once-per-turn graveyard permission
+    # was last used (-1 = never); and the life a card played with it
+    # gains when it's put into a graveyard from the battlefield ("exile
+    # it and you gain 2 life"), 0 when it has no such rider.
+    graveyard_permission_used_turn: int = -1
+    leaves_to_graveyard_exile_gain_life: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

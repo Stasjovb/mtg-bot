@@ -81,6 +81,8 @@ Shapes:
   it. For as long as that card remains exiled, its owner may play it. A
   spell cast this way costs {N} more to cast`` ->
   :class:`LookAtHandExileNonlandOwnerMayPlayTaxed` (Elite Spellbinder)
+* ``mill N cards. You may put a land card from among them into your
+  hand`` -> :class:`MillThenMayPutLandIntoHand` (Six)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -212,6 +214,10 @@ _LOOK_HAND_EXILE_MAY_PLAY_TAXED_RE = re.compile(
     r"^look at target opponent's hand\. You may exile a nonland card from "
     r"it\. For as long as that card remains exiled, its owner may play it\. "
     r"A spell cast this way costs \{(?P<n>\d+)\} more to cast$"
+)
+_MILL_MAY_PUT_LAND_RE = re.compile(
+    r"^mill (?P<n>two|three|four|five|\d+) cards\. You may put a land card "
+    r"from among them into your hand$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -469,6 +475,12 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _MILL_MAY_PUT_LAND_RE.match(phrase)
+    if m is not None:
+        n = m.group("n")
+        return wg.MillThenMayPutLandIntoHand(
+            n=int(n) if n.isdigit() else _WORD_NUMBERS[n],
+        )
     m = _LOOK_HAND_EXILE_MAY_PLAY_TAXED_RE.match(phrase)
     if m is not None and int(m.group("n")) >= 1:
         return wg.LookAtHandExileNonlandOwnerMayPlayTaxed(

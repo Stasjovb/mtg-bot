@@ -159,6 +159,8 @@ _STATIC_FLAG_LINES: dict[str, str] = {
     "Nonbasic lands your opponents control enter tapped.": (
         "opponents_nonbasic_lands_enter_tapped"
     ),
+    "During your turn, nonland permanent cards in your graveyard have "
+    "retrace.": "grants_retrace_to_nonland_permanents_during_your_turn",
 }
 
 
@@ -416,6 +418,27 @@ def _parse_backup_line(line: str, card: dict) -> WGLine | None:
     ),))
 
 
+_ONCE_PER_TURN_GRAVEYARD_PLAY_RE = re.compile(
+    r"^Once during each of your turns, you may play a land from your "
+    r"graveyard or cast a permanent spell with mana value (?P<mv>\d+) or "
+    r"less from your graveyard\. If you do, it gains \"When this permanent "
+    r"is put into a graveyard from the battlefield, exile it and you gain "
+    r"2 life\.\"$"
+)
+
+
+def _parse_once_per_turn_graveyard_play(line: str, card: dict) -> WGLine | None:
+    """Serra Paragon's graveyard permission (``mtg_bot.
+    graveyard_casting_wg``). The granted rider's life amount is the
+    printed 2; the recognizer declines any other rider."""
+    m = _ONCE_PER_TURN_GRAVEYARD_PLAY_RE.match(line)
+    if m is None or int(m.group("mv")) < 1:
+        return None
+    return WGLine(fields={
+        "grants_once_per_turn_graveyard_play_mv": int(m.group("mv")),
+    })
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -431,6 +454,7 @@ _RECOGNIZERS = (
     _parse_quote_final_line,
     _parse_activation_lock_line,
     _parse_backup_line,
+    _parse_once_per_turn_graveyard_play,
 )
 
 

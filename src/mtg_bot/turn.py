@@ -528,6 +528,17 @@ def move_off_battlefield(
             obj=obj,
         )
 
+    # Serra Paragon's granted rider ("When this permanent is put into a
+    # graveyard from the battlefield, exile it and you gain 2 life.").
+    if obj.leaves_to_graveyard_exile_gain_life:
+        if destination == "graveyard" and not obj.printing.is_token:
+            from mtg_bot.graveyard_casting_wg import (
+                fire_leaves_to_graveyard_rider,
+            )
+
+            fire_leaves_to_graveyard_rider(state, obj)
+        obj.leaves_to_graveyard_exile_gain_life = 0
+
     # Generic "when this leaves the battlefield" triggers — fires for
     # artifacts, enchantments, and anything else with a matching
     # triggered ability. Used by Cryogen Relic ("enters or leaves →
