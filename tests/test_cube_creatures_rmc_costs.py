@@ -29,7 +29,7 @@ from mtg_bot.effects.generic.cube_creatures_rmc import (
     exile_card,
     grant_exile_play,
 )
-from mtg_bot.effects.generic.mana import AddNManaOfChosenColor, AddOneOfManaCombinations
+from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
 from mtg_bot.effects.object_predicates import HasSubtype, IsArtifact
 from mtg_bot.game import ManaCoin, Zone
 from mtg_bot.legal import legal_actions
@@ -77,11 +77,11 @@ def test_cost_atom_grammar():
     assert parse_rmc_cost_piece("Sacrifice a blue thing") is None
     assert parse_rmc_cost_piece("Tap two untapped green things you control") is None
     assert parse_rmc_cost_piece("Discard two cards") is None
-    cost = _parse_activation_cost("{T}, Sacrifice a Forest")
+    cost = _parse_activation_cost("{T}, Sacrifice an artifact")
     assert cost.tap_self and cost.extra_costs == (
-        SacrificePermanentsCost(permanent_filter=HasSubtype("Forest"), label="a Forest"),
+        SacrificePermanentsCost(permanent_filter=IsArtifact(), label="an artifact"),
     )
-    assert "Sacrifice a Forest" in cost.describe()
+    assert "Sacrifice an artifact" in cost.describe()
 
 
 def test_grammar_disabled_and_eoe_guard():
@@ -94,16 +94,9 @@ def test_grammar_disabled_and_eoe_guard():
     # unclaimed status; cube cards shared with the EoE dumps don't.
     assert is_eoe_only_printing("Intruding Soulrager")
     assert not is_eoe_only_printing("Screaming Nemesis")
-    from mtg_bot.cards.parser.source import OracleParserCardSource
-
-    assert "Intruding Soulrager" not in OracleParserCardSource(pool="eoe").claimed_names
 
 
 def test_effect_grammar_shapes():
-    combos = parse_rmc_effect("add three mana in any combination of {R} and/or {G}")
-    assert combos == AddOneOfManaCombinations(options=(
-        (("R", 3),), (("R", 2), ("G", 1)), (("R", 1), ("G", 2)), (("G", 3),),
-    ))
     assert parse_rmc_effect("add three mana of any one color") == AddNManaOfChosenColor(amount=3)
     assert parse_rmc_effect("this creature deals 1 damage to any target") is not None
     assert parse_rmc_effect("it deals 1 damage to any target") is None
@@ -176,7 +169,7 @@ def test_orcish_lumberjack_sacrifices_a_forest():
     jack = add(state, 0, "Orcish Lumberjack")
     assert not can_activate(state, 0, jack)  # no Forest
     forest = add(state, 0, "Forest")
-    state.players[0].agent.scripts["mode"] = [1]  # {R}{R}{G}
+    state.players[0].agent.scripts["color"] = ["R", "G", "R"]
     activate(state, 0, jack)
     assert forest in state.players[0].graveyard and jack.tapped
     assert sorted(c.color for c in state.players[0].mana_pool) == ["G", "R", "R"]

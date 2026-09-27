@@ -209,10 +209,6 @@ def parse_rmc_cost_piece(piece: str):
 _SOURCE_SUBJECT = re.compile(
     r"^(?:this creature|this artifact|he|she) (?P<rest>(?:deals|fights) .+)$"
 )
-_ADD_N_MANA_ANY_COMBINATION_OF = re.compile(
-    rf"^add (?P<n>{_N}) mana in any combination of "
-    r"\{(?P<a>[WUBRG])\} and/or \{(?P<b>[WUBRG])\}$"
-)
 _ADD_N_MANA_OF_ANY_ONE_COLOR = re.compile(
     r"^add (?P<n>\d+|two|three|four|five|six|seven|eight|nine|ten) mana of "
     r"any one color$"
@@ -296,16 +292,6 @@ def parse_rmc_effect(phrase: str) -> Effect | None:
     m = _SOURCE_SUBJECT.match(phrase)
     if m is not None:
         return _parse_effect(m.group("rest"))
-
-    m = _ADD_N_MANA_ANY_COMBINATION_OF.match(phrase)
-    if m is not None:
-        from mtg_bot.effects.generic.mana import AddOneOfManaCombinations
-
-        n, a, b = _n(m.group("n")), m.group("a"), m.group("b")
-        return AddOneOfManaCombinations(options=tuple(
-            tuple((c, k) for c, k in ((a, n - i), (b, i)) if k)
-            for i in range(n + 1)
-        ))
 
     m = _ADD_N_MANA_OF_ANY_ONE_COLOR.match(phrase)
     if m is not None:
