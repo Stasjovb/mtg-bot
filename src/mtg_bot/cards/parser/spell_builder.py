@@ -658,6 +658,36 @@ _ESCAPE_LINE_RE = re.compile(
 )
 
 
+# "<Basic land type>cycling {cost}" (CR 702.29): a hand-activated
+# "<cost>, Discard this card: Search your library for a <type> card,
+# reveal it, put it into your hand, then shuffle." (Lorien Revealed's
+# Islandcycling) -> ``hand_activated_abilities`` + ``landcycling``.
+_BASIC_LANDCYCLING_LINE_RE = re.compile(
+    r"^(?P<sub>Plains|Island|Swamp|Mountain|Forest)cycling "
+    r"(?P<cost>(?:\{[^}]+\})+)$"
+)
+
+
+def _basic_landcycling_fields(subtype: str, cost_str: str) -> dict:
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.card_flow import CardFilter, SearchLibrary
+
+    ability = ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost(cost_str), mana_str=cost_str,
+            discard_self=True,
+        ),
+        effect=SearchLibrary(
+            card_filter=CardFilter(subtype=subtype), destination="hand",
+            reveal=True,
+        ),
+    )
+    return {
+        "hand_activated_abilities": (ability,),
+        "landcycling": (subtype, cost_str),
+    }
+
+
 # "Plot {cost}" (CR 702.170) -> ``plot_cost``.
 _PLOT_LINE_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
 
@@ -674,6 +704,9 @@ def _casting_keyword_fields(clause: str) -> dict | None:
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
+    m = _BASIC_LANDCYCLING_LINE_RE.match(clause.strip())
+    if m is not None:
+        return _basic_landcycling_fields(m.group("sub"), m.group("cost"))
     m = _ESCAPE_LINE_RE.match(clause.strip())
     if m is not None:
         from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS

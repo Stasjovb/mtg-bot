@@ -552,3 +552,25 @@ def test_natural_order_sacrifices_green_creature_fetches_green_creature():
     cast_and_resolve(state, 0, no)
     assert bear in state.players[0].graveyard
     assert wurm in state.battlefield
+
+
+def test_lorien_revealed_islandcycling_from_hand(cube):
+    from mtg_bot.actions import ActivateAbility
+
+    lorien = next(p for n, p in cube.items() if n.startswith("L") and n.endswith("Revealed"))
+    assert lorien.landcycling == ("Island", "{1}")
+    (ability,) = lorien.hand_activated_abilities
+    assert ability.cost.discard_self
+    state = make_state()
+    island = add(state, 0, "Island", Zone.LIBRARY)
+    add(state, 0, "Swamp", Zone.LIBRARY)
+    card = state.new_object(lorien, 0, Zone.HAND)
+    state.players[0].hand.append(card)
+    add_lands(state, 0, "Swamp", 1)
+    act = ActivateAbility(card.id, 0)
+    assert act in legal_actions(state, 0)
+    apply_action(state, 0, act)
+    resolve_top_of_stack(state)
+    assert card in state.players[0].graveyard
+    assert island in state.players[0].hand
+    assert CardFilter(subtype="Island").describe() == "Island card"
