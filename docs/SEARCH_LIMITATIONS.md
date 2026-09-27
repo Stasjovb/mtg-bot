@@ -19386,7 +19386,24 @@ claimed in both pools).
     `graveyard_arrival_pending`, `resolutions_this_turn`,
     `cast_uncounterable`, `must_attack_turn`, `exile_cast_extra_surcharge`,
     `graveyard_permission_used_turn`, `leaves_to_graveyard_exile_gain_life`,
-    `chosen_card_name` (`GameObject`) and `has_citys_blessing` (`Player`)
-    aren't in the canonical-state / info-set hashes (search code is
-    outside this bucket), so two states differing only in them can share
-    a transposition entry.
+    `chosen_card_name`, `bestowed`, `earthbent` (`GameObject`) and
+    `has_citys_blessing` (`Player`) aren't in the canonical-state /
+    info-set hashes (search code is outside this bucket), so two states
+    differing only in them can share a transposition entry.
+14. **Reconfigure / Bestow type changes are read through
+    `game.is_creature_now` only** (Lion Sash attached; a bestowed
+    Springheart Nantuko). Code that tests `printing.is_creature` directly
+    still sees the printed creature. A bestowed spell on the stack keeps
+    its printed types (a "counter target creature spell" can target it),
+    and bestow is offered only at the creature's own timing.
+15. **Earthbend and Figure of Fable characteristic changes** are
+    self-sourced registry entries (they end only when the permanent leaves
+    the battlefield); `set_creature_subtypes` replaces the whole subtype
+    list (fine for creatures, whose subtypes are all creature types).
+16. **"Whenever you tap a creature for mana"** (Badgermole Cub) fires after
+    a creature's {T} mana ability activated through `ActivateAbility`;
+    creatures tapped by the automatic sacrifice-for-mana payer don't add
+    the extra mana.
+17. **Ascend** is checked with the state-based actions
+    (`creature_statics_wg.apply_ascend`), i.e. before the next priority --
+    equivalent for every cube card with Ascend on a permanent.
