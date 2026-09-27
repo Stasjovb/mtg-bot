@@ -795,6 +795,140 @@ class ModalChooseOneNotYetChosen(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Emperor of Bones
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExileUpToOneTargetGraveyardCardWithSource(Effect):
+    """"Exile up to one target card from a graveyard." -- linked to the
+    source as "exiled with this creature" (``GameObject.exiled_with``);
+    the card stays in exile when the source leaves."""
+
+    def requires_target(self) -> bool:
+        return False
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0, 1)
+
+    def legal_targets(self, state, controller_id):
+        return [("card_in_graveyard", c.id) for p in state.players for c in p.graveyard]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        tid = targets[0][1]
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == tid), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.EXILE
+            src = state.resolving_source
+            card.exiled_with = src.id if src is not None else None
+            p.exile.append(card)
+            state.log.append(f"{card.printing.name} exiled from P{p.id}'s graveyard")
+            return
+
+    def describe(self) -> str:
+        return "exile up to one target card from a graveyard"
+
+
+@dataclass(frozen=True)
+class Adapt(Effect):
+    """Adapt N (CR 701.46): if this permanent has no +1/+1 counters on
+    it, put N +1/+1 counters on it."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import add_plus_one_counters
+
+        src = state.resolving_source
+        if src is None or src not in state.battlefield or src.plus_one_counters:
+            return
+        add_plus_one_counters(state, src, self.amount)
+        state.log.append(f"{src.printing.name} adapts {self.amount}")
+
+    def describe(self) -> str:
+        return f"adapt {self.amount}"
+
+
+@dataclass(frozen=True)
+class ReanimateExiledWithSourceFinalityHasteSacrifice(Effect):
+    """Emperor of Bones: "put a creature card exiled with this creature
+    onto the battlefield under your control with a finality counter on
+    it. It gains haste. Sacrifice it at the beginning of the next end
+    step." """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.generic.delayed_actions import (
+            SacrificeSourceDelayed, schedule_at_next_end_step,
+        )
+        from mtg_bot.game import _CowList, set_named_counters
+
+        src = state.resolving_source
+        if src is None:
+            return
+        options = [
+            (c, p) for p in state.players for c in p.exile
+            if c.exiled_with == src.id and c.printing.is_creature
+        ]
+        if not options:
+            return
+        me = state.player_by_id(controller_id)
+        card, owner = options[0]
+        if me.agent is not None and len(options) > 1:
+            pick = me.agent.choose_target(
+                state, controller_id, [("card", c.id) for c, _ in options],
+            )
+            if pick is not None:
+                card, owner = next(
+                    ((c, p) for c, p in options if c.id == pick[1]), options[0],
+                )
+        if isinstance(owner.exile, _CowList):
+            owner.exile.fork()
+            card = next(c for c in owner.exile if c.id == card.id)
+        owner.exile.remove(card)
+        card.exiled_with = None
+        card.named_counters = ()
+        put_into_battlefield(state, card, controller_id)
+        if card not in state.battlefield:  # pragma: no cover - defensive
+            return
+        set_named_counters(card, "finality", 1)
+        state.add_continuous_effect(
+            source_id=card.id, layer=6, kind="grant_keyword",
+            target_id=card.id, params=("haste",),
+            description=f"{card.printing.name} gains haste",
+        )
+        schedule_at_next_end_step(
+            state, controller_id, card.id, SacrificeSourceDelayed(),
+        )
+        state.log.append(
+            f"{card.printing.name} returns from exile with a finality counter"
+        )
+
+    def describe(self) -> str:
+        return (
+            "put a creature card exiled with this creature onto the "
+            "battlefield under your control with a finality counter; it "
+            "gains haste; sacrifice it at the next end step"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
 
@@ -1276,6 +1410,9 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "Adapt",
+    "ExileUpToOneTargetGraveyardCardWithSource",
+    "ReanimateExiledWithSourceFinalityHasteSacrifice",
     "ModalChooseOneNotYetChosen",
     "SpellMVHasSourceParity",
     "BecomeSaddled",

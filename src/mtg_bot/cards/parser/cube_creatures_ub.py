@@ -112,6 +112,8 @@ def parse_ub_trigger_phrase(phrase: str):
             Event.IS_CAST,
             Controlled(OPPONENT, subject="controller") & SpellMVHasSourceParity(),
         )
+    if phrase == "one or more +1/+1 counters are put on this creature":
+        return (Event.COUNTERS_ADDED, IsSelf())
     m = _SELF_OR_ANOTHER_ENTERS.match(phrase)
     if m is not None:
         noun = _leaves_noun(m.group("noun"))
@@ -443,6 +445,29 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         return ChooseOpponentsExiledCardWithCounterMayPlayFree(
             counter=m.group("kind"),
         )
+    m = re.match(r"^adapt (\d+)$", phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_ub import Adapt
+
+        return Adapt(amount=int(m.group(1)))
+    if phrase == "exile up to one target card from a graveyard":
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ExileUpToOneTargetGraveyardCardWithSource,
+        )
+
+        return ExileUpToOneTargetGraveyardCardWithSource()
+    if phrase == (
+        "put a creature card exiled with this creature onto the battlefield "
+        "under your control with a finality counter on it. It gains haste. "
+        "Sacrifice it at the beginning of the next end step"
+    ):
+        # Literal: Emperor of Bones is the only card in the pool with
+        # this exiled-with recall shape.
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ReanimateExiledWithSourceFinalityHasteSacrifice,
+        )
+
+        return ReanimateExiledWithSourceFinalityHasteSacrifice()
     ub = _parse_ub_effect_batch8(phrase)
     if ub is not None:
         return ub

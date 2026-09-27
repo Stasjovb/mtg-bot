@@ -392,6 +392,13 @@ def move_off_battlefield(
 
             shuffle_library(state, obj.owner_id)
             return
+    if destination == "graveyard":
+        from mtg_bot.game import named_counter_count
+
+        if named_counter_count(obj, "finality") > 0:
+            # A permanent with a finality counter that would be put into
+            # a graveyard from the battlefield is exiled instead.
+            destination = "exile"
     void_redirect = False
     if destination == "graveyard" and not obj.printing.is_token:
         from mtg_bot.game import void_exile_replacement_active

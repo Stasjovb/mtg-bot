@@ -944,6 +944,10 @@ class GameObject:
     saddled: bool = False
     # "choose odd or even" answer ("odd" / "even"), set as it enters.
     chosen_parity: Optional[str] = None
+    # "exiled with this creature" linkage that does NOT return the card
+    # when the source leaves (Emperor of Bones) -- unlike
+    # ``exiled_by_source`` (the "until it leaves the battlefield" link).
+    exiled_with: Optional[int] = None
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()
