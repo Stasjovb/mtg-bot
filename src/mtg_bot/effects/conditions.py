@@ -522,6 +522,25 @@ class HandSizeAtMost(Condition):
 
 
 @dataclass(frozen=True)
+class YourTurnOfGameAtMost(Condition):
+    """It is the viewer's turn and it's one of their first ``n`` turns
+    of the game (``Player.turns_started`` counts each turn they begin,
+    extra turns included).
+
+    Models Starting Town's "This land enters tapped unless it's your
+    first, second, or third turn of the game." via
+    ``YourTurnOfGameAtMost(3)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        if state.active_player().id != viewer_id:
+            return False
+        return 1 <= state.player_by_id(viewer_id).turns_started <= self.n
+
+
+@dataclass(frozen=True)
 class HandSizeExactly(Condition):
     """The viewer's hand has exactly ``n`` cards.
 

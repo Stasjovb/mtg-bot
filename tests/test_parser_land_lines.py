@@ -567,3 +567,91 @@ def test_legendary_land_keeps_supertype():
     )
     assert p.is_legendary and p.produces == frozenset({"G"})
     assert p.type_line == "Legendary Land"
+
+
+# --- helper edge cases -------------------------------------------------------
+
+
+def test_simple_and_multi_mana_helpers():
+    from mtg_bot.cards.parser.land_lines import (
+        _multi_mana_kind,
+        _simple_mana_colors,
+    )
+
+    assert _simple_mana_colors(
+        AddManaToPool(produces=(("C", 1),), spend_restriction="artifact_spell")
+    ) is None
+    assert _simple_mana_colors(
+        AddManaToPool(produces=(("W", 1), ("U", 1)))
+    ) is None
+    assert _simple_mana_colors(AddManaToPool(produces=(("any", 1),))) is None
+    assert _simple_mana_colors(AddManaToPool(produces=(("G", 1),))) == {"G"}
+    assert _simple_mana_colors(
+        AddNManaOfChosenColor(amount=3, options=("W", "U"))
+    ) is None
+    assert _simple_mana_colors(DrawCards(amount=1)) is None
+    assert _multi_mana_kind(DrawCards(amount=1)) is None
+    assert _multi_mana_kind(
+        AddManaToPool(produces=(("C", 2),), spend_restriction="x")
+    ) is None
+    assert _multi_mana_kind(AddManaToPool(produces=(("any", 2),))) is None
+    assert _multi_mana_kind(AddManaToPool(produces=(("C", 1),))) is None
+    assert _multi_mana_kind(AddManaToPool(produces=(("C", 3),))) == "C"
+
+
+def test_choose_ability_targets_edges():
+    from mtg_bot.actions import _choose_ability_targets
+    from mtg_bot.cards.base import DestroyTargetLand
+
+    state = _state()
+    src = _put(state, PLAINS)
+    # Untargeted effect / no legal target.
+    assert _choose_ability_targets(state, 0, src, DrawCards(amount=1)) == ()
+    assert _choose_ability_targets(
+        state, 0, src, DestroyTargetLand(nonbasic_only=True),
+    ) == ()
+    victim = _put(state, ISLAND, player_id=1)
+    # Agent declines -> nothing chosen; no agent -> first legal target.
+    class Decline(_Agent):
+        def choose_target(self, state, player_id, legal_targets):
+            return None
+
+    state.players[0].agent = Decline()
+    assert _choose_ability_targets(state, 0, src, DestroyTargetLand()) == ()
+    state.players[0].agent = None
+    picked = _choose_ability_targets(state, 0, src, DestroyTargetLand())
+    assert len(picked) == 1 and picked[0][1] in {src.id, victim.id}
+
+
+def test_choose_ability_targets_slot_kinds_and_zero_max():
+    from mtg_bot.actions import _choose_ability_targets
+    from mtg_bot.effects.base import Effect
+
+    class Odd(Effect):
+        def requires_target(self):
+            return True
+
+        def legal_targets(self, state, controller_id):
+            return [("permanent", 1)]
+
+        def target_count_range(self):
+            return (0, 0)
+
+        def target_slot_kinds(self):
+            return ("creature",)
+
+    state = _state()
+    src = _put(state, PLAINS)
+    # max 0 is treated as 1; the only slot wants a creature -> empty pool.
+    assert _choose_ability_targets(state, 0, src, Odd()) == ()
+
+
+def test_scaling_mana_and_boseiju_nouns_are_closed():
+    from mtg_bot.cards.parser.effects import _parse_effect
+
+    assert _parse_effect("add {G} for each frog you control") is None
+    assert _parse_effect(
+        "destroy target creature an opponent controls. That player may "
+        "search their library for a land card with a basic land type, put "
+        "it onto the battlefield, then shuffle"
+    ) is None

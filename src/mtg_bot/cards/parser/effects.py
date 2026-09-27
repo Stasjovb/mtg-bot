@@ -205,6 +205,7 @@ from mtg_bot.effects.formulas import (
 from mtg_bot.effects.generic import (
     SearchLibraryForLandCardToBattlefield,
     AddManaOfColorPerCount,
+    AddOneOfManaCombinations,
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     BecomeType,
@@ -1631,6 +1632,17 @@ _ADD_THREE_COLOR_CHOICE_MANA = re.compile(
 # bare regex's ``$`` anchor wouldn't match the multi-sentence shape
 # anyway, but ordering more-specific before more-general is the
 # convention here.
+# "Add {U}{U}, {U}{B}, or {B}{B}." — choose ONE of several fixed mana
+# combinations (filter lands: Sunken Ruins). Captured as a comma/or
+# list of brace runs; only claimed when at least one option mints two
+# or more mana (single-symbol "add {W} or {U}" lists keep their
+# ``AddNManaOfChosenColor`` recognizers). Maps to
+# ``AddOneOfManaCombinations``.
+_MANA_RUN = r"(?:\{[WUBRGC]\})+"
+_ADD_ONE_OF_MANA_COMBINATIONS = re.compile(
+    r"^add (?P<list>" + _MANA_RUN + r"(?:, " + _MANA_RUN + r")*,? or "
+    + _MANA_RUN + r")$"
+)
 # "Add {<C>} for each <noun> you control." — scaling mana ability
 # (Gaea's Cradle: creature; Tolarian Academy: artifact). Maps to
 # ``AddManaOfColorPerCount(color, CountControlledMatching(<pred>))``;
@@ -1737,6 +1749,21 @@ _THAT_PLAYER_GETS_N_POISON_COUNTERS = re.compile(
 # ships.
 _LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_YOU_CONTROL = re.compile(
     r"^lock or unlock a door of target Room you control$"
+)
+# "Destroy target <noun> an opponent controls. That player may search
+# their library for a land card with a basic land type, put it onto the
+# battlefield, then shuffle." — Boseiju, Who Endures' channel body. The
+# only printing in the pool with the destroy + "that player" land-search
+# compensation shape (broader grammar deferred until a second example
+# exists); the destroyable noun is captured and looked up in
+# ``_DESTROY_OPPONENT_NOUNS``. Maps to
+# ``ThenTargetControllerResolves(Destroy(<noun> & ControlledByOpponent),
+# SearchLibraryForLandCardToBattlefield(<five basic types>))`` — the
+# search's own ``choose_card_from_library`` decline models "may".
+_DESTROY_THEN_CONTROLLER_SEARCHES_BASIC_TYPED_LAND = re.compile(
+    r"^destroy target (?P<noun>.+) an opponent controls\. That player "
+    r"may search their library for a land card with a basic land type, "
+    r"put it onto the battlefield, then shuffle$"
 )
 # "Return target <noun> to its owner's hand." — mandatory single-target
 # bounce whose legal-target pool is named by the printed noun phrase.
@@ -2630,6 +2657,35 @@ _TARGET_ARTIFACT_BECOMES_CREATURE_UEOT = re.compile(
 # turn instead.") is handled by ``_SET_BASE_PT_CONDITIONAL_UEOT``
 # below, which must be tried FIRST because the base regex would match
 # the first sentence of the conditional body if the splitter carved it.
+# "up to one other target creature has base power and toughness N/N
+# until end of turn" — optional + other variant of the bare set-base-PT
+# UEOT (Restless Vinestalk's attack trigger). Maps to
+# ``SetBasePTUntilEOT(N, N, optional=True, exclude_self=True)``.
+_SET_BASE_PT_UP_TO_ONE_OTHER_UEOT = re.compile(
+    r"^up to one other target creature has base power and toughness "
+    r"(\d+)/(\d+) until end of turn$"
+)
+# "until end of turn, this land becomes a P/T <c1> [and <c2>] <Subtype>
+# creature [with <keywords>]. It's still a land" — creature-land
+# animation (Restless Vinestalk: "a 5/5 green and blue Plant creature
+# with trample"). Parameterized over P/T, color words, one creature
+# subtype and a keyword tail; maps to ``BecomeLandCreatureUEOT(power,
+# toughness, granted_keywords, granted_subtype, set_colors)``. Keywords
+# outside ``_ANIMATED_LAND_KEYWORDS`` reject the phrase.
+_THIS_LAND_BECOMES_CREATURE_UEOT = re.compile(
+    r"^until end of turn, this land becomes an? (?P<p>\d+)/(?P<t>\d+) "
+    r"(?P<colors>(?:white|blue|black|red|green)"
+    r"(?:(?:,| and|, and) (?:white|blue|black|red|green))*) "
+    r"(?P<subtype>[A-Z][a-z]+) creature(?: with (?P<kws>[^.]+))?\. "
+    r"It's still a land$"
+)
+_COLOR_WORD_LETTERS: dict[str, str] = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+_ANIMATED_LAND_KEYWORDS = frozenset({
+    "flying", "vigilance", "deathtouch", "hexproof", "double strike",
+    "lifelink", "reach", "trample", "first strike", "menace", "haste",
+})
 _SET_BASE_PT_UEOT = re.compile(
     r"^target creature has base power and toughness (\d+)/(\d+) "
     r"until end of turn$"
@@ -3433,6 +3489,17 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     return Sequence(effects=tuple(parsed))
 
 
+# "<body>. If there are no <kind> counters on this land, sacrifice it" —
+# a trailing self-sacrifice rider keyed on a ``named_counters`` kind
+# (Gemstone Mine's mana ability). The body parses through the unified
+# grammar; the rider maps to ``SacrificeSelfIfNoNamedCounters(kind)``
+# and the pair to a ``Sequence``.
+_IF_NO_NAMED_COUNTERS_SACRIFICE_RIDER = re.compile(
+    r"^(?P<body>.+)\. If there are no (?P<kind>[a-z]+) counters on this "
+    r"(?:land|artifact|creature|enchantment|permanent), sacrifice it$"
+)
+
+
 def _parse_effect(phrase: str) -> Effect | None:
     """Parse a *normalized* effect phrase into an ``Effect``.
 
@@ -3476,6 +3543,16 @@ def _parse_effect(phrase: str) -> Effect | None:
     # to recognize ``shuffle your <zone-list> into your library`` as
     # an atomic primitive whose internal `` and `` is bracketed)
     # deferred until a second example exists.
+    m = _IF_NO_NAMED_COUNTERS_SACRIFICE_RIDER.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic import SacrificeSelfIfNoNamedCounters
+
+        body = _parse_effect(m.group("body"))
+        if body is None:
+            return None
+        return Sequence(effects=(
+            body, SacrificeSelfIfNoNamedCounters(kind=m.group("kind")),
+        ))
     if phrase == (
         "shuffle your hand and graveyard into your library, "
         "then draw seven cards"
@@ -5435,6 +5512,39 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     # ``target creature has base power and toughness N/N until end of
     # turn`` — bare single-sentence form (layer 7b UEOT set).
+    m = _SET_BASE_PT_UP_TO_ONE_OTHER_UEOT.match(phrase)
+    if m is not None:
+        return SetBasePTUntilEOT(
+            power=int(m.group(1)),
+            toughness=int(m.group(2)),
+            optional=True,
+            exclude_self=True,
+        )
+    m = _THIS_LAND_BECOMES_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic import BecomeLandCreatureUEOT
+
+        kws: frozenset[str] = frozenset()
+        if m.group("kws"):
+            parts = [
+                k.strip()
+                for k in re.split(r",\s+|\s+and\s+", m.group("kws"))
+                if k.strip()
+            ]
+            if not parts or any(k not in _ANIMATED_LAND_KEYWORDS for k in parts):
+                return None
+            kws = frozenset(parts)
+        colors = frozenset(
+            _COLOR_WORD_LETTERS[w]
+            for w in re.findall(r"white|blue|black|red|green", m.group("colors"))
+        )
+        return BecomeLandCreatureUEOT(
+            power=int(m.group("p")),
+            toughness=int(m.group("t")),
+            granted_keywords=kws,
+            granted_subtype=m.group("subtype"),
+            set_colors=colors,
+        )
     m = _SET_BASE_PT_UEOT.match(phrase)
     if m is not None:
         return SetBasePTUntilEOT(
@@ -5738,6 +5848,17 @@ def _parse_effect(phrase: str) -> Effect | None:
     # captured brace expression — the regex enforces that it's exactly
     # one or two same-color brace pairs but doesn't decompose them
     # into engine coins, so we extract the colors directly.
+    m = _ADD_ONE_OF_MANA_COMBINATIONS.match(phrase)
+    if m is not None:
+        runs = re.findall(_MANA_RUN, m.group("list"))
+        combos = []
+        for run in runs:
+            counts: dict[str, int] = {}
+            for c in re.findall(r"\{([WUBRGC])\}", run):
+                counts[c] = counts.get(c, 0) + 1
+            combos.append(tuple(counts.items()))
+        if any(sum(n for _, n in combo) > 1 for combo in combos):
+            return AddOneOfManaCombinations(options=tuple(combos))
     m = _ADD_MANA_FOR_EACH_CONTROLLED.match(phrase)
     if m is not None:
         pred = _ADD_MANA_PER_CONTROLLED_NOUNS.get(m.group("noun"))
@@ -5884,6 +6005,28 @@ def _parse_effect(phrase: str) -> Effect | None:
         # via ``state.resolving_source``).
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
+        )
+    m = _DESTROY_THEN_CONTROLLER_SEARCHES_BASIC_TYPED_LAND.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.combinators import ThenTargetControllerResolves
+        from mtg_bot.effects.generic import Destroy
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent,
+            IsBasic,
+            IsLand,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        if m.group("noun") != "artifact, enchantment, or nonbasic land":
+            return None
+        pool = (
+            IsArtifact() | _IsEnchantment() | (IsLand() & ~IsBasic())
+        ) & ControlledByOpponent()
+        return ThenTargetControllerResolves(
+            first=Destroy(targets=(TargetSpec(pool),)),
+            then=SearchLibraryForLandCardToBattlefield(
+                land_types=("Plains", "Island", "Swamp", "Mountain", "Forest"),
+            ),
         )
     m = _RETURN_TARGET_NOUN_TO_OWNERS_HAND.match(phrase)
     if m is not None and m.group("noun") in _BOUNCE_TARGET_NOUNS:

@@ -69,6 +69,7 @@ from mtg_bot.effects.conditions import (
     Condition,
     ControlPermanent,
     ControlsAtMost,
+    YourTurnOfGameAtMost,
 )
 from mtg_bot.effects.object_predicates import HasSubtype, IsBasic, IsLand
 
@@ -104,7 +105,51 @@ _CONTROL_N_OR_FEWER_OTHER_LANDS_RE = re.compile(
 _CONTROL_A_BASIC_TYPE_RE = re.compile(
     r"^you control an? (?P<t>Plains|Island|Swamp|Mountain|Forest)$"
 )
+# "As this land enters, choose a basic land type. Then you may pay N
+# life. If you don't, it enters tapped." + "This land is the chosen
+# type." (Multiversal Passage). The choose clause is only meaningful
+# with the static line, so the builder requires both.
+_CHOOSE_TYPE_THEN_PAY_LIFE_RE = re.compile(
+    r"^As this land enters, choose a basic land type\. Then you may pay "
+    r"(?P<life>\d+) life\. If you don't, it enters tapped\.$"
+)
+_IS_CHOSEN_TYPE_LINE = "This land is the chosen type."
+# "This land enters with <N> <kind> counters on it." for a
+# ``named_counters`` kind (Gemstone Mine: "three mining counters").
+_ENTERS_WITH_NAMED_COUNTERS_RE = re.compile(
+    r"^This land enters with (?P<n>[a-z]+|\d+) (?P<kind>[a-z]+) counters? "
+    r"on it\.$"
+)
+_DEDICATED_COUNTER_KINDS = frozenset(
+    {"charge", "time", "stun", "loyalty", "lore", "luck"}
+)
 _CYCLING_RE = re.compile(r"^Cycling (?P<cost>(?:\{[^}]+\})+)$")
+# ``<Ability word> — <ability>`` (Channel — ...). Ability words have no
+# rules meaning (CR 207.2c); the ability after the dash is parsed on its
+# own merits.
+_ABILITY_WORD_PREFIX_RE = re.compile(r"^[A-Z][a-z]+ — (?P<rest>.+)$")
+
+
+_ORDINALS: tuple[str, ...] = (
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+)
+_YOUR_NTH_TURN_RE = re.compile(
+    r"^it's your (?P<list>[a-z]+(?:, [a-z]+)*,? or [a-z]+|[a-z]+) turn of "
+    r"the game$"
+)
+
+
+def _parse_your_early_turn(phrase: str) -> Condition | None:
+    """``it's your first, second, or third turn of the game`` ->
+    ``YourTurnOfGameAtMost(3)``. The ordinals must be exactly
+    first..Nth in order."""
+    m = _YOUR_NTH_TURN_RE.match(phrase)
+    if m is None:
+        return None
+    words = re.split(r",? or |, ", m.group("list"))
+    if tuple(words) != _ORDINALS[: len(words)]:
+        return None
+    return YourTurnOfGameAtMost(len(words))
 
 
 def _parse_enters_tapped_condition(phrase: str) -> Condition | None:
@@ -118,6 +163,9 @@ def _parse_enters_tapped_condition(phrase: str) -> Condition | None:
         return ControlsAtMost(IsLand(), n)
     if phrase == "you control a basic land":
         return ControlPermanent(IsLand() & IsBasic())
+    early = _parse_your_early_turn(phrase)
+    if early is not None:
+        return early
     m = _CONTROL_A_BASIC_TYPE_RE.match(phrase)
     if m is not None:
         return ControlPermanent(HasSubtype(m.group("t")))
@@ -190,6 +238,10 @@ def _try_build_line_composed_land(
     hand_abilities: list[ActivatedAbility] = []
     free_colors: set[str] = set()
     life_mana: list[tuple[int, frozenset[str], ActivatedAbility]] = []
+    chooses_type = False
+    is_chosen_type = False
+    shock_life = 0
+    named_counters: list[tuple[str, int]] = []
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
         if m is not None:
@@ -214,6 +266,28 @@ def _try_build_line_composed_land(
                 return None
             enters_tapped_unless = cond
             continue
+        m = _ENTERS_WITH_NAMED_COUNTERS_RE.match(line)
+        if m is not None:
+            n_word = m.group("n")
+            n = int(n_word) if n_word.isdigit() else _NUMBER_WORDS.get(
+                "one" if n_word == "a" else n_word,
+            )
+            if n is None or m.group("kind") in _DEDICATED_COUNTER_KINDS:
+                return None
+            named_counters.append((m.group("kind"), n))
+            continue
+        m = _CHOOSE_TYPE_THEN_PAY_LIFE_RE.match(line)
+        if m is not None:
+            if chooses_type:
+                return None
+            chooses_type = True
+            shock_life = int(m.group("life"))
+            continue
+        if line == _IS_CHOSEN_TYPE_LINE:
+            if is_chosen_type:
+                return None
+            is_chosen_type = True
+            continue
         m = _CYCLING_RE.match(line)
         if m is not None:
             cost_str = m.group("cost")
@@ -227,6 +301,13 @@ def _try_build_line_composed_land(
                     effect=DrawCards(amount=1),
                 )
             )
+            continue
+        m = _ABILITY_WORD_PREFIX_RE.match(line)
+        if m is not None:
+            line = m.group("rest")
+        hand_ability = _parse_activated_ability_line(line, from_hand=True)
+        if hand_ability is not None:
+            hand_abilities.append(hand_ability)
             continue
         if line.startswith(("When ", "Whenever ", "At ")):
             trig = _parse_triggered_ability_line(line)
@@ -255,6 +336,8 @@ def _try_build_line_composed_land(
             if kind is not None and ability.cost == _TAP_ONLY:
                 free_colors.add(kind)
         activated.append(ability)
+    if chooses_type != is_chosen_type:
+        return None
     produces = set(intrinsic) | free_colors
     produces_life_cost = 0
     if life_mana:
@@ -282,4 +365,8 @@ def _try_build_line_composed_land(
         mana_only_from_produces=True,
         produces_life_cost=produces_life_cost,
         hand_activated_abilities=tuple(hand_abilities),
+        shock_land_life_cost=shock_life,
+        enters_choosing_basic_land_type=chooses_type,
+        is_chosen_basic_land_type=is_chosen_type,
+        enters_with_named_counters=tuple(named_counters),
     )

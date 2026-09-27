@@ -492,22 +492,28 @@ class SetBasePTUntilEOT(Effect):
 
     power: int
     toughness: int
+    # "up to one" — declining a target is legal (count_min 0).
+    optional: bool = False
+    # "other" — the resolving source can't be the target (Restless
+    # Vinestalk's attack trigger: "up to one other target creature").
+    exclude_self: bool = False
 
     def requires_target(self) -> bool:
         return True
 
     def target_count_range(self) -> tuple[int, int]:
-        return (1, 1)
+        return (0, 1) if self.optional else (1, 1)
 
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list["Target"]:
         from mtg_bot.game import is_creature_now
 
+        src = state.resolving_source if self.exclude_self else None
         return [
             ("creature", o.id)
             for o in state.battlefield
-            if is_creature_now(o)
+            if is_creature_now(o) and (src is None or o.id != src.id)
         ]
 
     def resolve(

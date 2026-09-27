@@ -994,6 +994,7 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # Lands print "this land" as their self-reference (surveil lands'
     # "When this land enters, surveil 1."); same type-blind ``IsSelf()``.
     "this land enters": (Event.ENTERS, IsSelf()),
+    "this land attacks": (Event.ATTACKS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
     # Batch 12 — Aura relational trigger family. Three trigger conditions
     # that fire based on what happens to the Aura's enchanted host:

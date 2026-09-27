@@ -832,6 +832,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_untapped_other:
                     continue
+            if ability.cost.remove_named_counter_from_self:
+                from mtg_bot.game import named_counter_count
+                if named_counter_count(
+                    obj, ability.cost.remove_named_counter_from_self,
+                ) < 1:
+                    continue
             if ability.cost.exile_artifact_from_graveyard:
                 # "Exile an artifact card from your graveyard" — Rust
                 # Harvester. Requires at least one artifact card in the

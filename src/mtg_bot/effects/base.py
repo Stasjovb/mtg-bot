@@ -445,6 +445,11 @@ class ActivationCost:
     # graveyard (a discard — discard triggers fire) before the ability
     # goes on the stack.
     discard_self: bool = False
+    # "Remove a <kind> counter from this <permanent>" for a
+    # ``GameObject.named_counters`` kind (Gemstone Mine: "mining").
+    # ``legal_actions`` requires at least one such counter on the
+    # source; ``_activate_ability`` removes one. "" = no such cost.
+    remove_named_counter_from_self: str = ""
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -452,6 +457,11 @@ class ActivationCost:
             parts.append(self.mana_str)
         if self.discard_self:
             parts.append("Discard this card")
+        if self.remove_named_counter_from_self:
+            parts.append(
+                f"Remove a {self.remove_named_counter_from_self} counter "
+                f"from ~"
+            )
         if self.tap_self:
             parts.append("{T}")
         if self.sacrifice_self:

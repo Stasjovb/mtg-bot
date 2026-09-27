@@ -663,6 +663,20 @@ class GameObject:
     # at the moment a card becomes a face-down permanent; cleared by
     # the ``TurnFaceUp`` action.
     face_down: bool = False
+    # Basic land type chosen as this permanent entered ("As this land
+    # enters, choose a basic land type." — Multiversal Passage). Set by
+    # ``actions.apply_land_etb_replacements`` on every entry; read by
+    # ``effective_subtypes`` for printings with
+    # ``is_chosen_basic_land_type`` while the object is on the
+    # battlefield.
+    chosen_basic_land_type: Optional[str] = None
+    # Counters of kinds without a dedicated field ("mining" — Gemstone
+    # Mine), as an immutable ``((kind, count), ...)`` tuple so the fast
+    # slot-cloner can share it safely. Read / written through
+    # ``named_counter_count`` / ``set_named_counters``. Kinds that DO
+    # have a dedicated field (+1/+1, charge, time, stun, loyalty, lore)
+    # never live here.
+    named_counters: tuple = ()
     # DSK Rooms: set of half-names currently unlocked on this Room
     # permanent. When a Room is cast for half A's mana cost, the
     # entering permanent has ``unlocked_halves = frozenset({A})``;
@@ -1419,6 +1433,22 @@ _BASIC_LAND_TYPE_TO_COLOR: dict[str, str] = {
 }
 
 
+def named_counter_count(obj: "GameObject", kind: str) -> int:
+    """How many ``kind`` counters (a ``named_counters`` kind) are on
+    ``obj``."""
+    for k, n in obj.named_counters:
+        if k == kind:
+            return n
+    return 0
+
+
+def set_named_counters(obj: "GameObject", kind: str, count: int) -> None:
+    """Set the number of ``kind`` counters on ``obj`` (0 removes the
+    entry). Rebuilds the immutable tuple."""
+    rest = tuple((k, n) for k, n in obj.named_counters if k != kind)
+    obj.named_counters = rest + (((kind, count),) if count > 0 else ())
+
+
 def effective_subtypes(
     state: "GameState", obj: "GameObject"
 ) -> tuple[str, ...]:
@@ -1458,6 +1488,17 @@ def effective_subtypes(
     if obj.face_down:
         return ()
     subtypes = list(obj.printing.subtypes)
+    # "This land is the chosen type." (Multiversal Passage) — the
+    # entry-time choice, applied as a characteristic of the permanent
+    # before the layer-3/4 walk (so Blood Moon's later set-type still
+    # overrides it).
+    if (
+        obj.printing.is_chosen_basic_land_type
+        and obj.chosen_basic_land_type is not None
+        and obj.zone == Zone.BATTLEFIELD
+        and obj.chosen_basic_land_type not in subtypes
+    ):
+        subtypes.append(obj.chosen_basic_land_type)
     if obj.printing.is_artifact:
         for o in state.battlefield:
             if o.id == obj.id:
@@ -2479,6 +2520,11 @@ class Player:
     scheduled_agent_override: Optional["Agent"] = None
     scheduled_agent_override_by: Optional[int] = None
     agent_override_saved: Optional["Agent"] = None
+    # How many turns this player has begun (incremented at the start of
+    # each of their untap steps, extra turns included). Read by
+    # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
+    # first, second, or third turn of the game".
+    turns_started: int = 0
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

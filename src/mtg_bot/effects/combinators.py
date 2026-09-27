@@ -19,6 +19,78 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class ThenTargetControllerResolves(Effect):
+    """Resolve ``first`` against the chosen target, then resolve
+    ``then`` with THAT TARGET'S CONTROLLER (captured before ``first``
+    changes anything) as the resolving controller.
+
+    Models the anaphoric "That player ..." follow-up sentence: Boseiju,
+    Who Endures' "Destroy target artifact, enchantment, or nonbasic land
+    an opponent controls. That player may search their library for a
+    land card with a basic land type, put it onto the battlefield, then
+    shuffle." Targeting (legality, count, kinds) delegates to
+    ``first``. If the target is no longer legal on resolution the whole
+    ability fizzles (CR 608.2b) and ``then`` doesn't happen.
+    """
+
+    first: Effect
+    then: Effect
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", self.first.targets)
+
+    def requires_target(self) -> bool:
+        return self.first.requires_target()
+
+    def legal_targets(self, state, controller_id):
+        return self.first.legal_targets(state, controller_id)
+
+    def target_count_range(self):
+        return self.first.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        if not targets:
+            return
+        slot = next(
+            (t for t in self.first.targets if isinstance(t, TargetSpec)),
+            None,
+        )
+        _, target_id = targets[0]
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None,
+        )
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            legal = (
+                obj is not None
+                and slot is not None
+                and _slot_target_still_legal(state, slot, targets[0])
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append("ability fizzles (target no longer legal)")
+            return
+        that_player = obj.controller_id
+        self.first.resolve(state, controller_id, targets)
+        self.then.resolve(state, that_player)
+
+    def describe(self) -> str:
+        return (
+            f"{self.first.describe()}; that player: {self.then.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class ApplyEffect(Effect):
     """Wrap ``inner`` and rewrite the lifetime of every ``ContinuousEffect``
     record it appends to ``state.continuous_effects``.

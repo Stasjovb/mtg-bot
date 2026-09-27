@@ -45,6 +45,7 @@ STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, 
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    ap.turns_started += 1
     # "Until your next turn" expiry: drop every continuous-effect
     # registry entry tagged ``expires_at="controller_untap"`` whose
     # ``expires_at_player_id`` is this active player. Matches Mouth of

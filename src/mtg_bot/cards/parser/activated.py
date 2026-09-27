@@ -84,12 +84,14 @@ from mtg_bot.cards.base import (
     ActivationCost,
     AddManaToPool,
     CostReduction,
+    Sequence,
     parse_mana_cost,
 )
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddManaOfColorPerCount,
     AddNManaOfChosenColor,
+    AddOneOfManaCombinations,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.effects.conditions import (
@@ -97,12 +99,14 @@ from mtg_bot.effects.conditions import (
     Condition,
     ControlPermanent,
     HandSizeExactly,
+    PerControlled,
     PerDifferentlyNamedLand,
 )
 from mtg_bot.effects.object_predicates import (
     HasCounter,
     HasSubtype,
     IsCreature,
+    IsLegendary,
 )
 
 
@@ -202,6 +206,26 @@ _REMOVE_PLUS_ONE_COUNTER_PIECE = (
 # grammar deferred until a second example exists).
 _TAP_X_UNTAPPED_ARTIFACTS_PIECE = "Tap X untapped artifacts you control"
 
+# "Discard this card" — the hand-activated cost atom of Cycling /
+# Channel (``ActivationCost.discard_self``). Only accepted by
+# ``_parse_activated_ability_line(..., from_hand=True)``: an ability
+# with this cost functions from its owner's hand and must be routed to
+# ``CardPrinting.hand_activated_abilities``, never to the battlefield
+# ``activated_abilities`` (whose activation path doesn't pay it).
+_DISCARD_THIS_CARD_PIECE = "Discard this card"
+
+# "Remove a <kind> counter from this land" — a counter kind without a
+# dedicated engine field (``GameObject.named_counters``; Gemstone Mine's
+# "mining"). Kinds that DO have dedicated fields are rejected so they
+# can never be silently split across two stores.
+_REMOVE_NAMED_COUNTER_FROM_SELF_PIECE = re.compile(
+    r"^Remove an? (?P<kind>[a-z]+) counter from this "
+    r"(?:land|artifact|creature|enchantment|permanent)$"
+)
+_DEDICATED_COUNTER_KINDS = frozenset(
+    {"charge", "time", "stun", "loyalty", "lore", "luck"}
+)
+
 
 @dataclass(frozen=True)
 class _CostPiece:
@@ -250,6 +274,13 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="remove_plus_one_counter")
     if piece == _TAP_X_UNTAPPED_ARTIFACTS_PIECE:
         return _CostPiece(kind="tap_x_untapped_artifacts")
+    if piece == _DISCARD_THIS_CARD_PIECE:
+        return _CostPiece(kind="discard_self")
+    named = _REMOVE_NAMED_COUNTER_FROM_SELF_PIECE.match(piece)
+    if named is not None:
+        if named.group("kind") in _DEDICATED_COUNTER_KINDS:
+            return None
+        return _CostPiece(kind="remove_named_counter", field=named.group("kind"))
     pay_life_match = _PAY_LIFE_PIECE.match(piece)
     if pay_life_match is not None:
         return _CostPiece(
@@ -295,6 +326,8 @@ def _build_cost_from_pieces(
     sacrifice_seen = False
     remove_plus_one_counter = False
     tap_x_untapped_artifacts = False
+    discard_self = False
+    remove_named_counter = ""
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -339,6 +372,14 @@ def _build_cost_from_pieces(
             if tap_x_untapped_artifacts:
                 return None
             tap_x_untapped_artifacts = True
+        elif p.kind == "discard_self":
+            if discard_self:
+                return None
+            discard_self = True
+        elif p.kind == "remove_named_counter":
+            if remove_named_counter:
+                return None
+            remove_named_counter = p.field
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -363,6 +404,13 @@ def _build_cost_from_pieces(
         kwargs["remove_plus_one_counter_from_your_creature"] = True
     if tap_x_untapped_artifacts:
         kwargs["tap_x_untapped_artifacts_you_control"] = True
+    if remove_named_counter:
+        kwargs["remove_named_counter_from_self"] = remove_named_counter
+    if discard_self:
+        if tap_self or sacrifice_seen or remove_named_counter:
+            # A card in hand can't also be tapped / sacrificed.
+            return None
+        kwargs["discard_self"] = True
     return ActivationCost(**kwargs)
 
 
@@ -531,6 +579,21 @@ _INLINE_COST_REDUCTION_RIDER = re.compile(
 # amount by the condition's ``multiplier`` (the count of distinctly
 # named lands the controller controls at activation time), giving the
 # correct X-based discount.
+# Per-permanent cost-reduction rider: ``This ability costs {N} less to
+# activate for each <noun> you control.`` — the Channel lands (Boseiju,
+# Who Endures / Otawara, Soaring City: "for each legendary creature you
+# control"). Maps to ``CostReduction(amount=N,
+# condition=PerControlled(<pred>))``; the engine multiplies ``N`` by the
+# count. The noun is looked up in ``_PER_CONTROLLED_COST_REDUCTION_NOUNS``
+# (unknown noun rejects the line).
+_INLINE_PER_CONTROLLED_COST_REDUCTION_RIDER = re.compile(
+    r" This ability costs \{(\d+)\} less to activate for each (.+) you "
+    r"control\.$"
+)
+_PER_CONTROLLED_COST_REDUCTION_NOUNS: dict[str, object] = {
+    "legendary creature": IsCreature() & IsLegendary(),
+}
+
 _INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND = (
     " This ability costs {X} less to activate, where X is the number "
     "of differently named lands you control."
@@ -598,6 +661,17 @@ def _is_mana_ability_effect(effect) -> bool:
     targets, but the explicit guard keeps future grammar additions
     honest.
     """
+    # A Sequence headed by a mana production whose remaining steps don't
+    # target is still a mana ability (CR 605.1a) — Gemstone Mine's
+    # "Add one mana of any color. If there are no mining counters on
+    # this land, sacrifice it."
+    if (
+        isinstance(effect, Sequence)
+        and effect.effects
+        and _is_mana_ability_effect(effect.effects[0])
+        and not effect.requires_target()
+    ):
+        return True
     if isinstance(
         effect,
         (
@@ -605,6 +679,7 @@ def _is_mana_ability_effect(effect) -> bool:
             AddChargeCounterManaOfChosenColor,
             AddManaOfColorPerCount,
             AddNManaOfChosenColor,
+            AddOneOfManaCombinations,
         ),
     ):
         if effect.requires_target():
@@ -613,7 +688,9 @@ def _is_mana_ability_effect(effect) -> bool:
     return False
 
 
-def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
+def _parse_activated_ability_line(
+    line: str, *, from_hand: bool = False,
+) -> ActivatedAbility | None:
     """Return an ``ActivatedAbility`` for a ``{cost}: <effect>.`` line,
     or ``None`` if the line shape doesn't match, the cost shape isn't
     one of the supported pure-mana / tap / tap+mana forms, or the
@@ -677,6 +754,20 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         stripped = stripped[
             : -len(_INLINE_X_COST_REDUCTION_RIDER_DIFFERENTLY_NAMED_LAND)
         ]
+    per_match = _INLINE_PER_CONTROLLED_COST_REDUCTION_RIDER.search(stripped)
+    if per_match is not None:
+        pred = _PER_CONTROLLED_COST_REDUCTION_NOUNS.get(
+            per_match.group(2).strip()
+        )
+        if pred is None:
+            return None
+        cost_reductions = (
+            CostReduction(
+                amount=int(per_match.group(1)),
+                condition=PerControlled(pred),
+            ),
+        )
+        stripped = stripped[: per_match.start()]
     rider_match = _INLINE_COST_REDUCTION_RIDER.search(stripped)
     if rider_match is not None:
         condition_phrase = rider_match.group(2).strip()
@@ -706,6 +797,11 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         return None
     cost = _parse_activation_cost(m.group(1))
     if cost is None:
+        return None
+    # ``from_hand`` lines (Cycling / Channel bodies) must carry the
+    # "Discard this card" cost atom, and only they may: a battlefield
+    # ability can't pay it.
+    if cost.discard_self != from_hand:
         return None
     effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
     if effect is None:

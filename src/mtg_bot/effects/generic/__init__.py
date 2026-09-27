@@ -151,6 +151,7 @@ from mtg_bot.effects.generic.exile import (
     ReanimateOneExiledWithSourceWithCounters,
     ReturnExiledPermanentToOwnerTapped,
     SacrificeSelf,
+    SacrificeSelfIfNoNamedCounters,
     SacrificeSelfPreservingExileLink,
     WarpExileSelf,
 )
@@ -187,6 +188,7 @@ from mtg_bot.effects.generic.mana import (
     AddChargeCounterManaOfChosenColor,
     AddManaToPool,
     AddManaOfColorPerCount,
+    AddOneOfManaCombinations,
     AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
@@ -432,6 +434,7 @@ __all__ = [
     "ReanimateOneExiledWithSourceWithCounters",
     "ReturnExiledPermanentToOwnerTapped",
     "SacrificeSelf",
+    "SacrificeSelfIfNoNamedCounters",
     "SacrificeSelfPreservingExileLink",
     "WarpExileSelf",
     # bounce / return-to-hand
@@ -460,6 +463,7 @@ __all__ = [
     "AddChargeCounterManaOfChosenColor",
     "AddManaToPool",
     "AddManaOfColorPerCount",
+    "AddOneOfManaCombinations",
     "AddNManaOfChosenColor",
     "AddOneManaFromControlledLandsProductions",
     "AddOneManaOfChosenPermanentColor",

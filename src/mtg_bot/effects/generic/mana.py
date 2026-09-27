@@ -82,6 +82,53 @@ class AddManaToPool(Effect):
 
 
 @dataclass(frozen=True)
+class AddOneOfManaCombinations(Effect):
+    """Add ONE of several fixed mana combinations, chosen by the
+    controller at resolution — the filter-land shape "{U/B}, {T}: Add
+    {U}{U}, {U}{B}, or {B}{B}." (Sunken Ruins).
+
+    ``options`` is a tuple of combinations, each a ``produces``-style
+    tuple of ``(color, count)`` pairs. The pick goes through
+    ``Agent.choose_mode`` over one description per combination
+    (``"{U}{U}"`` ...); an agent-less controller or an out-of-range
+    answer takes the first combination.
+    """
+
+    options: tuple[tuple[tuple[str, int], ...], ...]
+
+    @staticmethod
+    def _label(combo: tuple[tuple[str, int], ...]) -> str:
+        return "".join(f"{{{c}}}" * n for c, n in combo)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        idx = 0
+        if p.agent is not None and len(self.options) > 1:
+            picked = p.agent.choose_mode(
+                state, controller_id,
+                [self._label(c) for c in self.options],
+            )
+            if isinstance(picked, int) and 0 <= picked < len(self.options):
+                idx = picked
+        combo = self.options[idx]
+        for color, count in combo:
+            for _ in range(count):
+                p.mana_pool.append(ManaCoin(color=color))
+        state.log.append(
+            f"P{controller_id} adds {self._label(combo)} to mana pool"
+        )
+
+    def describe(self) -> str:
+        labels = [self._label(c) for c in self.options]
+        return "add " + ", ".join(labels[:-1]) + ", or " + labels[-1]
+
+
+@dataclass(frozen=True)
 class AddManaOfColorPerCount(Effect):
     """Add ``amount.value(state, controller)`` mana of one fixed
     ``color`` — "{T}: Add {G} for each creature you control." (Gaea's

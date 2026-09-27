@@ -1178,6 +1178,11 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     fire_opponent_plays_land_triggers(state, player_id, land=card)
 
 
+_BASIC_LAND_TYPES: tuple[str, ...] = (
+    "Plains", "Island", "Swamp", "Mountain", "Forest",
+)
+
+
 def apply_land_etb_replacements(
     state: GameState, player_id: int, card: "GameObject",
     *, force_tapped: bool = False,
@@ -1211,6 +1216,10 @@ def apply_land_etb_replacements(
     if low_life_threshold > 0:
         any_low = any(pl.life <= low_life_threshold for pl in state.players)
         card.tapped = not any_low
+    # "This land enters with N <kind> counters on it." (Gemstone Mine).
+    for kind, n in card.printing.enters_with_named_counters:
+        from mtg_bot.game import set_named_counters
+        set_named_counters(card, kind, n)
     # Generic "This land enters tapped unless <condition>." (fast
     # lands, check lands). Deterministic state check, no agent choice.
     unless = card.printing.enters_tapped_unless
@@ -1219,6 +1228,20 @@ def apply_land_etb_replacements(
         state.log.append(
             f"{card.printing.name} enters "
             f"{'tapped' if card.tapped else 'untapped'}"
+        )
+    # "As this land enters, choose a basic land type." (Multiversal
+    # Passage). Chosen before the "Then you may pay 2 life" payment
+    # below, per the printed order.
+    if card.printing.enters_choosing_basic_land_type:
+        types = list(_BASIC_LAND_TYPES)
+        idx = 0
+        if p.agent is not None:
+            picked = p.agent.choose_mode(state, player_id, types)
+            if isinstance(picked, int) and 0 <= picked < len(types):
+                idx = picked
+        card.chosen_basic_land_type = types[idx]
+        state.log.append(
+            f"{card.printing.name}: P{player_id} chooses {types[idx]}"
         )
     # Shock land: optional life payment on ETB. Agent decides; if they
     # can't/won't pay, the land enters tapped.
@@ -2365,6 +2388,19 @@ def _activate_ability(
             f"P{player_id} removes a +1/+1 counter from "
             f"{chosen.printing.name} (now {chosen.plus_one_counters}) "
             f"(cost for {source.printing.name}'s ability)"
+        )
+
+    # "Remove a <kind> counter from this <permanent>" (Gemstone Mine).
+    if ability.cost.remove_named_counter_from_self:
+        from mtg_bot.game import named_counter_count, set_named_counters
+        kind = ability.cost.remove_named_counter_from_self
+        have = named_counter_count(source, kind)
+        if have < 1:  # pragma: no cover - legal_actions gates this
+            return
+        set_named_counters(source, kind, have - 1)
+        state.log.append(
+            f"P{player_id} removes a {kind} counter from "
+            f"{source.printing.name} ({have - 1} left)"
         )
 
     # "Pay N life" cost (Mana Confluence etc.). Straight life debit.

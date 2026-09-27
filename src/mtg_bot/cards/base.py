@@ -825,6 +825,19 @@ class CardPrinting:
     # indexing into THIS tuple, and ``actions._activate_ability``
     # resolves a hand-resident source against it.
     hand_activated_abilities: tuple["ActivatedAbility", ...] = ()
+    # "As this land enters, choose a basic land type." — the entry-time
+    # choice (``actions.apply_land_etb_replacements`` asks the agent via
+    # ``choose_mode`` over the five type names and stores it on
+    # ``GameObject.chosen_basic_land_type``) ...
+    enters_choosing_basic_land_type: bool = False
+    # ... and "This land is the chosen type." — the static that makes
+    # the permanent that type (``effective_subtypes``; its intrinsic
+    # mana ability follows via ``effective_land_produces``).
+    is_chosen_basic_land_type: bool = False
+    # "This land enters with three mining counters on it." — ETB
+    # replacement placing ``named_counters`` kinds (``((kind, n), ...)``)
+    # as the land enters (``actions.apply_land_etb_replacements``).
+    enters_with_named_counters: tuple = ()
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches
     # Embrace Oblivion's "As an additional cost to cast this spell,
@@ -1962,6 +1975,9 @@ def make_utility_land(
     produces_life_cost: int = 0,
     hand_activated_abilities: tuple = (),
     shock_land_life_cost: int = 0,
+    enters_choosing_basic_land_type: bool = False,
+    is_chosen_basic_land_type: bool = False,
+    enters_with_named_counters: tuple = (),
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -1992,6 +2008,9 @@ def make_utility_land(
         produces_life_cost=produces_life_cost,
         hand_activated_abilities=tuple(hand_activated_abilities),
         shock_land_life_cost=shock_land_life_cost,
+        enters_choosing_basic_land_type=enters_choosing_basic_land_type,
+        is_chosen_basic_land_type=is_chosen_basic_land_type,
+        enters_with_named_counters=tuple(enters_with_named_counters),
     )
 
 
