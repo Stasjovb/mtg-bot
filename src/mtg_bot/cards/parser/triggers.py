@@ -546,6 +546,7 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # controller-gated entry is wired.
     "your upkeep": (Event.BEGINNING_OF_UPKEEP, Controlled(YOU)),
     # White Plume Adventurer (cube W/G bucket): each opponent's upkeep.
+    # Abhorrent Oculus: fires in every opponent's upkeep.
     "each opponent's upkeep": (
         Event.BEGINNING_OF_UPKEEP, Controlled(OPPONENT),
     ),

@@ -789,7 +789,27 @@ def _parse_miracle_line(line: str) -> UBLine | None:
     return UBLine(fields={"miracle_cost": cost, "miracle_cost_str": m.group("cost")})
 
 
+_ADDITIONAL_EXILE_FROM_GRAVEYARD = re.compile(
+    r"^As an additional cost to cast this spell, exile (?P<n>two|three|four|"
+    r"five|six|seven|eight) cards from your graveyard\.$"
+)
+_CARD_COUNTS = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8,
+}
+
+
+def _parse_additional_exile_line(line: str) -> UBLine | None:
+    m = _ADDITIONAL_EXILE_FROM_GRAVEYARD.match(line)
+    if m is None:
+        return None
+    return UBLine(fields={
+        "additional_cost_exile_from_graveyard": _CARD_COUNTS[m.group("n")],
+    })
+
+
 _LINE_PARSERS = (
+    _parse_additional_exile_line,
     _parse_miracle_line,
     _parse_emerge_line,
     _parse_void_replacement_line,

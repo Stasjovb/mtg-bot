@@ -101,6 +101,11 @@ def additional_costs_payable(
     if card.printing.additional_cost_sacrifice_filter is not None:
         if not sacrifice_cost_options(state, player_id, card):
             return False
+    n = card.printing.additional_cost_exile_from_graveyard
+    if n and sum(
+        1 for c in state.player_by_id(player_id).graveyard if c.id != card.id
+    ) < n:
+        return False
     return True
 
 

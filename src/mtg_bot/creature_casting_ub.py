@@ -160,6 +160,37 @@ def pay_emerge_sacrifice(
 
 
 # ---------------------------------------------------------------------
+# "As an additional cost ..., exile N cards from your graveyard."
+# ---------------------------------------------------------------------
+
+
+def pay_exile_from_graveyard_cost(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> None:
+    """Exile ``additional_cost_exile_from_graveyard`` cards of the
+    caster's choice (``choose_sacrifice`` per card) from their graveyard
+    (Abhorrent Oculus)."""
+    from mtg_bot.game import Zone
+
+    p = state.player_by_id(player_id)
+    n = card.printing.additional_cost_exile_from_graveyard
+    for _ in range(n):
+        pool = [c for c in p.graveyard if c.id != card.id]
+        if not pool:  # pragma: no cover - legal_actions gates
+            break
+        chosen = pool[0]
+        if p.agent is not None:
+            pick = p.agent.choose_sacrifice(state, player_id, [c.id for c in pool])
+            chosen = next((c for c in pool if c.id == pick), chosen)
+        p.graveyard.remove(chosen)
+        chosen.zone = Zone.EXILE
+        p.exile.append(chosen)
+    state.log.append(
+        f"additional cost: P{player_id} exiles {n} cards from their graveyard"
+    )
+
+
+# ---------------------------------------------------------------------
 # Miracle (CR 702.94)
 # ---------------------------------------------------------------------
 

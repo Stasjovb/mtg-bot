@@ -2741,6 +2741,10 @@ def _cast_spell(
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 
         _pay_escape_exile(state, player_id, card, escape_exile_n)
+    if card.printing.additional_cost_exile_from_graveyard:
+        from mtg_bot.creature_casting_ub import pay_exile_from_graveyard_cost
+
+        pay_exile_from_graveyard_cost(state, player_id, card)
     if life_x_paid is not None:
         p.life -= life_x_paid
         x_value = life_x_paid

@@ -1412,6 +1412,9 @@ class CardPrinting:
     # miracle trigger resolves.
     miracle_cost: ManaCost | None = None
     miracle_cost_str: str = ""
+    # "As an additional cost to cast this spell, exile N cards from your
+    # graveyard." (Abhorrent Oculus)
+    additional_cost_exile_from_graveyard: int = 0
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

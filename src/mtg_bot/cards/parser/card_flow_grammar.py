@@ -327,6 +327,12 @@ def _parse_reanimate(m: re.Match) -> Effect | None:
     if m.group("counter") is not None:
         kwargs["with_counter"] = m.group("counter")
     if m.group("your_counter") is not None:
+        from mtg_bot.game import KEYWORD_COUNTER_KINDS
+
+        # Only counters with engine semantics (keyword counters, CR
+        # 122.1b); e.g. a finality counter would be a silent no-op.
+        if m.group("your_counter") not in KEYWORD_COUNTER_KINDS:
+            return None
         kwargs["with_counter"] = m.group("your_counter")
     if m.group("upto") is not None:
         kwargs["up_to_one"] = True
