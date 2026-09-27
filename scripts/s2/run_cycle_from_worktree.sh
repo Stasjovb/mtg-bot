@@ -25,7 +25,7 @@ export MTG_BOT_STRUCTURED_CACHE_DIR="${S2_CACHE:-E:/mtg_bot_structured_cache}"
 N="${1:-1}"
 CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
 VT="${S2_VALUE_TARGET:-root}"
-STATE="$MAIN/trained_weights_s2/iterate_state.json"
+STATE="$MAIN_WIN/trained_weights_s2/iterate_state.json"   # Windows path: read by the Windows python
 log() { echo "[s2-cycle] $(date -u +%FT%TZ) $*"; }
 
 log "worktree=$WT HEAD=$(git rev-parse --short HEAD) value_target=$VT accept=${S2_ACCEPT:-0.55} window=${S2_WINDOW:-6000}"
