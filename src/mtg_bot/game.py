@@ -2926,6 +2926,14 @@ class Player:
     # control this turn (any permanent, lands and tokens included).
     # Reset at cleanup.
     permanent_left_battlefield_this_turn: bool = False
+    # CR 504.1 draw-step bookkeeping for "except the first one they draw
+    # in each of their draw steps" (Orcish Bowmasters, Hullbreacher).
+    # ``draw_step_first_draw_pending`` is raised by ``run_draw_step`` for
+    # the active player and consumed by the first ``draw_card`` of that
+    # step; ``drawing_first_in_draw_step`` is True only while that first
+    # draw's replacement / trigger dispatch runs.
+    draw_step_first_draw_pending: bool = False
+    drawing_first_in_draw_step: bool = False
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None

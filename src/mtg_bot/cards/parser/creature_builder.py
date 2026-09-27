@@ -115,6 +115,7 @@ from mtg_bot.cards.parser.creature_rmc_grammar import (
     parse_rmc_creature_line_post,
     parse_rmc_creature_line_pre,
 )
+from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_creature_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import (
     _parse_predicate_trigger_phrase,
@@ -380,6 +381,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     # Cube W/G creature bucket (``creature_wg_lines``): printing fields
     # contributed by lines the pre-existing grammar declines.
     wg_fields: dict = {}
+    ub_fields: dict = {}
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -846,6 +848,19 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         if rmc is not None:
             _absorb_rmc_line(rmc)
             continue
+        # U/B cube-creature grammar (``parser.cube_creatures_ub``):
+        # draw replacements, Ninjutsu, ... Tried before the generic
+        # clause dispatch; contributes abilities and printing fields.
+        ub_line = parse_ub_creature_line(
+            _substitute_self_name(line, card["name"]), card["name"],
+        )
+        if ub_line is not None:
+            keywords.update(ub_line.keywords)
+            triggers.extend(ub_line.triggers)
+            activated.extend(ub_line.activated)
+            statics.extend(ub_line.statics)
+            ub_fields.update(ub_line.fields)
+            continue
         # Pass the printing's own name to the clause dispatcher so the
         # triggered-ability layer can substitute name references
         # (``Haliya``, ``Syr Vondam``, etc.) with the canonical
@@ -982,4 +997,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 + tuple(wg_fields["graveyard_activated_abilities"])
             )
         printing = replace(printing, **wg_fields)
+    if ub_fields:
+        printing = replace(printing, **ub_fields)
     return printing

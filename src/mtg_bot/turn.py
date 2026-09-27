@@ -218,15 +218,48 @@ def draw_card(state: GameState, player_id: int) -> None:
         p.has_lost = True
         p.lost_reason = DREW_FROM_EMPTY_LIBRARY
         return
-    top = p.library.pop(0)
-    top.zone = Zone.HAND
-    p.hand.append(top)
-    p.cards_drawn_this_turn += 1
-    # "Whenever you draw a card" observers (CR 121.2: one event per card).
-    from mtg_bot.actions import dispatch_event
+    # The first card a player draws in their own draw step (CR 504.1's
+    # turn-based draw) is exempt from "except the first one they draw
+    # in each of their draw steps" riders.
+    first_in_draw_step = p.draw_step_first_draw_pending
+    p.draw_step_first_draw_pending = False
+    p.drawing_first_in_draw_step = first_in_draw_step
+    try:
+        if _draw_replaced(state, p):
+            return
+        top = p.library.pop(0)
+        top.zone = Zone.HAND
+        p.hand.append(top)
+        p.cards_drawn_this_turn += 1
+        # "Whenever you draw a card" / "whenever an opponent draws a
+        # card" observers (CR 121.2: one event per card).
+        from mtg_bot.actions import dispatch_event
+        from mtg_bot.effects.predicates import Event
+
+        dispatch_event(state, Event.DRAWS_CARD, player=p)
+    finally:
+        p.drawing_first_in_draw_step = False
+
+
+def _draw_replaced(state: GameState, p) -> bool:
+    """Per-card draw replacement (CR 614.1a / 121.6): walk
+    ``WOULD_DRAW_A_CARD`` replacements for ``p``. When one replaces the
+    draw (Hullbreacher's "instead you create a Treasure token"), run the
+    substituted actions and report True so the draw doesn't happen."""
+    from mtg_bot.effects.modifiers import dispatch_replacement
     from mtg_bot.effects.predicates import Event
 
-    dispatch_event(state, Event.DRAWS_CARD, player=p)
+    out = dispatch_replacement(
+        state, Event.WOULD_DRAW_A_CARD,
+        affected_player_id=p.id,
+        subjects={"player": p},
+        payload={},
+    )
+    if not out.get("prevented"):
+        return False
+    for controller_id, effect in out.get("instead", ()):
+        effect.resolve(state, controller_id, ())
+    return True
 
 
 def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
@@ -256,12 +289,20 @@ def run_draw_step(state: GameState) -> None:
     call this only when the active player actually draws, so the
     starting player's skipped first draw step fires no draw-step
     triggers (documented in docs/SEARCH_LIMITATIONS.md).
+
+    The turn-based draw is marked as the first card drawn in this draw
+    step ("except the first one they draw in each of their draw
+    steps", Orcish Bowmasters / Hullbreacher).
     """
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
 
     ap = state.active_player()
-    draw_n_cards(state, ap.id, 1)
+    ap.draw_step_first_draw_pending = True
+    try:
+        draw_n_cards(state, ap.id, 1)
+    finally:
+        ap.draw_step_first_draw_pending = False
     dispatch_event(
         state, Event.BEGINNING_OF_DRAW_STEP,
         label="beginning-of-draw-step", player=ap,

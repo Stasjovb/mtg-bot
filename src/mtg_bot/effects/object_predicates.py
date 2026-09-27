@@ -553,3 +553,31 @@ class HasCardType(ObjectPredicate):
     def test(self, obj, state):
         printing = getattr(obj, "printing", None)
         return printing is not None and self.card_type in printing.card_types
+
+
+# ---------- drawing-player predicates (DRAWS_CARD / WOULD_DRAW_A_CARD) ----------
+
+
+@dataclass(frozen=True)
+class DrawIsFirstInOwnDrawStep(ObjectPredicate):
+    """The subject Player's in-flight draw is the first card they draw
+    in their own draw step (CR 504.1's turn-based draw). Negated, it is
+    the "except the first one they draw in each of their draw steps"
+    rider (Orcish Bowmasters, Hullbreacher). ``turn.draw_card`` raises
+    ``Player.drawing_first_in_draw_step`` while that draw's replacement
+    and trigger dispatch run."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "drawing_first_in_draw_step", False))
+
+
+@dataclass(frozen=True)
+class HasDrawnNCardsThisTurn(ObjectPredicate):
+    """The subject Player has drawn exactly ``n`` cards this turn —
+    evaluated right after a draw, so ``n=2`` reads "draws their second
+    card each turn" (Faerie Mastermind)."""
+
+    n: int
+
+    def test(self, obj, state):
+        return getattr(obj, "cards_drawn_this_turn", None) == self.n

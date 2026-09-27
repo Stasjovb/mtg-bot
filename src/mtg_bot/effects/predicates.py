@@ -249,6 +249,14 @@ class Event(str, Enum):
     # actually drawn (post-replacement). "Whenever you draw a card" --
     # Teferi, Hero of Dominaria's emblem.
     DRAWS_CARD = "draws_card"
+    # Subject ``(player,)``; payload starts empty. Fired by
+    # ``turn.draw_card`` once per card about to be drawn (CR 121.6 --
+    # a replacement can apply to each card individually). Models
+    # Hullbreacher's "If an opponent would draw a card except the first
+    # one they draw in each of their draw steps, instead you create a
+    # Treasure token." -- an ``InsteadForSourceController`` transform
+    # prevents the draw and queues the substitute action.
+    WOULD_DRAW_A_CARD = "would_draw_a_card"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -291,6 +299,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.WOULD_GO_TO_GRAVEYARD: ("card",),
     Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
     Event.DRAWS_CARD: ("player",),
+    Event.WOULD_DRAW_A_CARD: ("player",),
 }
 
 

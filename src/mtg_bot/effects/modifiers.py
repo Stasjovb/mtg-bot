@@ -165,6 +165,38 @@ class WinTheGameInstead(EventTransform):
         return new
 
 
+@dataclass(frozen=True)
+class InsteadForSourceController(EventTransform):
+    """Replace the event with ``effect`` performed by the replacement
+    source's controller ("..., instead you create a Treasure token").
+
+    Sets ``payload["prevented"] = True`` and appends
+    ``(source_controller_id, effect)`` to ``payload["instead"]``; the
+    dispatch site resolves the queued effects in place of the event.
+    Needs the source, so the dispatcher calls :meth:`apply_with_source`.
+    """
+
+    effect: Any
+
+    def apply(self, payload):  # pragma: no cover - needs a source
+        raise TypeError("InsteadForSourceController needs its source")
+
+    def apply_with_source(self, payload, source):
+        new = dict(payload)
+        new["prevented"] = True
+        new["instead"] = tuple(payload.get("instead", ())) + (
+            (source.controller_id, self.effect),
+        )
+        return new
+
+
+def _apply_transform(transform, payload, source):
+    fn = getattr(transform, "apply_with_source", None)
+    if fn is not None:
+        return fn(payload, source)
+    return transform.apply(payload)
+
+
 # ────────────────────────────────────────────────────────────────────
 # EventPattern — what to match
 # ────────────────────────────────────────────────────────────────────
@@ -388,6 +420,12 @@ class ReplacementEffect:
     event_pattern: EventPattern
     transform: EventTransform
     scope_filter: "ObjectPredicate | None" = None
+    # Whose events this replacement watches, relative to the source's
+    # controller: ``"you"`` (the default -- "if you would draw", "tokens
+    # created under your control") or ``"opponents"`` ("If an opponent
+    # would draw a card ...", Hullbreacher; "a card would be put into an
+    # opponent's graveyard", Dauthi Voidwalker).
+    affects: str = "you"
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -440,7 +478,10 @@ def dispatch_replacement(
         return cur_payload
 
     if len(candidates) == 1:
-        return candidates[0][1].transform.apply(cur_payload)
+        src_id, eff = candidates[0]
+        return _apply_transform(
+            eff.transform, cur_payload, _source_by_id(state, src_id),
+        )
 
     # CR 616.1 — affected player chooses the order.
     affected = state.player_by_id(affected_player_id)
@@ -471,13 +512,23 @@ def dispatch_replacement(
         )
 
     for idx in order:
-        cur_payload = candidates[idx][1].transform.apply(cur_payload)
+        src_id, eff = candidates[idx]
+        cur_payload = _apply_transform(
+            eff.transform, cur_payload, _source_by_id(state, src_id),
+        )
         if cur_payload.get("prevented"):
             # A Prevent short-circuits subsequent transforms — the
             # event has been intercepted.
             break
 
     return cur_payload
+
+
+def _source_by_id(state: "GameState", obj_id: int):
+    for o in state.battlefield:
+        if o.id == obj_id:
+            return o
+    return None
 
 
 def _collect_replacement_effects(
@@ -514,33 +565,34 @@ def _collect_replacement_effects(
     for obj in state.battlefield:
         # Native replacement effects on the printing's static
         # abilities. Implicit gate: source's controller IS the
-        # affected player. Every "your X would happen" replacement
-        # in the current pool has this shape; per-card overrides
-        # live in subject_filters / scope_filter for cards that
-        # narrow the gate further (none today).
-        if obj.controller_id == affected_player_id:
-            for static in active_static_abilities(obj):
-                re = static.replacement_effect
-                if re is None:
-                    continue
-                if re.event_pattern.event != event:
-                    continue
-                # Optional ``StaticAbility.condition`` gate
-                # (state-aware, viewer = source's controller).
-                cond = getattr(static, "condition", None)
-                if cond is not None and not cond.matches(
-                    state, obj.controller_id,
-                ):
-                    continue
-                if not _subject_filters_match(
-                    re.event_pattern.subject_filters, subjects, state,
-                ):
-                    continue
-                if re.scope_filter is not None and not re.scope_filter.test(
-                    obj, state,
-                ):
-                    continue
-                out.append((obj.id, re))
+        # affected player (``affects="you"``, every "your X would
+        # happen" replacement), or is NOT (``affects="opponents"``,
+        # "if an opponent would ...").
+        yours = obj.controller_id == affected_player_id
+        for static in active_static_abilities(obj):
+            re = static.replacement_effect
+            if re is None:
+                continue
+            if re.event_pattern.event != event:
+                continue
+            if (re.affects == "opponents") == yours:
+                continue
+            # Optional ``StaticAbility.condition`` gate
+            # (state-aware, viewer = source's controller).
+            cond = getattr(static, "condition", None)
+            if cond is not None and not cond.matches(
+                state, obj.controller_id,
+            ):
+                continue
+            if not _subject_filters_match(
+                re.event_pattern.subject_filters, subjects, state,
+            ):
+                continue
+            if re.scope_filter is not None and not re.scope_filter.test(
+                obj, state,
+            ):
+                continue
+            out.append((obj.id, re))
     # Moving-card walker: if subjects carries a ``"card"`` key, the
     # dispatcher is firing on an event whose source is the card itself
     # (mid-flight, not on the battlefield) — Nexus-of-Fate-shape

@@ -169,6 +169,9 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # looking — no EoE printing uses N>1 today, but the grammar shape is
 # uniform and trivially extends), and the per-other-creature-or-
 # artifact scaling form (Luxknight Breacher).
+_WHEN_AND_WHENEVER_LINE = re.compile(
+    r"^When (.+?) and whenever (.+?), (.+)\.$"
+)
 _ENTERS_WITH_REPLACEMENT_LINE = re.compile(
     r"^This creature enters with (.+)\.$"
 )
@@ -1726,7 +1729,15 @@ def _parse_predicate_trigger_phrase(
             parse_rmc_trigger_phrase,
         )
 
-        return parse_rmc_trigger_phrase(phrase.strip())
+        rmc = parse_rmc_trigger_phrase(phrase.strip())
+        if rmc is not None:
+            return rmc
+        # Draw-observer conditions (U/B creature bucket).
+        from mtg_bot.cards.parser.cube_creatures_ub import (
+            parse_ub_trigger_phrase,
+        )
+
+        return parse_ub_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 
@@ -2180,6 +2191,32 @@ def _parse_triggered_ability_line(
         if parsed is not None:
             return parsed
         return None
+    # ``When <condition> and whenever <condition>, <effect>.`` -- one
+    # ability printed with two trigger conditions (Orcish Bowmasters'
+    # "When this creature enters and whenever an opponent draws a card
+    # ..."). Each condition becomes its own ``TriggeredAbility`` arm
+    # sharing the effect, like the compound "enters or dies" table.
+    both = _WHEN_AND_WHENEVER_LINE.match(line)
+    if both is not None:
+        effect = _parse_effect_phrase(both.group(3))
+        if effect is None:
+            return None
+        arms = []
+        for condition in (both.group(1), both.group(2)):
+            pred_match = _parse_predicate_trigger_phrase(condition)
+            if pred_match is None:
+                return None
+            from mtg_bot.cards.parser.cube_creatures_ub import (
+                bind_event_player_anaphora,
+            )
+
+            arms.append(TriggeredAbility(
+                event=pred_match[0],
+                predicate=pred_match[1],
+                effect=bind_event_player_anaphora(pred_match[0], effect),
+                once_per_turn=once_per_turn,
+            ))
+        return tuple(arms)
     # Intervening-if shape (CR 603.4) tried first: a recognized gate
     # phrase between the trigger condition and the effect collapses to
     # a single ``TriggeredAbility`` with the gate predicate AND-ed onto
@@ -2442,10 +2479,14 @@ def _parse_triggered_ability_line(
     if pred_match is not None:
         event, predicate = pred_match
         phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
+        from mtg_bot.cards.parser.cube_creatures_ub import (
+            bind_event_player_anaphora,
+        )
+
         return TriggeredAbility(
             event=event,
             predicate=predicate,
-            effect=effect,
+            effect=bind_event_player_anaphora(event, effect),
             once_per_turn=once_per_turn or phrase_once,
         )
     trigger = _parse_trigger_phrase(condition)

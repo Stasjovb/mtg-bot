@@ -7014,7 +7014,23 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
     # Cube creatures (R / multicolor / colorless) bucket shapes -- last.
     from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_effect
 
-    return parse_rmc_effect(phrase)
+    rmc = parse_rmc_effect(phrase)
+    if rmc is not None:
+        return rmc
+    # U/B-creature bucket grammar (amass, ...).
+    from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_effect
+
+    ub = parse_ub_effect(phrase)
+    if ub is not None:
+        return ub
+    # The source as the printed subject of its own damage clause
+    # ("this creature deals 1 damage to any target"): retry through the
+    # subject-less ``deals ...`` grammar spells use once their name is
+    # stripped. Last resort, so every literal that spells out the
+    # subject keeps its match.
+    if phrase.startswith("this creature deals "):
+        return _parse_effect(phrase[len("this creature "):])
+    return None
 
 
 def _normalize_creature_effect_phrase(phrase: str) -> str:
