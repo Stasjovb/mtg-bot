@@ -791,16 +791,17 @@ def _improvise_max_contribution(
 def _apply_improvise(
     state: GameState, player_id: int, cost: ManaCost,
 ) -> ManaCost:
-    """Improvise during cost payment (CR 702.126a / 601.2h): the caster
-    picks untapped artifacts to tap (``choose_improvise_artifacts``);
-    each pays {1} of the generic part."""
-    p = state.player_by_id(player_id)
+    """Improvise during cost payment (CR 702.126a / 601.2h): untapped
+    artifacts are tapped, each paying {1} of the generic part. The engine
+    picks (``creature_casting_ub.improvise_tap_order``: artifacts without
+    mana abilities first) rather than asking the agent -- see
+    docs/SEARCH_LIMITATIONS.md."""
+    from mtg_bot.creature_casting_ub import improvise_tap_order
+
     candidates = _improvise_candidates(state, player_id)
-    if p.agent is None or cost.generic == 0 or not candidates:
+    if cost.generic == 0 or not candidates:
         return cost
-    chosen = p.agent.choose_improvise_artifacts(
-        state, player_id, [o.id for o in candidates], cost.generic,
-    )
+    chosen = improvise_tap_order(candidates)
     from mtg_bot.turn import tap_permanent
 
     by_id = {o.id: o for o in candidates}

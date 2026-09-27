@@ -210,9 +210,18 @@ def test_parse_effect_returns_none_for_malformed_target_opponent_loses_life():
     assert _parse_effect("target opponent loses life") is None
     assert _parse_effect("target opponent loses two life") is None
     assert _parse_effect("target opponent loses 3") is None
-    # Wrong subject — "target player" widens to allies, which the
-    # opponent-only effect can't support.
-    assert _parse_effect("target player loses 2 life") is None
+    # "target player" widens to the caster too: the opponent-only
+    # effect can't express it, so it maps to the any-player targeted
+    # action-list effect (U/B cube creatures) instead.
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        TargetPlayerPerformsActions,
+    )
+
+    assert _parse_effect("target player loses 2 life") == (
+        TargetPlayerPerformsActions(
+            actions=(("lose_life", 2),), opponent_only=False,
+        )
+    )
 
 
 def test_parse_effect_returns_none_for_malformed_return_creature_to_hand():

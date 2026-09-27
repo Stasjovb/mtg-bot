@@ -19499,6 +19499,6 @@ New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `sr
 
 ### Improvise, Saddle and clones
 
-**Where:** `actions._apply_improvise` / `_improvise_max_contribution`, `Agent.choose_improvise_artifacts`; `creature_casting_ub.pay_saddle_cost`; `creature_casting_ub.apply_copy_on_entry`.
+**Where:** `actions._apply_improvise` / `_improvise_max_contribution`, `creature_casting_ub.improvise_tap_order`; `creature_casting_ub.pay_saddle_cost`; `creature_casting_ub.apply_copy_on_entry`.
 
-**What the shortcut is.** Improvise is checked like convoke (upper-bound affordability) and the default agent taps artifacts without mana abilities first. Saddle picks riders one at a time through `choose_permanent_to_tap` (plain power; crew-only bonuses don't apply). Phyrexian Metamorph / Superior Spider-Man copy the target's printing (its copiable values); Superior Spider-Man's "When you do, exile that card." is a trigger put on the stack right after it enters.
+**What the shortcut is.** Improvise is checked like convoke (upper-bound affordability), and the engine -- not the agent -- picks which artifacts to tap: artifacts without mana abilities first, as many as the generic cost needs, before any land is tapped. Keeping an artifact untapped instead of a land is therefore not a searchable choice. Saddle picks riders one at a time through `choose_permanent_to_tap` (plain power; crew-only bonuses don't apply). Phyrexian Metamorph / Superior Spider-Man copy the target's printing (its copiable values); Superior Spider-Man's "When you do, exile that card." is a trigger put on the stack right after it enters.

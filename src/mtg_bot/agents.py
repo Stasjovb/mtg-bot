@@ -254,31 +254,6 @@ class Agent:
         """
         return list(candidates)
 
-    def choose_improvise_artifacts(
-        self,
-        state: "GameState",
-        player_id: int,
-        candidates: list[int],
-        remaining_generic: int,
-    ) -> list[int]:
-        """Improvise (CR 702.126) cost-payment helper: which untapped
-        artifacts to tap, each paying {1} of the generic cost.
-        Returning more than needed is harmless; an empty list skips
-        improvise.
-
-        Default: artifacts without mana abilities first (they have
-        nothing better to do), then the rest, in id order.
-        """
-        by_id = {o.id: o for o in state.battlefield}
-
-        def has_mana_ability(oid: int) -> bool:
-            obj = by_id.get(oid)
-            return obj is not None and any(
-                a.is_mana_ability for a in obj.printing.activated_abilities
-            )
-
-        return sorted(candidates, key=lambda oid: (has_mana_ability(oid), oid))
-
     def choose_sac_for_mana(
         self,
         state: "GameState",

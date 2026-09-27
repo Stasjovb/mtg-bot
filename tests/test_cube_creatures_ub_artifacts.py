@@ -14,7 +14,7 @@ from mtg_bot.actions import (
     drain_stack,
     put_into_battlefield,
 )
-from mtg_bot.agents import Agent
+from mtg_bot.creature_casting_ub import improvise_tap_order
 from mtg_bot.cards.base import ManaCost
 from mtg_bot.cards.parser.cube_creatures_ub import (
     parse_ub_creature_line,
@@ -65,10 +65,7 @@ def test_improvise_prefers_non_mana_artifacts_and_skips_without_need():
     state = make_state()
     ring = add(state, 0, "Sol Ring", Zone.BATTLEFIELD)
     rock = add(state, 0, "Aether Spellbomb", Zone.BATTLEFIELD)
-    order = Agent.choose_improvise_artifacts(
-        state.players[0].agent, state, 0, [ring.id, rock.id], 2,
-    )
-    assert order == [rock.id, ring.id]
+    assert improvise_tap_order([ring, rock]) == [rock.id, ring.id]
     free = ManaCost(generic=0, colored=(("U", 1),))
     assert _apply_improvise(state, 0, free) == free
     left = _apply_improvise(state, 0, ManaCost(generic=1))

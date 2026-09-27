@@ -119,14 +119,18 @@ def test_parse_effect_lenient_singular_discard_amount():
     ) == EachOpponentDiscards(count=1)
 
 
-def test_parse_effect_returns_none_for_target_opponent_discards():
+def test_parse_effect_target_opponent_discards_is_the_targeted_primitive():
     # ``target opponent discards a card`` is a different primitive
-    # (single-target discard) and isn't claimed by this regex. No
-    # EoE card prints this exact form but rejecting it explicitly
-    # documents the wide-vs-targeted boundary.
+    # (single-target discard) and isn't claimed by the each-opponent
+    # regex; it maps to the targeted action-list effect (U/B cube
+    # creatures), documenting the wide-vs-targeted boundary.
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        TargetPlayerPerformsActions,
+    )
+
     assert _parse_effect(
         "target opponent discards a card"
-    ) is None
+    ) == TargetPlayerPerformsActions(actions=(("discard", 1),))
 
 
 # ---------- exile target creature or Spacecraft ----------

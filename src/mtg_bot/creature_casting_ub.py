@@ -285,6 +285,24 @@ _REFLEXIVE_EXILE_INDEX = 2102
 
 
 # ---------------------------------------------------------------------
+# Improvise (CR 702.126)
+# ---------------------------------------------------------------------
+
+
+def improvise_tap_order(candidates: list) -> list[int]:
+    """Ids of untapped artifacts in the order improvise taps them:
+    artifacts without mana abilities first (they have nothing better to
+    do), then the rest, each group in id order."""
+
+    def has_mana_ability(obj) -> bool:
+        return any(a.is_mana_ability for a in obj.printing.activated_abilities)
+
+    return [
+        o.id for o in sorted(candidates, key=lambda o: (has_mana_ability(o), o.id))
+    ]
+
+
+# ---------------------------------------------------------------------
 # Saddle (CR 702.171)
 # ---------------------------------------------------------------------
 
