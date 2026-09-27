@@ -257,3 +257,29 @@ class AnyPlayerControlsNoCreatures(StatePredicate):
             if not has_creature:
                 return True
         return False
+
+
+@dataclass(frozen=True)
+class IsMonarch(StatePredicate):
+    """The viewer is the monarch (CR 724) — ``if you're the monarch``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).is_monarch
+
+
+@dataclass(frozen=True)
+class HasInitiative(StatePredicate):
+    """The viewer has the initiative (CR 725) — ``if you have the
+    initiative``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).has_initiative
+
+
+@dataclass(frozen=True)
+class CompletedADungeon(StatePredicate):
+    """The viewer has completed at least one dungeon (CR 309.7) —
+    ``if you've completed a dungeon``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).dungeons_completed > 0

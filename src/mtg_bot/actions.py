@@ -2983,8 +2983,14 @@ def _declare_attackers(
 ) -> None:
     from mtg_bot.combat import declare_attackers, eligible_attackers
 
+    from mtg_bot.designations import forced_attackers
+
     eligible_ids = {o.id for o in eligible_attackers(state, player_id)}
     valid = [oid for oid in attacker_ids if oid in eligible_ids]
+    # Goaded creatures attack each combat if able (CR 701.38a).
+    for oid in forced_attackers(state, player_id):
+        if oid not in valid:
+            valid.append(oid)
     declare_attackers(state, valid)
 
 

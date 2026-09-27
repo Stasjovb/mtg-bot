@@ -102,7 +102,10 @@ from mtg_bot.effects.object_predicates import (
 )
 from mtg_bot.effects.state_predicates import (
     AnyPlayerControlsNoCreatures,
+    CompletedADungeon,
     Delirium,
+    HasInitiative,
+    IsMonarch,
     LoneAttackerForYou,
     OpponentControlsMoreLandsThanYou,
     SpellsCastThisTurn,
@@ -1366,6 +1369,13 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # gate is in place if a future engine change ever loosened the
     # call-site ``was_creature`` check.
     "it was a creature": Subject(None, IsCreature()),
+    # Designation gates (``mtg_bot.designations``): Feywild Caretaker /
+    # Passageway Seer ``if you have the initiative``, the monarch
+    # family ``if you're the monarch``, White Plume Adventurer-style
+    # ``if you've completed a dungeon``.
+    "you have the initiative": StateBound(HasInitiative()),
+    "you're the monarch": StateBound(IsMonarch()),
+    "you've completed a dungeon": StateBound(CompletedADungeon()),
 }
 
 

@@ -59,6 +59,10 @@ def run_untap_step(state: GameState) -> None:
     # ``extended_temp_*`` mirror fields they previously fed have been
     # retired.
     state.expire_continuous_effects("controller_untap", player_id=ap.id)
+    # Goad (CR 701.38a) lasts until the goading player's next turn.
+    from mtg_bot.designations import clear_goad_for
+
+    clear_goad_for(state, ap.id)
     # Phasing: "until its controller's next turn." At the start of the
     # phased creature's controller's untap step, phase it (and anything
     # attached to it) back in. Matches Robe of Stars' Astral Projection.
@@ -825,6 +829,9 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
         state, Event.BEGINNING_OF_UPKEEP,
         label="beginning-of-upkeep", player=state.active_player(),
     )
+    from mtg_bot.designations import on_beginning_of_upkeep
+
+    on_beginning_of_upkeep(state)
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:
@@ -1058,6 +1065,9 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
         state, Event.BEGINNING_OF_END_STEP,
         label="end-step", player=state.active_player(),
     )
+    from mtg_bot.designations import on_beginning_of_end_step
+
+    on_beginning_of_end_step(state)
 
 
 def run_cleanup_step(state: GameState) -> None:

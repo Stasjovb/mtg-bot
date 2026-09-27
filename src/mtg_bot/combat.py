@@ -597,6 +597,10 @@ def _resolve_damage_step(
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.
     _fire_combat_damage_to_player_triggers(state, sources_hit_player)
+    # The monarch / the initiative change hands on combat damage.
+    from mtg_bot.designations import on_combat_damage_to_players
+
+    on_combat_damage_to_players(state, sources_hit_player)
 
 
 def _fire_enchanted_dealt_damage_triggers(

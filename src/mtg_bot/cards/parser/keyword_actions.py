@@ -32,7 +32,9 @@ def _investigate_count(raw: str | None) -> int:
 
 def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-    from mtg_bot.effects.generic.keyword_actions import Explore
+    from mtg_bot.effects.generic.keyword_actions import (
+        BecomeMonarch, Explore, TakeInitiative,
+    )
     from mtg_bot.effects.generic.tokens import CreateToken
 
     m = _INVESTIGATE.match(phrase)
@@ -41,6 +43,10 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
             token_printing=TOKEN_PRINTINGS["Clue"],
             count=_investigate_count(m.group("n")),
         )
+    if phrase == "you become the monarch":
+        return BecomeMonarch()
+    if phrase == "you take the initiative":
+        return TakeInitiative()
     if phrase == "this creature explores":
         return Explore()
     if phrase == "target creature you control explores":

@@ -18880,3 +18880,16 @@ Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of My
 **What the shortcut is.** Cycling / landcycling / typecycling reuse the existing `ActivateAbility(source_id, ability_index)` action with `source_id` naming a card in hand (index into `hand_abilities`) rather than adding a new action type. `training/action_encoding.encode` has no slot for a hand-sourced activation and raises `EncodingOverflowError`, which MCTS/ISMCTS/data_gen already tolerate (prior 0, visit-count-only exploration; dropped from policy targets). The search-side instant-speed capability check (`search/_player_capabilities.py`) doesn't know about hand abilities, so an auto-pass shortcut can skip a cycling window (conservative-wrong: never illegal, just a missed option). Rust engine does not model hand abilities (Python-only).
 
 **Fix scope estimate.** A dedicated action-codec slot range (v-chain break) + capability-check awareness: ~1 day, owned by the NN/search side.
+
+
+## Monarch / initiative / Undercity: inherent triggers and room abilities resolve without the stack — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `src/mtg_bot/designations.py` (hooks called from `turn.run_beginning_of_upkeep_triggers`, `turn.run_beginning_of_end_step_triggers`, `combat._resolve_damage_step`, `turn.run_untap_step`, `actions._declare_attackers`).
+
+**What the shortcuts are.**
+1. The monarch's end-step draw, the initiative's upkeep venture, the combat-damage steal, and every Undercity room ability resolve immediately at the hook instead of being put on the stack (CR 724.2 / 725.2 / 309.4c say they are triggered abilities). Nobody can respond to them; ordering relative to other same-step triggers is "after the dispatched triggers are stacked" (so they resolve first).
+2. Room targets are picked at resolution by the agent (no separate target-legality recheck). Trap!'s target pool is the opponents (a player never wants to target themself).
+3. Goad (Arena room) is modeled for two players: the goaded creature is force-added to its controller's attack declaration while eligible; the "attacks a player other than the goader if able" half is moot with two players.
+4. Designation state (`Player.is_monarch` / `has_initiative` / `dungeon_room` / `dungeons_completed`, `GameObject.goaded_by`) is not part of `search/canonical_state` hashing, so transposition lookups can conflate states differing only in a designation. Rust engine does not model any of it (Python-only).
+
+**Fix scope estimate.** Stack-based designation triggers need a synthetic command-zone source object: ~1 day. Canonical-state hashing: search-side, ~1 hour.

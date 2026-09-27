@@ -730,6 +730,11 @@ class GameObject:
     # automatically — same write-through-cache shape the +1/+1 counter
     # pump path uses for layer-7d P/T contributions.
     flying_counters: int = 0
+    # Goad (CR 701.38): id of the player who goaded this creature, or
+    # ``None``. A goaded creature attacks each combat if able until the
+    # goader's next turn (cleared at the goader's untap step). See
+    # ``mtg_bot.designations``.
+    goaded_by: Optional[int] = None
     # DSK Haunted Screen "Activate only once" tracking. The printed
     # rider on Haunted Screen's ``{7}: …`` activation reads "Activate
     # only once." which the engine simulates by latching this flag to
@@ -2540,6 +2545,14 @@ class Player:
     # effects that key on "if you gained life this turn" (Ragost,
     # Deft Gastronaut's end-step untap). Incremented by gain_life().
     life_gained_this_turn: int = 0
+    # Designations (``mtg_bot.designations``): the monarch (CR 724),
+    # the initiative (CR 725) and the player's Undercity venture marker
+    # (CR 309; ``None`` = not in a dungeon) + completed-dungeon count
+    # ("if you've completed a dungeon").
+    is_monarch: bool = False
+    has_initiative: bool = False
+    dungeon_room: Optional[str] = None
+    dungeons_completed: int = 0
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this

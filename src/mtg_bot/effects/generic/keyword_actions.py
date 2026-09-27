@@ -100,3 +100,36 @@ class Explore(Effect):
             "target creature you control explores" if self.target
             else "this creature explores"
         )
+
+
+@dataclass(frozen=True)
+class BecomeMonarch(Effect):
+    """``you become the monarch`` (CR 724)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.designations import become_monarch
+
+        become_monarch(state, controller_id)
+
+    def describe(self) -> str:
+        return "you become the monarch"
+
+
+@dataclass(frozen=True)
+class TakeInitiative(Effect):
+    """``you take the initiative`` (CR 725): take it, then venture into
+    Undercity."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.designations import take_initiative
+
+        take_initiative(state, controller_id)
+
+    def describe(self) -> str:
+        return "you take the initiative"
