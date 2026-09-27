@@ -212,8 +212,14 @@ def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
     lands = [
         o for o in state.battlefield
         if o.controller_id == player_id and o.printing.is_land and not o.tapped
-        and _land_auto_pays(state, o)
     ]
+    # Hot path (search rollouts): legacy printings skip both refinements.
+    if not any(
+        o.printing.mana_only_from_produces or o.printing.produces_life_cost
+        for o in lands
+    ):
+        return lands
+    lands = [o for o in lands if _land_auto_pays(state, o)]
     if not any(_land_tap_life_cost(state, o) for o in lands):
         return lands
     free = [o for o in lands if not _land_tap_life_cost(state, o)]
