@@ -1120,3 +1120,33 @@ class DrawDiscardThenTokensPerDiscardedType(Effect):
             f"{_describe_amount(self.amount)} cards; create a token for "
             f"each card type among the discarded cards"
         )
+
+
+@dataclass(frozen=True)
+class TargetPlayerDiscards(Effect):
+    """"Target player discards N cards." — the discarding player picks
+    (``choose_discard``). Any player may be targeted (Chain of Smog)."""
+
+    amount: Amount = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return _player_targets(state, controller_id, opponent_only=False)
+
+    def resolve(self, state, controller_id, targets=()):
+        p = _target_player(state, targets)
+        if p is None:
+            return
+        for _ in range(_amount(self.amount, state, controller_id)):
+            if not p.hand:
+                break
+            chosen = p.hand[0]
+            if p.agent is not None:
+                picked = p.agent.choose_discard(state, p.id, [c.id for c in p.hand])
+                chosen = _agent_pick(p.hand, picked) or p.hand[0]
+            discard_card(state, p, chosen)
+
+    def describe(self) -> str:
+        return f"target player discards {_describe_amount(self.amount)} card(s)"

@@ -167,6 +167,13 @@ _TARGET_PLAYER_DRAWS_RE = re.compile(
 _TARGET_PLAYER_EXTRA_TURN_RE = re.compile(
     r"^target player takes an extra turn after this one$"
 )
+# "Target player discards N cards[. That player may copy this spell and
+# may choose a new target for that copy]." (Chain of Smog.)
+_TARGET_PLAYER_DISCARDS_RE = re.compile(
+    rf"^target player discards (?P<n>{_AMT}) cards?"
+    r"(?P<copy>\. [Tt]hat player may copy this spell and may choose a new "
+    r"target for that copy)?$"
+)
 _TARGET_PLAYER_DISCARDS_AT_RANDOM_RE = re.compile(
     rf"^target player discards (?P<n>{_AMT}) cards? at random$"
 )
@@ -484,6 +491,19 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         return TargetPlayerDraws(amount=_amount(m.group("n")))
     if _TARGET_PLAYER_EXTRA_TURN_RE.match(phrase) is not None:
         return TargetPlayerTakesExtraTurn()
+    m = _TARGET_PLAYER_DISCARDS_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.card_flow import TargetPlayerDiscards
+
+        eff: Effect = TargetPlayerDiscards(amount=_amount(m.group("n")))
+        if m.group("copy") is not None:
+            from mtg_bot.cards.base import Sequence
+            from mtg_bot.effects.generic.spell_copies import (
+                TargetPlayerMayCopyThisSpell,
+            )
+
+            eff = Sequence(effects=(eff, TargetPlayerMayCopyThisSpell()))
+        return eff
     m = _TARGET_PLAYER_DISCARDS_AT_RANDOM_RE.match(phrase)
     if m is not None:
         return TargetPlayerDiscardsAtRandom(amount=_amount(m.group("n")))

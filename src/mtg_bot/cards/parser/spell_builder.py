@@ -617,8 +617,10 @@ _ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
 #   ``Flashback {cost}`` -> ``flashback_cost``   (CR 702.34)
 #   ``Delve``            -> ``has_delve``         (CR 702.66)
 #   ``Buyback {cost}``   -> ``buyback_cost``      (CR 702.27)
+#   ``Storm``            -> ``has_storm``         (CR 702.40)
 _SPELL_CASTING_KEYWORD_LINE_RE = re.compile(
     r"^(?:(?P<fb>Flashback) (?P<fb_cost>(?:\{[^}]+\})+)|(?P<delve>Delve)|"
+    r"(?P<storm>Storm)|"
     r"(?P<bb>Buyback) (?P<bb_cost>(?:\{[^}]+\})+))$"
 )
 
@@ -660,6 +662,8 @@ def _casting_keyword_fields(clause: str) -> dict | None:
         }
     if m.group("delve"):
         return {"has_delve": True}
+    if m.group("storm"):
+        return {"has_storm": True}
     cost = m.group("bb_cost")
     return {"buyback_cost": parse_mana_cost(cost), "buyback_cost_str": cost}
 

@@ -2124,6 +2124,28 @@ def _cast_spell(
         + _format_log_targets(state, targets)
     )
 
+    # Storm (CR 702.40): the cast trigger copies the spell once per
+    # spell cast before it this turn (every player's spells).
+    if card.printing.has_storm:
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.spell_copies import StormCopySpell
+        from mtg_bot.effects.predicates import Always, Event as _StormEvent
+
+        storm_count = sum(pl.spells_cast_this_turn for pl in state.players)
+        push_triggered_ability(
+            state,
+            source=card,
+            ability=TriggeredAbility(
+                event=_StormEvent.IS_CAST, predicate=Always(),
+                effect=StormCopySpell(
+                    spell_id=card.id, count=storm_count,
+                    printing=card.printing,
+                ),
+            ),
+            ability_index=-1,
+            controller_id=player_id,
+            label="storm",
+        )
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
     p.spells_cast_this_game += 1
@@ -3358,6 +3380,30 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     owner.graveyard.append(card)
 
 
+def push_spell_copy(
+    state: GameState, printing, controller_id: int,
+    targets: tuple = (), x_value: int = 0,
+) -> "GameObject":
+    """Put a copy of a spell onto the stack (CR 707.10) controlled by
+    ``controller_id`` with ``targets``. The copy is a fresh
+    ``GameObject`` flagged ``is_spell_copy`` — it is not cast (no cast
+    triggers, not counted as a spell cast) and ceases to exist when it
+    leaves the stack."""
+    obj = state.new_object(printing, owner_id=controller_id, zone=Zone.STACK)
+    obj.is_spell_copy = True
+    state.stack.append(
+        StackItem(
+            source=obj, controller_id=controller_id,
+            targets=tuple(targets), x_value=x_value,
+        )
+    )
+    state.log.append(
+        f"P{controller_id} puts a copy of {printing.name} on the stack"
+        + _format_log_targets(state, tuple(targets))
+    )
+    return obj
+
+
 def move_spell_off_stack(
     state: GameState, card, destination: str = "graveyard",
 ) -> None:
@@ -3373,6 +3419,9 @@ def move_spell_off_stack(
       ``_send_to_graveyard_or_library`` (so zone-change replacements
       such as Nexus of Fate's shuffle still apply).
     """
+    if card.is_spell_copy:
+        state.log.append(f"copy of {card.printing.name} ceases to exist")
+        return
     owner = state.player_by_id(card.owner_id)
     if card.cast_via_flashback:
         card.cast_via_flashback = False

@@ -1186,6 +1186,9 @@ class CardPrinting:
     # when it holds ``legal_actions`` also offers the
     # ``CastSpell(cast_for_free=True)`` variant.
     free_cast_condition: "object | None" = None
+    # "Storm" (CR 702.40): when cast, copy it for each spell cast before
+    # it this turn (``actions._cast_spell`` pushes the trigger).
+    has_storm: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

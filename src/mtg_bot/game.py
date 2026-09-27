@@ -767,6 +767,10 @@ class GameObject:
     # equal to its mana cost." Set on the graveyard card; cleared at
     # cleanup and when the card is cast.
     flashback_granted_until_eot: bool = False
+    # A copy of a spell on the stack (storm, Chain of Smog). Not a card:
+    # it isn't in any zone list and ceases to exist when it leaves the
+    # stack (CR 707.10a).
+    is_spell_copy: bool = False
 
 
 # Fast shallow cloner generated once at module load. ``blocked_by`` is the
