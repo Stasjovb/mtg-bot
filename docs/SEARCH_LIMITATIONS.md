@@ -19179,3 +19179,128 @@ behavior (every EoE printing parses identically).
    `cast_without_sorcery_timing` (`game.GameObject`) aren't in the
    canonical-state / info-set hashes (search code is outside this bucket),
    so two states differing only in them can share a transposition entry.
+## PowerLSV cube creatures bucket (red / multicolor / colorless) — engine shortcuts (2026-09-27, `feature/cube-creatures-rmc`)
+
+Shortcuts behind the creatures claimed by the R / multicolor / colorless
+bucket. New mechanics live in `src/mtg_bot/effects/generic/cube_creatures_rmc.py`
+(abbreviated `rmc.` below) with small hooks in `actions.py`, `legal.py`,
+`turn.py`, `combat.py` and `game.py`; the grammar is
+`src/mtg_bot/cards/parser/creature_rmc_grammar.py`. Pre-existing
+shortcuts this bucket leans on (activated abilities offered only at
+sorcery timing, hybrid mana paid as generic) are unchanged and not
+repeated here.
+
+1. **Exile play permissions** (`rmc.ExilePlayPermission`: Ragavan,
+   Robber of the Rich, Laelia, Inti, Headliner Scarlett, ...). The
+   permission rides the exiled card (`GameObject.exile_play_permission`),
+   so it works from any player's exile zone; plays are offered by
+   `legal._exile_permission_plays`. Expiry runs at the cleanup step
+   (`rmc.expire_exile_play_permissions` from `turn.run_cleanup_step`), so
+   an "until your next end step" card stays playable during that end
+   step itself (CR ends it as the end step begins). The permission is
+   cleared only when the card is played through it or expires, so a card
+   that leaves exile some other way and is exiled again by an unrelated
+   effect keeps a stale permission (CR 400.7 would make it a new object
+   with none). The action codec has no
+   slot for "cast a card from an opponent's exile", so those plays share
+   the plain `CastSpell` variant, and `canonical_state` doesn't hash the
+   permission. *Impact:* small — the permission is usually used or lost
+   within a turn. *Fix scope:* hash the permission; add a codec slot.
+2. **Dash / escape** stamp `StackItem.alt_cost`, copied onto the
+   permanent at resolution (`GameObject.dashed` / `escaped`). The dash
+   cast reuses the `CastSpell` codec variant with `use_dash=True` (the
+   legal-action dedup key includes the flag), so the policy head can't
+   tell a dash cast from a hard cast. The end-step return is keyed on
+   the ETB timestamp (`rmc.ReturnDashedPermanentToHand`) so a permanent
+   that re-entered isn't bounced.
+3. **Cascade** (`rmc.Cascade`) casts the hit during the cascade
+   trigger's resolution (`rmc.cast_card_from_exile_for_free`), picking
+   its targets immediately. Rules-equivalent for two players.
+4. **Boast** abilities are only offered at sorcery timing, like every
+   other activated ability; the once-per-turn latch is
+   `GameObject.boasted_turn`.
+5. **Reflexive triggers resolve inline.** "You may X. When you do, Y"
+   (`rmc.MayDoThenReflexive`: Generous Plunderer, Inti) chooses Y's
+   targets with the enclosing ability and resolves Y right after X
+   instead of putting a new trigger on the stack (the Minsc & Boo
+   precedent). *Impact:* opponents lose a response window between X
+   and Y.
+6. **Non-combat damage from these effects carries no source.** Fights
+   (`rmc.SourceFightsTarget`), Pyrogoyf-style event damage
+   (`rmc.DealDamageFromEvent`) and Batroc's per-kick damage go through
+   `effects.base._apply_damage`, which is source-agnostic, so the
+   source's deathtouch / lifelink / infect don't apply. Power is read at
+   resolution; when the source has left the battlefield, last-known
+   power comes from `rmc.find_object_anywhere` (printed power + counters).
+7. **Graveyard watch sweeps.** Blightsteel Colossus's "would be put into
+   a graveyard from anywhere → shuffle into library" is applied directly
+   when it leaves the battlefield (`turn.move_off_battlefield`). From
+   other zones (discard, mill) it is applied by `rmc.sweep_graveyard_watch`
+   at the next state-based-action pass, so the card sits in the
+   graveyard briefly (a graveyard count read in between sees it).
+   Emrakul's "is put into a graveyard from anywhere" trigger is detected
+   by the same sweep (`Player.graveyard_arrival_watch`).
+8. **Laelia's "one or more cards are put into exile from your library
+   and/or your graveyard"** is a snapshot diff (`Player.library_graveyard_watch`)
+   swept by `rmc.sweep_library_graveyard_exile_watch` at each SBA pass.
+   Everything exiled between two passes is one batch (one trigger). That
+   matches CR for a single instruction but merges two separate exile
+   instructions inside one resolution. A card that entered the graveyard
+   and was exiled within one resolution (never seen by a sweep) is
+   missed, and the snapshot starts at the first SBA pass after Laelia
+   enters. *Impact:* Laelia can under-count in rare mill-then-exile
+   sequences.
+9. **Wolverine's heal-then-damage replacement** (`rmc.heal_before_damage`)
+   applies once per combat damage step (`combat.healed_this_step`)
+   because all combat damage is dealt simultaneously; non-combat damage
+   applies it per damage event.
+10. **"Defending player"** (annihilator, Ragavan, Robber of the Rich,
+    `rmc.DefendingPlayerSacrificesPermanents`) is the single opponent
+    (two-player engine).
+11. **"One or more" batches** (`rmc.OneOrMoreBatch`, Inti's "whenever you
+    discard one or more cards") suppress a new trigger while one from
+    the same source is still on the stack. Per-card dispatches of one
+    discard all land before anyone gets priority, so that's right for a
+    single instruction. A second, separate discard made while the first
+    trigger is still waiting doesn't trigger again. *Impact:* Inti can
+    under-trigger in response chains.
+12. **Outside-the-game lines are inert.** Companion, "Choose a
+    Background" and draft-matters lines (Lurrus's companion clause,
+    Cogwork Librarian) parse to nothing: the engine has no sideboard,
+    companion zone or draft. Those cards are claimed for their in-game
+    abilities only.
+13. **Zirda's activation reduction** (`rmc.activation_cost_reduction`)
+    reduces generic mana only and keeps the total at one mana or more,
+    which covers every printed activation cost in the pool.
+14. **Lurrus's permission** (`rmc.lurrus_castable`) uses the first
+    unused Lurrus-style permanent whose cap fits; with two, a player may
+    cast two permanents per turn, as CR allows.
+15. **Multikicker count** (Batroc the Leaper): the number of extra kicks
+    is chosen through `Agent.choose_x` after the kicked `CastSpell`
+    variant is picked (`rmc.choose_extra_kicks`, capped at 10). The
+    policy head sees one "kicked" action for every kick count.
+16. **Die rolls** (`rmc.RollDieTable`, "Name Sticker" Goblin) use
+    `state.rng`; the roll is not a chance node in search.
+17. **New per-object / per-player fields are not hashed** by
+    `canonical_state`: `GameObject.exile_play_permission`, `dashed`,
+    `escaped`, `boasted_turn`, `monstrous`, `exhausted_abilities`,
+    `entered_via_cast`, `entered_from_zone`, `kick_count`,
+    `graveyard_cast_used_turn`; `Player.experience_counters`,
+    `cant_gain_life`, `graveyard_arrival_watch`,
+    `library_graveyard_watch`. Transposition lookups may merge states
+    that differ only in these. *Fix scope:* extend `canonical_state`.
+18. **Search capability short-circuits don't know graveyard abilities or
+    exile permissions.** A player whose only play is an exile permission
+    or a graveyard-zone ability (escape, Lurrus casts, graveyard
+    activations) may be auto-passed by search's "nothing to do" priority
+    shortcut.
+19. **"Becomes the target" dispatch sites** (`rmc.fire_becomes_target`,
+    Leovold, Nadu): spell cast, activated ability (battlefield, hand,
+    graveyard), triggered ability put on the stack with chosen targets,
+    and spell copies. Targets changed later by redirect effects don't
+    re-dispatch.
+20. **EoE-only guard.** `cards/parser/source._build_printing` disables
+    this bucket's grammar (`creature_rmc_grammar.rmc_grammar_disabled`)
+    for printings that exist only in the EoE-era pools, so no EoE
+    printing's parse changes (the Rust parity tests are pinned to those
+    parses).
