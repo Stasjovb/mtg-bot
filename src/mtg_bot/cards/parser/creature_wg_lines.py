@@ -182,6 +182,10 @@ def link_exile_abilities(
 def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
     """The :class:`WGLine` for ``line`` (one reminder-stripped oracle line
     of ``card``), or ``None`` when no W/G bucket recognizer claims it."""
+    from mtg_bot.cards.parser.creature_wg_effects import wg_grammar_disabled
+
+    if wg_grammar_disabled():
+        return None
     for recognizer in _RECOGNIZERS:
         out = recognizer(line, card)
         if out is not None:

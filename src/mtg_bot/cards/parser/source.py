@@ -105,6 +105,16 @@ def _build_printing(card: dict) -> CardPrinting | None:
 
 
 def _run_builders(card: dict) -> CardPrinting | None:
+    """The cube W/G creature grammar is pinned off for a few EoE-pool
+    printings whose claim it would otherwise change
+    (``creature_wg_effects.EOE_PINNED_NAMES``)."""
+    from mtg_bot.cards.parser.creature_wg_effects import wg_grammar_pinned_off
+
+    with wg_grammar_pinned_off(card.get("name", "")):
+        return _build_printing_unpinned(card)
+
+
+def _build_printing_unpinned(card: dict) -> CardPrinting | None:
     for builder in (
         _build_room_printing,
         _build_enchantment_printing,

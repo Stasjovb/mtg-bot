@@ -150,3 +150,21 @@ def test_graveyard_to_bottom_needs_a_live_player(cube):
     eff.resolve(state, 0, (("player", 1),))
     assert len(state.players[1].graveyard) == 1
     assert eff.describe().startswith("target player")
+
+
+@pytest.mark.parametrize("name,color", [("Fury", "R"), ("Grief", "B")])
+def test_other_incarnations_claim_through_evoke(cube, name, color):
+    pr = cube[name]
+    assert pr.evoke_exile_from_hand.color == color
+    assert EVOKE_SACRIFICE_TRIGGER in pr.triggered_abilities
+
+
+def test_evoked_grief_discards_then_is_sacrificed(cube):
+    state = make_state()
+    grief = add(state, 0, "Grief", Zone.HAND)
+    add(state, 0, "Dark Ritual", Zone.HAND)  # black pitch card
+    bolt = add(state, 1, "Lightning Bolt", Zone.HAND)
+    state.players[0].agent.scripts["target"] = [("player", 1)]
+    cast_and_resolve(state, 0, grief, use_evoke=True)
+    assert bolt in state.players[1].graveyard
+    assert grief in state.players[0].graveyard

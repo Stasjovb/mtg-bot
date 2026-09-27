@@ -1761,6 +1761,15 @@ def _substitute_self_name(line: str, name: str) -> str:
     if short and short != name:
         short_pattern = r"\b" + re.escape(short) + r"\b"
         line = re.sub(short_pattern, "this creature", line)
+    elif " of " in name:
+        # "Loran of the Third Path" is referred to as "Loran" (the
+        # epithet form of a legendary name without a comma). The
+        # negative lookahead keeps any remaining "<Name> of ..." text
+        # (another card's name) intact.
+        epithet = name.split(" of ", 1)[0]
+        line = re.sub(
+            r"\b" + re.escape(epithet) + r"\b(?! of )", "this creature", line,
+        )
     return line
 
 

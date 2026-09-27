@@ -43,6 +43,7 @@ Shapes:
 
 from __future__ import annotations
 
+import contextlib
 import re
 
 from mtg_bot.effects.base import Effect
@@ -110,8 +111,38 @@ def _target_spec(noun: str, up_to_one: bool, other: bool = False):
     return TargetSpec(filter=pred, count_min=0 if up_to_one else 1)
 
 
+# Edge of Eternities-era printings the W/G shapes would newly claim.
+# Their parse is pinned to the pre-bucket grammar so EoE behavior (and
+# the EoE parity campaign's claimed set) doesn't move.
+EOE_PINNED_NAMES: frozenset[str] = frozenset({
+    # "... you may put a permanent card from your hand onto the
+    # battlefield." (Survival) -- the put-from-hand shape.
+    "Kona, Rescue Beastie",
+})
+
+_DISABLED = [False]
+
+
+@contextlib.contextmanager
+def wg_grammar_pinned_off(name: str):
+    """Disable every W/G recognizer while building ``name`` when it is
+    one of :data:`EOE_PINNED_NAMES` (no-op otherwise)."""
+    prior = _DISABLED[0]
+    _DISABLED[0] = prior or name in EOE_PINNED_NAMES
+    try:
+        yield
+    finally:
+        _DISABLED[0] = prior
+
+
+def wg_grammar_disabled() -> bool:
+    return _DISABLED[0]
+
+
 def parse_wg_effect(phrase: str) -> Effect | None:
     """Last-resort W/G bucket recognizers (see the module docstring)."""
+    if _DISABLED[0]:
+        return None
     from mtg_bot.effects.generic import cube_creatures_wg as wg
 
     m = _GRAVEYARD_ON_BOTTOM_RE.match(phrase)
