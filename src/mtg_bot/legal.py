@@ -525,7 +525,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         return cost
 
     def _cost_plus_kicker(card, base_cost):
-        """Combined base + kicker cost (colored pips merged)."""
+        """Combined base + kicker cost (colored pips merged; a kicker
+        {X} counts at its least legal X)."""
         kc = card.printing.kicker_cost
         if kc is None:
             return base_cost
@@ -533,7 +534,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         for color, n in kc.colored:
             merged[color] = merged.get(color, 0) + n
         return ManaCost(
-            generic=base_cost.generic + kc.generic,
+            generic=base_cost.generic + kc.generic
+            + kc.x_pips * card.printing.x_min,
             colored=tuple(sorted(merged.items())),
             x_pips=base_cost.x_pips,
         )

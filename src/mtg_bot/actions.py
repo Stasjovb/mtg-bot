@@ -2461,7 +2461,8 @@ def _cast_spell(
         cost = ManaCost(
             generic=cost.generic + kc.generic,
             colored=tuple(sorted(merged_colored.items())),
-            x_pips=cost.x_pips,
+            # A kicker with {X} (Thieving Skydiver) adds its X pips.
+            x_pips=cost.x_pips + kc.x_pips,
         )
         state.log.append(
             f"P{player_id} kicks {card.printing.name} for "
@@ -2537,6 +2538,9 @@ def _cast_spell(
             early_x if early_x is not None
             else _choose_and_apply_x(state, player_id, card, cost)
         )
+        # "X can't be 0" (legal_actions only offers the cast when the
+        # minimum is affordable).
+        x_value = max(x_value, card.printing.x_min)
         cost = ManaCost(
             generic=cost.generic + cost.x_pips * x_value,
             colored=cost.colored,
@@ -5266,6 +5270,11 @@ def put_into_battlefield(
     if state.resolving_spell is not obj:
         obj.squad_paid_count = 0
         obj.offspring_paid = False
+        obj.was_kicked = False
+        obj.entered_x_value = 0
+    else:
+        obj.was_kicked = state.resolving_kicked
+        obj.entered_x_value = state.resolving_x_value
     obj.saddled = False   # a new object is never saddled
     # Death-tracker-gated ETB replacement: enters with one +1/+1
     # counter on it if a creature died this turn (Cackling Slasher).

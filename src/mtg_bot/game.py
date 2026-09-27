@@ -948,6 +948,11 @@ class GameObject:
     # when the source leaves (Emperor of Bones) -- unlike
     # ``exiled_by_source`` (the "until it leaves the battlefield" link).
     exiled_with: Optional[int] = None
+    # Whether this permanent's spell was kicked, and its X (Thieving
+    # Skydiver: "if it was kicked", "mana value X or less"). Kept only
+    # when the object entered by resolving as that spell.
+    was_kicked: bool = False
+    entered_x_value: int = 0
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()

@@ -1421,6 +1421,9 @@ class CardPrinting:
     artifact_ability_cost_reduction: int = 0
     # "As <this> enters, choose odd or even." (Gollum, Riddle Master)
     chooses_parity_as_enters: bool = False
+    # "X can't be 0." (Thieving Skydiver's "Kicker {X}. X can't be 0."):
+    # the least X the caster may choose.
+    x_min: int = 0
     # Clone family beyond ``enters_as_copy_of_creature`` (U/B cube):
     # "You may have this creature enter as a copy of any <types> on the
     # battlefield" (``enters_as_copy_types``, e.g. ("Artifact",

@@ -468,6 +468,17 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         )
 
         return ReanimateExiledWithSourceFinalityHasteSacrifice()
+    if phrase == (
+        "gain control of target artifact with mana value X or less. If that "
+        "artifact is an Equipment, attach it to this creature"
+    ):
+        # Literal: Thieving Skydiver is the only card in the pool with
+        # this steal-and-attach shape.
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            GainControlOfTargetThenAttachIfEquipment,
+        )
+
+        return GainControlOfTargetThenAttachIfEquipment()
     ub = _parse_ub_effect_batch8(phrase)
     if ub is not None:
         return ub
@@ -934,7 +945,20 @@ def _parse_choose_parity_line(line: str) -> UBLine | None:
     return UBLine(fields={"chooses_parity_as_enters": True})
 
 
+def _parse_kicker_x_line(line: str) -> UBLine | None:
+    """``Kicker {X}. X can't be 0.`` -- a creature's kicker whose cost is
+    only an {X} (Thieving Skydiver)."""
+    from mtg_bot.cards.base import ManaCost
+
+    if line != "Kicker {X}. X can't be 0.":
+        return None
+    return UBLine(fields={
+        "kicker_cost": ManaCost(x_pips=1), "kicker_cost_str": "{X}", "x_min": 1,
+    })
+
+
 _LINE_PARSERS = (
+    _parse_kicker_x_line,
     _parse_choose_parity_line,
     _parse_saddle_line,
     _parse_artifact_ability_reduction_line,

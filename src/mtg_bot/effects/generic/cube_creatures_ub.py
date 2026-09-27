@@ -928,6 +928,53 @@ class ReanimateExiledWithSourceFinalityHasteSacrifice(Effect):
         )
 
 
+@dataclass(frozen=True)
+class GainControlOfTargetThenAttachIfEquipment(Effect):
+    """"gain control of target artifact with mana value X or less. If
+    that artifact is an Equipment, attach it to this creature."
+    (Thieving Skydiver)."""
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.object_predicates import (
+            IsArtifact, ManaValueAtMostSourceX,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        object.__setattr__(self, "targets", (
+            TargetSpec(IsArtifact() & ManaValueAtMostSourceX()),
+        ))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_walkers import (
+            GainControlOfTargetPermanently,
+        )
+
+        if not targets:
+            return
+        GainControlOfTargetPermanently(targets=self.targets).resolve(
+            state, controller_id, targets,
+        )
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        src = state.resolving_source
+        if (
+            obj is None or obj.controller_id != controller_id
+            or "Equipment" not in obj.printing.subtypes
+            or src is None or src not in state.battlefield
+        ):
+            return
+        obj.attached_to = src.id
+        state.log.append(f"{obj.printing.name} is attached to {src.printing.name}")
+
+    def describe(self) -> str:
+        return (
+            "gain control of target artifact with mana value X or less; if "
+            "it's an Equipment, attach it to this creature"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -1410,6 +1457,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "GainControlOfTargetThenAttachIfEquipment",
     "Adapt",
     "ExileUpToOneTargetGraveyardCardWithSource",
     "ReanimateExiledWithSourceFinalityHasteSacrifice",
