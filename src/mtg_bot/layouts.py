@@ -152,3 +152,79 @@ def turn_to_face(card: "GameObject", face: "CardPrinting") -> None:
     """Turn ``card`` to ``face`` as it's cast (CR 709.3a / 712.11a: the
     spell has only that face's characteristics)."""
     turn_to_back_face(card, face)
+
+
+def _face_card_zones(state: "GameState", player_id: int) -> list[list]:
+    """Zones a player may cast a card from: their hand, graveyard and
+    exile, the top of their library, and other players' exile (exile
+    play permissions)."""
+    p = state.player_by_id(player_id)
+    zones: list[list] = [p.hand, p.graveyard, p.exile]
+    if p.library:
+        zones.append(p.library[:1])
+    zones.extend(o.exile for o in state.players if o.id != player_id)
+    return zones
+
+
+def find_face_card(state: "GameState", player_id: int, card_id: int):
+    """The card ``card_id`` in one of :func:`_face_card_zones`."""
+    for zone in _face_card_zones(state, player_id):
+        for c in zone:
+            if c.id == card_id:
+                return c
+    return None
+
+
+def face_cast_actions(state: "GameState", player_id: int, actions: list, core) -> list:
+    """Add ``CastSpell(..., cast_face=<name>)`` for every castable face
+    of every card the player could cast (``castable_faces``), and drop
+    the plain cast of a split card (CR 709.3: it's always cast as one
+    half).
+
+    Each face's legality is exactly the legality of casting a card
+    with that face's printing: the card is turned to the face, the
+    core enumerator ``core(state, player_id)`` runs, and its casts of
+    that card are kept (timing, cost, targets, alternative costs and
+    cast restrictions all come from the one enumerator). No extra work
+    unless such a card is in one of the player's castable zones."""
+    from dataclasses import replace
+
+    from mtg_bot.actions import CastSpell
+
+    cards = [
+        (zi, c)
+        for zi, zone in enumerate(_face_card_zones(state, player_id))
+        for c in zone
+        if castable_faces(c.printing)
+    ]
+    if not cards:
+        return actions
+    split_ids = {c.id for _, c in cards if c.printing.split_faces}
+    out = [
+        a for a in actions
+        if not (
+            isinstance(a, CastSpell) and a.card_id in split_ids
+            and a.cast_face is None
+        )
+    ]
+    seen: set = set()
+    for zi, card in cards:
+        orig = card.printing
+        for face in castable_faces(orig):
+            card.printing = face
+            try:
+                sub = core(state, player_id)
+            finally:
+                card.printing = orig
+            for a in sub:
+                if not isinstance(a, CastSpell) or a.card_id != card.id or a.use_plot:
+                    continue
+                cast = replace(a, cast_face=face.name)
+                # Same-named copies in one zone are interchangeable (the
+                # hand-cast dedup of the core enumerator).
+                key = (zi, orig.name, replace(cast, card_id=-1))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(cast)
+    return out

@@ -433,6 +433,19 @@ def _exile_permission_plays(
 
 
 def legal_actions(state: GameState, player_id: int) -> list[Action]:
+    """Return all legal actions for ``player_id`` right now (see
+    ``_legal_actions_core``), plus casts of a card as one of its other
+    faces -- a split card's halves, a modal DFC's castable back face
+    (``mtg_bot.layouts.castable_faces``)."""
+    actions = _legal_actions_core(state, player_id)
+    if len(actions) == 1 and not _has_priority(state, player_id):
+        return actions
+    from mtg_bot.layouts import face_cast_actions
+
+    return face_cast_actions(state, player_id, actions, _legal_actions_core)
+
+
+def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
     """Return all legal actions for ``player_id`` right now.
 
     At any priority moment (on or off your turn), instants in hand whose cost

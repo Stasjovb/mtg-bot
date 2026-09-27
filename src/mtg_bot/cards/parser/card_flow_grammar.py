@@ -284,6 +284,8 @@ _REANIMATE_RIDERS: dict[str, tuple[str, object]] = {
     "you lose life equal to that card's mana value": (
         "lose_life_equal_mv", True,
     ),
+    # Death (Life // Death).
+    "you lose life equal to its mana value": ("lose_life_equal_mv", True),
     "if that creature would leave the battlefield, exile it instead of "
     "putting it anywhere else": ("exile_if_it_would_leave", True),
 }

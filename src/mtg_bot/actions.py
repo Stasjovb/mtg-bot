@@ -133,6 +133,10 @@ class CastSpell(Action):
     # Emerge (CR 702.119): cast from hand for the emerge alternative cost,
     # sacrificing a creature / artifact (U/B cube creatures).
     use_emerge: bool = False
+    # Cast the card as its named other face (``mtg_bot.layouts``): one
+    # half of a split card (CR 709.3) or a modal DFC's castable back face
+    # (CR 712.11). ``None`` casts the card's own (front) printing.
+    cast_face: "str | None" = None
 
 
 @dataclass(frozen=True)
@@ -1345,6 +1349,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             graveyard_permission=action.graveyard_permission,
             use_bestow=action.use_bestow,
             use_emerge=action.use_emerge,
+            cast_face=action.cast_face,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -2001,9 +2006,30 @@ def _cast_spell(
     use_bestow: bool = False,
     use_emerge: bool = False,
     alt_mana_cost: "ManaCost | None" = None,
+    cast_face: "str | None" = None,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
+
+    if cast_face is not None:
+        # Split half / modal DFC back face (``mtg_bot.layouts``): the
+        # spell has only that face's characteristics (CR 709.3a /
+        # 712.11a), so the card turns to it before anything reads its
+        # printing; it turns back when it leaves the stack for any zone
+        # but the battlefield (``move_spell_off_stack``) or leaves the
+        # battlefield.
+        from mtg_bot.layouts import face_named, find_face_card, turn_to_face
+
+        face_card = find_face_card(state, player_id, card_id)
+        face = (
+            face_named(face_card.printing, cast_face)
+            if face_card is not None else None
+        )
+        if face is None:  # pragma: no cover - legal_actions gates
+            raise ValueError(
+                f"card {card_id} has no castable face {cast_face!r}"
+            )
+        turn_to_face(face_card, face)
 
     # Necromancy's "if you cast it any time a sorcery couldn't have been
     # cast" reads the timing before the spell moves to the stack.
@@ -4477,7 +4503,11 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     """
     from mtg_bot.effects.modifiers import dispatch_replacement
     from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import restore_mdfc_front
 
+    # A split half / DFC face turns back to the card's front printing
+    # (CR 709.3a / 712.8a).
+    restore_mdfc_front(card)
     owner = state.player_by_id(card.owner_id)
     if owner.graveyard_exile_replacement_this_turn:
         # Yawgmoth's Will: exiled instead of going to the graveyard.
@@ -4566,6 +4596,11 @@ def move_spell_off_stack(
     if card.is_spell_copy:
         state.log.append(f"copy of {card.printing.name} ceases to exist")
         return
+    from mtg_bot.game import restore_mdfc_front
+
+    # A split half / DFC face turns back to the card's front printing
+    # in every zone but the stack and battlefield (CR 709.3a / 712.8a).
+    restore_mdfc_front(card)
     owner = state.player_by_id(card.owner_id)
     if card.exile_if_put_into_graveyard_from_stack and destination != "hand":
         card.exile_if_put_into_graveyard_from_stack = False

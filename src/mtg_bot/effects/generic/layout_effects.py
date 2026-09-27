@@ -82,3 +82,50 @@ class ExileSourceThenReturnTransformed(Effect):
             "exile this permanent, then return it to the battlefield "
             f"transformed under {who} control"
         )
+
+
+@dataclass(frozen=True)
+class YourPermanentsBecomeCreaturesUEOT(Effect):
+    """"All <card type>s you control become P/T creatures until end of
+    turn. They're still <card type>s." (Life): each such permanent gains
+    the creature type with base P/T ``power``/``toughness`` until end of
+    turn (layer-4 ``add_type`` + layer-7b ``set_base_pt`` registry
+    entries through ``ApplyEffect(BecomeType(...), EndOfTurn())``), in
+    addition to its other types."""
+
+    card_type: str = "Land"
+    power: int = 1
+    toughness: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.become_type import BecomeType
+
+        affected = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id
+            and self.card_type in o.printing.card_types
+        ]
+        for obj in affected:
+            ApplyEffect(
+                inner=BecomeType(
+                    types_to_add=("creature",),
+                    base_pt=(self.power, self.toughness),
+                ),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, (("permanent", obj.id),))
+        state.log.append(
+            f"{len(affected)} {self.card_type.lower()}(s) P{controller_id} "
+            f"controls become {self.power}/{self.toughness} creatures "
+            "until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"all {self.card_type.lower()}s you control become "
+            f"{self.power}/{self.toughness} creatures until end of turn"
+        )
