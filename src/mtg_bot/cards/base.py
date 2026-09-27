@@ -1377,6 +1377,13 @@ class CardPrinting:
     # "Equipped creature gets +P/+T for each <kind> counter on this
     # Equipment." -- ``(kind, P, T)`` (Lion Sash).
     equipment_bonus_per_own_counter: tuple = ()
+    # Bestow (CR 702.103; Springheart Nantuko): cast as an Aura with
+    # enchant creature for ``bestow_cost`` (``CastSpell(use_bestow=True)``);
+    # ``bestow_enchanted_bonus`` is the printed "Enchanted creature gets
+    # +P/+T." while it's attached.
+    bestow_cost: "ManaCost | None" = None
+    bestow_cost_str: str = ""
+    bestow_enchanted_bonus: tuple = ()
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

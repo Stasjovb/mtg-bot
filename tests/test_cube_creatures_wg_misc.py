@@ -496,3 +496,83 @@ def test_lion_sash_grows_and_reconfigures():
     state.resolving_source = None
     for e in (ReconfigureAttach(), ReconfigureUnattach(), ExileGraveyardCardCounterIfPermanent()):
         assert e.describe()
+
+
+def _landfall(state, pid=0):
+    from mtg_bot.actions import put_into_battlefield
+
+    land = put(state, pid, "Forest", Zone.HAND)
+    state.players[pid].hand.remove(land)
+    put_into_battlefield(state, land, pid)
+    drain(state)
+    return land
+
+
+def test_springheart_nantuko_bestowed_copies_or_makes_insects():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.game import effective_power, is_creature_now
+
+    pr = cube()["Springheart Nantuko"]
+    assert pr.bestow_cost_str == "{1}{G}" and pr.bestow_enchanted_bonus == (1, 1)
+    state = make_state()
+    nan = put(state, 0, pr, Zone.HAND)
+    ally = put(state, 0, bear("Ally"))
+    add_lands(state, 0, "Forest", 2)
+    assert CastSpell(nan.id, use_bestow=True) in legal_actions(state, 0)
+    state.players[0].agent.scripts["target"] = [("creature", ally.id)]
+    cast_and_resolve(state, 0, nan, use_bestow=True)
+    assert nan.bestowed and nan.attached_to == ally.id
+    assert not is_creature_now(nan)
+    assert effective_power(state, ally) == 3
+    # Landfall with {1}{G} available: copy the enchanted creature.
+    add_lands(state, 0, "Forest", 2)
+    _landfall(state)
+    assert sum(o.printing.name == "Ally" for o in state.battlefield) == 2
+    # No mana left: an Insect instead.
+    for o in state.battlefield:
+        if o.printing.name == "Forest":
+            o.tapped = True
+    _landfall(state)
+    assert any(o.printing.name == "Insect" for o in state.battlefield)
+    # The enchanted creature leaves: Nantuko becomes a creature.
+    from mtg_bot.turn import sacrifice
+
+    sacrifice(state, ally)
+    assert nan in state.battlefield and is_creature_now(nan)
+    assert nan.attached_to is None
+
+
+def test_springheart_bestow_target_gone_resolves_as_creature():
+    from mtg_bot.actions import CastSpell, apply_action
+    from mtg_bot.game import is_creature_now
+    from mtg_bot.turn import sacrifice
+
+    state = make_state()
+    nan = put(state, 0, "Springheart Nantuko", Zone.HAND)
+    ally = put(state, 0, bear("Ally"))
+    add_lands(state, 0, "Forest", 2)
+    state.players[0].agent.scripts["target"] = [("creature", ally.id)]
+    apply_action(state, 0, CastSpell(nan.id, use_bestow=True))
+    sacrifice(state, ally)
+    drain(state)
+    assert nan in state.battlefield and not nan.bestowed and is_creature_now(nan)
+    # Unbestowed on the battlefield: landfall makes an Insect.
+    _landfall(state)
+    assert any(o.printing.name == "Insect" for o in state.battlefield)
+
+
+def test_springheart_bestow_needs_a_creature():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        PayToCopyEnchantedCreatureElseToken,
+    )
+
+    state = make_state()
+    nan = put(state, 0, "Springheart Nantuko", Zone.HAND)
+    add_lands(state, 0, "Forest", 2)
+    assert CastSpell(nan.id, use_bestow=True) not in legal_actions(state, 0)
+    eff = next(
+        t.effect for t in cube()["Springheart Nantuko"].triggered_abilities
+        if isinstance(t.effect, PayToCopyEnchantedCreatureElseToken)
+    )
+    assert "Insect" in eff.describe()

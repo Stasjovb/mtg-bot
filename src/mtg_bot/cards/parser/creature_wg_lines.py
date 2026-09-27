@@ -515,6 +515,42 @@ def _parse_equipped_per_own_counter_line(line: str, card: dict) -> WGLine | None
     )})
 
 
+# ---------------------------------------------------------------------
+# Bestow (CR 702.103)
+# ---------------------------------------------------------------------
+
+_BESTOW_RE = re.compile(r"^Bestow (?P<cost>(?:\{[^}]+\})+)$")
+_ENCHANTED_CREATURE_GETS_RE = re.compile(
+    r"^Enchanted creature gets \+(?P<p>\d+)/\+(?P<t>\d+)\.$"
+)
+
+
+def _has_bestow(card: dict) -> bool:
+    return any(
+        _BESTOW_RE.match(ln.split(" (", 1)[0].strip())
+        for ln in card.get("oracle_text", "").split("\n")
+    )
+
+
+def _parse_bestow_lines(line: str, card: dict) -> WGLine | None:
+    """``Bestow {cost}`` and, on a bestow creature, ``Enchanted creature
+    gets +P/+T.`` (the bonus while it's attached)."""
+    m = _BESTOW_RE.match(line)
+    if m is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        return WGLine(fields={
+            "bestow_cost": parse_mana_cost(m.group("cost")),
+            "bestow_cost_str": m.group("cost"),
+        })
+    m = _ENCHANTED_CREATURE_GETS_RE.match(line)
+    if m is not None and _has_bestow(card):
+        return WGLine(fields={
+            "bestow_enchanted_bonus": (int(m.group("p")), int(m.group("t"))),
+        })
+    return None
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -534,6 +570,7 @@ _RECOGNIZERS = (
     _parse_named_card_lines,
     _parse_reconfigure_line,
     _parse_equipped_per_own_counter_line,
+    _parse_bestow_lines,
 )
 
 

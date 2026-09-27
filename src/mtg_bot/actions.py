@@ -127,6 +127,9 @@ class CastSpell(Action):
     # Cast from the graveyard under a W/G graveyard permission
     # (``mtg_bot.graveyard_casting_wg``): "retrace" or "paragon".
     graveyard_permission: "str | None" = None
+    # Bestow (CR 702.103): cast from hand for the bestow cost as an Aura
+    # spell enchanting a creature.
+    use_bestow: bool = False
 
 
 @dataclass(frozen=True)
@@ -1274,6 +1277,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_dash=action.use_dash,
             use_evoke=action.use_evoke,
             graveyard_permission=action.graveyard_permission,
+            use_bestow=action.use_bestow,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1779,6 +1783,18 @@ def _select_spell_targets(
     # the caster controls — the printed "Enchant creature you control"
     # line. Sheltered by Ghosts ships this; default off mirrors the
     # plain "Enchant creature" wording.
+    if card.bestowed:
+        # Bestow (CR 702.103): an Aura spell with enchant creature.
+        from mtg_bot.game import is_creature_now
+
+        legal = filter_targetable(state, [
+            ("creature", o.id) for o in state.battlefield
+            if is_creature_now(o)
+        ], card, player_id)
+        if legal:
+            chosen = p.agent.choose_target(state, player_id, legal)
+            targets = (chosen if chosen in legal else legal[0],)
+        return targets
     if card.printing.is_aura:
         enchant_type = card.printing.aura_enchant_type
         yours_only = card.printing.aura_yours_only
@@ -1915,6 +1931,7 @@ def _cast_spell(
     use_dash: bool = False,
     use_evoke: bool = False,
     graveyard_permission: "str | None" = None,
+    use_bestow: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -1989,6 +2006,8 @@ def _cast_spell(
             from mtg_bot.evoke import evoke_mana_cost as _evoke_mana_cost
 
             cost = _evoke_mana_cost(card.printing)
+        elif use_bestow:
+            cost = card.printing.bestow_cost
         elif use_warp:
             # Innate warp first, then battlefield-granted warp
             # (Tannuk, Steadfast Second's hand-warp grant). The
@@ -2013,6 +2032,7 @@ def _cast_spell(
         # effect blinks the permanent.
         card.cast_via_impending = bool(use_impending)
         card.evoked = bool(use_evoke)
+        card.bestowed = bool(use_bestow)
         # Cast-from-hand provenance flag. Distinct from ``cast_via_warp``
         # / ``cast_via_impending``: a warp-from-hand or impending-from-
         # hand cast still originated from the hand (the printed cost
@@ -4577,6 +4597,30 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                 apply_aura_static_grants_on_attach(
                     state, card, target_obj, item.controller_id,
                 )
+            elif card.bestowed:
+                # Bestow (CR 702.103e): attach if the target is still a
+                # legal creature; otherwise it resolves as a creature.
+                from mtg_bot.game import is_creature_now as _icn
+
+                host = None
+                if item.targets:
+                    host = next(
+                        (o for o in state.battlefield
+                         if o.id == item.targets[0][1] and _icn(o)),
+                        None,
+                    )
+                if host is not None:
+                    card.attached_to = host.id
+                    state.log.append(
+                        f"{card.printing.name} enters bestowed on "
+                        f"{host.printing.name}"
+                    )
+                else:
+                    card.bestowed = False
+                    state.log.append(
+                        f"{card.printing.name} resolves as a creature "
+                        f"(bestow target gone)"
+                    )
             else:
                 state.log.append(
                     f"{card.printing.name} resolves onto the battlefield"

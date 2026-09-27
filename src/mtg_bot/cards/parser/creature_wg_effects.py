@@ -89,6 +89,10 @@ Shapes:
 * ``exile target card from a graveyard. If it was a permanent card, put a
   +1/+1 counter on this permanent`` ->
   :class:`ExileGraveyardCardCounterIfPermanent` (Lion Sash)
+* ``you may pay <cost> if this permanent is attached to a creature you
+  control. If you do, create a token that's a copy of that creature. If
+  you didn't create a token this way, create <token>`` ->
+  :class:`PayToCopyEnchantedCreatureElseToken` (Springheart Nantuko)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -233,6 +237,12 @@ _BECOMES_TYPES_WITH_BASE_PT_RE = re.compile(
 _EXILE_GRAVEYARD_CARD_COUNTER_IF_PERMANENT_RE = re.compile(
     r"^exile target card from a graveyard\. If it was a permanent card, put "
     r"a \+1/\+1 counter on this (?:permanent|creature)$"
+)
+_PAY_TO_COPY_ENCHANTED_ELSE_TOKEN_RE = re.compile(
+    r"^you may pay (?P<cost>(?:\{[^}]+\})+) if this permanent is attached to "
+    r"a creature you control\. If you do, create a token that's a copy of "
+    r"that creature\. If you didn't create a token this way, create "
+    r"(?P<tok>an? .+? creature token)$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -489,6 +499,19 @@ def parse_wg_effect(phrase: str) -> Effect | None:
         if counters is not None and spec is not None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
+            )
+    m = _PAY_TO_COPY_ENCHANTED_ELSE_TOKEN_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        base = _parse_effect("create " + m.group("tok"))
+        if isinstance(base, CreateToken) and base.count == 1:
+            return wg.PayToCopyEnchantedCreatureElseToken(
+                cost=parse_mana_cost(m.group("cost")),
+                cost_str=m.group("cost"),
+                token_printing=base.token_printing,
             )
     if _EXILE_GRAVEYARD_CARD_COUNTER_IF_PERMANENT_RE.match(phrase):
         return wg.ExileGraveyardCardCounterIfPermanent()

@@ -810,6 +810,25 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             seen_evoke.add(pr.name)
             actions.append(CastSpell(card.id, use_evoke=True))
 
+    # Bestow (CR 702.103): cast as an Aura for the bestow cost (the
+    # permanent's own timing; a creature target must exist).
+    seen_bestow: set[str] = set()
+    for card in p.hand:
+        pr = card.printing
+        if pr.bestow_cost is None or pr.name in seen_bestow:
+            continue
+        if not (sorcery_timing or "flash" in pr.keywords):
+            continue
+        from mtg_bot.game import is_creature_now as _icn
+
+        if not any(_icn(o) for o in state.battlefield):
+            continue
+        if _can_cast(
+            state, player_id, card, _effective_cost(card, pr.bestow_cost),
+        ) and _additional_costs_payable(state, player_id, card):
+            seen_bestow.add(pr.name)
+            actions.append(CastSpell(card.id, use_bestow=True))
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool

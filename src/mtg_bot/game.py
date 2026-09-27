@@ -919,6 +919,10 @@ class GameObject:
     # The card name chosen as this permanent entered (Anointed
     # Peacekeeper); ``None`` when none was chosen.
     chosen_card_name: Optional[str] = None
+    # Bestow (CR 702.103): cast for its bestow cost; while attached to a
+    # creature it's an Aura, not a creature. Cleared when it leaves the
+    # battlefield or resolves unattached.
+    bestowed: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -1070,6 +1074,9 @@ def is_creature_now(obj: GameObject) -> bool:
     # Reconfigure (CR 702.151b): an Equipment creature attached to a
     # creature isn't a creature.
     if obj.attached_to is not None and obj.printing.reconfigure_cost is not None:
+        return False
+    # Bestow (CR 702.103b): an attached bestowed permanent is an Aura.
+    if obj.bestowed and obj.attached_to is not None:
         return False
     return (
         obj.printing.is_creature
@@ -1240,6 +1247,11 @@ def _static_bonuses(
                         break
             power_bonus += n * per_p
             toughness_bonus += n * per_t
+        bestow_bonus = source.printing.bestow_enchanted_bonus
+        if bestow_bonus and source.bestowed:
+            # "Enchanted creature gets +P/+T." (Bestow; cube W/G bucket.)
+            power_bonus += bestow_bonus[0]
+            toughness_bonus += bestow_bonus[1]
         per_counter = source.printing.equipment_bonus_per_own_counter
         if per_counter and not _source_layer6_wiped(state, source):
             # "gets +1/+1 for each +1/+1 counter on this Equipment"

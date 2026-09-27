@@ -1641,3 +1641,53 @@ class ExileGraveyardCardCounterIfPermanent(Effect):
             "exile target card from a graveyard; if it was a permanent card, "
             "put a +1/+1 counter on this permanent"
         )
+
+
+# ---------------------------------------------------------------------
+# Springheart Nantuko (Bestow)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PayToCopyEnchantedCreatureElseToken(Effect):
+    """"You may pay <cost> if this permanent is attached to a creature you
+    control. If you do, create a token that's a copy of that creature. If
+    you didn't create a token this way, create <token>." (Springheart
+    Nantuko's landfall.)"""
+
+    cost: "object" = None
+    cost_str: str = ""
+    token_printing: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.cheat_into_play import (
+            pay_mana_during_resolution,
+        )
+        from mtg_bot.effects.generic.tokens import CreateToken
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source
+        host = None
+        if source is not None and source in state.battlefield and source.attached_to is not None:
+            host = next(
+                (o for o in state.battlefield if o.id == source.attached_to), None,
+            )
+        if (
+            host is not None and is_creature_now(host)
+            and host.controller_id == controller_id
+            and pay_mana_during_resolution(
+                state, controller_id, self.cost,
+                f"Pay {self.cost_str} to copy {host.printing.name}?",
+            )
+        ):
+            CreateToken(token_printing=token_copy_printing(host.printing)).resolve(
+                state, controller_id,
+            )
+            return
+        CreateToken(token_printing=self.token_printing).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"you may pay {self.cost_str} to copy the enchanted creature; "
+            f"otherwise create a {self.token_printing.name} token"
+        )
