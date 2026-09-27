@@ -18893,3 +18893,12 @@ Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of My
 4. Designation state (`Player.is_monarch` / `has_initiative` / `dungeon_room` / `dungeons_completed`, `GameObject.goaded_by`) is not part of `search/canonical_state` hashing, so transposition lookups can conflate states differing only in a designation. Rust engine does not model any of it (Python-only).
 
 **Fix scope estimate.** Stack-based designation triggers need a synthetic command-zone source object: ~1 day. Canonical-state hashing: search-side, ~1 hour.
+
+
+## Battle cry applied at attack declaration without the stack; prowess/persist are stacked — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `combat._fire_battle_cry_pumps` (sibling of the pre-existing `_fire_exalted_pumps`), `actions.fire_prowess_triggers`, `actions.push_persist_trigger`.
+
+**What the shortcut is.** Battle cry (CR 702.91) is a triggered ability; like Exalted in this engine it is applied immediately when attackers are declared, so no player can respond between the declaration and the +1/+0. Prowess and persist DO use the stack (synthesized `TriggeredAbility` pushed via `push_triggered_ability`, ability indexes 2000 / 2001 so they stay off the printed-ability once-per-turn ledger). Python-only: the Rust engine models none of shroud / protection-DEBT / prowess / battle cry / shadow / persist / devoid / energy / cycling.
+
+**Impact.** Negligible — battle cry's pump is never worth responding to in the pool. Fix scope: synthesize a stack trigger like prowess, ~1 hour.
