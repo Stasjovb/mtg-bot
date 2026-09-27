@@ -40,6 +40,7 @@ from __future__ import annotations
 import re
 
 from mtg_bot.cards.base import (
+    parse_mana_cost,
     CardPrinting,
     CommuneWithEvilEffect,
     ConditionalIfVoid,
@@ -1518,12 +1519,75 @@ def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     return tuple(rules)
 
 
+# Modal DFC land back face (CR 712): "As this land enters, you may pay
+# N life. If you don't, it enters tapped." + "{T}: Add {C}." — the
+# pathway-style MDFC land. ``shock_land_life_cost`` carries the optional
+# life payment (the same ETB choice shock lands use).
+_MDFC_LAND_PAY_LIFE_LINE_RE = re.compile(
+    r"^As this land enters, you may pay (?P<n>\d+) life\. If you don't, it "
+    r"enters tapped\.$"
+)
+_MDFC_LAND_TAP_ADD_LINE_RE = re.compile(r"^\{T\}: Add \{(?P<c>[WUBRGC])\}\.$")
+
+
+def _build_mdfc_land_face(face: dict) -> CardPrinting | None:
+    """Build the land back face of a modal DFC, or ``None`` if its text
+    isn't the pay-life-or-tapped + single-color tap shape."""
+    supertypes, card_types, subtypes = _parse_type_line(face.get("type_line", ""))
+    if "Land" not in card_types:
+        return None
+    lines = [ln.strip() for ln in face.get("oracle_text", "").split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    life = _MDFC_LAND_PAY_LIFE_LINE_RE.match(lines[0])
+    tap = _MDFC_LAND_TAP_ADD_LINE_RE.match(lines[1])
+    if life is None or tap is None:
+        return None
+    return CardPrinting(
+        name=face["name"],
+        mana_cost_str="",
+        mana_cost=parse_mana_cost(""),
+        type_line=face["type_line"],
+        supertypes=tuple(supertypes),
+        card_types=tuple(card_types),
+        subtypes=tuple(subtypes),
+        produces=frozenset({tap.group("c")}),
+        shock_land_life_cost=int(life.group("n")),
+    )
+
+
+def _build_mdfc_spell_printing(card: dict) -> CardPrinting | None:
+    """Modal DFC whose front is an instant / sorcery and whose back is a
+    land (Sink into Stupor // Soporific Springs): the front face is the
+    castable spell, with ``mdfc_back_face`` set to the land face. The
+    printing keeps the full card name (the pool / deck key)."""
+    import dataclasses
+
+    faces = card.get("card_faces") or []
+    if len(faces) != 2:
+        return None
+    front = _build_spell_printing({
+        "name": faces[0]["name"],
+        "mana_cost": faces[0].get("mana_cost", ""),
+        "type_line": faces[0].get("type_line", ""),
+        "oracle_text": faces[0].get("oracle_text", ""),
+    })
+    if front is None:
+        return None
+    back = _build_mdfc_land_face(faces[1])
+    if back is None:
+        return None
+    return dataclasses.replace(front, name=card["name"], mdfc_back_face=back)
+
+
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
     neither an instant nor a sorcery, or if its oracle text doesn't
     parse into a supported single-effect or composite shape.
     """
+    if card.get("layout") == "modal_dfc":
+        return _build_mdfc_spell_printing(card)
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )

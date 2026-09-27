@@ -257,6 +257,9 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             if obj is None:
                 continue
             state.battlefield.remove(obj)
+            from mtg_bot.game import restore_mdfc_front
+
+            restore_mdfc_front(obj)
             obj.damage = 0
             obj.marked_lethal = False
             obj.damaged_this_turn = False

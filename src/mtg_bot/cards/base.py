@@ -1200,6 +1200,11 @@ class CardPrinting:
     splice_onto: "str | None" = None
     splice_cost: ManaCost | None = None
     splice_cost_str: str = ""
+    # Modal double-faced card (CR 712): the back face's printing when it
+    # is a land the card may be played as (Sink into Stupor // Soporific
+    # Springs). ``legal_actions`` offers ``PlayLand`` for the card from
+    # hand; ``actions._play_land`` turns it to this face.
+    mdfc_back_face: "CardPrinting | None" = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

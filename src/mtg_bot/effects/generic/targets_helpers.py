@@ -153,6 +153,9 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     from mtg_bot.game import Zone, reveal_to_all
 
     state.battlefield.remove(obj)
+    from mtg_bot.game import restore_mdfc_front
+
+    restore_mdfc_front(obj)
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False

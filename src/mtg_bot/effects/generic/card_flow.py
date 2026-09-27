@@ -1150,3 +1150,59 @@ class TargetPlayerDiscards(Effect):
 
     def describe(self) -> str:
         return f"target player discards {_describe_amount(self.amount)} card(s)"
+
+
+@dataclass(frozen=True)
+class ReturnTargetSpellOrNonlandPermanentToHand(Effect):
+    """"Return target spell or nonland permanent [an opponent controls]
+    to its owner's hand." (Sink into Stupor.) A spell target is a
+    ``("stack", index)``; a permanent target bounces through
+    ``move_off_battlefield(destination="hand")``."""
+
+    opponent_only: bool = True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        from mtg_bot.game import is_creature_now
+
+        out = [
+            ("stack", i) for i, item in enumerate(state.stack)
+            if item.ability is None and not item.countered
+            and not (self.opponent_only and item.controller_id == controller_id)
+        ]
+        for o in state.battlefield:
+            if o.printing.is_land or o.phased_out:
+                continue
+            if self.opponent_only and o.controller_id == controller_id:
+                continue
+            out.append(("creature" if is_creature_now(o) else "permanent", o.id))
+        return out
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import move_spell_off_stack
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, tid = targets[0]
+        if kind == "stack":
+            if not (0 <= tid < len(state.stack)):
+                return
+            item = state.stack[tid]
+            if item.ability is not None or item.countered:
+                return
+            del state.stack[tid]
+            move_spell_off_stack(state, item.source, destination="hand")
+            return
+        obj = next((o for o in state.battlefield if o.id == tid), None)
+        if obj is None or obj.printing.is_land:
+            return
+        if self.opponent_only and obj.controller_id == controller_id:
+            return
+        move_off_battlefield(state, obj, destination="hand")
+
+    def describe(self) -> str:
+        who = " an opponent controls" if self.opponent_only else ""
+        return f"return target spell or nonland permanent{who} to its owner's hand"

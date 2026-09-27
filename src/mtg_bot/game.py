@@ -771,6 +771,17 @@ class GameObject:
     # it isn't in any zone list and ceases to exist when it leaves the
     # stack (CR 707.10a).
     is_spell_copy: bool = False
+    # A modal DFC played as its back face: the front-face printing to
+    # restore when the permanent leaves the battlefield (CR 712.8).
+    mdfc_front_printing: Optional["CardPrinting"] = None
+
+
+def restore_mdfc_front(obj: "GameObject") -> None:
+    """Turn a modal DFC that was played as its back face front-face up
+    again (every zone but the battlefield / stack shows the front)."""
+    if obj.mdfc_front_printing is not None:
+        obj.printing = obj.mdfc_front_printing
+        obj.mdfc_front_printing = None
 
 
 # Fast shallow cloner generated once at module load. ``blocked_by`` is the

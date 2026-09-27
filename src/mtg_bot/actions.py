@@ -1243,6 +1243,11 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     card = next((c for c in p.hand if c.id == card_id), None)
     if card is not None:
         p.hand.remove(card)
+        # Modal DFC (CR 712.12): played as its land back face.
+        back = card.printing.mdfc_back_face
+        if not card.printing.is_land and back is not None and back.is_land:
+            card.mdfc_front_printing = card.printing
+            card.printing = back
     elif (card := next(
         (c for c in p.graveyard if c.id == card_id), None
     )) is not None:

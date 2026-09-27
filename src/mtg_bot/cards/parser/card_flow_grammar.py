@@ -402,11 +402,20 @@ def _parse_distribute(m: re.Match, count) -> Effect | None:
     return LookAtTopCardsDistribute(count=count, piles=tuple(piles))
 
 
-# Divided damage (Pyrokinesis, Fire Covenant, Shatterskull Smashing).
+# Divided damage (Pyrokinesis, Fire Covenant, Shatterskull Smashing —
+# whose "If X is N or more, <Name> deals twice X damage divided as you
+# choose among them instead" rider is the optional tail).
 _DIVIDED_DAMAGE_RE = re.compile(
     r"^deals (?P<n>\d+|X) damage divided as you choose among "
     r"(?:any number of|up to (?P<k>\w+)) target "
-    r"(?P<kinds>creatures|creatures and/or planeswalkers)$"
+    r"(?P<kinds>creatures|creatures and/or planeswalkers)"
+    r"(?:\. If X is (?P<dbl>\d+) or more, .+? deals twice X damage divided "
+    r"as you choose among them instead)?$"
+)
+# Sink into Stupor.
+_RETURN_TARGET_SPELL_OR_PERMANENT_RE = re.compile(
+    r"^return target spell or nonland permanent an opponent controls to "
+    r"its owner's hand$"
 )
 
 # Invert Polarity (only coin-flip spell-steal in the pool).
@@ -749,10 +758,19 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             if k is None:
                 return None
             max_targets = k
+        if m.group("dbl") is not None and m.group("n") != "X":
+            return None
         return DealDamageDividedAmongTargets(
             amount=_amount(m.group("n")), max_targets=max_targets,
             include_planeswalkers=m.group("kinds") != "creatures",
+            double_if_x_at_least=int(m.group("dbl") or 0),
         )
+    if _RETURN_TARGET_SPELL_OR_PERMANENT_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.card_flow import (
+            ReturnTargetSpellOrNonlandPermanentToHand,
+        )
+
+        return ReturnTargetSpellOrNonlandPermanentToHand(opponent_only=True)
     if _PUT_CREATURE_HASTE_SAC_AT_END_RE.match(phrase) is not None:
         from mtg_bot.effects.generic.cheat_into_play import (
             PutCreatureFromHandHasteSacrificeAtNextEndStep,

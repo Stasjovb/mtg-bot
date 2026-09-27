@@ -552,7 +552,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         # instant-speed dedup block above.
         seen_playland: set[tuple] = set()
         for card in p.hand:
-            if card.printing.is_land:
+            back = card.printing.mdfc_back_face
+            if card.printing.is_land or (back is not None and back.is_land):
                 key = (card.printing.name,)
                 if key in seen_playland:
                     continue
