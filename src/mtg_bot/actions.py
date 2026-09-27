@@ -1487,6 +1487,12 @@ def apply_land_etb_replacements(
     # its other types." Agent target-selection over graveyard lands.
     if card.printing.optional_copy_land_from_graveyard and p.agent is not None:
         _offer_echoing_deeps_copy(state, player_id, card)
+    # "Nonbasic lands your opponents control enter tapped." (Archon of
+    # Emeria; ``mtg_bot.creature_statics_wg``).
+    from mtg_bot.creature_statics_wg import forced_to_enter_tapped
+
+    if forced_to_enter_tapped(state, card, player_id):
+        card.tapped = True
 
 
 def _offer_echoing_deeps_copy(
@@ -4799,6 +4805,13 @@ def put_into_battlefield(
         )
 
         obj.tapped = enters_tapped_by_opponent_static(state, obj, controller_id)
+    if obj.printing.is_land:
+        # "Nonbasic lands your opponents control enter tapped." (Archon
+        # of Emeria; ``mtg_bot.creature_statics_wg``).
+        from mtg_bot.creature_statics_wg import forced_to_enter_tapped
+
+        if forced_to_enter_tapped(state, obj, controller_id):
+            obj.tapped = True
     # Slice 14 (TTT Pin 2): summoning sickness is a creature-only
     # property per CR 302.1 + 612.6 — non-creature permanents
     # (Equipment, Aura, Enchantment, Artifact, planeswalker) do not

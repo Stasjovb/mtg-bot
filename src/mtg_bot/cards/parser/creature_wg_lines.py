@@ -64,8 +64,72 @@ def _parse_evoke_line(line: str, card: dict) -> WGLine | None:
     return WGLine(fields=fields, triggers=(EVOKE_SACRIFICE_TRIGGER,))
 
 
+# ---------------------------------------------------------------------
+# Ravenous / Mobilize
+# ---------------------------------------------------------------------
+
+
+def _parse_ravenous_line(line: str, card: dict) -> WGLine | None:
+    """``Ravenous`` (CR 702.156): enters with X +1/+1 counters; draws a
+    card on entering if X is 5 or more."""
+    if line != "Ravenous":
+        return None
+    from mtg_bot.effects.generic.cube_creatures_wg import ravenous_draw_trigger
+
+    return WGLine(
+        fields={"enters_with_counters_from_x": "x"},
+        triggers=(ravenous_draw_trigger(),),
+    )
+
+
+_MOBILIZE_RE = re.compile(r"^Mobilize (?P<n>\d+)$")
+
+
+def _parse_mobilize_line(line: str, card: dict) -> WGLine | None:
+    """``Mobilize N`` (CR 702.181): the attack trigger making N tapped and
+    attacking 1/1 red Warriors sacrificed at the next end step."""
+    m = _MOBILIZE_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_wg import Mobilize
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.ATTACKS, predicate=IsSelf(),
+        effect=Mobilize(n=int(m.group("n"))),
+    ),))
+
+
+# ---------------------------------------------------------------------
+# Rules-restricting statics (``mtg_bot.creature_statics_wg``)
+# ---------------------------------------------------------------------
+
+_STATIC_FLAG_LINES: dict[str, str] = {
+    "Your opponents can't cast spells during your turn.": (
+        "opponents_cant_cast_spells_during_your_turn"
+    ),
+    "Each player can't cast more than one spell each turn.": (
+        "each_player_one_spell_per_turn"
+    ),
+    "Nonbasic lands your opponents control enter tapped.": (
+        "opponents_nonbasic_lands_enter_tapped"
+    ),
+}
+
+
+def _parse_static_flag_line(line: str, card: dict) -> WGLine | None:
+    flag = _STATIC_FLAG_LINES.get(line)
+    if flag is None:
+        return None
+    return WGLine(fields={flag: True})
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
+    _parse_ravenous_line,
+    _parse_mobilize_line,
+    _parse_static_flag_line,
 )
 
 

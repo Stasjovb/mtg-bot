@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.base import Effect, Target, TriggeredAbility
+from mtg_bot.effects.predicates import TriggerPredicate
 
 if TYPE_CHECKING:
     from mtg_bot.game import GameState
@@ -335,4 +336,107 @@ class ReturnExiledCardToBattlefield(Effect):
         return (
             "return the exiled card to the battlefield under its owner's "
             "control"
+        )
+
+
+# ---------------------------------------------------------------------
+# Ravenous / Mobilize / tokens scaled by power
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EnteringWithXAtLeast(TriggerPredicate):
+    """Trigger gate: the entering spell's X (``state.resolving_x_value``
+    while it resolves onto the battlefield) is at least ``n`` -- the
+    Ravenous "If X is 5 or more, draw a card when it enters." rider. A
+    permanent that enters without being cast has X = 0."""
+
+    n: int = 5
+
+    def matches(self, state, subjects, source):
+        return getattr(state, "resolving_x_value", 0) >= self.n
+
+
+def ravenous_draw_trigger() -> TriggeredAbility:
+    """Ravenous (CR 702.156): "This creature enters with X +1/+1 counters
+    on it. If X is 5 or more, draw a card when it enters." The counters
+    are the printing's ``enters_with_counters_from_x="x"``; this is the
+    draw half."""
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    return TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf() & EnteringWithXAtLeast(5),
+        effect=DrawCards(amount=1),
+    )
+
+
+def _new_objects(state: "GameState", before: set) -> list:
+    return [o for o in state.battlefield if o.id not in before]
+
+
+@dataclass(frozen=True)
+class Mobilize(Effect):
+    """Mobilize N (CR 702.181): "Whenever this creature attacks, create N
+    tapped and attacking 1/1 red Warrior creature tokens. Sacrifice them
+    at the beginning of the next end step." -- the attack trigger's
+    effect. Token doublers apply; each created token gets its own
+    delayed sacrifice trigger."""
+
+    n: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.cards.base import make_token_creature
+        from mtg_bot.effects.generic.delayed_actions import (
+            SacrificeSourceDelayed,
+            schedule_at_next_end_step,
+        )
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        before = {o.id for o in state.battlefield}
+        warrior = make_token_creature(
+            name="Warrior", power=1, toughness=1, subtypes=("Warrior",),
+            colors=("R",),
+        )
+        CreateToken(
+            token_printing=warrior, count=self.n, tapped=True, attacking=True,
+        ).resolve(state, controller_id)
+        for tok in _new_objects(state, before):
+            schedule_at_next_end_step(
+                state, controller_id, tok.id, SacrificeSourceDelayed(),
+            )
+
+    def describe(self) -> str:
+        return (
+            f"mobilize {self.n}: create {self.n} tapped and attacking 1/1 red "
+            f"Warrior tokens; sacrifice them at the next end step"
+        )
+
+
+@dataclass(frozen=True)
+class CreateTokensEqualToSourcePower(Effect):
+    """"Create a number of <token> tokens equal to this creature's power."
+    (Jacked Rabbit.) Reads the source's current power (last known power
+    if it has left the battlefield)."""
+
+    token_printing: "object" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+        from mtg_bot.game import effective_power
+
+        source = state.resolving_source
+        if source is None:
+            return
+        n = max(0, effective_power(state, source))
+        if n:
+            CreateToken(token_printing=self.token_printing, count=n).resolve(
+                state, controller_id,
+            )
+
+    def describe(self) -> str:
+        return (
+            f"create a number of {self.token_printing.name} tokens equal to "
+            f"this creature's power"
         )

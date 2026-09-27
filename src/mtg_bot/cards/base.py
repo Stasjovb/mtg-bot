@@ -1321,6 +1321,14 @@ class CardPrinting:
     evoke_cost: ManaCost | None = None
     evoke_cost_str: str = ""
     evoke_exile_from_hand: "object | None" = None
+    # Rules-restricting statics (``mtg_bot.creature_statics_wg``):
+    # "Your opponents can't cast spells during your turn." (Voice of
+    # Victory) and "Each player can't cast more than one spell each
+    # turn." / "Nonbasic lands your opponents control enter tapped."
+    # (Archon of Emeria).
+    opponents_cant_cast_spells_during_your_turn: bool = False
+    each_player_one_spell_per_turn: bool = False
+    opponents_nonbasic_lands_enter_tapped: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

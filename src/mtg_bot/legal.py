@@ -784,7 +784,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         # player's spell casts to their own sorcery timing.
         if _restricted_to_sorcery_speed_casts(state, player_id):
             actions = [a for a in actions if not isinstance(a, CastSpell)]
-        return actions
+        return _filter_cast_restrictions_wg(state, player_id, actions)
 
     _emit_flashback_casts(instant_speed=False)
     _emit_escape_casts(instant_speed=False)
@@ -1572,7 +1572,15 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 filtered.append(action)
             actions = filtered
 
-    return actions
+    return _filter_cast_restrictions_wg(state, player_id, actions)
+
+
+def _filter_cast_restrictions_wg(state, player_id, actions):
+    """Cube W/G creature statics that forbid casting (Voice of Victory,
+    Archon of Emeria) -- see ``mtg_bot.creature_statics_wg``."""
+    from mtg_bot.creature_statics_wg import filter_cast_restrictions
+
+    return filter_cast_restrictions(state, player_id, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

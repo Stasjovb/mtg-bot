@@ -18,6 +18,9 @@ Shapes:
   :class:`ExiledCardOwnerCreatesManaValueToken` (Skyclave Apparition;
   the builder links the card's exiling ability, see
   ``creature_wg_lines.link_exile_abilities``)
+* ``create a number of <P>/<T> <color> <Subtypes> creature tokens equal
+  to this creature's power`` -> :class:`CreateTokensEqualToSourcePower`
+  (Jacked Rabbit)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -47,6 +50,12 @@ _EXILED_CARD_OWNER_MV_TOKEN_RE = re.compile(
     r"^the exiled card's owner creates an X/X "
     r"(?P<color>white|blue|black|red|green) (?P<sub>[A-Z][a-z]+) creature "
     r"token, where X is the mana value of the exiled card$"
+)
+_TOKENS_EQUAL_TO_POWER_RE = re.compile(
+    r"^create a number of (?P<p>\d+)/(?P<t>\d+) "
+    r"(?P<color>white|blue|black|red|green|colorless) "
+    r"(?P<sub>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature tokens equal to this "
+    r"creature's power$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -90,6 +99,19 @@ def parse_wg_effect(phrase: str) -> Effect | None:
     if m is not None:
         return wg.ExiledCardOwnerCreatesManaValueToken(
             color=_COLOR_LETTERS[m.group("color")], subtype=m.group("sub"),
+        )
+    m = _TOKENS_EQUAL_TO_POWER_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.base import make_token_creature
+
+        color = _COLOR_LETTERS.get(m.group("color"))
+        subtypes = tuple(m.group("sub").split(" "))
+        return wg.CreateTokensEqualToSourcePower(
+            token_printing=make_token_creature(
+                name=m.group("sub"), power=int(m.group("p")),
+                toughness=int(m.group("t")), subtypes=subtypes,
+                colors=(color,) if color else (),
+            ),
         )
     m = _EXILE_UNTIL_OPPONENT_MONARCH_RE.match(phrase)
     if m is not None:
