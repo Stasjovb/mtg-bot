@@ -205,16 +205,21 @@ def test_choose_one_or_both_header_is_claimed_with_or_both_flag():
     )
 
 
-def test_choose_two_header_is_not_claimed_by_this_branch():
-    # `Choose two` is also out of scope — it requires the agent to
-    # pick TWO modes, not one. The parser must decline.
+def test_choose_two_header_is_claimed_by_choose_modes():
+    # `Choose two` requires the agent to pick TWO modes — not this
+    # ModalChooseOne branch; the multi-mode ``ChooseModes`` shape
+    # (``modal_spells``) claims it.
+    from mtg_bot.effects.generic.multi_modal import ChooseModes
+
     text = (
         "Choose two —\n"
         "• Destroy target creature.\n"
         "• Draw a card.\n"
         "• You gain 3 life."
     )
-    assert _parse_spell_oracle_text(text, "Bogus Choose Two") is None
+    eff = _parse_spell_oracle_text(text, "Bogus Choose Two")
+    assert isinstance(eff, ChooseModes)
+    assert (eff.min_modes, eff.max_modes, eff.repeats) == (2, 2, False)
 
 
 def test_modal_header_with_no_modes_returns_none():

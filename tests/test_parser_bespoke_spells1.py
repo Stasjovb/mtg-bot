@@ -591,13 +591,15 @@ def test_if_they_do_rider_is_dropped():
 
 
 def test_counter_target_spell_unless_pays_parses():
-    from mtg_bot.cards.base import CounterTargetSpell
+    # Outside the Rust-parity-pinned legacy spells the pay-or-counter
+    # tax is modeled faithfully (``CounterSpell.unless_pays``).
     from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.effects.generic.counterspells import CounterSpell
     eff = _parse_spell_effect_phrase(
         "Counter target spell unless its controller pays {2}.",
         "Test",
     )
-    assert eff == CounterTargetSpell()
+    assert eff == CounterSpell(unless_pays="{2}", label="spell")
 
 
 def test_divert_disaster_parses_via_per_clause_grammar():

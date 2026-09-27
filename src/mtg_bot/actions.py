@@ -1520,6 +1520,7 @@ def _offer_echoing_deeps_copy(
 
 def _choose_modes_at_cast(
     state: GameState, player_id: int, card: GameObject,
+    base_cost: "ManaCost | None" = None,
 ) -> tuple[int, ...]:
     """CR 601.2e: pick mode(s) for a modal spell at cast time, before
     total cost is determined. Returns the chosen mode indices in
@@ -1531,7 +1532,16 @@ def _choose_modes_at_cast(
     at resolve time.
     """
     from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.multi_modal import ChooseModes
     spell_effect = card.printing.spell_effect
+    if isinstance(spell_effect, ChooseModes):
+        # "Choose two" / "Choose three (repeats)" / "one or more"
+        # (Escalate, Spree): count, repeats and extra-cost affordability
+        # are enforced by the effect.
+        return spell_effect.choose_at_cast(
+            state, player_id, card,
+            base_cost if base_cost is not None else card.printing.mana_cost,
+        )
     if not isinstance(spell_effect, ModalChooseOne):
         return ()
     p = state.player_by_id(player_id)
@@ -1588,10 +1598,50 @@ def _effective_spell_effect_for_targets(
     return spell_effect
 
 
+def cast_time_effect(
+    spell_effect, *, kicked: bool = False, alt_cost_paid: bool = False,
+    x_value: "int | None" = None,
+):
+    """The effect whose targets are chosen for a cast, given how it's
+    being cast. Effects whose target shape depends on a cast-time
+    choice ("If this spell was kicked, exile target nonland permanent
+    instead" — Tear Asunder; overload's "target" -> "each"; "up to X
+    target ..." — Pest Infestation) expose ``cast_time_shape(kicked=,
+    alt_cost_paid=, x_value=)``; a ``Sequence`` is shaped per
+    sub-effect; everything else is its own shape."""
+    from mtg_bot.effects.combinators import Sequence
+
+    if isinstance(spell_effect, Sequence):
+        shaped = tuple(
+            cast_time_effect(
+                e, kicked=kicked, alt_cost_paid=alt_cost_paid, x_value=x_value,
+            )
+            for e in spell_effect.effects
+        )
+        if shaped == spell_effect.effects:
+            return spell_effect
+        return Sequence(effects=shaped)
+    shape = getattr(spell_effect, "cast_time_shape", None)
+    if shape is None:
+        return spell_effect
+    return shape(kicked=kicked, alt_cost_paid=alt_cost_paid, x_value=x_value)
+
+
+def _targets_depend_on_x(spell_effect) -> bool:
+    """Whether the spell's target count depends on its X ("up to X
+    target ..."), so X must be announced before targets (CR 601.2b)."""
+    from mtg_bot.effects.combinators import Sequence
+
+    if isinstance(spell_effect, Sequence):
+        return any(_targets_depend_on_x(e) for e in spell_effect.effects)
+    return bool(getattr(spell_effect, "count_from_x", False))
+
+
 def _select_spell_targets(
     state: GameState, player_id: int, card: GameObject,
     mode_indices: tuple[int, ...] = (),
     x_hint: "int | None" = None,
+    *, kicked: bool = False, alt_cost_paid: bool = False,
 ) -> tuple[tuple[str, int], ...]:
     """Pick target(s) for a spell about to be cast. Mirrors CR
     601.2c-d (mode/target choices happen BEFORE total cost is
@@ -1609,7 +1659,15 @@ def _select_spell_targets(
     p = state.player_by_id(player_id)
     targets: tuple[tuple[str, int], ...] = ()
     spell_effect = card.printing.spell_effect
+    from mtg_bot.effects.generic.multi_modal import ChooseModes
+    if isinstance(spell_effect, ChooseModes):
+        # Per-mode-instance targets (CR 601.2c); modes were picked above.
+        return spell_effect.select_targets(state, player_id, mode_indices)
     if spell_effect is not None:
+        spell_effect = cast_time_effect(
+            spell_effect, kicked=kicked, alt_cost_paid=alt_cost_paid,
+            x_value=x_hint,
+        )
         spell_effect = _effective_spell_effect_for_targets(
             spell_effect, mode_indices,
         )
@@ -1708,6 +1766,74 @@ def _plot_card(state: GameState, player_id: int, card_id: int) -> None:
         f"P{player_id} plots {card.printing.name} "
         f"({card.printing.plot_cost_str})"
     )
+
+
+def _pay_teamwork(
+    state: GameState, player_id: int, card: GameObject, power_needed: int,
+) -> bool:
+    """Teamwork N: if the caster's untapped creatures have total power
+    >= N and their agent agrees (``choose_yes_no``), tap creatures
+    (picked via ``choose_permanent_to_tap``) until their total power
+    reaches N. Returns whether the cost was paid."""
+    from mtg_bot.game import effective_power, is_creature_now
+    from mtg_bot.turn import tap_permanent
+
+    candidates = [
+        o for o in state.battlefield
+        if o.controller_id == player_id and is_creature_now(o) and not o.tapped
+    ]
+    if sum(max(0, effective_power(state, o)) for o in candidates) < power_needed:
+        return False
+    agent = state.player_by_id(player_id).agent
+    if agent is not None and not agent.choose_yes_no(
+        state, player_id,
+        f"cast {card.printing.name} using teamwork (tap creatures with "
+        f"total power {power_needed} or more)",
+    ):
+        return False
+    total = 0
+    while total < power_needed and candidates:
+        ids = [o.id for o in candidates]
+        pick = agent.choose_permanent_to_tap(state, player_id, ids) if agent else None
+        chosen = next((o for o in candidates if o.id == pick), candidates[0])
+        candidates.remove(chosen)
+        total += max(0, effective_power(state, chosen))
+        tap_permanent(state, chosen)
+    state.log.append(f"P{player_id} casts {card.printing.name} using teamwork")
+    return True
+
+
+def _choose_replicate_times(
+    state: GameState, player_id: int, card: GameObject, cost: ManaCost,
+) -> tuple[int, ManaCost]:
+    """Ask the caster how many times to pay ``card``'s replicate cost
+    (``choose_x`` over the affordable range) and return ``(times,
+    cost + times * replicate)``."""
+    from mtg_bot.alt_casting import cost_plus
+    from mtg_bot.cards import parse_mana_cost
+
+    rep = parse_mana_cost(card.printing.replicate_cost)
+    upper = 0
+    total = cost
+    while upper < 10:
+        nxt = cost_plus(total, rep)
+        if not can_pay_cost(state, player_id, nxt, sac_for_mana=True):
+            break
+        total = nxt
+        upper += 1
+    times = upper
+    agent = state.player_by_id(player_id).agent
+    if agent is not None and upper > 0:
+        times = max(0, min(upper, agent.choose_x(
+            state, player_id, f"{card.printing.name} (replicate)", upper,
+        )))
+    for _ in range(times):
+        cost = cost_plus(cost, rep)
+    if times:
+        state.log.append(
+            f"P{player_id} replicates {card.printing.name} x{times}"
+        )
+    return times, cost
 
 
 def _cast_spell(
@@ -1991,8 +2117,21 @@ def _cast_spell(
     # spells. Stored on the StackItem and replayed via
     # state.resolving_modes during resolution so the modal effect
     # doesn't re-prompt.
+    # Printed alternative costs (CR 118.9: Force of Will, Daze, Snuff
+    # Out, Baleful Mastery, Overload, ...) ride the same "cast without
+    # paying its mana cost" action variant as the pitch cost below: a
+    # ``cast_for_free`` cast of a card with ``alternative_costs`` (and no
+    # free-cast permission) is cast for one of them. Announced before
+    # modes and targets (CR 601.2b) since Overload changes the targets.
+    alt_cost_index: int | None = None
+    if cast_for_free and card.printing.alternative_costs:
+        from mtg_bot.alt_casting import free_cast_permission as _free_perm
+        from mtg_bot.cards.spell_costs import select_alternative_cost
+
+        if not _free_perm(state, player_id, card):
+            alt_cost_index = select_alternative_cost(state, player_id, card)
     chosen_modes: tuple[int, ...] = _choose_modes_at_cast(
-        state, player_id, card,
+        state, player_id, card, base_cost=cost,
     )
     # Select target(s) BEFORE applying cost reductions. CR 601.2c-f
     # orders modes/targets BEFORE total-cost determination, so any
@@ -2008,12 +2147,21 @@ def _cast_spell(
         from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
 
         life_x_paid = _choose_life_x(state, player_id, card)
+    # "up to X target ...": X is announced before targets (CR 601.2b).
+    early_x: "int | None" = None
+    if (
+        cost is not None and cost.x_pips > 0 and not cast_for_free
+        and _targets_depend_on_x(card.printing.spell_effect)
+    ):
+        early_x = _choose_and_apply_x(state, player_id, card, cost)
     targets: tuple[tuple[str, int], ...] = _select_spell_targets(
         state, player_id, card, mode_indices=chosen_modes,
         x_hint=(
             life_x_paid if life_x_paid is not None
+            else early_x if early_x is not None
             else (0 if card.printing.mana_cost.x_pips == 0 else None)
         ),
+        kicked=kicked, alt_cost_paid=alt_cost_index is not None,
     )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
@@ -2067,11 +2215,26 @@ def _cast_spell(
         cost, spliced = _offer_splices(
             state, player_id, card, cost, frozenset({"spell"}),
         )
+    # Spree (CR 702.172): each chosen mode adds its own mana cost.
+    mode_mana_cost = getattr(card.printing.spell_effect, "mode_mana_cost", None)
+    if mode_mana_cost is not None and chosen_modes:
+        from mtg_bot.alt_casting import cost_plus as _cost_plus_spree
+
+        cost = _cost_plus_spree(cost, mode_mana_cost(chosen_modes))
+    # Replicate (CR 702.56): pay the replicate cost any number of times.
+    replicate_times = 0
+    if card.printing.replicate_cost and not cast_for_free:
+        replicate_times, cost = _choose_replicate_times(
+            state, player_id, card, cost,
+        )
     # X-cost spells: ask the agent how much X to pay, fold X*x_pips into
     # generic, then zero x_pips so the payment step sees a concrete cost.
     x_value = 0
     if cost.x_pips > 0:
-        x_value = _choose_and_apply_x(state, player_id, card, cost)
+        x_value = (
+            early_x if early_x is not None
+            else _choose_and_apply_x(state, player_id, card, cost)
+        )
         cost = ManaCost(
             generic=cost.generic + cost.x_pips * x_value,
             colored=cost.colored,
@@ -2096,6 +2259,11 @@ def _cast_spell(
             and not _free_permission(state, player_id, card)
         ):
             _pay_pitch(state, player_id, card)
+        if alt_cost_index is not None:
+            # A printed alternative cost may itself cost mana (Baleful
+            # Mastery's {1}{B}, Overload); its other parts are paid with
+            # the additional costs below.
+            cost = card.printing.alternative_costs[alt_cost_index].mana_cost()
     # Build the set of spend-restriction context tags for this cast.
     # A spell can match more than one (e.g., a legendary artifact
     # spell satisfies both "artifact_spell" and "legendary_spell"
@@ -2148,7 +2316,9 @@ def _cast_spell(
     haste_coins_before = sum(
         1 for c in p.mana_pool if c.grants_haste_to_creature_spell
     )
-    color_sources: "list | None" = [] if card.printing.sunburst else None
+    # Colors of mana spent (Sunburst, Converge): every cast records
+    # them — Prismatic Ending reads the count on the stack.
+    color_sources: list = []
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
         color_sources=color_sources,
@@ -2170,10 +2340,11 @@ def _cast_spell(
             state.log.append(
                 f"{card.printing.name} gains haste until end of turn"
             )
-    if color_sources is not None:
-        # Sunburst (CR 702.44): remember how many colors of mana were
-        # spent; ``put_into_battlefield`` places that many counters.
-        card.sunburst_colors_spent = max_distinct_colors(color_sources)
+    # Sunburst (CR 702.44) / Converge (CR 207.2c): remember how many
+    # colors of mana were spent; ``put_into_battlefield`` places that
+    # many counters on a Sunburst permanent, and converge spells read
+    # it while on the stack.
+    card.sunburst_colors_spent = max_distinct_colors(color_sources)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -2250,6 +2421,30 @@ def _cast_spell(
             f"additional cost: P{player_id} pays {life_x_paid} life "
             f"(life: {p.life})"
         )
+    # Printed alternative cost: pay its non-mana parts (life, exile a
+    # card from hand, return / sacrifice a land).
+    if alt_cost_index is not None:
+        from mtg_bot.cards.spell_costs import pay_alternative_cost_components
+
+        pay_alternative_cost_components(
+            state, player_id, card,
+            card.printing.alternative_costs[alt_cost_index],
+        )
+    # Teamwork: optionally tap creatures with enough total power.
+    card.optional_additional_cost_paid = False
+    if card.printing.teamwork_power:
+        card.optional_additional_cost_paid = _pay_teamwork(
+            state, player_id, card, card.printing.teamwork_power,
+        )
+    # Escalate (CR 702.120): its cost once per mode beyond the first.
+    pay_escalate = getattr(card.printing.spell_effect, "pay_escalate", None)
+    if pay_escalate is not None:
+        pay_escalate(state, player_id, chosen_modes)
+    # One-of additional cost ("discard a card or pay 3 life").
+    if card.printing.additional_cost_options:
+        from mtg_bot.cards.spell_costs import pay_additional_cost_option
+
+        pay_additional_cost_option(state, player_id, card)
     # Additional cost: designate a creature you control or a warped
     # creature card you own in exile (Close Encounter). Ungated by
     # sacrifice/tap — just a choice. The chosen id lands on the StackItem
@@ -2306,6 +2501,7 @@ def _cast_spell(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
+            alt_cost_paid=alt_cost_index is not None,
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
             cast_room_half=cast_room_half,
@@ -2319,6 +2515,8 @@ def _cast_spell(
     mode = " (warp)" if use_warp else ""
     if use_flashback:
         mode = " (flashback)"
+    if alt_cost_index is not None:
+        mode = " (alternative cost)"
     if cast_room_half is not None:
         mode = f" ({cast_room_half})"
     state.log.append(
@@ -2348,6 +2546,19 @@ def _cast_spell(
             controller_id=player_id,
             label="storm",
         )
+    # Replicate: "When you cast this spell, copy it for each time you
+    # paid its replicate cost. You may choose new targets for the
+    # copies."
+    if replicate_times:
+        from mtg_bot.effects.generic.spell_copies import _choose_copy_targets
+
+        for _ in range(replicate_times):
+            push_spell_copy(
+                state, card.printing, player_id,
+                _choose_copy_targets(state, player_id, card.printing, targets),
+                x_value=x_value,
+            )
+
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
     p.spells_cast_this_game += 1
@@ -3796,6 +4007,25 @@ def move_spell_off_stack(
             f"{card.printing.name} returns to P{card.owner_id}'s hand"
         )
         return
+    if destination == "exile":
+        # "If that spell is countered this way, exile it instead ..."
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(f"{card.printing.name} is exiled instead")
+        return
+    if destination == "library_top":
+        # Memory Lapse: "... put it on top of its owner's library".
+        from mtg_bot.game import reveal_to_all
+
+        card.zone = Zone.LIBRARY
+        owner.library.insert(0, card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} is put on top of P{card.owner_id}'s library"
+        )
+        return
+    if destination != "graveyard":
+        raise ValueError(f"unknown spell destination: {destination!r}")
     _send_to_graveyard_or_library(state, card)
 
 
@@ -3846,7 +4076,9 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
     # graveyard (permanents and non-permanents alike) per rule 701.5a.
     if item.countered:
         state.log.append(f"{item.source.printing.name} is countered")
-        move_spell_off_stack(state, item.source)
+        move_spell_off_stack(
+            state, item.source, destination=item.countered_destination,
+        )
         return
 
     # Triggered- or activated-ability resolution. StackItem.ability holds
@@ -3917,6 +4149,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
         return
     state.resolving_x_value = item.x_value
     state.resolving_kicked = item.kicked
+    state.resolving_alt_cost_paid = item.alt_cost_paid
     state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
     state.resolving_modes = item.chosen_modes
     state.resolving_spell = card
@@ -4024,6 +4257,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
         state.resolving_spell = None
         state.resolving_x_value = 0
         state.resolving_kicked = False
+        state.resolving_alt_cost_paid = False
         state.resolving_additional_cost_choice_id = None
         state.resolving_modes = ()
 

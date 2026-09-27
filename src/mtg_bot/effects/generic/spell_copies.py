@@ -182,3 +182,91 @@ class FlipCoinStealOrCounterTargetSpell(Effect):
             "choose target spell and flip a coin: win -> gain control of it "
             "and choose new targets; lose -> counter it"
         )
+
+
+@dataclass(frozen=True)
+class DealDamageThenChainCopy(Effect):
+    """Chain Lightning: "<Name> deals N damage to any target. Then that
+    player or that permanent's controller may pay {R}{R}. If the player
+    does, they may copy this spell and may choose a new target for that
+    copy."
+
+    The damaged player (or the damaged permanent's last-known
+    controller) may pay ``chain_cost`` (``choose_yes_no``); if they do
+    and agree to copy, a copy of the resolving spell goes on the stack
+    under their control with a target of their choice
+    (``push_spell_copy`` / ``_choose_copy_targets``)."""
+
+    amount: int = 3
+    chain_cost: str = "{R}{R}"
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        if not self.targets:
+            object.__setattr__(
+                self, "targets", (TargetSpec(any_target_filter()),),
+            )
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import auto_tap_for_cost, can_pay_cost, push_spell_copy
+        from mtg_bot.cards import parse_mana_cost
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+
+        if not targets:
+            return
+        chosen = targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], chosen)
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, chosen))
+            return
+        kind, tid = chosen
+        if kind == "player":
+            affected_id = tid
+        else:
+            affected_id = next(
+                o.controller_id for o in state.battlefield if o.id == tid
+            )
+        _apply_damage(state, chosen, self.amount)
+        spell = state.resolving_spell
+        if spell is None:
+            return
+        payer = state.player_by_id(affected_id)
+        if payer.has_lost:
+            return
+        cost = parse_mana_cost(self.chain_cost)
+        if not can_pay_cost(state, affected_id, cost):
+            return
+        agent = payer.agent
+        if agent is not None and not agent.choose_yes_no(
+            state, affected_id,
+            f"pay {self.chain_cost} to copy {spell.printing.name}",
+        ):
+            return
+        auto_tap_for_cost(state, affected_id, cost)
+        state.log.append(f"P{affected_id} pays {self.chain_cost}")
+        if agent is not None and not agent.choose_yes_no(
+            state, affected_id, f"copy {spell.printing.name}",
+        ):
+            return
+        copy_targets = _choose_copy_targets(
+            state, affected_id, spell.printing, targets,
+        )
+        push_spell_copy(state, spell.printing, affected_id, copy_targets)
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.amount} damage to any target; then that player or "
+            f"that permanent's controller may pay {self.chain_cost} to copy "
+            f"this spell"
+        )

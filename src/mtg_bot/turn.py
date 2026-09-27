@@ -328,6 +328,15 @@ def move_off_battlefield(
         # Yawgmoth's Will: exiled instead (it never dies).
         destination = "exile"
     was_creature = is_creature_now(obj)
+    if obj.exile_if_dies_this_turn:
+        obj.exile_if_dies_this_turn = False
+        if destination == "graveyard" and was_creature:
+            # Replacement: "If that creature would die this turn,
+            # exile it instead." (Suplex).
+            state.log.append(
+                f"{obj.printing.name} would die — exiled instead"
+            )
+            destination = "exile"
     # Persist LKI (CR 702.79a): read before the object leaves.
     persists = (
         destination == "graveyard"
@@ -340,6 +349,9 @@ def move_off_battlefield(
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    # Revolt: any permanent (lands and tokens included) leaving under
+    # its controller's control.
+    state.player_by_id(obj.controller_id).permanent_left_battlefield_this_turn = True
     # Layer-2 control-grant reversion: drop every continuous-effect
     # entry sourced by THIS leaving object, then refresh the
     # ``controller_id`` cache on each affected target via
@@ -1316,6 +1328,8 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_toughness_bonus = 0
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
+        # "If it would die this turn, exile it instead" ends too.
+        obj.exile_if_dies_this_turn = False
         # UEOT "gain control" reverts are handled above by the layer-2
         # ``control_change`` registry path (``expire_continuous_effects
         # ("cleanup")`` + the controller-refresh loop). The legacy
@@ -1356,8 +1370,14 @@ def run_cleanup_step(state: GameState) -> None:
             p.mana_pool.clear()
     # Reset first-time-tokens-created gate (Moonlit Meditation).
     state.players_who_created_tokens_this_turn.clear()
+    # "Whenever <event> this turn, ..." delayed triggers end with the
+    # turn (CreateThisTurnTriggeredAbility, Forth Eorlingas!).
+    if state.emblems and any(e.expires_at_cleanup for e in state.emblems):
+        state.emblems = [e for e in state.emblems if not e.expires_at_cleanup]
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
+    for _p in state.players:
+        _p.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
     # Reset the per-turn creature-death tracker (Cackling Slasher's
     # "if a creature died this turn" rider). The tracker is incremented

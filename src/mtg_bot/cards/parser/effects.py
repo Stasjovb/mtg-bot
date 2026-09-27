@@ -3561,6 +3561,30 @@ _IF_NO_NAMED_COUNTERS_SACRIFICE_RIDER = re.compile(
 def _parse_effect(phrase: str) -> Effect | None:
     """Parse a *normalized* effect phrase into an ``Effect``.
 
+    Layers the compositional grammar in
+    :mod:`mtg_bot.cards.parser.precise_grammar` around the legacy
+    per-shape grammar (``_parse_effect_legacy``): a faithful override
+    for the few surfaces the legacy grammar accepts lossily, then the
+    legacy grammar, then the compositional fallback for phrases the
+    legacy grammar rejects.
+    """
+    from mtg_bot.cards.parser.precise_grammar import (
+        parse_precise_fallback,
+        parse_precise_override,
+    )
+
+    eff = parse_precise_override(phrase)
+    if eff is not None:
+        return eff
+    eff = _parse_effect_legacy(phrase)
+    if eff is not None:
+        return eff
+    return parse_precise_fallback(phrase)
+
+
+def _parse_effect_legacy(phrase: str) -> Effect | None:
+    """Parse a *normalized* effect phrase into an ``Effect``.
+
     Normalized form has no source-subject prefix, no trailing period,
     and a lowercased first letter — see ``_normalize_*`` helpers below
     for the per-context surface stripping.
@@ -7060,5 +7084,11 @@ def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
     Delegates to the unified ``_parse_effect`` after normalization, so
     every effect available to creature triggered abilities is also
     available to spells (and vice versa).
+
+    The compositional grammar is disabled for the Rust-parity-pinned
+    legacy spells (see ``precise_grammar.legacy_parity_pinned``).
     """
-    return _parse_effect(_normalize_spell_effect_phrase(phrase, name))
+    from mtg_bot.cards.parser.precise_grammar import legacy_parity_pinned
+
+    with legacy_parity_pinned(name):
+        return _parse_effect(_normalize_spell_effect_phrase(phrase, name))

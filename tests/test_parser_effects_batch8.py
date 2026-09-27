@@ -176,7 +176,18 @@ def test_parse_effect_returns_none_for_malformed_destroy_artifact():
 def test_parse_effect_returns_none_for_malformed_destroy_land():
     assert _parse_effect("destroy target lands") is None
     assert _parse_effect("destroy target nonbasic lands") is None
-    assert _parse_effect("destroy target basic land") is None
+
+
+def test_parse_effect_destroy_target_basic_land_composes():
+    # No legacy recognizer; the compositional target grammar
+    # (precise_grammar fallback) claims the printed "basic land" noun
+    # phrase faithfully.
+    from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
+    from mtg_bot.effects.object_predicates import IsBasic, IsLand
+
+    assert _parse_effect("destroy target basic land") == RemoveTargetPermanents(
+        action="destroy", target_filter=IsLand() & IsBasic(),
+    )
 
 
 def test_parse_effect_destroy_target_nonbasic_land():

@@ -97,14 +97,23 @@ def test_parse_effect_filter_takes_priority_over_bare_counter():
     assert eff.filter_types == frozenset({"Artifact", "Enchantment"})
 
 
-def test_parse_effect_returns_none_for_unsupported_counter_filter():
-    # ``counter target instant or sorcery spell`` — different filter,
-    # no regex matches it today. The wrapping card stays unclaimed.
+def test_parse_effect_counter_filters_compose_through_spell_grammar():
+    # Spell-type filters outside the legacy literals are claimed by the
+    # compositional counterspell grammar (``counter_phrases``).
+    from mtg_bot.effects.generic.counterspells import CounterSpell
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.value_predicates import HasCardType
+
     assert _parse_effect(
         "counter target instant or sorcery spell"
-    ) is None
-    # ``counter target creature spell`` — likewise unsupported.
-    assert _parse_effect("counter target creature spell") is None
+    ) == CounterSpell(
+        spell_filter=HasCardType("Instant") | HasCardType("Sorcery"),
+        label="instant or sorcery spell",
+    )
+    assert _parse_effect("counter target creature spell") == CounterSpell(
+        spell_filter=IsCreature(), label="creature spell",
+    )
+    assert _parse_effect("counter target wizard spell") is None
 
 
 # ---------- exile all creatures and Spacecraft ----------
@@ -140,13 +149,20 @@ def test_parse_effect_returns_none_for_lowercase_spacecraft():
     assert _parse_effect("exile all creatures and spacecraft") is None
 
 
-def test_parse_effect_returns_none_for_partial_exile_phrase():
+def test_parse_effect_bare_exile_all_creatures_composes():
     # ``exile all creatures`` alone is a different effect
     # (DestroyAllCreatures-shape mass exile that wouldn't include
     # Spacecraft) and isn't claimed by this primitive. No EoE card
     # ships this exact bare phrase but rejecting it keeps the grammar
     # narrow.
-    assert _parse_effect("exile all creatures") is None
+    # The compositional mass-removal grammar claims the bare printed
+    # surface faithfully (no Spacecraft arm).
+    from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
+    from mtg_bot.effects.object_predicates import IsCreature
+
+    assert _parse_effect("exile all creatures") == RemoveAllMatching(
+        permanent_filter=IsCreature(), action="exile", label="all creatures",
+    )
 
 
 # ---------- deals N damage to each opponent ----------
@@ -235,11 +251,17 @@ def test_parse_spell_effect_phrase_recognizes_exile_all_artifacts_with_mv():
     ) == ExileAllArtifactsWithManaValueAtMost(max_mv=3)
 
 
-def test_parse_effect_returns_none_for_exile_artifacts_without_bound():
+def test_parse_effect_bare_exile_all_artifacts_composes():
     # ``exile all artifacts`` alone (no mana-value bound) isn't claimed —
     # different effect with no upper limit. No EoE card prints that
     # exact form but rejecting it keeps the grammar narrow.
-    assert _parse_effect("exile all artifacts") is None
+    # Claimed faithfully (no bound) by the compositional grammar.
+    from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
+    from mtg_bot.effects.object_predicates import IsArtifact
+
+    assert _parse_effect("exile all artifacts") == RemoveAllMatching(
+        permanent_filter=IsArtifact(), action="exile", label="all artifacts",
+    )
 
 
 def test_parse_effect_returns_none_for_exile_artifacts_with_word_amount():

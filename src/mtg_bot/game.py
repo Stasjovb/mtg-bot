@@ -625,6 +625,19 @@ class GameObject:
     # consumed by state_based_actions when destruction is averted;
     # cleared at cleanup if unconsumed (regeneration is UEOT).
     regeneration_shield: bool = False
+    # "If that creature would die this turn, exile it instead." (Suplex,
+    # CR 614.1a replacement): while True, this object going from the
+    # battlefield to a graveyard as a creature is exiled instead.
+    # Set by ``DealDamageExileIfDiesThisTurn``; cleared at cleanup and
+    # whenever the object leaves the battlefield.
+    exile_if_dies_this_turn: bool = False
+    # Command-zone holder of a "whenever <event> this turn" delayed
+    # triggered ability (CR 603.7c; ``CreateThisTurnTriggeredAbility``,
+    # Forth Eorlingas!): removed from ``state.emblems`` at cleanup.
+    expires_at_cleanup: bool = False
+    # The spell was cast with its optional additional cost paid
+    # (Teamwork — "if this spell was cast using teamwork").
+    optional_additional_cost_paid: bool = False
     # Phasing — "treat it and anything attached to it as though they
     # don't exist until its controller's next turn." While True, this
     # object is skipped in combat damage assignment. Set by
@@ -759,8 +772,9 @@ class GameObject:
     # permanent's ∞ abilities. Cleared when it enters the battlefield
     # anew (``put_into_battlefield``).
     harnessed: bool = False
-    # Sunburst: colors of mana spent to cast this card, recorded by
-    # ``actions._cast_spell`` and consumed (reset) as it enters.
+    # Colors of mana spent to cast this card (Sunburst CR 702.44,
+    # Converge CR 207.2c), recorded by ``actions._cast_spell`` for every
+    # cast; a Sunburst permanent consumes (resets) it as it enters.
     sunburst_colors_spent: int = 0
     # DSK Haunted Screen "Activate only once" tracking. The printed
     # rider on Haunted Screen's ``{7}: …`` activation reads "Activate
@@ -2595,6 +2609,12 @@ class StackItem:
     # to its owner's graveyard (for instants/sorceries) or vanishing
     # (for permanents) without firing any effects/ETBs.
     countered: bool = False
+    # Where a countered spell's card goes when the item is popped:
+    # "graveyard" (CR 701.6a default) or the zone a counterspell's
+    # "If that spell is countered this way, ... instead" rider names —
+    # "exile" (Force of Negation), "library_top" (Memory Lapse),
+    # "hand" (Remand). Set by ``CounterSpell.resolve``.
+    countered_destination: str = "graveyard"
     # The value chosen for {X} in this spell's cost (0 for non-X spells).
     # Set by _cast_spell via agent.choose_x; exposed to the resolving
     # effect via state.resolving_x_value.
@@ -2602,6 +2622,10 @@ class StackItem:
     # True when the spell was cast with its kicker cost paid. Exposed
     # to the resolving effect via state.resolving_kicked.
     kicked: bool = False
+    # True when the spell was cast for one of its printed alternative
+    # costs (``CardPrinting.alternative_costs``). Exposed to the
+    # resolving effect via state.resolving_alt_cost_paid.
+    alt_cost_paid: bool = False
     # Id of the creature the caster designated as a
     # choose-your-creature additional cost. None for spells that
     # don't have such a cost. Mirrored to
@@ -2739,6 +2763,10 @@ class Player:
     # by the "each opponent can't draw more than one card each turn"
     # restriction (Narset, Parter of Veils).
     cards_drawn_this_turn: int = 0
+    # Revolt: a permanent left the battlefield under this player's
+    # control this turn (any permanent, lands and tokens included).
+    # Reset at cleanup.
+    permanent_left_battlefield_this_turn: bool = False
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None
@@ -3040,6 +3068,10 @@ class GameState:
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
     resolving_kicked: bool = False
+    # Mirrors StackItem.alt_cost_paid during spell resolution ("If the
+    # {1}{B} cost was paid, ..." — Baleful Mastery). False outside
+    # resolution.
+    resolving_alt_cost_paid: bool = False
     # Mirrors StackItem.chosen_modes during resolution so a modal
     # spell's resolve() reads the cast-time pick (CR 601.2e) rather
     # than prompting the agent again at resolve time. Empty tuple
@@ -3759,6 +3791,7 @@ class GameState:
         new_state.resolving_controller_id = self.resolving_controller_id
         new_state.resolving_x_value = self.resolving_x_value
         new_state.resolving_kicked = self.resolving_kicked
+        new_state.resolving_alt_cost_paid = self.resolving_alt_cost_paid
         new_state.resolving_modes = self.resolving_modes
         new_state.resolving_additional_cost_choice_id = (
             self.resolving_additional_cost_choice_id

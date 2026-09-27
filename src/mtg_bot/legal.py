@@ -194,7 +194,8 @@ def _can_cast(
 
 
 def _targets_are_satisfiable(
-    state: GameState, player_id: int, card: GameObject
+    state: GameState, player_id: int, card: GameObject,
+    *, kicked: bool = False,
 ) -> bool:
     """For spells with targeted spell_effects, check that at least
     ``min_t`` legal targets exist (CR 601.2c — a spell with N
@@ -206,7 +207,12 @@ def _targets_are_satisfiable(
     Non-targeting spells and creatures without spell_effect trivially
     satisfy this.
     """
+    from mtg_bot.actions import cast_time_effect
+
     effect = card.printing.spell_effect
+    if effect is not None:
+        # Kicker-dependent target shapes (Tear Asunder).
+        effect = cast_time_effect(effect, kicked=kicked)
     if effect is None or not effect.requires_target():
         return True
     from mtg_bot.game import drop_protected_players
@@ -249,6 +255,13 @@ def _additional_costs_payable(
 
     if not _alt_payable(state, player_id, card):
         return False
+    if card.printing.additional_cost_options:
+        # One-of additional costs ("discard a card or pay 3 life"): at
+        # least one arm must be payable.
+        from mtg_bot.cards.spell_costs import additional_costs_payable
+
+        if not additional_costs_payable(state, player_id, card):
+            return False
     if card.printing.additional_cost_sacrifice_creature_or_artifact:
         have_sac = any(
             o for o in state.battlefield
@@ -321,10 +334,19 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     def _effective_cost(card, base_cost):
         # Delve (CR 702.66) only ever lowers the generic cost, so the
         # affordability probe assumes the whole graveyard is available.
-        return _delve_affordability_cost(
+        cost = _delve_affordability_cost(
             state, player_id, card,
             apply_cost_reductions(card.printing, state, player_id, base_cost),
         )
+        # Spree: every cast chooses at least one mode, each with its own
+        # extra mana cost — the cast is affordable if base + SOME single
+        # mode's cost is payable.
+        mode_costs = getattr(card.printing.spell_effect, "single_mode_mana_costs", None)
+        if mode_costs is not None:
+            options = [_cost_plus(cost, extra) for extra in mode_costs()]
+            payable = [c for c in options if _can_cast(state, player_id, card, c)]
+            return (payable or options)[0]
+        return cost
 
     def _cost_plus_kicker(card, base_cost):
         """Combined base + kicker cost (colored pips merged)."""
@@ -359,6 +381,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         cond = card.printing.free_cast_condition
         if cond is not None and cond.matches(state, player_id):
             return True
+        # Printed alternative costs (Force of Will, Daze, Snuff Out,
+        # Baleful Mastery, Overload, ...) share this action variant.
+        if card.printing.alternative_costs:
+            from mtg_bot.cards.spell_costs import payable_alternative_costs
+
+            if payable_alternative_costs(state, player_id, card):
+                return True
         # Pitch alternative cost (Pyrokinesis): exile another card.
         return bool(_pitch_options(state, player_id, card))
 
@@ -410,7 +439,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if card.printing.kicker_cost is not None and _can_cast(
                 state, player_id, card,
                 _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
-            ):
+            ) and _targets_are_satisfiable(state, player_id, card, kicked=True):
                 _emit_hand_cast(card, kicked=True)
             # Buyback variant (CR 702.27): base + buyback cost.
             if card.printing.buyback_cost is not None and _can_cast(
@@ -421,6 +450,18 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 ),
             ):
                 _emit_hand_cast(card, use_buyback=True)
+        elif (
+            # Only the kicked cast has a legal target (Tear Asunder's
+            # kicked "exile target nonland permanent").
+            card.printing.kicker_cost is not None
+            and _can_cast(
+                state, player_id, card,
+                _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
+            )
+            and _targets_are_satisfiable(state, player_id, card, kicked=True)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            _emit_hand_cast(card, kicked=True)
         if (
             card.printing.warp_cost is not None
             and _can_cast(
@@ -705,7 +746,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 if card.printing.kicker_cost is not None and _can_cast(
                     state, player_id, card,
                     _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
-                ):
+                ) and _targets_are_satisfiable(state, player_id, card, kicked=True):
                     _emit_hand_sorcery_cast(card, kicked=True)
                 if card.printing.buyback_cost is not None and _can_cast(
                     state, player_id, card,
@@ -715,6 +756,16 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     ),
                 ):
                     _emit_hand_sorcery_cast(card, use_buyback=True)
+            elif (
+                card.printing.kicker_cost is not None
+                and _can_cast(
+                    state, player_id, card,
+                    _cost_plus_kicker(card, _effective_cost(card, card.printing.mana_cost)),
+                )
+                and _targets_are_satisfiable(state, player_id, card, kicked=True)
+                and _additional_costs_payable(state, player_id, card)
+            ):
+                _emit_hand_sorcery_cast(card, kicked=True)
             if (
                 card.printing.warp_cost is not None
                 and _can_cast(

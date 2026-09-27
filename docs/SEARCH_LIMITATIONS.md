@@ -19020,3 +19020,106 @@ the new mechanics; none changes EoE-pool behavior.
     `activated.py` only after the whole-effect parse failed; spell
     text keeps the base compound grammar (so Ponder's nested shape is
     unchanged).
+
+## PowerLSV cube "spells A" (removal / counters / burn) — parser pins and engine approximations (2026-09-27, `feature/cube-spells-a`)
+
+### Rust-parity-pinned lossy legacy spells
+
+**Where:** `src/mtg_bot/cards/parser/precise_grammar.py` (`RUST_PARITY_PINNED_SPELLS`, `legacy_parity_pinned`); consumed by `effects._parse_spell_effect_phrase` and `spell_builder._parse_spell_oracle_text` (the single-parseable-mode modal fallback is restricted separately by `spell_builder._LEGACY_PARTIAL_MODAL_CLAIMS`).
+
+**What the shortcut is.** The compositional phrase grammar models "target creature or planeswalker", "counter target spell unless its controller pays {N}", and other surfaces faithfully, but five Edge-of-Eternities-era spells were claimed earlier through lossy legacy recognizers (planeswalker target arm dropped, pay-or-counter tax dropped, riders dropped, or only one of several modes kept) and their simplified models are pinned by cross-engine parity tests against the Rust engine: Divert Disaster, Don't Make a Sound, Archenemy's Charm, Scorching Dragonfire, Break Down the Door (plus Get Out / Untimely Malfunction for the single-parseable-mode modal fallback). While one of those names is being parsed the compositional grammar is switched off, so they keep the legacy models. Every other card with the same printed surfaces (including the cube's Mana Leak, Sear, Baleful Mastery, Unholy Heat, Mine Collapse, …) now parses faithfully, and the single-parseable-mode fallback no longer claims non-legacy modal spells (Suplex, Sheoldred's Edict must parse every mode).
+
+**Why it's OK.** It keeps the Python and Rust engines in lock-step for the EoE fixtures while letting the cube pool be modeled faithfully; the pinned behaviour is exactly what shipped before.
+
+**Failure mode.** The five pinned EoE spells still misplay (e.g. Divert Disaster counters even if the controller could pay {2}; Archenemy's Charm can't exile a planeswalker).
+
+**Fix scope estimate.** Per card: teach the Rust engine the faithful effect (the Python side already exists), update the parity pins, delete the name from the set.
+
+**Impact estimate.** None on the cube pool; unchanged from before for the EoE pool.
+
+### Noncombat damage to planeswalkers
+
+**Where:** `src/mtg_bot/effects/base.py::_apply_damage` (`"planeswalker"` target kind).
+
+**What changed / residual gap.** Damage to a planeswalker target now removes loyalty counters (CR 120.3c) and the existing loyalty-0 SBA kills it. The Rust engine's damage arm still ignores planeswalker targets; the EoE pool has a single planeswalker (Tezzeret, Cruel Captain) so the Python/Rust gap only shows when an "any target" burn spell targets it.
+
+### Regeneration vs. effect-destroy
+
+**Where:** `src/mtg_bot/effects/generic/targeted_removal.py::destroy_permanent`.
+
+**What the shortcut is.** The compositional removal effects (`RemoveTargetPermanents`, `DestroyAllMatching`) honor a regeneration shield on "destroy" (CR 701.15) and skip it for "can't be regenerated" printings, but the legacy destroy classes (`Destroy`, `DestroyTargetCreature`, …, all routed through `turn.destroy`) still never regenerate — only SBA lethal damage does. Changing `turn.destroy` would alter the Rust-parity-pinned EoE behaviour (Swarmyard shields).
+
+**Failure mode.** A shielded creature dies to a legacy destroy effect it should survive. **Fix scope:** route `turn.destroy` through the shield check once the Rust side mirrors it.
+
+### Countered-spell destination is not part of the search hash
+
+**Where:** `src/mtg_bot/game.py::StackItem.countered_destination` (set by `effects/generic/counterspells.py::CounterSpell.resolve`, consumed by `actions.resolve_top_of_stack` / `move_spell_off_stack`).
+
+**What the shortcut is.** Memory Lapse / Remand / Force of Negation / No More Lies record where the countered card goes on the `StackItem`; the search-side canonical-state hash (`search/canonical_state.py`, `search/info_set.py`) hashes `countered` but not the new destination field (search code is out of scope for the card campaign). Two states that differ only in whether a countered spell will go to the graveyard or back to its owner's hand collide in the transposition cache until the item is popped (one priority pass later).
+
+**Impact estimate.** Negligible: the window is a single priority pass with a countered spell on the stack. **Fix scope:** add the field to the two hashers.
+
+### Spell-level fizzle for multi-effect spells
+
+**Where:** `effects/combinators.py::Sequence` (pre-existing engine behaviour, newly exercised by Remand).
+
+**What the shortcut is.** CR 608.2b says a spell whose every target has become illegal doesn't resolve at all. The engine re-checks legality per effect, so a `Sequence` like Remand ("Counter target spell. … Draw a card.") still draws a card when its target spell has already left the stack. Pre-existing for every multi-sentence targeted spell (Radiant Strike, …).
+
+**Fix scope.** A spell-level legality pre-check in `resolve_top_of_stack`; deferred because it changes EoE behaviour pinned by Rust parity.
+
+### Printed alternative costs share the `cast_for_free` action variant
+
+**Where:** `src/mtg_bot/cards/spell_costs.py::select_alternative_cost` / `payable_alternative_costs`, `actions._cast_spell` (alt-cost branch), `legal._own_free_cast`.
+
+**What the shortcut is.** CR 118.9 alternative costs (Force of Will, Daze, Force of Negation / Vigor, Snuff Out, Mine Collapse, Baleful Mastery, Overload on Damn / Winds of Abandon) ride the casting substrate's existing `CastSpell(cast_for_free=True)` variant — the same one `alt_casting`'s pitch costs and conditional free casts use — so there is ONE cast-time alternative-cost path and the action encoding is unchanged (the codec already has a `cast_for_free` slot). The variant means "cast for an alternative cost" rather than naming WHICH one: a free-cast permission wins, and when a card prints several payable alternatives the caster's agent picks among them with `choose_mode` inside the cast. No printed card in either pool has two payable alternatives at once, so today the variant is unambiguous. Two further approximations: (1) `search/_player_capabilities.py`'s priority short-circuit only checks mana costs, so with that heuristic enabled a player whose only castable card is a free-cast (e.g. Force of Will with no untapped lands) can be skipped; (2) when several candidates can pay an alternative cost the pick reuses existing hooks: `choose_discard` for the exiled hand card (as `alt_casting.pay_pitch_cost` does), `choose_sacrifice` for the returned / sacrificed permanent.
+
+**Fix scope.** Teach `_player_capabilities` about `CardPrinting.alternative_costs` (search code, out of scope for the card campaign); give each alternative cost its own codec variant with the next encoding version if a card with two payable alternatives ever lands.
+
+### "Dies this turn -> exile instead" rider is a per-object flag
+
+**Where:** `src/mtg_bot/game.py::GameObject.exile_if_dies_this_turn`, set by `effects/generic/spell_damage.py::DealDamageExileIfDiesThisTurn` (Suplex), consumed by `turn.move_off_battlefield`, cleared at cleanup.
+
+**What the shortcut is.** The replacement is stored on the object rather than as a registered replacement effect, and the search-side hashes don't include the flag, so two states differing only in whether a damaged creature carries the rider share a transposition entry for the rest of the turn. **Impact:** negligible. **Fix scope:** add the flag to `search/canonical_state.py` / `search/info_set.py`.
+
+### Overload cast needs the single-target version's target
+
+**Where:** `legal.py` cast emission (`_targets_are_satisfiable` checks the printing's base, single-target shape).
+
+**What the shortcut is.** An Overload cast (Damn, Winds of Abandon) is only offered when the non-overloaded "target" version has a legal target, so overloading onto a board with no legal target for the single-target version isn't offered. Such a cast would do nothing, so no strategic option is lost.
+
+### Multi-mode spells: mode choice padding and per-mode single targets
+
+**Where:** `src/mtg_bot/effects/generic/multi_modal.py::ChooseModes` (Kolaghan's Command, Fiery / Mystic Confluence, Collective Brutality, Three Steps Ahead), `actions._choose_modes_at_cast` / `_select_spell_targets`.
+
+**What the shortcut is.** Modes are chosen through the agent's existing `choose_modes` hook, which (for the search resolution channel and `RandomAgent`) returns a set of distinct indices. For "choose three, you may choose the same mode more than once" the engine pads a short pick by cycling the agent's own picks (a single pick of mode 2 becomes 2/2/2), so mixed repeated selections like 1/1/2 are only reachable by agents that return duplicates themselves. For Spree / Escalate the pick is trimmed from the end until the extra costs are payable. Every mode of these cards takes zero or one target, which `ChooseModes` enforces (multi-target modes stay unclaimed).
+
+**Fix scope.** Expose repeat-mode multisets as a first-class resolution-channel decision (search code).
+
+### Spell copies: new targets are re-picked, Replicate copies skip the cast trigger
+
+**Where:** `src/mtg_bot/actions.py::push_spell_copy` (the substrate's one copy primitive) via `effects/generic/spell_copies.py::DealDamageThenChainCopy` (Chain Lightning) and `actions._cast_spell`'s replicate step (`_choose_replicate_times`).
+
+**What the shortcut is.** CR 707.10c lets the copier keep the original targets or choose new ones; the engine simply asks the copier's agent to pick targets from the full legal pool (the old target is always among the options), so "keep" and "change" are one decision. Replicate's copies are put on the stack directly at cast rather than by a separate "when you cast" trigger, so players can't respond between the cast and the copies (the copies still resolve before the original). The number of replicate payments is asked through `choose_x` (0..max affordable, capped at 10). `GameState.resolving_spell` / `GameObject.is_spell_copy` are not part of the search-side hashes.
+
+### Converge counts the colors of the lands the auto-tapper happened to pick
+
+**Where:** the Sunburst substrate's color tracking — `actions.auto_tap_for_cost(color_sources=...)` + `max_distinct_colors`, recorded for every cast on `GameObject.sunburst_colors_spent` and read by `value_predicates.HasManaValueAtMostColorsSpent` (Prismatic Ending).
+
+**What the shortcut is.** The count is the maximum number of distinct colors the mana actually spent could have produced (dual lands count as whichever color helps), but *which* lands are tapped is decided by `auto_tap_for_cost`'s greedy order, which doesn't try to diversify colors. With two Plains and an Island available, an X=1 Prismatic Ending may be paid with both Plains (1 color) even though Plains + Island (2 colors) was possible. Convoke-tapped creatures don't count toward converge.
+
+**Fix scope.** A converge-aware land picker in `auto_tap_for_cost` (touches every cast; deferred).
+
+### "Whenever <event> this turn" triggers are command-zone holders
+
+**Where:** `src/mtg_bot/effects/generic/spell_misc.py::CreateThisTurnTriggeredAbility` (Forth Eorlingas!), `GameObject.expires_at_cleanup`, removed in `turn.run_cleanup_step`.
+
+**What the shortcut is.** A delayed triggered ability (CR 603.7c) is not an object, but the engine models it as a synthetic command-zone object in `state.emblems` (the trigger source `dispatch_event` already scans) that is dropped at cleanup. The NN tokenizer and the search hashes therefore see it as an emblem for the rest of the turn. "One or more creatures ... deal combat damage to one or more players" reuses the once-per-turn aggregated combat-damage observer, which equals once per combat under the engine's one-combat-per-turn model.
+
+**Impact / fix scope.** Negligible (one turn, one card). A first-class delayed-trigger list with its own tokenizer slot would remove the emblem aliasing.
+
+### Galvanic Discharge's energy payment is a `choose_x`
+
+**Where:** `src/mtg_bot/effects/generic/spell_damage.py::DealDamagePaidInEnergy`.
+
+**What the shortcut is.** "You may pay any amount of {E}" is asked through the existing `choose_x` hook (`[0, energy]`, card name "energy to pay"); the default / random / tactical agents pay everything, so saving energy for a later Galvanic Discharge is only reachable through the search's X decision.
+

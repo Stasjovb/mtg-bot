@@ -136,6 +136,7 @@ def _make_incubator_token() -> CardPrinting:
     )
 
 
+
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Human Soldier": make_token_creature(
         "Human Soldier", 1, 1, subtypes=("Human", "Soldier")

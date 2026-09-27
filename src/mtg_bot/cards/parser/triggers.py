@@ -1009,6 +1009,16 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         & Subject("target", IsPlayer()),
         True,
     ),
+    # ``... deal combat damage to one or more players`` (Forth
+    # Eorlingas!'s this-turn trigger): the same aggregated observer —
+    # with one combat per turn, once per turn is once per combat.
+    "one or more creatures you control deal combat damage to one or more players": (
+        Event.DEALS_COMBAT_DAMAGE,
+        Subject("source", IsCreature())
+        & Controlled(YOU, subject="source")
+        & Subject("target", IsPlayer()),
+        True,
+    ),
     # ``Whenever a nontoken creature you control with a +1/+1
     # counter on it dies`` (Rayblade Trooper). Batch 9. Stricter
     # variant of the existing ``a creature you control with a

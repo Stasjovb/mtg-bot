@@ -37,6 +37,7 @@ matching machinery.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 from mtg_bot.cards.base import (
@@ -70,6 +71,17 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+from mtg_bot.cards.parser.conditional_phrases import combine_instead_rider
+from mtg_bot.cards.parser.modal_spells import parse_multi_modal
+from mtg_bot.cards.parser.spell_cost_lines import (
+    apply_overload,
+    detect_spell_line_fields,
+    is_spell_cost_line,
+)
+from mtg_bot.cards.parser.precise_grammar import (
+    legacy_parity_pinned,
+    precise_grammar_active,
+)
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
@@ -820,6 +832,17 @@ def _is_additional_cost_preamble(clause: str) -> bool:
     )
 
 
+def _is_substrate_cost_line(line: str) -> bool:
+    """Whether a printing line is owned by the casting substrate
+    (additional-cost preambles in the flag table / substrate fields,
+    casting keywords incl. the plain pitch alternative cost), so the
+    spells-A ``spell_cost_lines`` detector must not also model it."""
+    if _is_additional_cost_preamble(line):
+        return True
+    clause = _strip_reminder_text(line.strip())
+    return bool(clause) and _casting_keyword_fields(clause) is not None
+
+
 def _additional_cost_flags(clause: str) -> dict:
     """Return the printing-flag dict for a recognized additional-cost
     preamble ``clause``. Returns an empty dict if the clause isn't a
@@ -1153,6 +1176,13 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     a printing that put each sentence on its own ``\\n``-separated
     line. Returns ``None`` if any surviving clause fails to parse.
     """
+    with legacy_parity_pinned(name):
+        return _parse_spell_oracle_text_body(text, name)
+
+
+def _parse_spell_oracle_text_body(text: str, name: str) -> Effect | None:
+    """Body of :func:`_parse_spell_oracle_text`, run under the
+    Rust-parity pin for the legacy spells it applies to."""
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
     # stripping. The preamble shape (``"Convoke (...)"``) is recognized
@@ -1169,6 +1199,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # stay unclaimed rather than silently dropping the cost.
     while clauses and _is_additional_cost_preamble(clauses[0]):
         clauses = clauses[1:]
+    # Drop alternative-cost (incl. Overload) / one-of additional-cost /
+    # "This spell can't be countered." lines (``spell_cost_lines``);
+    # ``_build_spell_printing`` threads them onto the printing via
+    # ``detect_spell_line_fields``.
+    clauses = [c for c in clauses if not is_spell_cost_line(c)]
     # Drop a leading Kicker preamble. The kicker cost is threaded onto
     # the ``CardPrinting`` separately via ``_detect_kicker_cost``
     # (called from ``_build_spell_printing``); the preamble line
@@ -1366,9 +1401,21 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # because Sequence would uselessly attempt to parse the modal
     # header as a spell-effect sentence, fail, and return None —
     # losing any modal spell whose modes are individually parseable.
+    # Multi-mode shapes (Choose two / three with repeats / one or more
+    # with Escalate / Spree) — ``modal_spells``.
+    if precise_grammar_active():
+        multi = parse_multi_modal(clauses, name)
+        if multi is not None:
+            return multi
     modal = _parse_modal_choose_one(clauses, name)
     if modal is not None:
         return modal
+    # Base clause + "... instead if <condition>" rider line (Unholy
+    # Heat's Delirium, Fatal Push's Revolt) — ``conditional_phrases``.
+    if precise_grammar_active():
+        instead = combine_instead_rider(clauses, name)
+        if instead is not None:
+            return instead
     # Sequence shape: every clause must be a plain spell-effect sentence.
     parsed: list[Effect] = []
     for clause in clauses:
@@ -1626,6 +1673,10 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     if not text:
         return None
     effect = _parse_spell_oracle_text(text, card["name"])
+    if effect is not None:
+        effect = apply_overload(
+            effect, text, card["name"], _parse_spell_oracle_text,
+        )
     if effect is None:
         return None
     factory = make_instant if "Instant" in card_types else make_sorcery
@@ -1644,6 +1695,12 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         **kwargs,
     )
     substrate = _detect_casting_substrate_fields(text)
+    # Spells-A printing lines the substrate doesn't own: alternative
+    # costs (incl. Overload), one-of additional costs, Replicate,
+    # Teamwork, "This spell can't be countered." (``spell_cost_lines``).
+    substrate.update(detect_spell_line_fields(
+        text, legacy_line=_is_substrate_cost_line,
+    ))
     if subtypes or supertypes:
         # "Instant — Arcane": the factories print a bare type line; keep
         # the printed subtypes / supertypes (splice keys off Arcane).

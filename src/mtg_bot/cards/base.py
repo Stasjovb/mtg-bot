@@ -1279,6 +1279,28 @@ class CardPrinting:
     # set to the half-name, so the existing iterators (filtered through
     # ``effective_*_abilities``) gate them by ``unlocked_halves``.
     room_halves: tuple[RoomHalf, ...] = ()
+    # --- Spell costs (cube spells A) -------------------------------
+    # Printed alternative costs ("You may <cost> rather than pay this
+    # spell's mana cost", CR 118.9): Force of Will, Daze, Snuff Out,
+    # Mine Collapse, Baleful Mastery, Overload ... — tuple of
+    # ``mtg_bot.cards.spell_costs.AlternativeCost``. Cast through the
+    # ``CastSpell(cast_for_free=True)`` variant, shared with the pitch
+    # cost above (``spell_costs.select_alternative_cost``).
+    alternative_costs: tuple = ()
+    # One-of additional costs ("As an additional cost to cast this
+    # spell, discard a card or pay 3 life."): tuple of
+    # ``spell_costs.AdditionalCostOption``; the caster pays exactly one
+    # payable arm (``spell_costs.pay_additional_cost_option``).
+    additional_cost_options: tuple = ()
+    # Replicate (CR 702.56): "When you cast this spell, copy it for each
+    # time you paid its replicate cost." Mana-cost string ("{U}"); the
+    # caster picks how many times to pay at cast time.
+    replicate_cost: str = ""
+    # Teamwork N: "As an additional cost to cast this spell, you may
+    # tap any number of untapped creatures you control with total power
+    # N or more." Optional; recorded on the spell object as
+    # ``GameObject.optional_additional_cost_paid``.
+    teamwork_power: int = 0
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

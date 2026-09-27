@@ -1666,6 +1666,28 @@ class IfConditionElse(Effect):
     def requires_target(self) -> bool:
         return self._targeting_branch() is not None
 
+    def cast_time_shape(
+        self, *, kicked: bool = False, alt_cost_paid: bool = False,
+        x_value: "int | None" = None,
+    ) -> Effect:
+        """For conditions fixed at cast time — "If this spell was
+        kicked" (Tear Asunder), an alternative cost / Overload — the
+        branch, and so the target shape, is known when targets are
+        chosen (CR 601.2b-c; ``actions.cast_time_effect``)."""
+        from mtg_bot.effects.generic.cast_conditionals import (
+            AlternativeCostWasPaid, SpellWasKicked,
+        )
+
+        if isinstance(self.condition, SpellWasKicked):
+            fired = kicked
+        elif isinstance(self.condition, AlternativeCostWasPaid):
+            fired = alt_cost_paid
+        else:
+            return self
+        if fired:
+            return self.then_effect
+        return self.else_effect if self.else_effect is not None else self
+
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:

@@ -174,6 +174,7 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     obj.temp_toughness_bonus = 0
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    state.player_by_id(obj.controller_id).permanent_left_battlefield_this_turn = True
     if obj.printing.is_token:
         state.log.append(
             f"{obj.printing.name} token ceases to exist (bounced)"
