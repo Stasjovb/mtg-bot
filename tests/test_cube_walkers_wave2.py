@@ -438,6 +438,29 @@ def test_copy_effect_edges():
     assert thopter.printing.name == "Thopter"
 
 
+def test_legacy_grammar_disables_extension_and_pins_break_down_the_door():
+    from mtg_bot.cards.parser.effects_ext import legacy_grammar
+    from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    from mtg_bot.effects.generic.library_lookat import ManifestDread
+
+    assert parse_ext_effect("exile target artifact") is not None
+    with legacy_grammar():
+        assert parse_ext_effect("exile target artifact") is None
+    assert parse_ext_effect("exile target artifact") is not None
+    text = (
+        "Choose one —\n"
+        "• Exile target artifact.\n"
+        "• Exile target enchantment.\n"
+        "• Manifest dread."
+    )
+    assert isinstance(
+        _parse_spell_oracle_text(text, "Break Down the Door"), ManifestDread,
+    )
+    assert type(_parse_spell_oracle_text(text, "Other Door")).__name__ == (
+        "ModalChooseOne"
+    )
+
+
 def test_draws_card_event_fires_once_per_card():
     from mtg_bot.cards.base import make_emblem
     from mtg_bot.effects.base import TriggeredAbility

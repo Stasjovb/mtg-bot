@@ -242,7 +242,7 @@ def test_survival_unparseable_inner_effect_rejected():
     # partial trigger.
     parsed = _parse_triggered_ability_line(
         "Survival — At the beginning of your second main phase, "
-        "if this creature is tapped, win the game."
+        "if this creature is tapped, frobnicate the widget."
     )
     assert parsed is None
 

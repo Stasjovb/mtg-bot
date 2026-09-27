@@ -784,7 +784,14 @@ def _parse_void_pump_replacement(
 # tests. Any other modal spell whose modes don't ALL parse stays
 # unclaimed (e.g. Suplex, whose "exile target artifact" mode parses
 # but whose damage + exile-if-it-would-die mode does not).
+#
+# These printings are ALSO parsed with the pre-extension grammar
+# (``effects_ext.legacy_grammar``): their claimed shape is pinned by the
+# EoE cross-engine parity probes, so the cube-era extension recognizers
+# must not change it (Break Down the Door would otherwise become a full
+# three-mode ModalChooseOne the Rust bridge doesn't seat).
 _LEGACY_PARTIAL_MODAL_CLAIMS: frozenset[str] = frozenset({
+    "Break Down the Door",
     "Get Out",
     "Sheoldred's Edict",
     "Untimely Malfunction",
@@ -870,7 +877,13 @@ def _parse_modal_choose_one(
             # may indicate a multi-line mode, which we don't support).
             malformed = True
             break
-        eff = _parse_spell_effect_phrase(m.group(1), name)
+        if name in _LEGACY_PARTIAL_MODAL_CLAIMS:
+            from mtg_bot.cards.parser.effects_ext import legacy_grammar
+
+            with legacy_grammar():
+                eff = _parse_spell_effect_phrase(m.group(1), name)
+        else:
+            eff = _parse_spell_effect_phrase(m.group(1), name)
         if eff is not None:
             parsed_modes.append(eff)
         # else: append None placeholder? No — we only collect parseable modes.

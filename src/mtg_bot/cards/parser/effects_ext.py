@@ -42,6 +42,28 @@ letter, source-name subject stripped):
   where X is that creature's power. If the sacrificed creature was a
   <Subtype>, draw X cards`` ->
   :class:`SacrificeCreatureThenDamageEqualToItsPower`
+* library / player shapes: ``look at the top card of target player's
+  library. You may put that card on the bottom ...``, ``put N cards
+  from your hand on top of your library in any order``, ``exile all
+  cards from target player's library, then that player shuffles ...``,
+  ``target player draws N cards, then discards M cards``, ``reveal the
+  top N cards ... An opponent chooses one ... exile the other with a
+  silver counter``, ``put a card you own with a silver counter on it
+  from exile into your hand``
+* ``gain control of target <noun>``; ``put target <noun> into its
+  owner's library <Nth> from the top``; ``untap up to N <nouns>``;
+  ``at the beginning of the next end step, <untargeted effect>``;
+  ``target <A> becomes a copy of another target <B> until end of
+  turn[, except ...]``; tokens with a quoted per-count self-anthem
+* ``you get an emblem with "<trigger>"`` (the quoted trigger parses
+  through the unified trigger grammar, plus the whole-line "Whenever
+  you cast a spell that targets one or more permanents, gain control of
+  those permanents." shape)
+* trigger conditions (:func:`parse_ext_trigger_phrase`): ``you draw a
+  card``, ``you cast a[n] [<filter>] spell``
+
+:func:`legacy_grammar` switches every recognizer here off, for
+printings whose claimed shape EoE parity probes pin.
 
 The compositional target noun-phrase parser
 (:func:`parse_target_noun_phrase`) covers
@@ -51,6 +73,7 @@ controls| you control][ with <qualifier>]``.
 
 from __future__ import annotations
 
+import contextlib
 import re
 
 from mtg_bot.effects.base import Effect
@@ -412,9 +435,28 @@ def _token_printing(
     )
 
 
+_LEGACY_GRAMMAR = [False]
+
+
+@contextlib.contextmanager
+def legacy_grammar():
+    """Disable every recognizer in this module for the duration of the
+    block -- the pre-extension grammar. Used for printings whose claimed
+    shape is pinned by EoE cross-engine parity probes (see
+    ``spell_builder._LEGACY_PARTIAL_MODAL_CLAIMS``)."""
+    prior = _LEGACY_GRAMMAR[0]
+    _LEGACY_GRAMMAR[0] = True
+    try:
+        yield
+    finally:
+        _LEGACY_GRAMMAR[0] = prior
+
+
 def parse_ext_effect(phrase: str) -> Effect | None:
     """Last-resort recognizers for the unified effect grammar. See the
     module docstring for the shape list."""
+    if _LEGACY_GRAMMAR[0]:
+        return None
     from mtg_bot.cards.parser.effects import _parse_effect
 
     if _WIN_THE_GAME.match(phrase):
