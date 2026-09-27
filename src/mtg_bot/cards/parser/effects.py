@@ -203,6 +203,8 @@ from mtg_bot.effects.formulas import (
     MVOfCostPaidObjectPlus,
 )
 from mtg_bot.effects.generic import (
+    SearchLibraryForLandCardToBattlefield,
+    AddManaOfColorPerCount,
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     BecomeType,
@@ -224,7 +226,13 @@ from mtg_bot.effects.generic import (
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
 )
-from mtg_bot.effects.object_predicates import IsArtifact
+from mtg_bot.effects.object_predicates import (
+    IsArtifact,
+    IsCreature as _IsCreature,
+    IsEnchantment as _IsEnchantment,
+    IsLegendary as _IsLegendary,
+    IsPlaneswalker as _IsPlaneswalker,
+)
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -1138,6 +1146,24 @@ _SEARCH_LIBRARY_FOR_EQUIPMENT_CARD_ONTO_BATTLEFIELD = re.compile(
     r"^search your library for an Equipment card, "
     r"put it onto the battlefield, then shuffle$"
 )
+# "Search your library for a <T1> or <T2> card, put it onto the
+# battlefield, then shuffle." — the fetch-land body (Arid Mesa,
+# Flooded Strand, ... : two basic land types) and Prismatic Vista's
+# "a basic land card" variant; optional "tapped" tail. Captures the
+# land-kind phrase so every type pairing (and any single type) claims
+# through one recognizer, mapping to
+# ``SearchLibraryForLandCardToBattlefield(land_types=..., basic_only=...,
+# tapped=...)``. The "basic land card ... tapped" surface is matched
+# FIRST by the older ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_
+# BATTLEFIELD`` recognizer (Moldering Gym / Lander parity), so this one
+# only ever sees it untapped.
+_BASIC_LAND_TYPE_ALT = r"(?:Plains|Island|Swamp|Mountain|Forest)"
+_SEARCH_LIBRARY_FOR_LAND_KIND_ONTO_BATTLEFIELD = re.compile(
+    r"^search your library for an? "
+    r"(?P<kind>basic land|" + _BASIC_LAND_TYPE_ALT
+    + r"(?: or " + _BASIC_LAND_TYPE_ALT + r")*) card, "
+    r"put it onto the battlefield(?P<tapped> tapped)?, then shuffle$"
+)
 # "Gain control of target <subtype>." — permanent-theft activated ability
 # whose legal-target pool is restricted to permanents with a named subtype.
 # Sliver Overlord's second ability "{3}: Gain control of target Sliver.
@@ -1424,7 +1450,17 @@ _DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
 _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
     r"^destroy target artifact, enchantment, or creature with flying$"
 )
-_DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
+# "destroy target land" (Strip Mine) / "destroy target nonbasic land"
+# (Wasteland, Dust Bowl) — the optional ``nonbasic`` qualifier maps to
+# ``DestroyTargetLand(nonbasic_only=True)``.
+# "Sacrifice this <permanent-type>." as an effect body (not a cost) —
+# City of Traitors' "When you play another land, sacrifice this land."
+# Maps to ``SacrificeSelf()`` (reads ``state.resolving_source``; no-op
+# if the source already left the battlefield).
+_SACRIFICE_THIS_PERMANENT = re.compile(
+    r"^sacrifice this (?:land|creature|artifact|enchantment|permanent)$"
+)
+_DESTROY_TARGET_LAND = re.compile(r"^destroy target (?P<nonbasic>nonbasic )?land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
 )
@@ -1595,10 +1631,21 @@ _ADD_THREE_COLOR_CHOICE_MANA = re.compile(
 # bare regex's ``$`` anchor wouldn't match the multi-sentence shape
 # anyway, but ordering more-specific before more-general is the
 # convention here.
+# "Add {<C>} for each <noun> you control." — scaling mana ability
+# (Gaea's Cradle: creature; Tolarian Academy: artifact). Maps to
+# ``AddManaOfColorPerCount(color, CountControlledMatching(<pred>))``;
+# the noun is looked up in ``_ADD_MANA_PER_CONTROLLED_NOUNS`` (unknown
+# noun -> ``None``).
+_ADD_MANA_FOR_EACH_CONTROLLED = re.compile(
+    r"^add \{(?P<color>[WUBRGC])\} for each (?P<noun>.+) you control$"
+)
+_ADD_MANA_PER_CONTROLLED_NOUNS: dict[str, object] = {
+    "creature": _IsCreature(),
+    "artifact": IsArtifact(),
+}
 _ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
-    r"^add (\{[WUBRG]\}(?:\{[WUBRG]\})?)\. "
-    r"Spend this mana only to "
-    r"(cast an artifact spell|activate abilities of artifact sources)$"
+    r"^add ((?:\{[WUBRGC]\})+)\. "
+    r"Spend this mana only to (.+)$"
 )
 # "Add one mana of any color. Spend this mana only to <restriction>."
 # — restricted any-color mana ability (Plaza of Heroes' second ability:
@@ -1635,6 +1682,9 @@ _ADD_MANA_AMONG_RESTRICTION: dict[str, str] = {
 # expected by ``_coin_satisfies_context`` (``actions.py``).
 _SPEND_RESTRICTION_BY_PHRASE: dict[str, str] = {
     "cast an artifact spell": "artifact_spell",
+    # Mishra's Workshop: "{T}: Add {C}{C}{C}. Spend this mana only to
+    # cast artifact spells." — plural surface of the same restriction.
+    "cast artifact spells": "artifact_spell",
     "activate abilities of artifact sources": "artifact_activation",
     # Plaza of Heroes line 2: "Spend this mana only to cast a legendary
     # spell." Maps to the same engine tag honoured by
@@ -1688,6 +1738,22 @@ _THAT_PLAYER_GETS_N_POISON_COUNTERS = re.compile(
 _LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_YOU_CONTROL = re.compile(
     r"^lock or unlock a door of target Room you control$"
 )
+# "Return target <noun> to its owner's hand." — mandatory single-target
+# bounce whose legal-target pool is named by the printed noun phrase.
+# The captured noun is looked up in ``_BOUNCE_TARGET_NOUNS`` and maps to
+# the unified ``Bounce`` primitive with one ``TargetSpec``; an unknown
+# noun returns ``None`` (card stays unclaimed rather than bouncing the
+# wrong pool). Karakas: "legendary creature"; Otawara, Soaring City's
+# channel body: "artifact, creature, enchantment, or planeswalker".
+_RETURN_TARGET_NOUN_TO_OWNERS_HAND = re.compile(
+    r"^return target (?P<noun>.+) to its owner's hand$"
+)
+_BOUNCE_TARGET_NOUNS: dict[str, object] = {
+    "legendary creature": _IsCreature() & _IsLegendary(),
+    "artifact, creature, enchantment, or planeswalker": (
+        IsArtifact() | _IsCreature() | _IsEnchantment() | _IsPlaneswalker()
+    ),
+}
 # "Return up to one other target permanent you control to its owner's
 # hand" — Exosuit Savior's ETB. Maps to
 # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
@@ -5244,6 +5310,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``Equipment``-keyed payload class with a ``tapped=True``
         # construction (no DSK printing today carries that shape).
         return SearchLibraryForEquipmentToBattlefield()
+    m = _SEARCH_LIBRARY_FOR_LAND_KIND_ONTO_BATTLEFIELD.match(phrase)
+    if m is not None:
+        # Fetch-land body — see the regex comment.
+        kind = m.group("kind")
+        return SearchLibraryForLandCardToBattlefield(
+            land_types=(
+                () if kind == "basic land" else tuple(kind.split(" or "))
+            ),
+            basic_only=kind == "basic land",
+            tapped=m.group("tapped") is not None,
+        )
     # ``gain control of target <subtype>`` — permanent-theft activated
     # ability restricted to a named subtype (Sliver Overlord's second
     # ability: "Gain control of target Sliver. (This effect lasts
@@ -5511,8 +5588,13 @@ def _parse_effect(phrase: str) -> Effect | None:
         # more-specific shape only claims phrases that carry the
         # ``, enchantment, or creature with flying`` tail.
         return DestroyTargetArtifactEnchantmentOrFlyingCreature()
-    if _DESTROY_TARGET_LAND.match(phrase) is not None:
-        return DestroyTargetLand()
+    if _SACRIFICE_THIS_PERMANENT.match(phrase) is not None:
+        return SacrificeSelf()
+    m = _DESTROY_TARGET_LAND.match(phrase)
+    if m is not None:
+        return DestroyTargetLand(
+            nonbasic_only=m.group("nonbasic") is not None,
+        )
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
     if (
@@ -5656,6 +5738,15 @@ def _parse_effect(phrase: str) -> Effect | None:
     # captured brace expression — the regex enforces that it's exactly
     # one or two same-color brace pairs but doesn't decompose them
     # into engine coins, so we extract the colors directly.
+    m = _ADD_MANA_FOR_EACH_CONTROLLED.match(phrase)
+    if m is not None:
+        pred = _ADD_MANA_PER_CONTROLLED_NOUNS.get(m.group("noun"))
+        if pred is None:
+            return None
+        return AddManaOfColorPerCount(
+            color=m.group("color"),
+            amount=CountControlledMatching(pred),
+        )
     m = _ADD_MANA_WITH_SPEND_RESTRICTION.match(phrase)
     if m is not None:
         mana_str = m.group(1)
@@ -5667,7 +5758,7 @@ def _parse_effect(phrase: str) -> Effect | None:
         # abilities the engine wants a tuple of single-coin entries
         # (one ``(color, 1)`` per coin minted), so we walk the brace
         # pairs directly.
-        colors = re.findall(r"\{([WUBRG])\}", mana_str)
+        colors = re.findall(r"\{([WUBRGC])\}", mana_str)
         return AddManaToPool(
             produces=tuple((c, 1) for c in colors),
             spend_restriction=restriction,
@@ -5793,6 +5884,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # via ``state.resolving_source``).
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
+        )
+    m = _RETURN_TARGET_NOUN_TO_OWNERS_HAND.match(phrase)
+    if m is not None and m.group("noun") in _BOUNCE_TARGET_NOUNS:
+        # ``return target <noun> to its owner's hand`` — see the regex
+        # comment; ``Bounce`` re-verifies the filter at resolution.
+        from mtg_bot.effects.generic import Bounce
+        from mtg_bot.effects.targets import TargetSpec
+
+        return Bounce(
+            targets=(TargetSpec(_BOUNCE_TARGET_NOUNS[m.group("noun")]),),
         )
     if _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND.match(
         phrase

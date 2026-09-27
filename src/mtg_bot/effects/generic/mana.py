@@ -82,6 +82,37 @@ class AddManaToPool(Effect):
 
 
 @dataclass(frozen=True)
+class AddManaOfColorPerCount(Effect):
+    """Add ``amount.value(state, controller)`` mana of one fixed
+    ``color`` — "{T}: Add {G} for each creature you control." (Gaea's
+    Cradle) / "{T}: Add {U} for each artifact you control." (Tolarian
+    Academy). The count is read at resolution (the mana ability
+    resolves immediately, CR 605.3a), so zero matching permanents adds
+    no mana.
+    """
+
+    color: str
+    amount: "Formula"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        n = self.amount.value(state, controller_id)
+        p = state.player_by_id(controller_id)
+        for _ in range(n):
+            p.mana_pool.append(ManaCoin(color=self.color))
+        state.log.append(
+            f"P{controller_id} adds {self.color}x{n} to mana pool"
+        )
+
+    def describe(self) -> str:
+        return f"add {{{self.color}}} for each ({self.amount!r})"
+
+
+@dataclass(frozen=True)
 class AddNManaOfChosenColor(Effect):
     """Add ``amount`` mana of a single color chosen by the controller
     at resolution time.

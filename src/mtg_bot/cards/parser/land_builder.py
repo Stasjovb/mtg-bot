@@ -93,6 +93,7 @@ from mtg_bot.cards.base import (
     parse_mana_cost,
 )
 from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+from mtg_bot.cards.parser.land_lines import _try_build_line_composed_land
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.effects.object_predicates import IsCreature
@@ -978,7 +979,12 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     )
     if colorless is not None:
         return colorless
-    return None
+    # Line-composed grammar (``land_lines``): every oracle line through
+    # a parameterized per-line recognizer. Last so every whole-card
+    # shape above keeps its claim.
+    return _try_build_line_composed_land(
+        card, text, supertypes, card_types, subtypes,
+    )
 
 
 def _try_build_shock_land(

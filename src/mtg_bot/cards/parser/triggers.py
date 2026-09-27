@@ -643,6 +643,14 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "an opponent plays a land": (
         Event.PLAYS_LAND, Controlled(by=OPPONENT, subject="controller"),
     ),
+    # ``When you play another land`` — City of Traitors. Same
+    # ``Event.PLAYS_LAND`` dispatch, gated on the acting player being
+    # the source's controller and the played land NOT being the source
+    # itself ("another": the source's own land drop dispatches too).
+    "you play another land": (
+        Event.PLAYS_LAND,
+        Controlled(YOU, subject="controller") & ~IsSelf(subject="land"),
+    ),
     # ``When this creature dies`` — the source's own death (Gravpack
     # Monoist's create-Robot trigger and the synthetic ``draw 2 cards``
     # death triggers used in parser tests). Maps to the centralized
@@ -983,6 +991,9 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters": (Event.ENTERS, IsSelf()),
     "this enchantment enters": (Event.ENTERS, IsSelf()),
     "this Aura enters": (Event.ENTERS, IsSelf()),
+    # Lands print "this land" as their self-reference (surveil lands'
+    # "When this land enters, surveil 1."); same type-blind ``IsSelf()``.
+    "this land enters": (Event.ENTERS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
     # Batch 12 — Aura relational trigger family. Three trigger conditions
     # that fire based on what happens to the Aura's enchanted host:

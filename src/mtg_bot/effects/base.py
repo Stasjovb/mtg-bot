@@ -436,11 +436,22 @@ class ActivationCost:
     # ``state.loyalty_activated_this_turn``. The loyalty-at-0 SBA
     # (``turn.py`` 704.5i) catches a walker that drops to 0.
     loyalty: int = 0
+    # "Discard this card" — the hand-activated cost atom of Cycling
+    # (CR 702.29a: "[Cost], Discard this card: Draw a card.") and
+    # Channel (CR 702.140 ability word over the same shape). Only
+    # meaningful on abilities listed in
+    # ``CardPrinting.hand_activated_abilities``: the source is the card
+    # in its owner's hand, and paying the cost moves it to the
+    # graveyard (a discard — discard triggers fire) before the ability
+    # goes on the stack.
+    discard_self: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
         if self.mana_str:
             parts.append(self.mana_str)
+        if self.discard_self:
+            parts.append("Discard this card")
         if self.tap_self:
             parts.append("{T}")
         if self.sacrifice_self:
@@ -541,6 +552,13 @@ class ActivatedAbility:
     # blink-and-recast (a fresh ``GameObject`` instance) gets a fresh
     # one-shot per CR 706.2.
     activate_only_once: bool = False
+    # "Activate only if <condition>." rider (CR 602.5b) — Library of
+    # Alexandria's "Activate only if you have exactly seven cards in
+    # hand." A ``Condition`` evaluated from the activator's viewpoint
+    # (``condition.matches(state, activator_id)``); ``legal_actions``
+    # omits the activation while it's False and ``_activate_ability``
+    # refuses it defensively. ``None`` = no restriction.
+    activate_only_if: "Condition | None" = None
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"

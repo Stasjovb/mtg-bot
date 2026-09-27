@@ -88,6 +88,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
+    AddManaOfColorPerCount,
     AddNManaOfChosenColor,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
@@ -95,6 +96,7 @@ from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
     Condition,
     ControlPermanent,
+    HandSizeExactly,
     PerDifferentlyNamedLand,
 )
 from mtg_bot.effects.object_predicates import (
@@ -123,6 +125,9 @@ _MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
 _SACRIFICE_SELF_PIECES = frozenset({
     "Sacrifice this creature",
     "Sacrifice this artifact",
+    # Lands' self-reference (Horizon Canopy's "{1}, {T}, Sacrifice this
+    # land: Draw a card.", Wasteland, the fetch lands).
+    "Sacrifice this land",
 })
 
 # "Exile this land" / "Exile this creature" / "Exile this artifact" —
@@ -462,6 +467,36 @@ _INLINE_SORCERY_RIDER_SUFFIX = " Activate only as a sorcery."
 _INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX = " Activate only once."
 
 
+# Inline activation-restriction rider: ``Activate only if <condition>.``
+# glued to the end of the activation line (CR 602.5b). The condition
+# phrase is translated by ``_parse_activate_only_if_condition``; an
+# unknown phrase rejects the whole line (never a silently-dropped
+# gate). Library of Alexandria: "{T}: Draw a card. Activate only if you
+# have exactly seven cards in hand."
+_INLINE_ACTIVATE_ONLY_IF_RIDER = re.compile(r" Activate only if (.+)\.$")
+_HAND_SIZE_EXACTLY_PHRASE = re.compile(
+    r"^you have exactly (?P<n>\w+) cards? in hand$"
+)
+_ACTIVATE_ONLY_IF_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _parse_activate_only_if_condition(phrase: str) -> "Condition | None":
+    """Map the ``<condition>`` of an ``Activate only if <condition>.``
+    rider to a ``Condition`` evaluated for the activator, or ``None``."""
+    m = _HAND_SIZE_EXACTLY_PHRASE.match(phrase)
+    if m is not None:
+        n = _ACTIVATE_ONLY_IF_NUMBER_WORDS.get(m.group("n"))
+        if n is None and m.group("n").isdigit():
+            n = int(m.group("n"))
+        if n is None:
+            return None
+        return HandSizeExactly(n)
+    return None
+
+
 # Inline cost-reduction rider for activated abilities:
 # ``This ability costs {N} less to activate if <condition>.`` glued to
 # the end of the activation line, with a single space separator after
@@ -568,6 +603,7 @@ def _is_mana_ability_effect(effect) -> bool:
         (
             AddManaToPool,
             AddChargeCounterManaOfChosenColor,
+            AddManaOfColorPerCount,
             AddNManaOfChosenColor,
         ),
     ):
@@ -617,6 +653,15 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         # today), so the two checks operate independently.
         stripped = stripped[: -len(_INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX)]
         activate_only_once = True
+    activate_only_if = None
+    only_if_match = _INLINE_ACTIVATE_ONLY_IF_RIDER.search(stripped)
+    if only_if_match is not None:
+        activate_only_if = _parse_activate_only_if_condition(
+            only_if_match.group(1).strip()
+        )
+        if activate_only_if is None:
+            return None
+        stripped = stripped[: only_if_match.start()]
     cost_reductions: tuple[CostReduction, ...] = ()
     # Variable-amount X-based differently-named-land rider — checked
     # BEFORE the numeric ``{N}`` rider because ``{X}`` can't be captured
@@ -669,6 +714,7 @@ def _parse_activated_ability_line(line: str) -> ActivatedAbility | None:
         cost=cost, effect=effect, sorcery_speed=sorcery_speed,
         cost_reductions=cost_reductions,
         activate_only_once=activate_only_once,
+        activate_only_if=activate_only_if,
     )
     if _is_mana_ability_effect(effect):
         ability = replace(ability, is_mana_ability=True)

@@ -174,7 +174,17 @@ def test_parse_effect_returns_none_for_malformed_destroy_artifact():
 
 def test_parse_effect_returns_none_for_malformed_destroy_land():
     assert _parse_effect("destroy target lands") is None
-    assert _parse_effect("destroy target nonbasic land") is None
+    assert _parse_effect("destroy target nonbasic lands") is None
+    assert _parse_effect("destroy target basic land") is None
+
+
+def test_parse_effect_destroy_target_nonbasic_land():
+    """``nonbasic`` qualifier (Wasteland, Dust Bowl) narrows the filter."""
+    from mtg_bot.cards.base import DestroyTargetLand
+
+    assert _parse_effect("destroy target nonbasic land") == DestroyTargetLand(
+        nonbasic_only=True,
+    )
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_noncreature():

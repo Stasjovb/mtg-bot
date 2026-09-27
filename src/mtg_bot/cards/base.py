@@ -786,6 +786,45 @@ class CardPrinting:
     # target and it enters tapped. If they decline (or no legal
     # target exists), the land enters per its normal rules.
     optional_copy_land_from_graveyard: bool = False
+    # Generic "This land enters tapped unless <condition>." ETB
+    # replacement (CR 614.1d / 614.12). ``None`` disables. When set, the
+    # land enters tapped iff ``condition.matches(state, controller_id)``
+    # is False, evaluated BEFORE the land joins the battlefield (so
+    # "unless you control two or fewer other lands" counts only the
+    # other lands). Applied by ``actions.apply_land_etb_replacements`` on
+    # both the land-drop path and effect-driven puts (fetch lands).
+    # Fast lands (``ControlsAtMost(IsLand(), 2)``), check lands
+    # (``ControlPermanent(HasSubtype("Mountain"))``) and the basic-land
+    # variant (``ControlPermanent(IsLand() & IsBasic())``).
+    enters_tapped_unless: "Condition | None" = None
+    # When True, ``produces`` is the EXHAUSTIVE set of mana this land's
+    # cost-free (or life-cost, see ``produces_life_cost``) ``{T}`` mana
+    # abilities make, and the land contributes to automatic cost
+    # payment only through that set. The legacy default (False) keeps
+    # the engine's historical fallback where every untapped land can
+    # pay one generic even with an empty ``produces`` — pre-existing
+    # printings rely on it for their dropped ``{T}: Add {C}.`` lines.
+    # The line-composed land grammar sets this True and writes
+    # colorless production explicitly as ``"C"``; a land whose only
+    # mana abilities carry extra costs (Gaea's Cradle, Mishra's
+    # Workshop, Gemstone Mine) or that has no mana ability at all
+    # (fetch lands) therefore never taps for free phantom mana.
+    mana_only_from_produces: bool = False
+    # Life paid each time this land is tapped for its ``produces``
+    # mana: "{T}, Pay 1 life: Add {G} or {W}." (Horizon Canopy cycle)
+    # folds into ``produces={G, W}`` + ``produces_life_cost=1``.
+    # Automatic payment charges the life per tapped land and treats the
+    # land as unavailable once paying would drop its controller to 0
+    # (the same "don't pay to death" gate ``legal_actions`` applies to
+    # explicit ``pay_life`` activations). 0 = free.
+    produces_life_cost: int = 0
+    # Activated abilities that function while this card is in its
+    # owner's hand (CR 602.2 + 702.29 Cycling / 702.140 Channel). Each
+    # ability's cost carries ``discard_self=True``; ``legal_actions``
+    # offers ``ActivateAbility(source_id=<hand card>, ability_index=i)``
+    # indexing into THIS tuple, and ``actions._activate_ability``
+    # resolves a hand-resident source against it.
+    hand_activated_abilities: tuple["ActivatedAbility", ...] = ()
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches
     # Embrace Oblivion's "As an additional cost to cast this spell,
@@ -1918,6 +1957,11 @@ def make_utility_land(
     keywords: "frozenset[str] | set[str] | tuple[str, ...]" = (),
     optional_copy_land_from_graveyard: bool = False,
     enters_tapped_unless_any_player_life_at_most: int = 0,
+    enters_tapped_unless: "Condition | None" = None,
+    mana_only_from_produces: bool = False,
+    produces_life_cost: int = 0,
+    hand_activated_abilities: tuple = (),
+    shock_land_life_cost: int = 0,
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -1943,6 +1987,11 @@ def make_utility_land(
         enters_tapped_unless_any_player_life_at_most=(
             enters_tapped_unless_any_player_life_at_most
         ),
+        enters_tapped_unless=enters_tapped_unless,
+        mana_only_from_produces=mana_only_from_produces,
+        produces_life_cost=produces_life_cost,
+        hand_activated_abilities=tuple(hand_activated_abilities),
+        shock_land_life_cost=shock_land_life_cost,
     )
 
 

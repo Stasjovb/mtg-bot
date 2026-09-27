@@ -21,8 +21,20 @@ mana ability) are out of scope this batch and remain skipped.
 from __future__ import annotations
 
 from mtg_bot.cards.lands import UTILITY_LANDS
-from mtg_bot.cards.parser.land_builder import _build_land_printing
+from mtg_bot.cards.parser.land_builder import (
+    _build_land_printing,
+    _try_build_colorless_utility_land,
+)
+from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.parser_source import OracleParserCardSource
+
+
+def _colorless_branch(card: dict):
+    """Run ONLY the colorless-utility-land recognizer on ``card``."""
+    supertypes, _card_types, subtypes = _parse_type_line(card["type_line"])
+    return _try_build_colorless_utility_land(
+        card, card["oracle_text"], supertypes, subtypes,
+    )
 
 
 _STARFORGE_CARD = {
@@ -121,7 +133,12 @@ def test_build_land_printing_skips_utility_land_with_subtypes():
         "oracle_text": "{T}: Add {C}.",
         "produced_mana": ["C"],
     }
-    assert _build_land_printing(card) is None
+    assert _colorless_branch(card) is None
+    # The line-composed land grammar claims it with the subtype kept.
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.subtypes == ("Locus",)
+    assert built.produces == frozenset({"C"})
 
 
 def test_build_land_printing_skips_when_first_line_is_not_colorless_tap():
@@ -157,7 +174,12 @@ def test_build_land_printing_skips_legendary_supertype_with_colorless_tap():
         "oracle_text": "{T}: Add {C}.",
         "produced_mana": ["C"],
     }
-    assert _build_land_printing(card) is None
+    assert _colorless_branch(card) is None
+    # The line-composed land grammar claims it with Legendary kept.
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.is_legendary
+    assert built.produces == frozenset({"C"})
 
 
 def test_build_land_printing_skips_basic_supertype_with_colorless_tap():
@@ -195,7 +217,16 @@ def test_build_land_printing_skips_colorless_tap_with_colored_produced_mana():
         ),
         "produced_mana": ["C", "U"],
     }
-    assert _build_land_printing(card) is None
+    assert _colorless_branch(card) is None
+    # The line-composed land grammar keeps the paid {U} ability as an
+    # explicit mana ability (it isn't free, so it stays out of
+    # ``produces``).
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.produces == frozenset({"C"})
+    (paid,) = built.activated_abilities
+    assert paid.is_mana_ability
+    assert paid.cost.mana_str == "{1}" and paid.cost.tap_self
 
 
 def test_build_land_printing_skips_empty_oracle_on_plain_land():

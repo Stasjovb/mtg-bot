@@ -158,6 +158,30 @@ class ControlPermanent(Condition):
 
 
 @dataclass(frozen=True)
+class ControlsAtMost(Condition):
+    """``viewer_id`` controls at most ``n`` permanents matching
+    ``filter``.
+
+    Models the fast-land ETB gate "This land enters tapped unless you
+    control two or fewer other lands." via
+    ``ControlsAtMost(IsLand(), 2)``: the land's ETB replacement is
+    evaluated before it joins the battlefield, so every counted land is
+    an "other" land.
+    """
+
+    filter: ObjectPredicate
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        count = sum(
+            1 for obj in state.battlefield
+            if obj.controller_id == viewer_id
+            and self.filter.test(obj, state)
+        )
+        return count <= self.n
+
+
+@dataclass(frozen=True)
 class ControlsAnotherCreatureWithPowerAtMost(Condition):
     """``viewer_id`` controls at least one creature OTHER than
     ``state.resolving_source`` whose effective power is ``<= threshold``.
@@ -495,6 +519,20 @@ class HandSizeAtMost(Condition):
 
     def matches(self, state, viewer_id, chosen_targets=None):
         return len(state.player_by_id(viewer_id).hand) <= self.n
+
+
+@dataclass(frozen=True)
+class HandSizeExactly(Condition):
+    """The viewer's hand has exactly ``n`` cards.
+
+    Models Library of Alexandria's "Activate only if you have exactly
+    seven cards in hand." via ``HandSizeExactly(7)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return len(state.player_by_id(viewer_id).hand) == self.n
 
 
 @dataclass(frozen=True)

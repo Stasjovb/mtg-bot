@@ -139,6 +139,21 @@ class IsArtifact(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsLegendary(ObjectPredicate):
+    """The object's printing carries the ``"Legendary"`` supertype.
+
+    Composes with the type atoms for "legendary creature" filters
+    (Karakas's "Return target legendary creature to its owner's
+    hand."). Players have no ``printing`` and evaluate False.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Legendary" in obj.printing.supertypes
+
+
+@dataclass(frozen=True)
 class IsEnchantment(ObjectPredicate):
     """The object is an enchantment.
 

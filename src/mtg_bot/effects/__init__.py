@@ -36,6 +36,7 @@ from mtg_bot.effects.durations import (
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
     AddManaToPool,
+    AddManaOfColorPerCount,
     AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
@@ -208,6 +209,7 @@ from mtg_bot.effects.generic import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
+    SearchLibraryForLandCardToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
     Scry,
     ScuttlemuttColorChangeUEOT,

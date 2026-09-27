@@ -949,14 +949,20 @@ def test_build_land_printing_skips_shock_with_wrong_life_cost():
 
 def test_build_land_printing_skips_shock_with_missing_rider():
     """Just the dual-mana reminder line, no ETB rider, isn't a shock —
-    skip rather than build a shock with shock_land_life_cost=2."""
+    never build a shock with shock_land_life_cost=2. (It's an original
+    dual, Tropical Island's shape; the line-composed land grammar claims
+    it as an untapped Forest Island.)"""
     card = {
         "name": "Hypothetical Dual",
         "mana_cost": "",
         "type_line": "Land — Forest Island",
         "oracle_text": "({T}: Add {G} or {U}.)",
     }
-    assert _build_land_printing(card) is None
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.shock_land_life_cost == 0
+    assert built.enters_tapped is False
+    assert built.produces == frozenset({"G", "U"})
 
 
 def test_build_land_printing_skips_shock_dual_with_no_subtypes():

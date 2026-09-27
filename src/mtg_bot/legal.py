@@ -654,6 +654,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             # first activation has resolved.
             if ability.activate_only_once and obj.has_activated_once_only_ability:
                 continue
+            # "Activate only if <condition>." (Library of Alexandria).
+            if (
+                ability.activate_only_if is not None
+                and not ability.activate_only_if.matches(state, player_id)
+            ):
+                continue
             # Cost payability checks. Apply ability-level mana
             # reductions (Dominion Bracelet: {X} less where X is
             # equipped creature's power) before checking.
@@ -852,6 +858,45 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     continue
             actions.append(
                 ActivateAbility(source_id=obj.id, ability_index=idx)
+            )
+
+    # Hand-activated abilities (Cycling, Channel): the source is a card
+    # in the activator's hand; ``ability_index`` indexes
+    # ``printing.hand_activated_abilities``. Same sorcery-window gate as
+    # every other activation (the early return above). Dedup same-name
+    # hand copies exactly like the hand CastSpell / PlayLand blocks —
+    # hand-resident GameObjects carry no per-object state.
+    seen_hand_abilities: set[tuple[str, int]] = set()
+    for card in p.hand:
+        for idx, ability in enumerate(card.printing.hand_activated_abilities):
+            key = (card.printing.name, idx)
+            if key in seen_hand_abilities:
+                continue
+            if (
+                ability.activate_only_if is not None
+                and not ability.activate_only_if.matches(state, player_id)
+            ):
+                continue
+            if ability.cost.mana is not None:
+                from mtg_bot.actions import _effective_ability_mana_cost
+                if not can_pay_cost(
+                    state, player_id,
+                    _effective_ability_mana_cost(state, card, ability),
+                ):
+                    continue
+            if ability.effect.requires_target():
+                state.resolving_source = card
+                try:
+                    has_legal = bool(
+                        ability.effect.legal_targets(state, player_id)
+                    )
+                finally:
+                    state.resolving_source = None
+                if not has_legal:
+                    continue
+            seen_hand_abilities.add(key)
+            actions.append(
+                ActivateAbility(source_id=card.id, ability_index=idx)
             )
 
     # Station activations: for each Spacecraft this player controls, each

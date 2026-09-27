@@ -186,6 +186,7 @@ from mtg_bot.effects.generic.tokens import (
 from mtg_bot.effects.generic.mana import (
     AddChargeCounterManaOfChosenColor,
     AddManaToPool,
+    AddManaOfColorPerCount,
     AddNManaOfChosenColor,
     AddOneManaFromControlledLandsProductions,
     AddOneManaOfChosenPermanentColor,
@@ -195,6 +196,7 @@ from mtg_bot.effects.generic.search import (
     SearchLibraryForBasicLandTapped,
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
+    SearchLibraryForLandCardToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
 )
 
@@ -457,6 +459,7 @@ __all__ = [
     # mana
     "AddChargeCounterManaOfChosenColor",
     "AddManaToPool",
+    "AddManaOfColorPerCount",
     "AddNManaOfChosenColor",
     "AddOneManaFromControlledLandsProductions",
     "AddOneManaOfChosenPermanentColor",
@@ -464,6 +467,7 @@ __all__ = [
     "SearchLibraryForBasicLandTapped",
     "SearchLibraryForCard",
     "SearchLibraryForEquipmentToBattlefield",
+    "SearchLibraryForLandCardToBattlefield",
     "SearchLibraryForGreenCreatureWithMVAtMostX",
     # library_lookat
     "LookAtTopNRevealOrCounter",

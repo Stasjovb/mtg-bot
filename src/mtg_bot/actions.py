@@ -194,10 +194,64 @@ class DeclareBlockers(Action):
 
 
 def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    """Untapped lands ``player_id`` controls that automatic cost payment
+    may tap, in the order payment should consider them.
+
+    Two printing-level refinements (both no-ops for printings that
+    leave the fields at their defaults, i.e. every pre-cube printing):
+
+    - ``mana_only_from_produces``: the land pays only through its
+      effective ``produces`` set, so a land with none (a fetch land,
+      Gaea's Cradle — whose mana abilities carry costs or scale) is
+      not an automatic mana source at all.
+    - ``produces_life_cost``: lands that charge life per tap sort
+      after the free lands (stable), and only as many of them are
+      offered as the controller can pay for while staying above 0
+      life.
+    """
+    lands = [
         o for o in state.battlefield
         if o.controller_id == player_id and o.printing.is_land and not o.tapped
+        and _land_auto_pays(state, o)
     ]
+    if not any(_land_tap_life_cost(state, o) for o in lands):
+        return lands
+    free = [o for o in lands if not _land_tap_life_cost(state, o)]
+    budget = state.player_by_id(player_id).life - 1
+    paid: list[GameObject] = []
+    for o in lands:
+        cost = _land_tap_life_cost(state, o)
+        if not cost:
+            continue
+        if cost <= budget:
+            paid.append(o)
+            budget -= cost
+    return free + paid
+
+
+def _land_auto_pays(state: GameState, land: GameObject) -> bool:
+    """True if automatic payment may tap ``land`` for mana. Legacy
+    printings always may (the historical generic-mana fallback);
+    ``mana_only_from_produces`` printings only when they produce
+    something."""
+    if not land.printing.mana_only_from_produces:
+        return True
+    return bool(effective_land_produces(state, land))
+
+
+def _land_tap_life_cost(state: GameState, land: GameObject) -> int:
+    """Life paid when ``land`` is tapped for its ``produces`` mana.
+
+    A layer-4 type rewrite (Magus of the Moon, Dryad of the Ilysian
+    Grove) replaces the land's printed mana abilities with its basic
+    land types' intrinsic ``{T}: Add`` — those are free, so the life
+    cost only applies while the printed ``produces`` is in force."""
+    cost = land.printing.produces_life_cost
+    if not cost:
+        return 0
+    if effective_land_produces(state, land) != land.printing.produces:
+        return 0
+    return cost
 
 
 def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
@@ -982,7 +1036,16 @@ def auto_tap_for_cost(
     # (Chrome Companion, Grove of the Burnwillows, etc.).
     from mtg_bot.turn import tap_permanent
     for l in tapped:
+        # "{T}, Pay N life: Add ..." lands (Horizon Canopy cycle): the
+        # life is part of the mana ability's cost, paid as it's tapped.
+        life_cost = _land_tap_life_cost(state, l)
         tap_permanent(state, l)
+        if life_cost:
+            p.life -= life_cost
+            state.log.append(
+                f"P{player_id} pays {life_cost} life for "
+                f"{l.printing.name}'s mana (life: {p.life})"
+            )
     return tapped
 
 
@@ -1083,44 +1146,9 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     card.cast_from_exile_with_lightstall_surcharge = False
     card.zone = Zone.BATTLEFIELD
     card.controller_id = player_id
-    # "Enters tapped" covers Planets + most non-basic utility lands.
-    card.tapped = bool(card.printing.enters_tapped)
-    # Lightstall Inquisitor: lands played from exile via this grant
-    # always enter tapped.
-    if lightstall_land:
-        card.tapped = True
-    # Duskmourn horror duals: "This land enters tapped unless a
-    # player has 13 or less life." Deterministic state check at ETB,
-    # no agent choice. The land enters untapped when any player's
-    # life total is at or below the threshold; otherwise tapped.
-    low_life_threshold = (
-        card.printing.enters_tapped_unless_any_player_life_at_most
+    apply_land_etb_replacements(
+        state, player_id, card, force_tapped=lightstall_land,
     )
-    if low_life_threshold > 0:
-        any_low = any(pl.life <= low_life_threshold for pl in state.players)
-        card.tapped = not any_low
-    # Shock land: optional life payment on ETB. Agent decides; if they
-    # can't/won't pay, the land enters tapped.
-    life_cost = card.printing.shock_land_life_cost
-    if life_cost > 0 and p.agent is not None:
-        pay = p.agent.choose_pay_shock_life(state, player_id, life_cost)
-        if pay:
-            p.life -= life_cost
-            state.log.append(
-                f"P{player_id} pays {life_cost} life for "
-                f"{card.printing.name} (life: {p.life})"
-            )
-        else:
-            card.tapped = True
-            state.log.append(
-                f"P{player_id} declines shock life — "
-                f"{card.printing.name} enters tapped"
-            )
-    # Echoing Deeps: "You may have this land enter tapped as a copy of
-    # any land card in a graveyard, except it's a Cave in addition to
-    # its other types." Agent target-selection over graveyard lands.
-    if card.printing.optional_copy_land_from_graveyard and p.agent is not None:
-        _offer_echoing_deeps_copy(state, player_id, card)
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     p.lands_entered_this_turn += 1
@@ -1148,6 +1176,72 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     # PLAYS_LAND dispatch sweep.
     from mtg_bot.turn import fire_opponent_plays_land_triggers
     fire_opponent_plays_land_triggers(state, player_id, land=card)
+
+
+def apply_land_etb_replacements(
+    state: GameState, player_id: int, card: "GameObject",
+    *, force_tapped: bool = False,
+) -> None:
+    """Apply a land's printed "as/enters" replacement effects (CR 614.1c-d
+    / 614.12) to ``card`` as it enters under ``player_id``'s control:
+    sets ``card.tapped`` and runs the pay-life / copy choices.
+
+    Called while ``card`` is NOT yet on the battlefield, so conditions
+    like "unless you control two or fewer other lands" see only the
+    other permanents. Shared by the land-drop path (``_play_land``)
+    and effects that put a land onto the battlefield (fetch lands), so
+    a fetched surveil land / triome / shock land honors its own
+    printed entry rules. ``force_tapped`` models external "enters
+    tapped" grants (Lightstall Inquisitor's exile-play rider).
+    """
+    p = state.player_by_id(player_id)
+    # "Enters tapped" covers Planets + most non-basic utility lands.
+    card.tapped = bool(card.printing.enters_tapped)
+    # Lightstall Inquisitor: lands played from exile via this grant
+    # always enter tapped.
+    if force_tapped:
+        card.tapped = True
+    # Duskmourn horror duals: "This land enters tapped unless a
+    # player has 13 or less life." Deterministic state check at ETB,
+    # no agent choice. The land enters untapped when any player's
+    # life total is at or below the threshold; otherwise tapped.
+    low_life_threshold = (
+        card.printing.enters_tapped_unless_any_player_life_at_most
+    )
+    if low_life_threshold > 0:
+        any_low = any(pl.life <= low_life_threshold for pl in state.players)
+        card.tapped = not any_low
+    # Generic "This land enters tapped unless <condition>." (fast
+    # lands, check lands). Deterministic state check, no agent choice.
+    unless = card.printing.enters_tapped_unless
+    if unless is not None:
+        card.tapped = not unless.matches(state, player_id)
+        state.log.append(
+            f"{card.printing.name} enters "
+            f"{'tapped' if card.tapped else 'untapped'}"
+        )
+    # Shock land: optional life payment on ETB. Agent decides; if they
+    # can't/won't pay, the land enters tapped.
+    life_cost = card.printing.shock_land_life_cost
+    if life_cost > 0 and p.agent is not None:
+        pay = p.agent.choose_pay_shock_life(state, player_id, life_cost)
+        if pay:
+            p.life -= life_cost
+            state.log.append(
+                f"P{player_id} pays {life_cost} life for "
+                f"{card.printing.name} (life: {p.life})"
+            )
+        else:
+            card.tapped = True
+            state.log.append(
+                f"P{player_id} declines shock life — "
+                f"{card.printing.name} enters tapped"
+            )
+    # Echoing Deeps: "You may have this land enter tapped as a copy of
+    # any land card in a graveyard, except it's a Cave in addition to
+    # its other types." Agent target-selection over graveyard lands.
+    if card.printing.optional_copy_land_from_graveyard and p.agent is not None:
+        _offer_echoing_deeps_copy(state, player_id, card)
 
 
 def _offer_echoing_deeps_copy(
@@ -1925,6 +2019,102 @@ def _effective_ability_mana_cost(
     return cost
 
 
+def _choose_ability_targets(
+    state: GameState, player_id: int, source: "GameObject", effect,
+) -> "tuple[tuple[str, int], ...]":
+    """Pick targets for an activated ability's ``effect`` via the
+    controller's agent (multi-slot aware; mirrors the inline selection
+    in ``_activate_ability``). Returns ``()`` when nothing is chosen."""
+    if not effect.requires_target():
+        return ()
+    state.resolving_source = source
+    try:
+        legal = effect.legal_targets(state, player_id)
+    finally:
+        state.resolving_source = None
+    _, max_t = effect.target_count_range()
+    if max_t <= 0:
+        max_t = 1
+    if not legal:
+        return ()
+    p = state.player_by_id(player_id)
+    chosen_list: list[tuple[str, int]] = []
+    remaining = list(legal)
+    slot_kinds = effect.target_slot_kinds()
+    for slot_idx in range(max_t):
+        if slot_kinds and slot_idx < len(slot_kinds):
+            pool = [t for t in remaining if t[0] == slot_kinds[slot_idx]]
+        else:
+            pool = remaining
+        if not pool:
+            break
+        pick = (
+            p.agent.choose_target(state, player_id, pool)
+            if p.agent is not None else pool[0]
+        )
+        if pick is None or pick not in pool:
+            break
+        chosen_list.append(pick)
+        remaining.remove(pick)
+    return tuple(chosen_list)
+
+
+def _activate_hand_ability(
+    state: GameState, player_id: int, card: "GameObject", ability_index: int,
+) -> None:
+    """Activate ``card.printing.hand_activated_abilities[ability_index]``
+    from ``player_id``'s hand (CR 602.2; Cycling 702.29, Channel).
+
+    Cost payment order: mana (auto-tap, with the ability's own cost
+    reductions), then "Discard this card" — the card moves to its
+    owner's graveyard as a discard, firing discard triggers. Targets
+    are chosen before the discard (CR 601.2c precedes 601.2h). The
+    ability then goes on the stack with the (now-graveyard) card as its
+    source; abilities exist independently of their source (CR 113.7a).
+    """
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import fire_opponent_discards_triggers
+
+    abilities = card.printing.hand_activated_abilities
+    if ability_index < 0 or ability_index >= len(abilities):
+        return
+    ability = abilities[ability_index]
+    if (
+        ability.activate_only_if is not None
+        and not ability.activate_only_if.matches(state, player_id)
+    ):
+        return
+    p = state.player_by_id(player_id)
+    if ability.cost.mana is not None:
+        mana = _effective_ability_mana_cost(state, card, ability)
+        auto_tap_for_cost(state, player_id, mana, spell_kind="spell")
+    targets = _choose_ability_targets(state, player_id, card, ability.effect)
+    cost_paid_objects: list[GameObject] = []
+    if ability.cost.discard_self:
+        p.hand.remove(card)
+        card.zone = Zone.GRAVEYARD
+        p.graveyard.append(card)
+        state.log.append(
+            f"P{player_id} discards {card.printing.name} "
+            f"(cost for its ability)"
+        )
+        fire_opponent_discards_triggers(state, player_id)
+        cost_paid_objects.append(card)
+    state.stack.append(
+        StackItem(
+            source=card,
+            controller_id=player_id,
+            ability=ability,
+            targets=targets,
+            cost_paid_objects=tuple(cost_paid_objects),
+        )
+    )
+    state.log.append(
+        f"P{player_id} activates {card.printing.name}'s ability from hand"
+        + _format_log_targets(state, targets)
+    )
+
+
 def _activate_ability(
     state: GameState, player_id: int, source_id: int, ability_index: int
 ) -> None:
@@ -1932,13 +2122,31 @@ def _activate_ability(
     from mtg_bot.turn import move_off_battlefield
 
     source = next((o for o in state.battlefield if o.id == source_id), None)
-    if source is None or source.controller_id != player_id:
+    if source is None:
+        # Hand-resident source: Cycling / Channel style abilities that
+        # function from the owner's hand (``hand_activated_abilities``).
+        hand_card = next(
+            (c for c in state.player_by_id(player_id).hand
+             if c.id == source_id),
+            None,
+        )
+        if hand_card is not None:
+            _activate_hand_ability(
+                state, player_id, hand_card, ability_index,
+            )
+        return
+    if source.controller_id != player_id:
         return
     from mtg_bot.game import effective_activated_abilities
     abilities = effective_activated_abilities(state, source)
     if ability_index < 0 or ability_index >= len(abilities):
         return
     ability = abilities[ability_index]
+    if (
+        ability.activate_only_if is not None
+        and not ability.activate_only_if.matches(state, player_id)
+    ):
+        return
 
     # Accumulate every discrete GameObject paid as part of this
     # activation's cost (sacrificed permanents, exiled-from-graveyard
