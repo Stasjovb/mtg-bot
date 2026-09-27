@@ -1401,6 +1401,12 @@ class CardPrinting:
     # anywhere, instead exile it with a void counter on it." (Dauthi
     # Voidwalker). See ``game.void_exile_replacement_active``.
     void_exile_replacement: bool = False
+    # "Emerge [from artifact] {cost}" (CR 702.119): alternative cost --
+    # sacrifice a creature (or artifact) and pay the emerge cost reduced
+    # by that permanent's mana value.
+    emerge_cost: ManaCost | None = None
+    emerge_cost_str: str = ""
+    emerge_sacrifice_type: str = "Creature"
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

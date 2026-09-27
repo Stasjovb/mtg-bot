@@ -75,6 +75,91 @@ def offer_creature_additional_costs(
 
 
 # ---------------------------------------------------------------------
+# Emerge (CR 702.119)
+# ---------------------------------------------------------------------
+
+
+def _emerge_candidates(state: "GameState", player_id: int, card: "GameObject"):
+    from mtg_bot.game import is_creature_now
+
+    kind = card.printing.emerge_sacrifice_type
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and (
+            is_creature_now(o) if kind == "Creature"
+            else kind in o.printing.card_types
+        )
+    ]
+
+
+def _emerge_cost_after(card: "GameObject", sac: "GameObject") -> ManaCost:
+    return card.printing.emerge_cost.reduced(sac.printing.mana_cost.total)
+
+
+def emerge_cast_actions(state: "GameState", player_id: int) -> list:
+    """``CastSpell(id, use_emerge=True)`` for hand cards with Emerge
+    whose reduced cost is payable with some sacrifice (sorcery timing
+    unless the card has flash)."""
+    from mtg_bot.actions import CastSpell, can_pay_cost
+    from mtg_bot.legal import (
+        _additional_costs_payable, _is_sorcery_timing, _targets_are_satisfiable,
+    )
+
+    p = state.player_by_id(player_id)
+    out: list = []
+    seen: set[str] = set()
+    for card in p.hand:
+        if card.printing.emerge_cost is None or card.printing.name in seen:
+            continue
+        if not ("flash" in card.printing.keywords or _is_sorcery_timing(
+            state, player_id,
+        )):
+            continue
+        if not (
+            _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            continue
+        if any(
+            can_pay_cost(state, player_id, _emerge_cost_after(card, sac))
+            for sac in _emerge_candidates(state, player_id, card)
+        ):
+            seen.add(card.printing.name)
+            out.append(CastSpell(card.id, use_emerge=True))
+    return out
+
+
+def pay_emerge_sacrifice(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> ManaCost:
+    """Sacrifice the caster's pick among permanents that keep the
+    emerge cost payable, and return the emerge cost reduced by its mana
+    value."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.turn import sacrifice
+
+    options = [
+        o for o in _emerge_candidates(state, player_id, card)
+        if can_pay_cost(state, player_id, _emerge_cost_after(card, o))
+    ]
+    if not options:  # pragma: no cover - legal_actions gates
+        raise ValueError(f"no emerge sacrifice for {card.printing.name}")
+    p = state.player_by_id(player_id)
+    chosen = options[0]
+    if p.agent is not None:
+        pick = p.agent.choose_sacrifice(state, player_id, [o.id for o in options])
+        chosen = next((o for o in options if o.id == pick), chosen)
+    cost = _emerge_cost_after(card, chosen)
+    state.log.append(
+        f"P{player_id} emerges {card.printing.name}, sacrificing "
+        f"{chosen.printing.name}"
+    )
+    sacrifice(state, chosen)
+    return cost
+
+
+# ---------------------------------------------------------------------
 # Spell origin for "spells you cast from anywhere other than your hand"
 # ---------------------------------------------------------------------
 

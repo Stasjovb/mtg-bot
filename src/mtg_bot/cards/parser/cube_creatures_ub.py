@@ -171,6 +171,14 @@ _CHOOSE_EXILED_WITH_COUNTER = re.compile(
     r"counter on it\. You may play it this turn without paying its mana "
     r"cost$"
 )
+# Crabomination (literal: the only card in the pool with this
+# three-zone exile-and-cast shape).
+_CRABOMINATION_BODY = (
+    "target opponent exiles the top card of their library, a card at "
+    "random from their graveyard, and a card at random from their hand. "
+    "You may cast a spell from among cards exiled this way without paying "
+    "its mana cost"
+)
 # Black Widow, Super Spy (literal: the only card in the pool with the
 # exile-until-nonland / counter-or-cast choice).
 _BLACK_WIDOW_BODY = (
@@ -226,6 +234,12 @@ def _parse_ub_effect_batch8(phrase: str) -> Effect | None:
         MayCastSpellFromGraveyardNow,
     )
 
+    if phrase == _CRABOMINATION_BODY:
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            TargetOpponentExilesThreeMayCastOneFree,
+        )
+
+        return TargetOpponentExilesThreeMayCastOneFree()
     if phrase == _BLACK_WIDOW_BODY:
         return ExileUntilNonlandThenCounterOrMayCastIt()
     m = _LOOT_CAST_DISCARDED.match(phrase)
@@ -735,7 +749,31 @@ def _parse_void_replacement_line(line: str) -> UBLine | None:
     return UBLine(fields={"void_exile_replacement": True})
 
 
+_EMERGE = re.compile(
+    r"^Emerge(?: from (?P<type>artifact))? (?P<cost>(?:\{[^}]+\})+)$"
+)
+
+
+def _parse_emerge_line(line: str) -> UBLine | None:
+    """``Emerge {cost}`` / ``Emerge from artifact {cost}`` (CR 702.119)."""
+    from mtg_bot.cards.base import parse_mana_cost
+
+    m = _EMERGE.match(line)
+    if m is None:
+        return None
+    try:
+        cost = parse_mana_cost(m.group("cost"))
+    except ValueError:
+        return None
+    return UBLine(fields={
+        "emerge_cost": cost,
+        "emerge_cost_str": m.group("cost"),
+        "emerge_sacrifice_type": "Artifact" if m.group("type") else "Creature",
+    })
+
+
 _LINE_PARSERS = (
+    _parse_emerge_line,
     _parse_void_replacement_line,
     _parse_ninjutsu_line,
     _parse_cost_keyword_line,

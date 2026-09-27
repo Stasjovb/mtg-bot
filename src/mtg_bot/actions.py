@@ -130,6 +130,9 @@ class CastSpell(Action):
     # Bestow (CR 702.103): cast from hand for the bestow cost as an Aura
     # spell enchanting a creature.
     use_bestow: bool = False
+    # Emerge (CR 702.119): cast from hand for the emerge alternative cost,
+    # sacrificing a creature / artifact (U/B cube creatures).
+    use_emerge: bool = False
 
 
 @dataclass(frozen=True)
@@ -1340,6 +1343,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_evoke=action.use_evoke,
             graveyard_permission=action.graveyard_permission,
             use_bestow=action.use_bestow,
+            use_emerge=action.use_emerge,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -2010,6 +2014,7 @@ def _cast_spell(
     use_evoke: bool = False,
     graveyard_permission: "str | None" = None,
     use_bestow: bool = False,
+    use_emerge: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -2078,6 +2083,10 @@ def _cast_spell(
                 if h.name == cast_room_half
             )
             cost = half.mana_cost
+        elif use_emerge:
+            from mtg_bot.creature_casting_ub import pay_emerge_sacrifice
+
+            cost = pay_emerge_sacrifice(state, player_id, card)
         elif use_impending:
             cost = card.printing.impending_cost
         elif use_dash:

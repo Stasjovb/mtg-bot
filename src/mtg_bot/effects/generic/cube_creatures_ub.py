@@ -589,6 +589,72 @@ class MayCastSpellFromGraveyardNow(Effect):
         )
 
 
+@dataclass(frozen=True)
+class TargetOpponentExilesThreeMayCastOneFree(Effect):
+    """Crabomination: "target opponent exiles the top card of their
+    library, a card at random from their graveyard, and a card at random
+    from their hand. You may cast a spell from among cards exiled this
+    way without paying its mana cost." """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.game import Zone
+
+        if not targets or targets[0] not in self.legal_targets(
+            state, controller_id,
+        ):
+            return
+        opp = state.player_by_id(targets[0][1])
+        exiled = []
+        if opp.library:
+            exiled.append(opp.library.pop(0))
+        if opp.graveyard:
+            card = state.rng.choice(list(opp.graveyard))
+            opp.graveyard.remove(card)
+            exiled.append(card)
+        if opp.hand:
+            card = state.rng.choice(list(opp.hand))
+            opp.hand.remove(card)
+            exiled.append(card)
+        for card in exiled:
+            card.zone = Zone.EXILE
+            opp.exile.append(card)
+            state.log.append(f"P{opp.id} exiles {card.printing.name}")
+        options = [
+            c for c in exiled if can_cast_now(state, controller_id, c, free=True)
+        ]
+        if not options:
+            return
+        me = state.player_by_id(controller_id)
+        chosen = options[0]
+        if me.agent is not None:
+            pick = me.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            chosen = next((c for c in options if c.id == pick), None)
+        if chosen is not None:
+            cast_now(state, controller_id, chosen, free=True)
+
+    def describe(self) -> str:
+        return (
+            "target opponent exiles the top card of their library and a "
+            "random card from their graveyard and hand; you may cast one "
+            "of them without paying its mana cost"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -1056,6 +1122,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "TargetOpponentExilesThreeMayCastOneFree",
     "ExileUntilNonlandThenCounterOrMayCastIt",
     "LootThenMayCastDiscardedFreeIfCounters",
     "MayCastSpellFromGraveyardNow",

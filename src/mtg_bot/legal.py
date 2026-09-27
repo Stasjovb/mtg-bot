@@ -929,6 +929,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     _emit_flashback_casts(instant_speed=False)
     _emit_escape_casts(instant_speed=False)
+    # Emerge (CR 702.119) from hand, at the card's own timing.
+    from mtg_bot.creature_casting_ub import emerge_cast_actions
+
+    actions.extend(emerge_cast_actions(state, player_id))
     _emit_graveyard_permission_casts(instant_speed=False)
     _emit_wg_graveyard_casts(instant_speed=False)
 
