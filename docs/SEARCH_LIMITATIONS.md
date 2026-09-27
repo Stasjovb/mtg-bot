@@ -19502,3 +19502,9 @@ New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `sr
 **Where:** `actions._apply_improvise` / `_improvise_max_contribution`, `creature_casting_ub.improvise_tap_order`; `creature_casting_ub.pay_saddle_cost`; `creature_casting_ub.apply_copy_on_entry`.
 
 **What the shortcut is.** Improvise is checked like convoke (upper-bound affordability), and the engine -- not the agent -- picks which artifacts to tap: artifacts without mana abilities first, as many as the generic cost needs, before any land is tapped. Keeping an artifact untapped instead of a land is therefore not a searchable choice. Saddle picks riders one at a time through `choose_permanent_to_tap` (plain power; crew-only bonuses don't apply). Phyrexian Metamorph / Superior Spider-Man copy the target's printing (its copiable values); Superior Spider-Man's "When you do, exile that card." is a trigger put on the stack right after it enters.
+
+### Subtlety removes a spell from mid-stack by index; Deep-Cavern Bat's hand exile
+
+**Where:** `cube_creatures_ub.OwnerPutsTargetSpellOnTopOrBottom`, `cube_creatures_ub.LookAtHandMayExileNonlandUntilSourceLeaves`, `GameObject.exiled_until_leaves_from_hand`, `turn._release_exiled_until_leaves`.
+
+**What the shortcut is.** Stack targets are `("stack", index)` pairs, so when Subtlety pulls a spell out from under other stack items, the engine re-indexes those items' `targets` above the removed spell; nothing else stores stack indices today, but a future effect that does would need the same fix-up. The owner's top/bottom choice goes through `choose_yes_no`. Deep-Cavern Bat's pick goes through `choose_card_from_opponent_hand`, and the card returns to its owner's hand (not the battlefield) through the base's until-leaves release hook.

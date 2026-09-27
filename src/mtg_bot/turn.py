@@ -772,6 +772,16 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
         for c in released:
             p.exile.remove(c)
             c.exiled_by_source = None
+            if c.exiled_until_leaves_from_hand:
+                # Deep-Cavern Bat: a card exiled from a hand goes back
+                # to its owner's hand.
+                c.exiled_until_leaves_from_hand = False
+                c.zone = Zone.HAND
+                p.hand.append(c)
+                state.log.append(
+                    f"{c.printing.name} returns from exile to P{p.id}'s hand"
+                )
+                continue
             state.log.append(
                 f"{c.printing.name} returns from exile to "
                 f"P{p.id}'s battlefield"

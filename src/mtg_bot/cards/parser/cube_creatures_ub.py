@@ -288,6 +288,17 @@ _COUNTER_STACK_OBJECT = re.compile(
     r"permanent loses all abilities for as long as this creature remains "
     r"on the battlefield)?$"
 )
+# Subtlety: "choose up to one target creature spell or planeswalker
+# spell. Its owner puts it on their choice of the top or bottom of their
+# library."
+_OWNER_PUTS_SPELL_TOP_OR_BOTTOM = re.compile(
+    r"^choose (?P<upto>up to one )?target "
+    r"(?P<types>(?:artifact|creature|enchantment|planeswalker|instant|sorcery)"
+    r" spell(?: or (?:artifact|creature|enchantment|planeswalker|instant|"
+    r"sorcery) spell)*)\. its owner puts it on their choice of the top or "
+    r"bottom of their library$",
+    re.IGNORECASE,
+)
 _STACK_KIND_WORDS = {
     "spell": "spell", "activated ability": "activated",
     "triggered ability": "triggered",
@@ -464,6 +475,29 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         )
 
         return OwnerPutsTargetSecondFromTopOrBottom()
+    if re.fullmatch(
+        r"look at target opponent's hand\. you may exile a nonland card "
+        r"from it until this creature leaves the battlefield",
+        phrase, re.IGNORECASE,
+    ):
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            LookAtHandMayExileNonlandUntilSourceLeaves,
+        )
+
+        return LookAtHandMayExileNonlandUntilSourceLeaves()
+    m = _OWNER_PUTS_SPELL_TOP_OR_BOTTOM.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            OwnerPutsTargetSpellOnTopOrBottom,
+        )
+
+        return OwnerPutsTargetSpellOnTopOrBottom(
+            card_types=tuple(
+                t.capitalize()
+                for t in re.findall(r"(\w+) spell", m.group("types"))
+            ),
+            up_to_one=m.group("upto") is not None,
+        )
     ub = _parse_ub_effect_batch8(phrase)
     if ub is not None:
         return ub

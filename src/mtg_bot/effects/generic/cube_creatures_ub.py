@@ -1014,6 +1014,148 @@ class OwnerPutsTargetSecondFromTopOrBottom(Effect):
         )
 
 
+@dataclass(frozen=True)
+class OwnerPutsTargetSpellOnTopOrBottom(Effect):
+    """"choose up to one target creature spell or planeswalker spell. Its
+    owner puts it on their choice of the top or bottom of their library."
+    (Subtlety.) ``card_types`` are the spell types that may be targeted;
+    ``up_to_one`` makes the target optional. Not a counter: the spell
+    leaves the stack at once even if it can't be countered. The owner
+    chooses (``choose_yes_no``: yes = top). A copy of a spell ceases to
+    exist instead (CR 707.10a). Later stack items' ``("stack", i)``
+    targets above the removed spell are re-indexed."""
+
+    card_types: tuple = ("Creature",)
+    up_to_one: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0 if self.up_to_one else 1, 1)
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("stack", i) for i, item in enumerate(state.stack)
+            if item.ability is None and not item.countered
+            and any(t in item.source.printing.card_types for t in self.card_types)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+        from mtg_bot.turn import note_cards_put_into_library
+
+        if not targets or targets[0] not in self.legal_targets(
+            state, controller_id,
+        ):
+            return
+        idx = targets[0][1]
+        item = state.stack.pop(idx)
+        for other in state.stack:
+            if any(k == "stack" and j > idx for k, j in other.targets):
+                other.targets = tuple(
+                    (k, j - 1) if k == "stack" and j > idx else (k, j)
+                    for k, j in other.targets
+                )
+        card = item.source
+        if card.is_spell_copy:
+            state.log.append(f"copy of {card.printing.name} ceases to exist")
+            return
+        owner = state.player_by_id(card.owner_id)
+        top = owner.agent is None or owner.agent.choose_yes_no(
+            state, owner.id,
+            f"Put {card.printing.name} on top of your library (no = bottom)?",
+        )
+        card.zone = Zone.LIBRARY
+        if top:
+            owner.library.insert(0, card)
+        else:
+            owner.library.append(card)
+        reveal_to_all(state, card)
+        note_cards_put_into_library(state, owner.id)
+        state.log.append(
+            f"{card.printing.name} is put on the {'top' if top else 'bottom'} "
+            f"of P{owner.id}'s library"
+        )
+
+    def describe(self) -> str:
+        kinds = " or ".join(f"{t.lower()} spell" for t in self.card_types)
+        return (
+            f"choose {'up to one ' if self.up_to_one else ''}target {kinds}; "
+            f"its owner puts it on the top or bottom of their library"
+        )
+
+
+@dataclass(frozen=True)
+class LookAtHandMayExileNonlandUntilSourceLeaves(Effect):
+    """"look at target opponent's hand. You may exile a nonland card from
+    it until this creature leaves the battlefield." (Deep-Cavern Bat.)
+    The exiled card carries the base ``exiled_by_source`` link plus
+    ``exiled_until_leaves_from_hand`` so the on-leave release puts it
+    back into its owner's hand. If the source has already left the
+    battlefield when this resolves, nothing is exiled (CR 610.3c)."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to
+
+        opp = next(
+            (state.player_by_id(t[1]) for t in targets if t[0] == "player"),
+            None,
+        )
+        if opp is None:
+            return
+        for c in opp.hand:
+            reveal_to(c, controller_id)
+        src = state.resolving_source
+        if src is None or not any(o.id == src.id for o in state.battlefield):
+            return
+        options = [c for c in opp.hand if not c.printing.is_land]
+        if not options:
+            return
+        me = state.player_by_id(controller_id)
+        if me.agent is not None and not me.agent.choose_yes_no(
+            state, controller_id,
+            "exile a nonland card from their hand until this leaves?",
+        ):
+            return
+        pick = options[0].id
+        if me.agent is not None:
+            pick = me.agent.choose_card_from_opponent_hand(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == pick), options[0])
+        opp.hand.remove(card)
+        card.zone = Zone.EXILE
+        card.exiled_by_source = src.id
+        card.exiled_until_leaves_from_hand = True
+        opp.exile.append(card)
+        state.log.append(
+            f"P{controller_id} exiles {card.printing.name} from P{opp.id}'s "
+            f"hand until {src.printing.name} leaves the battlefield"
+        )
+
+    def describe(self) -> str:
+        return (
+            "look at target opponent's hand; you may exile a nonland card "
+            "from it until this creature leaves the battlefield"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------

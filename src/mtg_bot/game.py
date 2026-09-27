@@ -941,6 +941,10 @@ class GameObject:
     # when the source leaves (Emperor of Bones) -- unlike
     # ``exiled_by_source`` (the "until it leaves the battlefield" link).
     exiled_with: Optional[int] = None
+    # With ``exiled_by_source``: the card was exiled from a hand, so it
+    # returns to its owner's HAND (not the battlefield) when the source
+    # leaves (Deep-Cavern Bat).
+    exiled_until_leaves_from_hand: bool = False
     # The X its spell was cast with (Thieving Skydiver's kicker {X}:
     # "mana value X or less"). Kept only when the object entered by
     # resolving as that spell.
