@@ -409,6 +409,19 @@ _DIVIDED_DAMAGE_RE = re.compile(
     r"(?P<kinds>creatures|creatures and/or planeswalkers)$"
 )
 
+# Invert Polarity (only coin-flip spell-steal in the pool).
+_FLIP_STEAL_OR_COUNTER_RE = re.compile(
+    r"^choose target spell, then flip a coin\. If you win the flip, gain "
+    r"control of that spell and you may choose new targets for it\. If you "
+    r"lose the flip, counter that spell$"
+)
+
+# Sunfall.
+_EXILE_ALL_CREATURES_INCUBATE_RE = re.compile(
+    r"^exile all creatures\. [Ii]ncubate X, where X is the number of "
+    r"creatures exiled this way$"
+)
+
 # The Flashback card.
 _GRANT_FLASHBACK_RE = re.compile(
     r"^target (?P<desc>.+? card) in your graveyard gains flashback until "
@@ -733,6 +746,16 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             amount=_amount(m.group("n")), max_targets=max_targets,
             include_planeswalkers=m.group("kinds") != "creatures",
         )
+    if _EXILE_ALL_CREATURES_INCUBATE_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.incubate import ExileAllCreaturesThenIncubate
+
+        return ExileAllCreaturesThenIncubate()
+    if _FLIP_STEAL_OR_COUNTER_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.spell_copies import (
+            FlipCoinStealOrCounterTargetSpell,
+        )
+
+        return FlipCoinStealOrCounterTargetSpell()
     m = _GRANT_FLASHBACK_RE.match(phrase)
     if m is not None:
         from mtg_bot.effects.generic.graveyard_casting import (

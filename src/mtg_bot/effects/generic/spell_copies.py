@@ -122,3 +122,63 @@ class TargetPlayerMayCopyThisSpell(Effect):
 
     def describe(self) -> str:
         return "that player may copy this spell and choose a new target"
+
+
+@dataclass(frozen=True)
+class FlipCoinStealOrCounterTargetSpell(Effect):
+    """Invert Polarity: "Choose target spell, then flip a coin. If you win
+    the flip, gain control of that spell and you may choose new targets
+    for it. If you lose the flip, counter that spell."
+
+    The flip uses ``state.rng`` (reproducible under a seeded game). On a
+    win the StackItem's controller becomes the caster, who may pick new
+    targets (the current ones are among the options while still legal);
+    on a loss the spell is countered unless it can't be.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("stack", i) for i, item in enumerate(state.stack)
+            if item.ability is None and not item.countered
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+
+        if not targets or targets[0][0] != "stack":
+            return
+        idx = targets[0][1]
+        if not (0 <= idx < len(state.stack)):
+            return
+        item = state.stack[idx]
+        if item.ability is not None or item.countered:
+            return
+        won = state.rng.random() < 0.5
+        state.log.append(
+            f"P{controller_id} {'wins' if won else 'loses'} the coin flip"
+        )
+        if not won:
+            if CounterTargetSpell._is_uncounterable(state, item):
+                state.log.append(f"{item.source.printing.name} can't be countered")
+                return
+            item.countered = True
+            state.log.append(f"{item.source.printing.name} is countered")
+            return
+        item.controller_id = controller_id
+        item.source.controller_id = controller_id
+        if item.targets:
+            item.targets = _choose_copy_targets(
+                state, controller_id, item.source.printing, item.targets,
+            )
+        state.log.append(
+            f"P{controller_id} gains control of {item.source.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "choose target spell and flip a coin: win -> gain control of it "
+            "and choose new targets; lose -> counter it"
+        )

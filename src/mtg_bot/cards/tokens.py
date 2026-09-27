@@ -103,6 +103,39 @@ def _predefined_artifact_tokens() -> dict[str, CardPrinting]:
     }
 
 
+# Back face of the Incubator token: a 0/0 colorless Phyrexian artifact
+# creature (the Incubator's +1/+1 counters carry over on transform).
+_PHYREXIAN_TOKEN = make_token_creature(
+    "Phyrexian", 0, 0, subtypes=("Phyrexian",), artifact=True,
+)
+
+
+def _make_incubator_token() -> CardPrinting:
+    """Incubator: artifact token with "{2}: Transform this artifact."
+    (transforms into ``_PHYREXIAN_TOKEN``)."""
+    from mtg_bot.effects.generic.incubate import TransformSelfIntoPrinting
+
+    type_line = "Token Artifact — Incubator"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name="Incubator",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"), mana_str="{2}",
+                ),
+                effect=TransformSelfIntoPrinting(back_printing=_PHYREXIAN_TOKEN),
+            ),
+        ),
+    )
+
+
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Human Soldier": make_token_creature(
         "Human Soldier", 1, 1, subtypes=("Human", "Soldier")
@@ -271,3 +304,9 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
 }
 
 TOKEN_PRINTINGS.update(_predefined_artifact_tokens())
+# Incubator (CR 701.53): the artifact token Incubate creates — "{2}:
+# Transform this artifact." — whose back face is the "Phyrexian" token
+# (a 0/0 artifact creature; the Incubator's +1/+1 counters size it).
+# Sunfall (cube).
+TOKEN_PRINTINGS["Incubator"] = _make_incubator_token()
+TOKEN_PRINTINGS["Phyrexian"] = _PHYREXIAN_TOKEN
