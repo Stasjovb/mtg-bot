@@ -14,7 +14,7 @@ from mtg_bot.actions import (
     can_pay_cost,
 )
 from mtg_bot.cards import ManaCost
-from mtg_bot.game import GameObject, GameState
+from mtg_bot.game import GameObject, GameState, Zone
 from mtg_bot.turn import MAIN_STEPS
 
 
@@ -507,10 +507,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     def _effective_cost(card, base_cost):
         # Delve (CR 702.66) only ever lowers the generic cost, so the
         # affordability probe assumes the whole graveyard is available.
-        cost = _delve_affordability_cost(
-            state, player_id, card,
-            apply_cost_reductions(card.printing, state, player_id, base_cost),
-        )
+        from mtg_bot.creature_casting_ub import casting_origin
+
+        with casting_origin(card.zone != Zone.HAND):
+            reduced = apply_cost_reductions(
+                card.printing, state, player_id, base_cost,
+            )
+        cost = _delve_affordability_cost(state, player_id, card, reduced)
         # Spree: every cast chooses at least one mode, each with its own
         # extra mana cost — the cast is affordable if base + SOME single
         # mode's cost is payable.

@@ -50,6 +50,7 @@ import re
 
 from mtg_bot.cards.base import CostReduction, ExternalCostReduction
 from mtg_bot.effects.conditions import (
+    SpellCastFromOutsideHand,
     AnotherSpellCastThisTurn,
     Condition,
     DuringYourTurn,
@@ -188,6 +189,9 @@ _EXTERNAL_COST_REDUCTION_LINES: dict[str, Condition] = {
     "The second spell you cast each turn costs {N} less to cast.": (
         NthSpellThisTurn(2)
     ),
+    # Bilbo, Thief in the Night.
+    "Spells you cast from anywhere other than your hand cost {N} less to "
+    "cast.": SpellCastFromOutsideHand(),
 }
 
 

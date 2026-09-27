@@ -662,3 +662,17 @@ class FirstSpellYouCastThisGame(Condition):
         except (KeyError, AttributeError):
             return False
         return player.spells_cast_this_game == 0
+
+
+@dataclass(frozen=True)
+class SpellCastFromOutsideHand(Condition):
+    """The spell whose cost is being determined is being cast from
+    anywhere other than its caster's hand (Bilbo, Thief in the Night:
+    "Spells you cast from anywhere other than your hand cost {1} less to
+    cast."). Reads the cast-origin context set by the cast pipeline and
+    ``legal_actions`` (``creature_casting_ub.casting_origin``)."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        from mtg_bot.creature_casting_ub import CASTING_FROM_OUTSIDE_HAND
+
+        return CASTING_FROM_OUTSIDE_HAND.get()

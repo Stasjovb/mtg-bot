@@ -932,6 +932,10 @@ class GameObject:
     may_play_by: Optional[int] = None
     may_play_free: bool = False
     may_play_any_mana: bool = False
+    # "If an instant or sorcery spell cast this way would be put into
+    # your graveyard, exile it instead." (Bilbo, Thief in the Night) --
+    # honored when the spell leaves the stack.
+    exile_if_put_into_graveyard_from_stack: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

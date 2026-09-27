@@ -171,6 +171,86 @@ _CHOOSE_EXILED_WITH_COUNTER = re.compile(
     r"counter on it\. You may play it this turn without paying its mana "
     r"cost$"
 )
+# Black Widow, Super Spy (literal: the only card in the pool with the
+# exile-until-nonland / counter-or-cast choice).
+_BLACK_WIDOW_BODY = (
+    "that player exiles cards from the top of their library until they "
+    "exile a nonland card. You may put a +1/+1 counter on this creature. "
+    "If you don't, you may cast the exiled nonland card until end of turn "
+    "and mana of any type can be spent to cast that spell"
+)
+# Malcolm: "put a <kind> counter on it. Draw a card, then discard a card.
+# If there are N or more <kind> counters on this creature, you may cast
+# the discarded card without paying its mana cost"
+_LOOT_CAST_DISCARDED = re.compile(
+    r"^put an? (?P<kind>[a-z]+) counter on it\. Draw a card, then discard "
+    r"a card\. If there are (?P<n>two|three|four|five) or more "
+    r"(?P=kind) counters on this creature, you may cast the discarded card "
+    r"without paying its mana cost$"
+)
+# Bilbo: "you may cast a[n] <desc> spell from your graveyard. If an
+# instant or sorcery spell cast this way would be put into your
+# graveyard, exile it instead"
+_MAY_CAST_FROM_GRAVEYARD_NOW = re.compile(
+    r"^you may cast an? (?P<desc>.+?) spell from your graveyard\. If an "
+    r"instant or sorcery spell cast this way would be put into your "
+    r"graveyard, exile it instead$"
+)
+
+
+_TYPE_WORDS = {
+    "artifact": "Artifact", "creature": "Creature",
+    "enchantment": "Enchantment", "instant": "Instant",
+    "sorcery": "Sorcery", "planeswalker": "Planeswalker",
+}
+
+
+def _type_list_filter(text: str):
+    """``artifact, instant, or sorcery`` -- a disjunctive card-type list
+    (the card-flow descriptor grammar reads commas conjunctively, as in
+    ``noncreature, nonland``)."""
+    from mtg_bot.effects.generic.card_flow import CardFilter
+
+    words = [w for w in re.split(r", or |, | or ", text)]
+    if len(words) < 2 or not all(w in _TYPE_WORDS for w in words):
+        return None
+    return CardFilter(any_types=tuple(_TYPE_WORDS[w] for w in words))
+
+
+def _parse_ub_effect_batch8(phrase: str) -> Effect | None:
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic import PutNamedCountersOnSelf
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        ExileUntilNonlandThenCounterOrMayCastIt,
+        LootThenMayCastDiscardedFreeIfCounters,
+        MayCastSpellFromGraveyardNow,
+    )
+
+    if phrase == _BLACK_WIDOW_BODY:
+        return ExileUntilNonlandThenCounterOrMayCastIt()
+    m = _LOOT_CAST_DISCARDED.match(phrase)
+    if m is not None:
+        return Sequence(effects=(
+            PutNamedCountersOnSelf(kind=m.group("kind"), amount=1),
+            LootThenMayCastDiscardedFreeIfCounters(
+                kind=m.group("kind"), threshold=_WORD_COUNTS[m.group("n")],
+            ),
+        ))
+    m = _MAY_CAST_FROM_GRAVEYARD_NOW.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import (
+            parse_card_descriptor,
+        )
+
+        f = _type_list_filter(m.group("desc"))
+        if f is None:
+            f = parse_card_descriptor("an " + m.group("desc") + " card")
+        if f is None:
+            return None
+        return MayCastSpellFromGraveyardNow(card_filter=f)
+    return None
+
+
 # Thassa's Oracle
 _THASSA = re.compile(
     r"^look at the top X cards of your library, where X is your devotion to "
@@ -338,6 +418,9 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         return ChooseOpponentsExiledCardWithCounterMayPlayFree(
             counter=m.group("kind"),
         )
+    ub = _parse_ub_effect_batch8(phrase)
+    if ub is not None:
+        return ub
     ub = _parse_ub_effect_batch5(phrase)
     if ub is not None:
         return ub

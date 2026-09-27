@@ -72,3 +72,88 @@ def offer_creature_additional_costs(
                 f"for {printing.name}"
             )
     return cost
+
+
+# ---------------------------------------------------------------------
+# Spell origin for "spells you cast from anywhere other than your hand"
+# ---------------------------------------------------------------------
+
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+CASTING_FROM_OUTSIDE_HAND: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_outside_hand", default=False)
+)
+
+
+@_contextlib.contextmanager
+def casting_origin(outside_hand: bool):
+    """Mark the spell whose cost is being determined as cast from
+    outside its caster's hand (graveyard, exile, library) for the
+    duration of the block (read by ``SpellCastFromOutsideHand``)."""
+    token = CASTING_FROM_OUTSIDE_HAND.set(outside_hand)
+    try:
+        yield
+    finally:
+        CASTING_FROM_OUTSIDE_HAND.reset(token)
+
+
+# ---------------------------------------------------------------------
+# Casting a spell while an effect resolves
+# ---------------------------------------------------------------------
+
+
+def can_cast_now(
+    state: "GameState", player_id: int, card: "GameObject", *, free: bool,
+) -> bool:
+    """Could ``player_id`` cast ``card`` right now (during an effect's
+    resolution): not a land, targets available, additional costs and --
+    unless free -- the mana cost payable."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import (
+        _additional_costs_payable, _can_cast, _targets_are_satisfiable,
+    )
+
+    if card.printing.is_land:
+        return False
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        return False
+    if free:
+        return True
+    with casting_origin(card.zone != Zone.HAND):
+        cost = apply_cost_reductions(
+            card.printing, state, player_id, card.printing.mana_cost,
+        )
+    return _can_cast(state, player_id, card, cost)
+
+
+def cast_now(
+    state: "GameState", player_id: int, card: "GameObject", *, free: bool,
+) -> bool:
+    """Cast ``card`` from its graveyard or exile while an effect
+    resolves ("you may cast the discarded card without paying its mana
+    cost", "you may cast a spell from among cards exiled this way").
+    The spell goes on the stack above the resolving ability (CR
+    608.2g); timing restrictions don't apply. The caller has already
+    obtained the player's "may" consent and checked ``can_cast_now``.
+    Returns False when the card isn't in a castable zone."""
+    from mtg_bot.actions import _cast_spell
+    from mtg_bot.game import Zone
+
+    if card.zone == Zone.GRAVEYARD and card in state.player_by_id(
+        player_id,
+    ).graveyard:
+        card.castable_from_graveyard_this_turn = True
+    elif card.zone == Zone.EXILE and card in state.player_by_id(
+        card.owner_id,
+    ).exile:
+        card.may_play_by = player_id
+        card.may_play_free = free
+    else:
+        return False
+    _cast_spell(state, player_id, card.id, cast_for_free=free)
+    return True

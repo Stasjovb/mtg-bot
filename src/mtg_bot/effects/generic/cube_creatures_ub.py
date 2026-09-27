@@ -445,6 +445,150 @@ class ChooseOpponentsExiledCardWithCounterMayPlayFree(Effect):
         )
 
 
+@dataclass(frozen=True)
+class ExileUntilNonlandThenCounterOrMayCastIt(Effect):
+    """Black Widow, Super Spy: "that player exiles cards from the top of
+    their library until they exile a nonland card. You may put a +1/+1
+    counter on this creature. If you don't, you may cast the exiled
+    nonland card until end of turn and mana of any type can be spent to
+    cast that spell." The player is the fixed target (the damaged
+    player)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, add_plus_one_counters
+
+        if not targets or targets[0][0] != "player":
+            return
+        victim = state.player_by_id(targets[0][1])
+        found = None
+        while victim.library:
+            card = victim.library.pop(0)
+            card.zone = Zone.EXILE
+            victim.exile.append(card)
+            state.log.append(f"P{victim.id} exiles {card.printing.name}")
+            if not card.printing.is_land:
+                found = card
+                break
+        me = state.player_by_id(controller_id)
+        src = state.resolving_source
+        take_counter = src is not None and src in state.battlefield and (
+            me.agent is None or me.agent.choose_yes_no(
+                state, controller_id,
+                f"Put a +1/+1 counter on {src.printing.name}?",
+            )
+        )
+        if take_counter:
+            add_plus_one_counters(state, src, 1)
+            return
+        if found is not None:
+            found.may_play_by = controller_id
+            found.may_play_any_mana = True
+            state.log.append(
+                f"P{controller_id} may cast {found.printing.name} this turn"
+            )
+
+    def describe(self) -> str:
+        return (
+            "that player exiles cards from the top until a nonland card; "
+            "put a +1/+1 counter on this creature or you may cast that card "
+            "this turn (mana of any type)"
+        )
+
+
+@dataclass(frozen=True)
+class LootThenMayCastDiscardedFreeIfCounters(Effect):
+    """Malcolm, Alluring Scoundrel: "Draw a card, then discard a card.
+    If there are N or more <kind> counters on this creature, you may
+    cast the discarded card without paying its mana cost." """
+
+    kind: str = "chorus"
+    threshold: int = 4
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.effects.generic.card_flow import discard_card
+        from mtg_bot.game import named_counter_count
+        from mtg_bot.turn import draw_n_cards
+
+        p = state.player_by_id(controller_id)
+        draw_n_cards(state, controller_id, 1)
+        if not p.hand:
+            return
+        card = p.hand[0]
+        if p.agent is not None:
+            pick = p.agent.choose_discard(state, controller_id, [c.id for c in p.hand])
+            card = next((c for c in p.hand if c.id == pick), card)
+        discard_card(state, p, card)
+        src = state.resolving_source
+        if src is None or named_counter_count(src, self.kind) < self.threshold:
+            return
+        if card not in p.graveyard or not can_cast_now(
+            state, controller_id, card, free=True,
+        ):
+            return
+        if p.agent is None or p.agent.choose_yes_no(
+            state, controller_id, f"Cast {card.printing.name} for free?",
+        ):
+            cast_now(state, controller_id, card, free=True)
+
+    def describe(self) -> str:
+        return (
+            f"draw a card, then discard a card; with {self.threshold}+ "
+            f"{self.kind} counters, you may cast the discarded card free"
+        )
+
+
+@dataclass(frozen=True)
+class MayCastSpellFromGraveyardNow(Effect):
+    """Bilbo, Thief in the Night: "you may cast an artifact, instant, or
+    sorcery spell from your graveyard. If an instant or sorcery spell
+    cast this way would be put into your graveyard, exile it instead."
+    The spell is cast immediately (paying its costs)."""
+
+    card_filter: object = None
+    exile_instants_and_sorceries: bool = True
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.graveyard
+            if self.card_filter.matches(c.printing)
+            and can_cast_now(state, controller_id, c, free=False)
+        ]
+        if not options:
+            return
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            chosen = next((c for c in options if c.id == pick), None)
+        if chosen is None:
+            return
+        if self.exile_instants_and_sorceries and (
+            chosen.printing.is_instant or chosen.printing.is_sorcery
+        ):
+            chosen.exile_if_put_into_graveyard_from_stack = True
+        cast_now(state, controller_id, chosen, free=False)
+
+    def describe(self) -> str:
+        return (
+            f"you may cast a {self.card_filter.describe()} spell from your "
+            "graveyard (instants and sorceries are exiled afterwards)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -912,6 +1056,9 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "ExileUntilNonlandThenCounterOrMayCastIt",
+    "LootThenMayCastDiscardedFreeIfCounters",
+    "MayCastSpellFromGraveyardNow",
     "ChooseOpponentsExiledCardWithCounterMayPlayFree",
     "MayMillDamageThenMayTakeCreature",
     "ShuffleThenExileTopMayPlayFree",

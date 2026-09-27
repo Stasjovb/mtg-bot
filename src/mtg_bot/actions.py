@@ -2432,9 +2432,12 @@ def _cast_spell(
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
     # spell this turn"). Warp costs are reduced too — the rules don't
     # special-case this.
-    cost = apply_cost_reductions(
-        card.printing, state, player_id, cost, chosen_targets=targets,
-    )
+    from mtg_bot.creature_casting_ub import casting_origin as _casting_origin
+
+    with _casting_origin(cast_from_outside_hand):
+        cost = apply_cost_reductions(
+            card.printing, state, player_id, cost, chosen_targets=targets,
+        )
     # Kicker: add the optional kicker cost onto the generic+colored
     # portion before X is resolved.
     if kicked and card.printing.kicker_cost is not None:
@@ -4563,6 +4566,15 @@ def move_spell_off_stack(
         state.log.append(f"copy of {card.printing.name} ceases to exist")
         return
     owner = state.player_by_id(card.owner_id)
+    if card.exile_if_put_into_graveyard_from_stack and destination != "hand":
+        card.exile_if_put_into_graveyard_from_stack = False
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(
+            f"{card.printing.name} is exiled instead of going to the graveyard"
+        )
+        return
+    card.exile_if_put_into_graveyard_from_stack = False
     if card.cast_via_flashback:
         card.cast_via_flashback = False
         card.zone = Zone.EXILE
