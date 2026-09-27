@@ -402,6 +402,96 @@ def effective_warp_cost(
     return None
 
 
+def _phyrexian_split_affordable(
+    state: GameState, player_id: int, cost: ManaCost, life: int,
+    spell_kind: "str | frozenset[str]" = "spell",
+    *, convoke: bool = False, sac_for_mana: bool = False,
+) -> bool:
+    """Is ``cost`` payable when each Phyrexian pip may be paid with its
+    color or 2 life (CR 107.4f / 119.4: life may be paid only while the
+    life total is at least the amount)? Tries every life/mana split —
+    printed costs carry at most a few Phyrexian pips."""
+    pips = cost.phyrexian
+    n = len(pips)
+    for mask in range(1 << n):
+        life_pips = bin(mask).count("1")
+        if life < 2 * life_pips:
+            continue
+        mana_pips = [pips[i] for i in range(n) if not (mask >> i) & 1]
+        if can_pay_cost(
+            state, player_id, cost.with_colored(mana_pips),
+            spell_kind, convoke=convoke, sac_for_mana=sac_for_mana,
+        ):
+            return True
+    return False
+
+
+def _settle_phyrexian_pips(
+    state: GameState, player_id: int, card: "GameObject", cost: ManaCost,
+    spell_kind: "frozenset[str]",
+) -> ManaCost:
+    """Decide, pip by pip, whether each Phyrexian symbol is paid with 2
+    life or with mana of its color, pay the life, and return the cost
+    with the mana-paid pips folded into its colored requirement.
+
+    When both options keep the rest of the cost payable the caster
+    chooses via ``choose_yes_no`` (yes = pay 2 life); otherwise the only
+    workable option is taken.
+    """
+    if not cost.phyrexian:
+        return cost
+    p = state.player_by_id(player_id)
+    settled_mana: list[str] = []
+    life_paid = 0
+    pips = list(cost.phyrexian)
+    for i, color in enumerate(pips):
+        rest = ManaCost(
+            generic=cost.generic, colored=cost.colored, x_pips=cost.x_pips,
+            hybrid=cost.hybrid, phyrexian=tuple(pips[i + 1:]),
+        )
+        life_left = p.life - life_paid
+        mana_ok = _phyrexian_split_affordable(
+            state, player_id,
+            ManaCost(
+                generic=rest.generic,
+                colored=rest.with_colored(settled_mana + [color]).colored,
+                x_pips=rest.x_pips, hybrid=rest.hybrid,
+                phyrexian=rest.phyrexian,
+            ),
+            life_left, spell_kind, sac_for_mana=True,
+        )
+        life_ok = life_left >= 2 and _phyrexian_split_affordable(
+            state, player_id,
+            ManaCost(
+                generic=rest.generic,
+                colored=rest.with_colored(settled_mana).colored,
+                x_pips=rest.x_pips, hybrid=rest.hybrid,
+                phyrexian=rest.phyrexian,
+            ),
+            life_left - 2, spell_kind, sac_for_mana=True,
+        )
+        pay_life = life_ok
+        if life_ok and mana_ok and p.agent is not None:
+            pay_life = p.agent.choose_yes_no(
+                state, player_id,
+                f"Pay 2 life for {{{color}/P}} ({card.printing.name})?",
+            )
+        if pay_life:
+            life_paid += 2
+        else:
+            settled_mana.append(color)
+    if life_paid:
+        p.life -= life_paid
+        state.log.append(
+            f"P{player_id} pays {life_paid} life for Phyrexian mana "
+            f"(life: {p.life})"
+        )
+    return ManaCost(
+        generic=cost.generic, colored=cost.with_colored(settled_mana).colored,
+        x_pips=cost.x_pips, hybrid=cost.hybrid,
+    )
+
+
 def can_pay_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
@@ -425,6 +515,11 @@ def can_pay_cost(
     optimistically counted as available coverage. Like convoke, this
     is upper-bound: the cast pipeline activates only what's needed.
     """
+    if cost.phyrexian:
+        return _phyrexian_split_affordable(
+            state, player_id, cost, state.player_by_id(player_id).life,
+            spell_kind=spell_kind, convoke=convoke, sac_for_mana=sac_for_mana,
+        )
     if convoke:
         cost = _convoke_max_contribution(state, player_id, cost)
     if sac_for_mana:
@@ -1000,6 +1095,10 @@ def auto_tap_for_cost(
     context tags — see ``_coin_satisfies_context`` for the supported
     tags.
     """
+    if cost.phyrexian:
+        # Unsettled Phyrexian pips (a payment path that didn't run
+        # ``_settle_phyrexian_pips``) are paid with mana of their color.
+        cost = cost.with_colored(cost.phyrexian)
     p = state.player_by_id(player_id)
     lands = _untapped_lands(state, player_id)
     used_coin_ids: list[int] = []  # indices into p.mana_pool
@@ -1757,6 +1856,16 @@ def _cast_spell(
         state.log.append(
             f"P{player_id} kicks {card.printing.name} for "
             f"{card.printing.kicker_cost_str}"
+        )
+    # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
+    # one mana of its color before the rest of the payment.
+    if cost.phyrexian:
+        _spell_kinds_for_phyrexian: set[str] = {"spell"}
+        if cast_from_outside_hand:
+            _spell_kinds_for_phyrexian.add("cast_from_outside_hand")
+        cost = _settle_phyrexian_pips(
+            state, player_id, card, cost,
+            frozenset(_spell_kinds_for_phyrexian),
         )
     # Buyback (CR 702.27): the optional additional cost joins the total
     # cost before X is resolved.

@@ -603,6 +603,117 @@ _ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------
+# Casting-substrate keyword lines + additional costs (cube spells-B)
+# ---------------------------------------------------------------------
+#
+# Keyword lines that change HOW a spell is cast rather than what it does.
+# Each is recognized after reminder-text stripping, removed from the
+# effect-clause stream, and threaded onto the ``CardPrinting`` fields the
+# cast pipeline (``actions._cast_spell`` / ``legal.py`` via
+# ``mtg_bot.alt_casting``) consumes:
+#
+#   ``Flashback {cost}`` -> ``flashback_cost``   (CR 702.34)
+#   ``Delve``            -> ``has_delve``         (CR 702.66)
+#   ``Buyback {cost}``   -> ``buyback_cost``      (CR 702.27)
+_SPELL_CASTING_KEYWORD_LINE_RE = re.compile(
+    r"^(?:(?P<fb>Flashback) (?P<fb_cost>(?:\{[^}]+\})+)|(?P<delve>Delve)|"
+    r"(?P<bb>Buyback) (?P<bb_cost>(?:\{[^}]+\})+))$"
+)
+
+
+def _casting_keyword_fields(clause: str) -> dict | None:
+    """``CardPrinting`` fields for a casting-keyword line, or ``None``
+    when ``clause`` (reminder text already stripped) isn't one."""
+    from mtg_bot.cards.base import parse_mana_cost
+
+    m = _SPELL_CASTING_KEYWORD_LINE_RE.match(clause.strip())
+    if m is None:
+        return None
+    if m.group("fb"):
+        cost = m.group("fb_cost")
+        return {
+            "flashback_cost": parse_mana_cost(cost),
+            "flashback_cost_str": cost,
+        }
+    if m.group("delve"):
+        return {"has_delve": True}
+    cost = m.group("bb_cost")
+    return {"buyback_cost": parse_mana_cost(cost), "buyback_cost_str": cost}
+
+
+# Additional-cost bodies modeled by the casting substrate (beyond the
+# flag whitelist above): ``sacrifice <permanent descriptor>`` (Tinker's
+# "an artifact", Natural Order's "a green creature", Crop Rotation's "a
+# land") and ``pay X life`` (Toxic Deluge).
+_ADDITIONAL_COST_SACRIFICE_BODY_RE = re.compile(r"^sacrifice (?P<desc>an? .+)$")
+
+
+def _substrate_additional_cost_fields(body: str) -> dict | None:
+    from mtg_bot.cards.parser.card_flow_grammar import (
+        parse_permanent_descriptor,
+    )
+
+    if body == "pay X life":
+        return {"additional_cost_pay_x_life": True}
+    m = _ADDITIONAL_COST_SACRIFICE_BODY_RE.match(body)
+    if m is not None:
+        f = parse_permanent_descriptor(m.group("desc"))
+        if f is not None:
+            return {"additional_cost_sacrifice_filter": f}
+    return None
+
+
+# "<effect> instead if <condition>." replacement rider, optionally
+# labelled with an ability word ("Threshold — "). Pairs with the
+# preceding base clause into ``IfConditionElse(condition, then=<rider
+# effect>, else=<base>)``. The condition grammar lives in
+# ``_parse_instead_if_condition``.
+_INSTEAD_IF_RIDER_RE = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?(?P<effect>.+?) instead if (?P<cond>.+)\.$"
+)
+_CARDS_IN_YOUR_GRAVEYARD_COND_RE = re.compile(
+    r"^there are (?P<n>\w+) or more cards in your graveyard$"
+)
+
+
+def _parse_instead_if_condition(cond: str):
+    from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
+    from mtg_bot.effects.conditions import CardsInYourGraveyardAtLeast
+
+    m = _CARDS_IN_YOUR_GRAVEYARD_COND_RE.match(cond)
+    if m is not None:
+        tok = m.group("n")
+        n = int(tok) if tok.isdigit() else _SMALL_CARDINAL_WORDS.get(tok)
+        if n is not None:
+            return CardsInYourGraveyardAtLeast(n=n)
+    return None
+
+
+def _parse_instead_if_rider(
+    clause: str, base: Effect, name: str,
+) -> Effect | None:
+    """``Threshold — Add {B}{B}{B}{B}{B} instead if there are seven or
+    more cards in your graveyard.`` paired with base ``Add {B}{B}{B}.``
+    -> ``IfConditionElse(CardsInYourGraveyardAtLeast(7), then=Add 5,
+    else=Add 3)``. ``None`` if the rider or its condition doesn't
+    parse."""
+    from mtg_bot.effects.combinators import IfConditionElse
+
+    m = _INSTEAD_IF_RIDER_RE.match(clause.strip())
+    if m is None:
+        return None
+    condition = _parse_instead_if_condition(m.group("cond"))
+    if condition is None:
+        return None
+    then_effect = _parse_spell_effect_phrase(m.group("effect"), name)
+    if then_effect is None:
+        return None
+    return IfConditionElse(
+        condition=condition, then_effect=then_effect, else_effect=base,
+    )
+
+
 def _is_additional_cost_preamble(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a recognized additional-cost
     preamble (``As an additional cost to cast this spell, <cost>.``
@@ -614,7 +725,10 @@ def _is_additional_cost_preamble(clause: str) -> bool:
     m = _ADDITIONAL_COST_PREAMBLE_RE.match(clause.strip())
     if m is None:
         return False
-    return m.group(1) in _ADDITIONAL_COST_BODY_FLAGS
+    return (
+        m.group(1) in _ADDITIONAL_COST_BODY_FLAGS
+        or _substrate_additional_cost_fields(m.group(1)) is not None
+    )
 
 
 def _additional_cost_flags(clause: str) -> dict:
@@ -979,6 +1093,10 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         for stripped in (_strip_reminder_text(c) for c in clauses)
         if stripped
     ]
+    # Drop casting-keyword lines (Flashback / Delve / Buyback) — they
+    # change how the spell is cast, not what it does; the fields are
+    # threaded onto the printing by ``_detect_casting_substrate_fields``.
+    clauses = [c for c in clauses if _casting_keyword_fields(c) is None]
     # Drop Delirium-prefix rider clauses BEFORE the cost-reduction pass.
     # These ``Delirium — …`` lines are unimplemented mechanics that the
     # parser drops entirely — doing so before the cost-reduction pass
@@ -1133,6 +1251,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             # manifest, optional-graveyard-return), return just the
             # first-clause effect — mirroring the simplification the
             # bespoke entries already make (entries 23, 28, 34).
+            # "<effect> instead if <condition>." replacement rider
+            # (Cabal Ritual's Threshold line).
+            instead_if = _parse_instead_if_rider(clauses[1], first, name)
+            if instead_if is not None:
+                return instead_if
             if _is_unimplemented_secondary_rider(clauses[1]):
                 return first
     # General N-clause unimplemented-rider drop: if the first clause
@@ -1336,9 +1459,6 @@ def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     return tuple(rules)
 
 
-_PHYREXIAN_MANA_SYMBOL_RE = re.compile(r"\{[WUBRG2]/P\}")
-
-
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
@@ -1353,12 +1473,6 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     text = card.get("oracle_text", "").strip()
     if not text:
         return None
-    if _PHYREXIAN_MANA_SYMBOL_RE.search(card.get("mana_cost", "")):
-        # Phyrexian mana ({U/P}: pay {U} or 2 life) has no payment path
-        # in the engine — ``parse_mana_cost`` folds it into a generic-1
-        # hybrid pip, so the life option would silently vanish. Leave
-        # such spells unclaimed until the cost substrate exists.
-        return None
     effect = _parse_spell_oracle_text(text, card["name"])
     if effect is None:
         return None
@@ -1367,7 +1481,7 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     kwargs: dict = {}
     if kicker is not None:
         kwargs["kicker"] = kicker
-    return factory(
+    printing = factory(
         name=card["name"],
         cost=card["mana_cost"],
         effect=effect,
@@ -1377,3 +1491,34 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         **_detect_additional_cost_flags(text),
         **kwargs,
     )
+    substrate = _detect_casting_substrate_fields(text)
+    if substrate:
+        import dataclasses
+
+        printing = dataclasses.replace(printing, **substrate)
+    return printing
+
+
+def _detect_casting_substrate_fields(text: str) -> dict:
+    """``CardPrinting`` fields for the casting-substrate lines in
+    ``text``: casting keywords (Flashback / Delve / Buyback) anywhere,
+    plus leading additional-cost preambles modeled by the substrate
+    (sacrifice-a-<permanent>, pay X life). Mirrors the clause dropping
+    in ``_parse_spell_oracle_text``."""
+    fields: dict = {}
+    leading = True
+    for raw in [c.strip() for c in text.split("\n") if c.strip()]:
+        if leading and _is_additional_cost_preamble(raw):
+            body = _ADDITIONAL_COST_PREAMBLE_RE.match(raw).group(1)
+            if body not in _ADDITIONAL_COST_BODY_FLAGS:
+                fields.update(_substrate_additional_cost_fields(body) or {})
+            continue
+        if leading and _is_spell_keyword_preamble(raw):
+            continue
+        clause = _strip_reminder_text(raw)
+        kw = _casting_keyword_fields(clause) if clause else None
+        if kw is not None:
+            fields.update(kw)
+            continue
+        leading = False
+    return fields

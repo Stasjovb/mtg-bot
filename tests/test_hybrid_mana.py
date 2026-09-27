@@ -105,10 +105,14 @@ def test_multiple_hybrid_symbols():
 # ---------------------------------------------------------------------------
 
 def test_phyrexian_hybrid_parses():
-    """{W/P} is treated as a hybrid symbol (engine simplification)."""
+    """{W/P} is a Phyrexian symbol (CR 107.4f) — stored in
+    ``ManaCost.phyrexian`` (payable with {W} or 2 life), not as a
+    hybrid pair, so no spurious "P" color leaks into ``colors``."""
     c = parse_mana_cost("{W/P}")
-    assert len(c.hybrid) == 1
+    assert c.hybrid == ()
+    assert c.phyrexian == ("W",)
     assert c.total == 1
+    assert c.colors == frozenset({"W"})
 
 
 # ---------------------------------------------------------------------------

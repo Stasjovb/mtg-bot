@@ -276,17 +276,43 @@ class ManaCost:
     # of each hybrid symbol contribute to the card's color identity via
     # the ``colors`` property.
     hybrid: tuple[tuple[str, str], ...] = ()
+    # Phyrexian mana symbols ({U/P}), one color letter per symbol
+    # (CR 107.4f): each can be paid with one mana of its color or with
+    # 2 life. MV 1 each; the color counts toward the card's colors.
+    # The cast pipeline settles each pip (life vs. mana) before paying
+    # (``actions._settle_phyrexian_pips``); ``can_pay_cost`` checks
+    # every life/mana split for affordability.
+    phyrexian: tuple[str, ...] = ()
 
     @property
     def total(self) -> int:
-        return self.generic + sum(n for _, n in self.colored) + len(self.hybrid)
+        return (
+            self.generic + sum(n for _, n in self.colored)
+            + len(self.hybrid) + len(self.phyrexian)
+        )
 
     @property
     def colors(self) -> frozenset[str]:
         hybrid_colors: frozenset[str] = frozenset(
             c for pair in self.hybrid for c in pair
         )
-        return frozenset(c for c, _ in self.colored) | hybrid_colors
+        return (
+            frozenset(c for c, _ in self.colored) | hybrid_colors
+            | frozenset(self.phyrexian)
+        )
+
+    def with_colored(self, extra: "tuple[str, ...] | list[str]") -> "ManaCost":
+        """Return a copy with one more colored pip per entry of
+        ``extra`` and no Phyrexian pips (they've been settled)."""
+        merged: dict[str, int] = dict(self.colored)
+        for c in extra:
+            merged[c] = merged.get(c, 0) + 1
+        return ManaCost(
+            generic=self.generic,
+            colored=tuple(sorted(merged.items())),
+            x_pips=self.x_pips,
+            hybrid=self.hybrid,
+        )
 
     def reduced(self, amount: int) -> "ManaCost":
         """Return a new ManaCost with ``amount`` generic mana removed
@@ -302,6 +328,7 @@ class ManaCost:
             colored=self.colored,
             x_pips=self.x_pips,
             hybrid=self.hybrid,
+            phyrexian=self.phyrexian,
         )
 
 
@@ -352,6 +379,7 @@ def parse_mana_cost(s: str) -> ManaCost:
     colored: dict[str, int] = {}
     x_pips = 0
     hybrid_list: list[tuple[str, str]] = []
+    phyrexian_list: list[str] = []
     for sym in re.findall(r"\{([^}]+)\}", s):
         if sym.isdigit():
             generic += int(sym)
@@ -367,14 +395,10 @@ def parse_mana_cost(s: str) -> ManaCost:
             parts = sym.split("/")
             if len(parts) == 2:
                 a, b = parts[0], parts[1]
-                if b == "P":
-                    # Phyrexian hybrid: {W/P} etc. MV=1, can be paid with
-                    # the color or 2 life. Engine simplification: treat as
-                    # generic-1 (same as non-Phyrexian hybrid — life-payment
-                    # path not yet modeled). Store as hybrid for color identity.
-                    color_a = tuple(sorted((a, b)))[0]
-                    color_b = tuple(sorted((a, b)))[1]
-                    hybrid_list.append((color_a, color_b))
+                if b == "P" and a in COLORS:
+                    # Phyrexian mana {W/P} etc. (CR 107.4f): MV 1, paid
+                    # with one mana of the color or 2 life.
+                    phyrexian_list.append(a)
                 elif a in COLORS and b in COLORS:
                     # Standard two-color hybrid: store canonical (alpha) order.
                     pair = tuple(sorted((a, b)))
@@ -390,6 +414,7 @@ def parse_mana_cost(s: str) -> ManaCost:
         colored=tuple(sorted(colored.items())),
         x_pips=x_pips,
         hybrid=tuple(hybrid_list),
+        phyrexian=tuple(phyrexian_list),
     )
 
 

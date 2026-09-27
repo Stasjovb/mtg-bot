@@ -329,9 +329,12 @@ def test_card_is_claimed(cube_printings, name):
     assert name in cube_printings
 
 
-def test_phyrexian_mana_spell_stays_unclaimed(cube_printings):
-    # {U/P} has no life-payment path in the engine.
-    assert "Gitaxian Probe" not in cube_printings
+def test_gitaxian_probe_claimed_with_phyrexian_cost(cube_printings):
+    probe = cube_printings["Gitaxian Probe"]
+    assert probe.mana_cost.phyrexian == ("U",)
+    assert probe.spell_effect == Sequence(effects=(
+        LookAtTargetPlayersHand(), DrawCards(amount=1),
+    ))
 
 
 def test_claimed_shapes(cube_printings):

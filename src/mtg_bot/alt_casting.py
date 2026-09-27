@@ -236,6 +236,7 @@ def cost_plus(cost: ManaCost, extra: "ManaCost | None") -> ManaCost:
         colored=tuple(sorted(merged.items())),
         x_pips=cost.x_pips + extra.x_pips,
         hybrid=cost.hybrid + extra.hybrid,
+        phyrexian=cost.phyrexian + extra.phyrexian,
     )
 
 
