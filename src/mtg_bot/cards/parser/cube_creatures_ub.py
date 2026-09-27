@@ -461,6 +461,13 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         return None
     if _REVEAL_TOP_TO_HAND_LOSE_MV.match(phrase):
         return RevealTopCardToHandLoseLifeEqualMV()
+    if phrase == (
+        "reveal the top card of your library and put it into your hand. You "
+        "lose life equal to that card's mana value if this creature isn't "
+        "saddled. Otherwise, each opponent loses that much life"
+    ):
+        # Caustic Bronco -- the saddled branch of the Confidant shape.
+        return RevealTopCardToHandLoseLifeEqualMV(unless_saddled=True)
     m = _TARGET_PLAYER_ACTIONS.match(phrase)
     if m is not None:
         return _parse_target_player_actions(m)
@@ -868,7 +875,25 @@ def _parse_enter_as_copy_line(line: str) -> UBLine | None:
     return UBLine(fields=fields)
 
 
+def _parse_saddle_line(line: str) -> UBLine | None:
+    """``Saddle N`` (CR 702.171a): "Tap any number of other untapped
+    creatures you control with total power N or more: This Mount becomes
+    saddled until end of turn. Saddle only as a sorcery." """
+    from mtg_bot.cards.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.cube_creatures_ub import BecomeSaddled
+
+    m = re.match(r"^Saddle (\d+)$", line)
+    if m is None:
+        return None
+    return UBLine(activated=(ActivatedAbility(
+        cost=ActivationCost(saddle=int(m.group(1))),
+        effect=BecomeSaddled(),
+        sorcery_speed=True,
+    ),))
+
+
 _LINE_PARSERS = (
+    _parse_saddle_line,
     _parse_artifact_ability_reduction_line,
     _parse_enter_as_copy_line,
     _parse_additional_exile_line,

@@ -939,6 +939,9 @@ class GameObject:
     # Superior Spider-Man: the graveyard card this object copied as it
     # entered ("When you do, exile that card." fires after it enters).
     copied_card_to_exile: Optional[int] = None
+    # Saddle (CR 702.171b): "This Mount becomes saddled until end of
+    # turn." Cleared at cleanup.
+    saddled: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

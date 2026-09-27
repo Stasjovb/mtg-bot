@@ -1513,6 +1513,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if n_nonland < ability.cost.sacrifice_n_nonland_permanents:
                     continue
+            if ability.cost.saddle:
+                from mtg_bot.game import crew_candidates, effective_power
+
+                if sum(
+                    max(0, effective_power(state, o2))
+                    for o2 in crew_candidates(state, player_id, obj)
+                ) < ability.cost.saddle:
+                    continue
             if ability.cost.crew:
                 from mtg_bot.game import crew_candidates, crew_power
                 total = sum(

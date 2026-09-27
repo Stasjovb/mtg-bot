@@ -490,6 +490,10 @@ class ActivationCost:
     # creature's ``crew_power_bonus`` (Reckoner Bankbuster's Pilot:
     # "crews Vehicles as though its power were 2 greater") is added.
     crew: int = 0
+    # Saddle N (CR 702.171): tap any number of other untapped creatures
+    # you control with total power N or more (plain power -- crew-only
+    # bonuses don't apply).
+    saddle: int = 0
     # "Sacrifice N nonland permanents" (Bolas's Citadel: ten). The
     # activator picks them one at a time (``choose_sacrifice``); the
     # source itself is a legal choice.
@@ -619,6 +623,8 @@ class ActivationCost:
             parts.append("Sacrifice a nontoken artifact")
         if self.crew:
             parts.append(f"Crew {self.crew}")
+        if self.saddle:
+            parts.append(f"Saddle {self.saddle}")
         if self.sacrifice_n_nonland_permanents:
             parts.append(
                 f"Sacrifice {self.sacrifice_n_nonland_permanents} nonland "

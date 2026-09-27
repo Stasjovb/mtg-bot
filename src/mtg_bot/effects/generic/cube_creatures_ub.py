@@ -709,6 +709,23 @@ class ExileGraveyardCardById(Effect):
         return "exile that card"
 
 
+@dataclass(frozen=True)
+class BecomeSaddled(Effect):
+    """"This Mount becomes saddled until end of turn." (CR 702.171b)"""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        if src is not None and src in state.battlefield:
+            src.saddled = True
+            state.log.append(f"{src.printing.name} becomes saddled")
+
+    def describe(self) -> str:
+        return "this Mount becomes saddled until end of turn"
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -718,7 +735,12 @@ class ExileGraveyardCardById(Effect):
 class RevealTopCardToHandLoseLifeEqualMV(Effect):
     """"Reveal the top card of your library and put that card into your
     hand. You lose life equal to its mana value." (Dark Confidant). An
-    empty library reveals nothing and costs no life."""
+    empty library reveals nothing and costs no life.
+
+    ``unless_saddled``: Caustic Bronco's "... if this creature isn't
+    saddled. Otherwise, each opponent loses that much life." """
+
+    unless_saddled: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -734,6 +756,16 @@ class RevealTopCardToHandLoseLifeEqualMV(Effect):
         p.hand.append(card)
         card.publicly_known_to = frozenset(pl.id for pl in state.players)
         mv = card.printing.mana_cost.total
+        src = state.resolving_source
+        if self.unless_saddled and src is not None and src.saddled:
+            for opp in state.players:
+                if opp.id != controller_id and not opp.has_lost:
+                    opp.life -= mv
+            state.log.append(
+                f"P{controller_id} reveals {card.printing.name}; each "
+                f"opponent loses {mv} life"
+            )
+            return
         p.life -= mv
         state.log.append(
             f"P{controller_id} reveals {card.printing.name} and puts it "
@@ -1176,6 +1208,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "BecomeSaddled",
     "ExileGraveyardCardById",
     "MayCastSourceFromHandForMiracleCost",
     "TargetOpponentExilesThreeMayCastOneFree",

@@ -285,6 +285,43 @@ _REFLEXIVE_EXILE_INDEX = 2102
 
 
 # ---------------------------------------------------------------------
+# Saddle (CR 702.171)
+# ---------------------------------------------------------------------
+
+
+def pay_saddle_cost(
+    state: "GameState", player_id: int, mount: "GameObject", needed: int,
+) -> list:
+    """Tap other untapped creatures (agent picks, one at a time) until
+    their total power reaches ``needed``. Returns the tapped creatures."""
+    from mtg_bot.game import crew_candidates, effective_power
+    from mtg_bot.turn import tap_permanent
+
+    p = state.player_by_id(player_id)
+    chosen: list = []
+    total = 0
+    while total < needed:
+        options = [o for o in crew_candidates(state, player_id, mount) if o not in chosen]
+        if not options:  # pragma: no cover - legal_actions gates
+            break
+        pick = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_permanent_to_tap(
+                state, player_id, [o.id for o in options],
+            )
+            pick = next((o for o in options if o.id == pick_id), pick)
+        chosen.append(pick)
+        total += max(0, effective_power(state, pick))
+    for o in chosen:
+        tap_permanent(state, o)
+    state.log.append(
+        f"P{player_id} saddles {mount.printing.name} with "
+        f"{', '.join(o.printing.name for o in chosen)}"
+    )
+    return chosen
+
+
+# ---------------------------------------------------------------------
 # Miracle (CR 702.94)
 # ---------------------------------------------------------------------
 

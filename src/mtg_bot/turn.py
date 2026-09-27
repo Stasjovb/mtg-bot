@@ -1411,6 +1411,7 @@ def run_cleanup_step(state: GameState) -> None:
     )
     for obj in state.battlefield:
         revert_printing_if_no_layer1_copies(state, obj)
+        obj.saddled = False
     # UEOT layer-2 control_change effects (Mutinous Massacre,
     # Systems Override): when the layer-2 entry expired above,
     # the cached ``obj.controller_id`` is stale. Recompute via

@@ -3986,6 +3986,13 @@ def _activate_ability(
     # Crew N cost (CR 702.122): tap untapped creatures with total power
     # N or more. The activator picks one creature at a time until the
     # total is reached; legal_actions already guaranteed it's reachable.
+    if ability.cost.saddle:
+        from mtg_bot.creature_casting_ub import pay_saddle_cost
+
+        cost_paid_objects.extend(
+            pay_saddle_cost(state, player_id, source, ability.cost.saddle)
+        )
+
     if ability.cost.crew:
         from mtg_bot.game import crew_candidates, crew_power
         from mtg_bot.turn import tap_permanent
@@ -5259,6 +5266,7 @@ def put_into_battlefield(
     if state.resolving_spell is not obj:
         obj.squad_paid_count = 0
         obj.offspring_paid = False
+    obj.saddled = False   # a new object is never saddled
     # Death-tracker-gated ETB replacement: enters with one +1/+1
     # counter on it if a creature died this turn (Cackling Slasher).
     # Read from the global ``state.creatures_died_this_turn`` tracker
