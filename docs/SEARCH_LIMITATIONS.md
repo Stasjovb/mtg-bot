@@ -19457,11 +19457,11 @@ New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `sr
 
 **What the shortcut is.** The card is given a one-shot graveyard / exile permission (or an alternative mana cost for Miracle) and cast through the normal `_cast_spell` pipeline, so it lands on the stack above the resolving ability (CR 608.2g) and timing is ignored, as the rules require. Which card to cast is asked through `choose_card_from_library` (a generic "pick one of these ids" hook) and consent through `choose_yes_no`.
 
-### Exile play permissions cover any player's exile; "mana of any type" becomes generic
+### Exile play permissions ride the base's `ExilePlayPermission`
 
-**Where:** `GameObject.may_play_by / may_play_free / may_play_any_mana`, `legal._exile_play_permission_actions`, `legal.permission_cost`, the exile branches of `actions._cast_spell` / `_play_land`; cleared in `turn.run_cleanup_step`.
+**Where:** `cube_creatures_rmc.grant_exile_play` (used by Fallen Shinobi, Urza, Dauthi Voidwalker, Black Widow, and `creature_casting_ub.cast_now` for exiled cards).
 
-**What the shortcut is.** "You may play those cards this turn" (Fallen Shinobi, Urza, Dauthi Voidwalker, Black Widow) is a per-card grant readable in every exile zone. Black Widow's "mana of any type can be spent to cast that spell" is modeled by converting the colored part of the cost to generic mana (equivalent for payment). Lands played this way use the normal land drop.
+**What the shortcut is.** Nothing beyond the base substrate's own notes: "mana of any type can be spent" (Black Widow) is its `any_color_mana` (colored pips paid as generic), and a free permission never demands a pitch alternative cost.
 
 ### Dauthi Voidwalker's replacement: redirect on the main paths, SBA catch-all elsewhere
 

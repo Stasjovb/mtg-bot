@@ -1572,15 +1572,6 @@ def run_cleanup_step(state: GameState) -> None:
             for c in p.graveyard:
                 c.flashback_granted_until_eot = False
                 c.castable_from_graveyard_this_turn = False
-        if any(c.may_play_by is not None for c in p.exile):
-            from mtg_bot.game import _CowList
-
-            if isinstance(p.exile, _CowList):
-                p.exile.fork()
-            for c in p.exile:
-                c.may_play_by = None
-                c.may_play_free = False
-                c.may_play_any_mana = False
         p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0
@@ -1635,6 +1626,7 @@ def state_based_actions(state: GameState) -> bool:
     if sweep_graveyard_watch(state):
         any_changed = True
     if sweep_library_graveyard_exile_watch(state):
+        any_changed = True
     if apply_void_exile_replacement(state):
         any_changed = True
     # Ascend (CR 702.131; ``mtg_bot.creature_statics_wg``).

@@ -1,5 +1,5 @@
 """U/B cube creatures that let a player play exiled cards: the exile
-play-permission substrate (``GameObject.may_play_by``), Ninjutsu and
+play permission (the base's ``GameObject.exile_play_permission``), Ninjutsu and
 Fallen Shinobi, Urza, Lord High Artificer, and Barrowgoyf's dynamic P/T
 and mill-then-take trigger."""
 
@@ -23,7 +23,8 @@ from mtg_bot.effects.generic.cube_creatures_ub import (
     TargetPlayerExilesTopNYouMayPlayThem,
 )
 from mtg_bot.game import Zone, effective_power, effective_toughness
-from mtg_bot.legal import legal_actions, permission_cost
+from mtg_bot.effects.generic.cube_creatures_rmc import exile_permission_cast_cost
+from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step, run_cleanup_step
 from tests._spells_b_helpers import PRINTINGS, ScriptedAgent, add, add_lands, make_state
 
@@ -47,7 +48,8 @@ def test_permission_lets_the_grantee_play_an_opponents_exiled_cards():
         state, 0, (("player", 1),),
     )
     bolt, mountain = state.players[1].exile
-    assert bolt.may_play_by == 0 and mountain.may_play_free
+    assert bolt.exile_play_permission.player_id == 0
+    assert mountain.exile_play_permission.free
     acts = legal_actions(state, 0)
     assert CastSpell(bolt.id, cast_for_free=True) in acts
     assert PlayLand(mountain.id) in acts
@@ -82,11 +84,10 @@ def test_permission_timing_cost_and_cleanup():
     assert CastSpell(bob.id) not in legal_actions(state, 0)   # no mana
     add_lands(state, 0, "Swamp", 2)
     assert CastSpell(bob.id) in legal_actions(state, 0)
-    bob.may_play_any_mana = True
-    assert permission_cost(bob).colored == ()
+    assert exile_permission_cast_cost(bob, bob.exile_play_permission) == bob.printing.mana_cost
     state.step = Step.CLEANUP
     run_cleanup_step(state)
-    assert bob.may_play_by is None and island.may_play_by is None
+    assert bob.exile_play_permission is None and island.exile_play_permission is None
     assert "play them" in TargetPlayerExilesTopNYouMayPlayThem(amount=2).describe()
 
 
@@ -129,7 +130,10 @@ def test_fallen_shinobi_ninjas_in_and_steals_cards():
     assert state.players[1].life == 15
     exiled = state.players[1].exile
     assert {c.printing.name for c in exiled} == {"Lightning Bolt", "Mountain"}
-    assert all(c.may_play_by == 0 and c.may_play_free for c in exiled)
+    assert all(
+        c.exile_play_permission.player_id == 0 and c.exile_play_permission.free
+        for c in exiled
+    )
 
 
 def test_ninja_effect_needs_the_card_in_hand():
@@ -172,7 +176,7 @@ def test_urza_taps_artifacts_for_blue_and_impulses_for_free():
     add(state, 0, "Mountain", Zone.LIBRARY)
     ShuffleThenExileTopMayPlayFree().resolve(state, 0, ())
     (land,) = state.players[0].exile
-    assert land.may_play_by == 0 and land.may_play_free
+    assert land.exile_play_permission.free
     assert "shuffle" in ShuffleThenExileTopMayPlayFree().describe()
     ShuffleThenExileTopMayPlayFree().resolve(state, 0, ())   # empty library
 

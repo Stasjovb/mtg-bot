@@ -480,8 +480,9 @@ def cast_now(
     elif card.zone == Zone.EXILE and card in state.player_by_id(
         card.owner_id,
     ).exile:
-        card.may_play_by = player_id
-        card.may_play_free = free
+        from mtg_bot.effects.generic.cube_creatures_rmc import grant_exile_play
+
+        grant_exile_play(state, card, player_id, free=free, cast_only=True)
     else:
         return False
     _cast_spell(state, player_id, card.id, cast_for_free=free)

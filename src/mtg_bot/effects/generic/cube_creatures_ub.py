@@ -11,6 +11,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+
+
+def grant_exile_play(state, card, player_id, **kwargs):
+    """The base's exile play permission (``cube_creatures_rmc``)."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        grant_exile_play as _grant,
+    )
+
+    _grant(state, card, player_id, **kwargs)
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.formulas import Formula
 from mtg_bot.effects.predicates import TriggerPredicate
@@ -297,9 +306,8 @@ class TargetPlayerExilesTopNYouMayPlayThem(Effect):
                 break
             card = p.library.pop(0)
             card.zone = Zone.EXILE
-            card.may_play_by = controller_id
-            card.may_play_free = self.free
             p.exile.append(card)
+            grant_exile_play(state, card, controller_id, free=self.free)
             state.log.append(
                 f"P{p.id} exiles {card.printing.name}; P{controller_id} "
                 f"may play it this turn"
@@ -332,9 +340,8 @@ class ShuffleThenExileTopMayPlayFree(Effect):
             return
         card = p.library.pop(0)
         card.zone = Zone.EXILE
-        card.may_play_by = controller_id
-        card.may_play_free = True
         p.exile.append(card)
+        grant_exile_play(state, card, controller_id, free=True)
         state.log.append(
             f"P{controller_id} exiles {card.printing.name}; may play it "
             f"free this turn"
@@ -433,8 +440,7 @@ class ChooseOpponentsExiledCardWithCounterMayPlayFree(Effect):
         if isinstance(owner.exile, _CowList):
             owner.exile.fork()
             chosen = next(c for c in owner.exile if c.id == chosen.id)
-        chosen.may_play_by = controller_id
-        chosen.may_play_free = True
+        grant_exile_play(state, chosen, controller_id, free=True)
         state.log.append(
             f"P{controller_id} chooses {chosen.printing.name}; may play it "
             f"free this turn"
@@ -487,8 +493,9 @@ class ExileUntilNonlandThenCounterOrMayCastIt(Effect):
             add_plus_one_counters(state, src, 1)
             return
         if found is not None:
-            found.may_play_by = controller_id
-            found.may_play_any_mana = True
+            grant_exile_play(
+                state, found, controller_id, cast_only=True, any_color_mana=True,
+            )
             state.log.append(
                 f"P{controller_id} may cast {found.printing.name} this turn"
             )

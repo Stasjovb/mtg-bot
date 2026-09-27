@@ -263,10 +263,8 @@ _ADD_N_MANA_ANY_COMBINATION_RE = re.compile(
 _REANIMATE_RE = re.compile(
     r"^(?:put target (?P<any_desc>.+? card) from a graveyard onto the "
     r"battlefield under your control(?: with an? (?P<counter>[a-z]+) counter "
-    r"on it)?|return target (?P<your_desc>.+? card(?: with mana value \d+ "
-    r"or less)?) "
-    r"from your graveyard to the battlefield|return the top "
-    r"on it)?|return (?P<upto>up to one )?target (?P<your_desc>.+? card) "
+    r"on it)?|return (?P<upto>up to one )?target (?P<your_desc>.+? card"
+    r"(?: with mana value \d+ or less)?) "
     r"from your graveyard to the battlefield(?: with an? "
     r"(?P<your_counter>[a-z]+) counter on it)?|return the top "
     r"(?P<top_desc>.+? card) of your graveyard to the battlefield)"

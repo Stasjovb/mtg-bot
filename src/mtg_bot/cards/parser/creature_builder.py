@@ -1032,4 +1032,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         )
     if ub_fields:
         printing = replace(printing, **ub_fields)
-    return printing
+    from mtg_bot.cards.parser.cube_creatures_ub import link_exiled_with_recall
+
+    return link_exiled_with_recall(printing)

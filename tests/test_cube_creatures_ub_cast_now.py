@@ -49,7 +49,7 @@ def test_black_widow_takes_the_counter_when_asked():
     ExileUntilNonlandThenCounterOrMayCastIt().resolve(state, 0, (("player", 1),))
     assert widow.plus_one_counters == 1
     assert _names(state.players[1].exile) == ["Island", "Dark Confidant"]
-    assert all(c.may_play_by is None for c in state.players[1].exile)
+    assert all(c.exile_play_permission is None for c in state.players[1].exile)
     assert _names(state.players[1].library) == ["Swamp"]
 
 
@@ -61,7 +61,8 @@ def test_black_widow_may_cast_the_card_with_any_mana():
     ExileUntilNonlandThenCounterOrMayCastIt().resolve(state, 0, (("player", 1),))
     state.resolving_source = None
     (bob,) = state.players[1].exile
-    assert bob.may_play_by == 0 and bob.may_play_any_mana
+    perm = bob.exile_play_permission
+    assert perm.player_id == 0 and perm.any_color_mana and perm.cast_only
     add_lands(state, 0, "Mountain", 2)       # no black mana needed
     assert CastSpell(bob.id) in legal_actions(state, 0)
     apply_action(state, 0, CastSpell(bob.id))

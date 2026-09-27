@@ -14,7 +14,6 @@ from mtg_bot.actions import (
     put_into_battlefield,
 )
 from mtg_bot.cards.parser.cube_creatures_ub import (
-    parse_ub_compound_trigger_phrase,
     parse_ub_creature_line,
     parse_ub_effect,
     parse_ub_trigger_phrase,
@@ -199,15 +198,6 @@ def test_offspring_declined_and_reanimated_objects_pay_nothing():
 
 
 # ---------------------------------------------------------------- Magecraft
-
-
-def test_cast_or_copy_is_two_arms():
-    arms = parse_ub_compound_trigger_phrase(
-        "you cast or copy an instant or sorcery spell"
-    )
-    assert [a[0] for a in arms] == [Event.IS_CAST, Event.SPELL_COPIED]
-    assert parse_ub_compound_trigger_phrase("you cast or copy a frob spell") is None
-    assert parse_ub_compound_trigger_phrase("you cast a spell") is None
 
 
 def test_sedgemoor_witch_makes_pests_on_cast_and_copy():

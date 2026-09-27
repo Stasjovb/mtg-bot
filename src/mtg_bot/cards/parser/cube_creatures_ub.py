@@ -53,28 +53,6 @@ def _leaves_noun(noun: str):
     }.get(noun, lambda: None)()
 
 
-# "you cast or copy a[n] <filter> spell" (Magecraft)
-_CAST_OR_COPY = re.compile(r"^you cast or copy an? (?P<filter>.+) spell$")
-
-
-def parse_ub_compound_trigger_phrase(phrase: str):
-    """Multi-arm trigger conditions: ``((Event, Predicate), ...)`` or
-    ``None``. "you cast or copy an instant or sorcery spell" fires on
-    the cast (IS_CAST) and on a copy being put on the stack
-    (SPELL_COPIED)."""
-    from mtg_bot.cards.parser.effects_ext import _spell_filter
-    from mtg_bot.effects.predicates import YOU, Controlled, Event, Subject
-
-    m = _CAST_OR_COPY.match(phrase)
-    if m is None:
-        return None
-    f = _spell_filter(m.group("filter"))
-    if f is None:
-        return None
-    pred = Subject("spell", f) & Controlled(YOU, subject="controller")
-    return ((Event.IS_CAST, pred), (Event.SPELL_COPIED, pred))
-
-
 _COMBAT_DAMAGE_TO_PLAYER_OR_PW = (
     "this creature deals combat damage to a player or planeswalker"
 )
@@ -452,12 +430,6 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         from mtg_bot.effects.generic.cube_creatures_ub import Adapt
 
         return Adapt(amount=int(m.group(1)))
-    if phrase == "exile up to one target card from a graveyard":
-        from mtg_bot.effects.generic.cube_creatures_ub import (
-            ExileUpToOneTargetGraveyardCardWithSource,
-        )
-
-        return ExileUpToOneTargetGraveyardCardWithSource()
     if phrase == (
         "put a creature card exiled with this creature onto the battlefield "
         "under your control with a finality counter on it. It gains haste. "
@@ -1010,3 +982,32 @@ def parse_ub_creature_line(line: str, name: str) -> UBLine | None:
         if out is not None:
             return out
     return None
+
+
+def link_exiled_with_recall(printing):
+    """Context rewrite: when a creature's text recalls "a creature card
+    exiled with this creature" (Emperor of Bones), its own "exile up to
+    one target card from a graveyard" must record that link
+    (``GameObject.exiled_with``) instead of the base graveyard-exile
+    effect's until-it-leaves link, which would put the card onto the
+    battlefield when the creature leaves."""
+    import dataclasses
+
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        ExileUpToOneTargetGraveyardCardWithSource,
+        ReanimateExiledWithSourceFinalityHasteSacrifice,
+    )
+
+    triggers = printing.triggered_abilities
+    if not any(
+        isinstance(t.effect, ReanimateExiledWithSourceFinalityHasteSacrifice)
+        for t in triggers
+    ):
+        return printing
+    rewritten = tuple(
+        dataclasses.replace(t, effect=ExileUpToOneTargetGraveyardCardWithSource())
+        if t.effect.describe() == "exile up to one target card from a graveyard"
+        else t
+        for t in triggers
+    )
+    return dataclasses.replace(printing, triggered_abilities=rewritten)

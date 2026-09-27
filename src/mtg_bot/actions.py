@@ -1452,16 +1452,6 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
             )
             if permitted is not None:
                 card, exile_zone = permitted, perm_owner.exile
-        if card is None:
-            # A land in any player's exile this player may play
-            # (Fallen Shinobi / Dauthi Voidwalker permissions).
-            card = next(
-                (
-                    c for owner in state.players for c in owner.exile
-                    if c.id == card_id and c.may_play_by == player_id
-                ),
-                None,
-            )
         if card is None:  # pragma: no cover - defensive; legal_actions gates
             raise ValueError(
                 f"land {card_id} not playable by P{player_id}"
@@ -1470,12 +1460,6 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         card.playable_from_exile_this_turn = False
         card.play_from_exile_requires_kavu = False
         card.exile_play_permission = None
-        state.player_by_id(card.owner_id).exile.remove(card)
-        card.playable_from_exile_this_turn = False
-        card.play_from_exile_requires_kavu = False
-        card.may_play_by = None
-        card.may_play_free = False
-        card.may_play_any_mana = False
     # Track whether the land was played from Lightstall exile (enters
     # tapped regardless of printing) before clearing the flag.
     lightstall_land = card.cast_from_exile_with_lightstall_surcharge
@@ -2173,24 +2157,23 @@ def _cast_spell(
         ) is not None
         and (
             p.may_play_from_graveyard_this_turn
+            or yw_card.castable_from_graveyard_this_turn
             or _lurrus_permission_for(state, player_id, yw_card) is not None
         )
     ):
-        # Yawgmoth's Will: cast from the graveyard for the normal cost.
+        # Yawgmoth's Will / a per-card "you may cast that card this turn"
+        # permission (Emry): cast from the graveyard for the normal cost.
         # Otherwise a Lurrus-style once-per-turn permission (spent now).
-        if not p.may_play_from_graveyard_this_turn:
+        if not (
+            p.may_play_from_graveyard_this_turn
+            or yw_card.castable_from_graveyard_this_turn
+        ):
             granter = _lurrus_permission_for(state, player_id, yw_card)
             granter.graveyard_cast_used_turn = state.turn_number
             state.log.append(
                 f"{granter.printing.name} lets P{player_id} cast "
                 f"{yw_card.printing.name} from the graveyard"
             )
-            or yw_card.castable_from_graveyard_this_turn
-        )
-    ):
-        # Yawgmoth's Will / a per-card "you may cast that card this
-        # turn" permission (Emry): cast from the graveyard for the
-        # normal cost.
         card = yw_card
         cost = card.printing.mana_cost
         cast_from_outside_hand = True
@@ -2265,34 +2248,12 @@ def _cast_spell(
             # arrives with ``cast_for_free`` (which zeroes the cost below).
             card = permitted
             cost = exile_permission_cast_cost(card, card.exile_play_permission)
+            # A free permission never demands a pitch alternative cost.
+            free_by_permission = card.exile_play_permission.free
             cast_from_outside_hand = True
             perm_owner.exile.remove(card)
             card.exile_play_permission = None
             card.playable_from_exile_this_turn = False
-        permitted = None
-        if card is None:
-            # An exile play permission granted to this player, on a card
-            # in any player's exile (Fallen Shinobi, Urza, Dauthi).
-            permitted = next(
-                (
-                    c for owner in state.players for c in owner.exile
-                    if c.id == card_id and c.may_play_by == player_id
-                ),
-                None,
-            )
-        if permitted is not None:
-            from mtg_bot.legal import permission_cost as _permission_cost
-
-            card = permitted
-            cost = _permission_cost(card)
-            free_by_permission = card.may_play_free
-            cast_from_outside_hand = True
-            state.player_by_id(card.owner_id).exile.remove(card)
-            card.may_play_by = None
-            card.may_play_free = False
-            card.may_play_any_mana = False
-            card.cast_via_warp = False
-            card.cast_via_hand = False
         elif card is not None:
             cost = card.printing.mana_cost
             # Lightstall surcharge: "each spell cast this way costs {1}
@@ -4584,13 +4545,6 @@ def push_spell_copy(
 
     fire_copy_triggers(state, obj, controller_id)
     fire_becomes_target(state, tuple(targets), obj, controller_id)
-    # "Whenever you ... copy an instant or sorcery spell" observers.
-    from mtg_bot.effects.predicates import Event as _Event
-
-    dispatch_event(
-        state, _Event.SPELL_COPIED, label="copied",
-        spell=obj, controller=state.player_by_id(controller_id),
-    )
     return obj
 
 

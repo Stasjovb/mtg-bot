@@ -110,7 +110,8 @@ def test_sacrifice_lets_you_play_a_void_card_for_free():
     apply_action(state, 0, act)
     drain_stack(state)
     assert dauthi not in state.battlefield
-    assert victim.may_play_by == 0 and victim.may_play_free
+    perm = victim.exile_play_permission
+    assert perm.player_id == 0 and perm.free
     assert CastSpell(victim.id, cast_for_free=True) in legal_actions(state, 0)
     apply_action(state, 0, CastSpell(victim.id, cast_for_free=True))
     drain_stack(state)
@@ -124,4 +125,4 @@ def test_choose_void_card_edge_cases():
     card = add(state, 1, "Island", Zone.EXILE)
     card.named_counters = (("void", 1),)
     eff.resolve(state, 0, ())   # the agent declines
-    assert card.may_play_by is None
+    assert card.exile_play_permission is None

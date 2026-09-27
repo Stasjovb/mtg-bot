@@ -257,12 +257,6 @@ class Event(str, Enum):
     # Treasure token." -- an ``InsteadForSourceController`` transform
     # prevents the draw and queues the substitute action.
     WOULD_DRAW_A_CARD = "would_draw_a_card"
-    # A copy of a spell was just put onto the stack (CR 707.10). Subjects
-    # mirror ``IS_CAST``: the copy (``"spell"``) and its controller
-    # (``"controller"``). Models "Whenever you cast or copy an instant
-    # or sorcery spell" (Magecraft) -- a copy is not cast, so IS_CAST
-    # doesn't see it.
-    SPELL_COPIED = "spell_copied"
     # One or more cards were just put into a library from another zone
     # (CR 400.2; Wan Shi Tong's "Whenever one or more cards are put into
     # a library from anywhere"). Subject ``"player"`` is the library's
@@ -311,7 +305,6 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
     Event.DRAWS_CARD: ("player",),
     Event.WOULD_DRAW_A_CARD: ("player",),
-    Event.SPELL_COPIED: ("spell", "controller"),
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
 }
 
