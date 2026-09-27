@@ -18824,7 +18824,7 @@ incomplete CR conformance), add a section here with:
 
 ## Cube planeswalker bucket — engine shortcuts behind the claimed walkers (2026-09-27, `feature/cube-planeswalkers`)
 
-Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of Mysteries, Narset Parter of Veils, Teferi Time Raveler, Minsc & Boo, Jace the Mind Sculptor, Teferi Hero of Dominaria, Dack Fayden (plus Tezzeret, Cruel Captain, unchanged). Each shortcut below is deliberate; none drops a printed clause.
+Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of Mysteries, Narset Parter of Veils, Teferi Time Raveler, Minsc & Boo, Saheeli Sublime Artificer, Jace the Mind Sculptor, Teferi Hero of Dominaria, Dack Fayden, Karn Scion of Urza (plus Tezzeret, Cruel Captain, unchanged). Each shortcut below is deliberate; none drops a printed clause.
 
 **1. Search auto-pass doesn't know the new instant-speed permissions.**
 *Where:* `src/mtg_bot/search/_player_capabilities.py` (`_instant_speed_castable_in_hand`, `_has_instant_speed_activatable`) vs `src/mtg_bot/legal.py` (`_instant_speed_loyalty_activations`, `_may_cast_sorceries_as_flash`). *What:* `legal_actions` now offers The Wandering Emperor's loyalty abilities outside sorcery timing the turn she entered, and sorcery spells at instant speed under Teferi, Time Raveler's +1. The search-side capability short-circuit still believes no activated ability and no sorcery is ever usable off sorcery timing, so an MCTS/PIMC seat auto-passes those priority windows. Non-search agents (random / heuristic / UI) see the full legal set. Search code was out of scope for this bucket. *Failure mode:* under search, Emperor's flash-in-then-activate line and Teferi's +1 are never used off sorcery timing (Emperor still gets her sorcery-speed activations). *Fix scope:* two structural checks in the capability module (+ the hash already covers `continuous_effects` length and permanent shape) — under an hour. *Impact:* strength-only (missed lines for the two cards); zero perf cost.
@@ -18852,3 +18852,9 @@ Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of My
 
 **9. New per-turn / per-object state isn't in the search fingerprint.**
 *Where:* `Player.cards_drawn_this_turn` (Narset's cap) and `GameObject.entered_battlefield_turn` (Emperor's static) are not hashed by `search/canonical_state.py` / `search/info_set.py` (search code out of scope). *Failure mode:* two states differing only in those fields share a transposition entry — e.g. an opponent's second draw under Narset. Rare and bounded.
+
+**10. Karn's silver counters ride the exiled card object.**
+*Where:* `GameObject.silver_counters`, set by `RevealTopNOpponentChoosesOneRestExiledWithCounter` and cleared by `PutCardYouOwnWithCounterFromExileIntoHand`. The engine keeps one `GameObject` per card across zones, so a silver-countered card that leaves exile by some OTHER effect and is later exiled again would still carry the counter (CR 400.7 says it's a new object with none). No card in the pool moves cards out of exile that way today. *Fix scope:* clear per-zone counters on every exile exit, ~an hour.
+
+**11. Two-target copy effects enumerate slots per filter; the copy is a printing swap.**
+*Where:* `actions._activate_ability` consults an effect's optional `legal_targets_for_slot` hook (Saheeli, Sublime Artificer's -2) so each target slot uses its own filter and stays distinct. The copy itself follows the Cytoshape layer-1 precedent (`original_printing` snapshot + `is_copy` registry entry reverted at cleanup / zone change), keeping the copier's token status. The spell-cast pipeline does not have the per-slot hook yet (activation-only).
