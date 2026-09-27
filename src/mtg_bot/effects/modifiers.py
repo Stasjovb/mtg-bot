@@ -148,6 +148,23 @@ class Prevent(EventTransform):
         return new
 
 
+@dataclass(frozen=True)
+class WinTheGameInstead(EventTransform):
+    """Replace the event with "you win the game".
+
+    Sets ``payload["win_game"] = True``; the dispatch site declares the
+    affected player the winner instead of performing the event. Models
+    Jace, Wielder of Mysteries' "If you would draw a card while your
+    library has no cards in it, you win the game instead." (paired with
+    ``Event.WOULD_DRAW_FROM_EMPTY_LIBRARY``).
+    """
+
+    def apply(self, payload):
+        new = dict(payload)
+        new["win_game"] = True
+        return new
+
+
 # ────────────────────────────────────────────────────────────────────
 # EventPattern — what to match
 # ────────────────────────────────────────────────────────────────────
@@ -667,6 +684,7 @@ __all__ = [
     "AddInstances",
     "Replace",
     "Prevent",
+    "WinTheGameInstead",
     "EventPattern",
     "LayerPayload",
     "GrantKeyword",

@@ -2313,7 +2313,14 @@ def _activate_ability(
     # (Nesting Grounds's "from target permanent you control onto a
     # second target permanent" picks two targets per activation).
     targets: tuple[tuple[str, int], ...] = ()
-    if ability.effect.requires_target():
+    # "Up to one target" abilities (count_min 0) report
+    # ``requires_target() == False`` but still offer a target choice;
+    # the agent may decline (``choose_target`` -> None). Mirrors the
+    # spell / trigger paths, which key on ``target_count_range``.
+    if (
+        ability.effect.requires_target()
+        or ability.effect.target_count_range()[1] > 0
+    ):
         state.resolving_source = source
         try:
             legal = ability.effect.legal_targets(state, player_id)
@@ -3461,6 +3468,8 @@ def put_into_battlefield(
     # battlefield (loyalty_counters starts at 0).
     if obj.printing.is_planeswalker and obj.printing.loyalty is not None:
         obj.loyalty_counters = obj.printing.loyalty
+    # "As long as ~ entered this turn" stamp (The Wandering Emperor).
+    obj.entered_battlefield_turn = state.turn_number
     # Devour land N: as ``obj`` enters, agent may sacrifice any number
     # of lands; obj enters with N counters per land sacrificed.
     # Simplification: the random baseline doesn't ramp Famished's own

@@ -592,6 +592,14 @@ class GameObject:
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
     loyalty_counters: int = 0
+    # ``state.turn_number`` at the moment this object last entered the
+    # battlefield (stamped by ``actions.put_into_battlefield``). 0 for
+    # objects that never entered. Read by "as long as ~ entered this
+    # turn" gates (The Wandering Emperor's instant-speed loyalty
+    # abilities) -- distinct from ``summoning_sick``, which persists
+    # until the controller's NEXT untap step rather than ending with
+    # the turn the object entered.
+    entered_battlefield_turn: int = 0
     # Saga lore counters. Sagas would get a lore counter at the
     # start of each precombat main phase as a turn-based action;
     # the state-based action (CR 704.5r in audit numbering)
@@ -2505,6 +2513,11 @@ class Player:
     # which gates Mechan Shieldmate's defender-removing
     # ``ContinuousModifier`` via ``effective_keywords``.
     artifacts_entered_under_your_control_this_turn: int = 0
+    # Number of cards this player has drawn this turn (every draw via
+    # ``turn.draw_card``, draw step included). Reset at cleanup. Read
+    # by the "each opponent can't draw more than one card each turn"
+    # restriction (Narset, Parter of Veils).
+    cards_drawn_this_turn: int = 0
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None

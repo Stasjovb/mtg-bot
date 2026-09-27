@@ -88,7 +88,7 @@ def test_parse_effect_returns_none_for_malformed_destroy_phrase():
     # malformed-phrase shapes here keep the negative-case coverage
     # without overlapping the new grammar.
     assert _parse_effect("destroy target") is None
-    assert _parse_effect("destroy target creature you control") is None
+    assert _parse_effect("destroy target creature spell") is None
     assert _parse_effect("destroy target artifact creature") is None
 
 

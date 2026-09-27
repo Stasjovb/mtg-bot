@@ -202,10 +202,14 @@ def test_parse_effect_returns_none_for_malformed_optional_discard():
     assert _parse_effect(
         "you may discard a card. If you do, gain 1 life"
     ) is None
-    # Missing the ``If you do`` gate.
-    assert _parse_effect(
-        "you may discard a card and draw two cards"
-    ) is None
+    # Missing the ``If you do`` gate: not the optional-discard-then-
+    # draw primitive. The generic ``you may <effect>`` recognizer scopes
+    # the optional over the whole conjunction (both halves optional
+    # together), never over the discard alone.
+    from mtg_bot.effects.combinators import MayDo, Sequence
+    eff = _parse_effect("you may discard a card and draw two cards")
+    assert isinstance(eff, MayDo)
+    assert isinstance(eff.inner, Sequence)
 
 
 # ---------- you may sac another for self-pump UEOT ----------

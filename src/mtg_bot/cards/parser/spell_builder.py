@@ -777,6 +777,20 @@ def _parse_void_pump_replacement(
     )
 
 
+# Grandfathered users of the exactly-one-parseable-mode fallback below.
+# The fallback drops the unparsed modes, which the parser's
+# no-silent-no-op rule forbids for new cards; these printings claimed
+# through it before that rule was enforced and are pinned by existing
+# tests. Any other modal spell whose modes don't ALL parse stays
+# unclaimed (e.g. Suplex, whose "exile target artifact" mode parses
+# but whose damage + exile-if-it-would-die mode does not).
+_LEGACY_PARTIAL_MODAL_CLAIMS: frozenset[str] = frozenset({
+    "Get Out",
+    "Sheoldred's Edict",
+    "Untimely Malfunction",
+})
+
+
 def _parse_modal_choose_one(
     clauses: list[str], name: str
 ) -> Effect | None:
@@ -865,7 +879,11 @@ def _parse_modal_choose_one(
     if len(parsed_modes) == len(mode_lines):
         # All modes parse → full ModalChooseOne.
         return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
-    if len(parsed_modes) == 1 and not or_both:
+    if (
+        len(parsed_modes) == 1
+        and not or_both
+        and name in _LEGACY_PARTIAL_MODAL_CLAIMS
+    ):
         # Exactly one mode parseable (and this is a "Choose one —" spell,
         # not "Choose one or both —") → parser-is-right: return that mode's
         # effect directly. Same simplification as Get Out (mode 1 = counter

@@ -164,7 +164,7 @@ def test_at_beginning_of_unparseable_effect_rejected():
     # than silently dropping the effect). The wrapping card stays
     # unclaimed.
     parsed = _parse_triggered_ability_line(
-        "At the beginning of your end step, win the game."
+        "At the beginning of your end step, frobnicate the widget."
     )
     assert parsed is None
 
@@ -241,7 +241,7 @@ def test_at_beginning_of_with_tapped_creatures_gate_unparseable_inner_rejected()
     parsed = _parse_triggered_ability_line(
         "At the beginning of your end step, "
         "if you control two or more tapped creatures, "
-        "win the game."
+        "frobnicate the widget."
     )
     assert parsed is None
 
@@ -334,7 +334,7 @@ def test_at_beginning_of_void_prefix_unparseable_inner_rejected():
         "Void — At the beginning of your end step, "
         "if a nonland permanent left the battlefield this turn or "
         "a spell was warped this turn, "
-        "win the game."
+        "frobnicate the widget."
     )
     assert parsed is None
 

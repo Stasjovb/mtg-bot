@@ -197,6 +197,14 @@ class Event(str, Enum):
     # for entry counters / clones / etc.) is a separate deferred
     # pillar — see project notes.
     WOULD_GO_TO_GRAVEYARD = "would_go_to_graveyard"
+    # Subject ``(player,)``; payload starts empty. Fired by
+    # ``turn.draw_card`` when a player would draw a card while their
+    # library has no cards in it. Models Jace, Wielder of Mysteries'
+    # "If you would draw a card while your library has no cards in it,
+    # you win the game instead." -- a ``WinTheGameInstead`` transform
+    # sets ``payload["win_game"]`` and the draw site declares the win
+    # instead of recording the empty-library loss.
+    WOULD_DRAW_FROM_EMPTY_LIBRARY = "would_draw_from_empty_library"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -228,6 +236,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.TRIGGERED_ABILITY_TRIGGERS: ("triggering_obj", "ability_source"),
     Event.WOULD_PLACE_COUNTER: ("obj", "kind"),
     Event.WOULD_GO_TO_GRAVEYARD: ("card",),
+    Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
 }
 
 

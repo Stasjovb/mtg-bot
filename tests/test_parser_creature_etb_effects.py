@@ -294,12 +294,16 @@ def test_parse_effect_phrase_recognizes_return_up_to_one_other_permanent():
     )
 
 
-def test_parse_effect_returns_none_for_return_without_other():
-    # Without the ``other`` qualifier we don't claim the surface — the
-    # regex is anchored on the full ``up to one other`` phrase.
-    assert _parse_effect(
+def test_parse_effect_return_without_other_is_not_the_other_primitive():
+    # Without the ``other`` qualifier the ``up to one other`` primitive
+    # doesn't claim the surface; the generic ``return [up to one ]target
+    # <noun> to its owner's hand`` recognizer (effects_ext) does, WITHOUT
+    # the source-exclusion.
+    from mtg_bot.effects.generic.bounce import Bounce
+    eff = _parse_effect(
         "return up to one target permanent you control to its owner's hand"
-    ) is None
+    )
+    assert type(eff) is Bounce
 
 
 # ---------- end-to-end card claims ----------

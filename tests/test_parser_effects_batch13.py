@@ -206,13 +206,13 @@ def test_parse_spell_effect_phrase_recognizes_destroy_artifact_or_tapped():
     ) == DestroyTargetArtifactOrTappedCreature()
 
 
-def test_parse_effect_returns_none_for_destroy_target_creature_alone():
+def test_parse_effect_destroy_target_tapped_creature_is_generic_destroy():
     # ``destroy target tapped creature`` (without the ``artifact or``
-    # prefix) is a different shape and isn't claimed by this regex.
-    # No EoE card prints it but rejecting it keeps the grammar narrow.
-    assert _parse_effect(
-        "destroy target tapped creature"
-    ) is None
+    # prefix) is a different shape and isn't claimed by this regex; the
+    # generic ``destroy target <noun>`` recognizer (effects_ext) claims
+    # it with the composed tapped-creature filter.
+    eff = _parse_effect("destroy target tapped creature")
+    assert type(eff).__name__ == "Destroy"
 
 
 def test_parse_effect_bare_destroy_target_artifact_still_parses():

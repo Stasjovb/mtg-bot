@@ -168,8 +168,9 @@ def test_parse_effect_returns_none_for_malformed_mill():
 
 def test_parse_effect_returns_none_for_malformed_destroy_artifact():
     assert _parse_effect("destroy target artifacts") is None
-    assert _parse_effect("destroy target artifact you control") is None
-    assert _parse_effect("destroy target artifact or creature") is None
+    # "destroy target artifact you control" / "... artifact or creature"
+    # are well-formed and claim through the generic destroy recognizer.
+    assert _parse_effect("destroy target artifact spell") is None
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_land():
@@ -192,7 +193,7 @@ def test_parse_effect_returns_none_for_malformed_destroy_noncreature():
     # ``destroy target nonland permanent`` is now a recognized
     # primitive (Thaumaton Torpedo), so it parses; only the malformed
     # surface forms below should return None.
-    assert _parse_effect("destroy target noncreature permanent you control") \
+    assert _parse_effect("destroy target noncreature spell you control") \
         is None
 
 

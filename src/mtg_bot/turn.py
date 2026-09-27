@@ -112,15 +112,95 @@ def run_untap_step(state: GameState) -> None:
             obj.summoning_sick = False
 
 
+DREW_FROM_EMPTY_LIBRARY = "drew from empty library"
+
+
+def _draw_limited_to_one_per_turn(state: GameState, player_id: int) -> bool:
+    """True iff an opponent of ``player_id`` controls a permanent with
+    the "each opponent can't draw more than one card each turn"
+    restriction (Narset, Parter of Veils)."""
+    for o in state.battlefield:
+        if (
+            o.controller_id != player_id
+            and o.printing.opponents_cant_draw_more_than_one_card_each_turn
+        ):
+            return True
+    return False
+
+
+def _draw_from_empty_library_wins(state: GameState, player_id: int) -> bool:
+    """CR 614 replacement: "If you would draw a card while your library
+    has no cards in it, you win the game instead." (Jace, Wielder of
+    Mysteries). Routed through ``dispatch_replacement`` on
+    ``WOULD_DRAW_FROM_EMPTY_LIBRARY``; a ``WinTheGameInstead``
+    transform sets ``payload["win_game"]``."""
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    out = dispatch_replacement(
+        state, Event.WOULD_DRAW_FROM_EMPTY_LIBRARY,
+        affected_player_id=player_id,
+        subjects={"player": state.player_by_id(player_id)},
+        payload={},
+    )
+    return bool(out.get("win_game"))
+
+
+def win_the_game(state: GameState, player_id: int, reason: str) -> None:
+    """``player_id`` wins the game (CR 104.2a): every opponent loses.
+
+    A player whose only "loss" so far is an attempted draw from an
+    empty library during the CURRENT resolution hasn't actually lost
+    yet -- that loss is a state-based action (CR 704.5b) and no SBA
+    check happens mid-resolution. The engine records the empty-library
+    loss eagerly in ``draw_card``, so a win produced later in the same
+    resolution (Jace, Wielder of Mysteries' "Draw seven cards. Then if
+    your library has no cards in it, you win the game.") clears that
+    pending flag before declaring the winner. A game that is already
+    over is left untouched.
+    """
+    if state.is_over():
+        return
+    p = state.player_by_id(player_id)
+    if p.has_lost:
+        if p.lost_reason != DREW_FROM_EMPTY_LIBRARY:
+            return
+        p.has_lost = False
+        p.lost_reason = ""
+    for opp in state.players:
+        if opp.id != player_id and not opp.has_lost:
+            opp.has_lost = True
+            opp.lost_reason = f"P{player_id} won the game ({reason})"
+    state.winner_id = player_id
+    state.log.append(f"P{player_id} wins the game ({reason})")
+
+
 def draw_card(state: GameState, player_id: int) -> None:
     p = state.player_by_id(player_id)
+    # "Each opponent can't draw more than one card each turn." A draw
+    # the player can't perform simply doesn't happen (CR 101.2 -- the
+    # "can't" wins), so it can't be a draw from an empty library either.
+    if p.cards_drawn_this_turn >= 1 and _draw_limited_to_one_per_turn(
+        state, player_id,
+    ):
+        state.log.append(
+            f"P{player_id} can't draw more than one card this turn"
+        )
+        return
     if not p.library:
+        if _draw_from_empty_library_wins(state, player_id):
+            win_the_game(
+                state, player_id,
+                reason="would draw from an empty library",
+            )
+            return
         p.has_lost = True
-        p.lost_reason = "drew from empty library"
+        p.lost_reason = DREW_FROM_EMPTY_LIBRARY
         return
     top = p.library.pop(0)
     top.zone = Zone.HAND
     p.hand.append(top)
+    p.cards_drawn_this_turn += 1
 
 
 def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
@@ -1112,6 +1192,7 @@ def run_cleanup_step(state: GameState) -> None:
     for p in state.players:
         p.spells_cast_this_turn = 0
         p.noncreature_spells_cast_this_turn = 0
+        p.cards_drawn_this_turn = 0
         p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0

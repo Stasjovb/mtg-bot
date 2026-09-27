@@ -941,6 +941,25 @@ class CardPrinting:
     # aren't proposed once the caster's
     # Player.noncreature_spells_cast_this_turn is already ≥ 1.
     restricts_noncreature_spells_to_one_per_turn: bool = False
+    # Narset, Parter of Veils: "Each opponent can't draw more than one
+    # card each turn." While a permanent with this flag is on the
+    # battlefield, ``turn.draw_card`` skips any draw by an opponent of
+    # its controller who has already drawn a card this turn
+    # (``Player.cards_drawn_this_turn``).
+    opponents_cant_draw_more_than_one_card_each_turn: bool = False
+    # Teferi, Time Raveler: "Each opponent can cast spells only any time
+    # they could cast a sorcery." While a permanent with this flag is on
+    # the battlefield, ``legal.legal_actions`` offers an opponent of its
+    # controller no spell casts outside that opponent's sorcery timing
+    # (instants and flash included).
+    opponents_cast_spells_only_at_sorcery_speed: bool = False
+    # The Wandering Emperor: "As long as ~ entered this turn, you may
+    # activate her loyalty abilities any time you could cast an
+    # instant." ``legal.legal_actions`` lifts the sorcery-timing gate
+    # on this permanent's loyalty abilities while
+    # ``GameObject.entered_battlefield_turn == state.turn_number``
+    # (the once-per-turn loyalty gate still applies).
+    loyalty_abilities_at_instant_speed_if_entered_this_turn: bool = False
     # Type-change flag: while any permanent with this flag is on the
     # battlefield, every nonbasic land's mana-production colors are
     # overridden to {R} and its activated abilities are suppressed —
@@ -1655,16 +1674,26 @@ def make_planeswalker(
     name: str,
     cost: str,
     loyalty: int,
-    subtype: str,
+    subtype: str | None,
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     static_abilities: tuple[StaticAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = True,
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    opponents_cant_draw_more_than_one_card_each_turn: bool = False,
+    opponents_cast_spells_only_at_sorcery_speed: bool = False,
+    loyalty_abilities_at_instant_speed_if_entered_this_turn: bool = False,
 ) -> CardPrinting:
     """Build a Legendary Planeswalker card. Loyalty is the printed
     starting loyalty; it initializes ``GameObject.loyalty_counters``
     when the planeswalker enters the battlefield. SBAs send it to
     graveyard at 0 loyalty.
+
+    ``subtype`` may be ``None`` / empty for a planeswalker printed with
+    no planeswalker type (The Wandering Emperor's bare "Legendary
+    Planeswalker" type line). ``keywords`` carries printed keyword
+    lines (Flash). The remaining flags are the planeswalker statics
+    documented on ``CardPrinting``.
 
     Loyalty-activated abilities ARE modeled via ``activated_abilities``
     carrying ``ActivationCost.loyalty`` (signed cost) + ``sorcery_speed``
@@ -1676,7 +1705,10 @@ def make_planeswalker(
     abilities on the walker still fire normally.
     """
     prefix = "Legendary " if legendary else ""
-    type_line = f"{prefix}Planeswalker — {subtype}"
+    type_line = (
+        f"{prefix}Planeswalker — {subtype}" if subtype
+        else f"{prefix}Planeswalker"
+    )
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -1686,10 +1718,20 @@ def make_planeswalker(
         supertypes=supertypes,
         card_types=card_types,
         subtypes=subtypes,
+        keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
         loyalty=loyalty,
+        opponents_cant_draw_more_than_one_card_each_turn=(
+            opponents_cant_draw_more_than_one_card_each_turn
+        ),
+        opponents_cast_spells_only_at_sorcery_speed=(
+            opponents_cast_spells_only_at_sorcery_speed
+        ),
+        loyalty_abilities_at_instant_speed_if_entered_this_turn=(
+            loyalty_abilities_at_instant_speed_if_entered_this_turn
+        ),
     )
 
 
@@ -1876,6 +1918,7 @@ def make_token_creature(
     artifact: bool = False,
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     can_only_block_creatures_with_flying: bool = False,
+    legendary: bool = False,
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -1885,13 +1928,16 @@ def make_token_creature(
     ``artifact=True`` adds the Artifact card type (e.g. for EoE's colorless
     Robot tokens). ``can_only_block_creatures_with_flying`` plumbs the
     block-restriction flag onto the resulting printing — used by the EoE
-    Drone token.
+    Drone token. ``legendary=True`` adds the Legendary supertype (Minsc &
+    Boo's "Boo, a legendary 1/1 red Hamster creature token") so the legend
+    rule applies to it.
     """
     subtypes_str = " ".join(subtypes)
     extra_type = "Artifact " if artifact else ""
+    legend = "Legendary " if legendary else ""
     type_line = (
-        f"Token {extra_type}Creature — {subtypes_str}"
-        if subtypes else f"Token {extra_type}Creature"
+        f"{legend}Token {extra_type}Creature — {subtypes_str}"
+        if subtypes else f"{legend}Token {extra_type}Creature"
     )
     supertypes, card_types, subtypes_tup = _parse_type_line(type_line)
     return CardPrinting(

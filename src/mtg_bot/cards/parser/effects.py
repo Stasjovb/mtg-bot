@@ -3485,6 +3485,12 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     pipeline is single-choice). A multi-target spell needs a
     different combinator and isn't claimed by this slice.
     """
+    # ``you may X and Y`` -- the optional scopes over the whole
+    # conjunction, so it must not be carved into ``you may X`` + ``Y``
+    # (which would make ``Y`` mandatory). The whole phrase falls through
+    # to the ``you may <effect>`` recognizer instead.
+    if phrase.startswith("you may ") and " and " in phrase:
+        return None
     if " and " in phrase:
         pieces = phrase.split(" and ")
     elif ", then " in phrase:
@@ -6896,7 +6902,12 @@ def _parse_effect(phrase: str) -> Effect | None:
         # activated-ability layer (``sorcery_speed=True``), not in the
         # effect body.
         return LockOrUnlockDoorOfTargetRoomYouControl()
-    return None
+    # Last-resort extension recognizers (cube planeswalker bucket). Run
+    # after every recognizer above so they only claim phrases nothing
+    # else understood -- see ``effects_ext`` for the shape list.
+    from mtg_bot.cards.parser.effects_ext import parse_ext_effect
+
+    return parse_ext_effect(phrase)
 
 
 def _normalize_creature_effect_phrase(phrase: str) -> str:

@@ -303,6 +303,16 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 
             _fire_enchanted_dealt_damage_triggers(state, obj, amount)
+    elif kind == "planeswalker":
+        # CR 120.3c: damage dealt to a planeswalker removes that many
+        # loyalty counters from it. The 0-loyalty SBA (704.5i) buries it.
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is not None:
+            obj.loyalty_counters -= amount
+            state.log.append(
+                f"{obj.printing.name} takes {amount} damage "
+                f"(loyalty: {obj.loyalty_counters})"
+            )
 
 
 

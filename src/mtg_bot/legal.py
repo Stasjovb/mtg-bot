@@ -32,6 +32,94 @@ def _is_sorcery_timing(state: GameState, player_id: int) -> bool:
     )
 
 
+def _restricted_to_sorcery_speed_casts(
+    state: GameState, player_id: int,
+) -> bool:
+    """True iff an opponent of ``player_id`` controls a permanent with
+    "Each opponent can cast spells only any time they could cast a
+    sorcery." (Teferi, Time Raveler)."""
+    for o in state.battlefield:
+        if (
+            o.controller_id != player_id
+            and o.printing.opponents_cast_spells_only_at_sorcery_speed
+        ):
+            return True
+    return False
+
+
+CAST_SORCERIES_AS_FLASH_KIND = "cast_sorceries_as_flash"
+
+
+def _may_cast_sorceries_as_flash(state: GameState, player_id: int) -> bool:
+    """True iff a live "you may cast sorcery spells as though they had
+    flash" grant (Teferi, Time Raveler's +1; a
+    ``cast_sorceries_as_flash`` continuous-effect registry entry whose
+    ``params[0]`` is the granted player) covers ``player_id``."""
+    for ce in state.continuous_effects:
+        if (
+            ce.kind == CAST_SORCERIES_AS_FLASH_KIND
+            and ce.params
+            and ce.params[0] == player_id
+        ):
+            return True
+    return False
+
+
+def _loyalty_abilities_at_instant_speed(
+    state: GameState, obj: GameObject,
+) -> bool:
+    """The Wandering Emperor: "As long as ~ entered this turn, you may
+    activate her loyalty abilities any time you could cast an
+    instant." True iff ``obj`` carries that static and entered the
+    battlefield this turn."""
+    return (
+        obj.printing.is_planeswalker
+        and obj.printing.loyalty_abilities_at_instant_speed_if_entered_this_turn
+        and obj.entered_battlefield_turn == state.turn_number
+    )
+
+
+def _instant_speed_loyalty_activations(
+    state: GameState, player_id: int,
+) -> list[Action]:
+    """``ActivateAbility`` actions for loyalty abilities that may be
+    activated outside sorcery timing (The Wandering Emperor the turn
+    she entered). A loyalty ability's only cost is its loyalty cost
+    (CR 606.4), so the gates are: the once-per-turn-per-walker rule
+    (CR 606.3), loyalty affordability for a -N cost, and at least one
+    legal target when the effect targets."""
+    from mtg_bot.game import effective_activated_abilities
+
+    out: list[Action] = []
+    for obj in state.battlefield:
+        if obj.controller_id != player_id:
+            continue
+        if not _loyalty_abilities_at_instant_speed(state, obj):
+            continue
+        if (player_id, obj.id) in state.loyalty_activated_this_turn:
+            continue
+        for idx, ability in enumerate(
+            effective_activated_abilities(state, obj)
+        ):
+            if (
+                ability.cost.loyalty > 0
+                and obj.loyalty_counters < ability.cost.loyalty
+            ):
+                continue
+            if ability.effect.requires_target():
+                state.resolving_source = obj
+                try:
+                    has_legal = bool(
+                        ability.effect.legal_targets(state, player_id)
+                    )
+                finally:
+                    state.resolving_source = None
+                if not has_legal:
+                    continue
+            out.append(ActivateAbility(source_id=obj.id, ability_index=idx))
+    return out
+
+
 def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
     """Build the set of spend-restriction context tags for casting
     ``card``. Mirrors the logic in ``actions._cast_spell``: a card may
@@ -243,9 +331,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         seen_instant.add(key)
         actions.append(CastSpell(card.id, **kwargs))
 
+    sorcery_timing = _is_sorcery_timing(state, player_id)
+    # Teferi, Time Raveler's +1: sorcery spells as though they had flash.
+    sorceries_have_flash = _may_cast_sorceries_as_flash(state, player_id)
     for card in p.hand:
         instant_speed = (
             card.printing.is_instant or "flash" in card.printing.keywords
+            or (sorceries_have_flash and card.printing.is_sorcery)
         )
         if not instant_speed:
             continue
@@ -300,7 +392,16 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ):
             _emit_hand_cast(card, cast_for_free=True)
 
-    if not _is_sorcery_timing(state, player_id):
+    if not sorcery_timing:
+        # Instant-speed loyalty activations (The Wandering Emperor the
+        # turn she entered). Every other activated ability in the pool
+        # is surfaced at sorcery timing only (see the activated-ability
+        # block below).
+        actions.extend(_instant_speed_loyalty_activations(state, player_id))
+        # Teferi, Time Raveler: an opponent's static confines this
+        # player's spell casts to their own sorcery timing.
+        if _restricted_to_sorcery_speed_casts(state, player_id):
+            actions = [a for a in actions if not isinstance(a, CastSpell)]
         return actions
 
     # Land plays per turn at sorcery speed. Base = 1, increased by
@@ -366,6 +467,9 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if "flash" in card.printing.keywords:
             continue
         if card.printing.is_instant:
+            continue
+        if sorceries_have_flash and card.printing.is_sorcery:
+            # Already proposed by the instant-speed block above.
             continue
         # DSK Rooms: a Room is cast for the chosen half's mana cost,
         # not the printing's combined cost. Surface one CastSpell per
