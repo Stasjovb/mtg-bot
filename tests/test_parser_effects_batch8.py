@@ -162,8 +162,8 @@ def test_parse_effect_returns_none_for_malformed_mill():
     assert _parse_effect("mill one card") is None
     # Out-of-range word.
     assert _parse_effect("mill twelve cards") is None
-    # Wrong subject.
-    assert _parse_effect("each opponent mills three cards") is None
+    # Wrong subject (each opponent mills N is modeled; each player is not).
+    assert _parse_effect("each player mills three cards") is None
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_artifact():

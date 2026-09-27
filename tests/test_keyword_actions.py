@@ -248,3 +248,14 @@ def test_token_color_indicator_feeds_effective_colors():
     eff.resolve(state, 0, ())
     spirit = next(o for o in state.battlefield if o.printing.name == "Spirit")
     assert effective_colors(state, spirit) == frozenset({"W"})
+
+
+def test_scry_and_each_opponent_mills_phrases():
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    assert _parse_effect("scry 2") == Scry(amount=2)
+    assert _parse_effect("scry one") == Scry(amount=1)
+    assert _parse_effect("each opponent mills three cards") == EachOpponentMillsCards(amount=3)
+    assert _parse_effect("each opponent mills a card") == EachOpponentMillsCards(amount=1)
+    assert "Preordain" in OracleParserCardSource(pool="cube").claimed_names

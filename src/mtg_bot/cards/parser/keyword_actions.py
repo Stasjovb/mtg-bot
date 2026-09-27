@@ -20,6 +20,21 @@ _INVESTIGATE = re.compile(
 # ``you get {E}{E}`` / ``get {E}`` (the second arm of a compound
 # ``you gain 1 life and get {E}``).
 _GET_ENERGY = re.compile(r"^(?:you )?get ((?:\{E\})+)$")
+# ``scry N`` (CR 701.18) and ``each opponent mills N cards`` (CR 701.13).
+_SCRY_N = re.compile(r"^scry (\d+|one|two|three|four|five)$")
+_EACH_OPPONENT_MILLS = re.compile(
+    r"^each opponent mills (\d+|a|one|two|three|four|five|six|seven|eight|nine|ten) cards?$"
+)
+
+
+def _amount(raw: str) -> int:
+    words = {
+        "a": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
+    return int(raw) if raw.isdigit() else words[raw]
+
+
 _COUNT_WORDS = {
     "twice": 2, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
 }
@@ -101,6 +116,16 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     )
     from mtg_bot.effects.generic.tokens import CreateToken
 
+    m = _SCRY_N.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.library_lookat import Scry
+
+        return Scry(amount=_amount(m.group(1)))
+    m = _EACH_OPPONENT_MILLS.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+
+        return EachOpponentMillsCards(amount=_amount(m.group(1)))
     m = _GET_ENERGY.match(phrase)
     if m is not None:
         return GetEnergy(amount=m.group(1).count("{E}"))
