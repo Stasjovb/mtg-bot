@@ -395,6 +395,22 @@ def _parse_distribute(m: re.Match, count) -> Effect | None:
     return LookAtTopCardsDistribute(count=count, piles=tuple(piles))
 
 
+# The Flashback card.
+_GRANT_FLASHBACK_RE = re.compile(
+    r"^target (?P<desc>.+? card) in your graveyard gains flashback until "
+    r"end of turn\. [Tt]he flashback cost is equal to its mana cost$"
+)
+# Yawgmoth's Will (two separate oracle lines).
+_MAY_PLAY_FROM_GRAVEYARD_RE = re.compile(
+    r"^until end of turn, you may play lands and cast spells from your "
+    r"graveyard$"
+)
+_EXILE_INSTEAD_OF_GRAVEYARD_RE = re.compile(
+    r"^if a card would be put into your graveyard from anywhere this turn, "
+    r"exile that card instead$"
+)
+
+
 def _rest_fields(rest: str) -> tuple[str, bool]:
     if rest == "into your graveyard":
         return "graveyard", False
@@ -674,6 +690,28 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             ),
             ability=ability,
         )
+    m = _GRANT_FLASHBACK_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.graveyard_casting import (
+            GrantFlashbackToTargetCardUEOT,
+        )
+
+        f = parse_card_descriptor("a " + m.group("desc"))
+        if f is None:
+            return None
+        return GrantFlashbackToTargetCardUEOT(card_filter=f)
+    if _MAY_PLAY_FROM_GRAVEYARD_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.graveyard_casting import (
+            MayPlayFromGraveyardThisTurn,
+        )
+
+        return MayPlayFromGraveyardThisTurn()
+    if _EXILE_INSTEAD_OF_GRAVEYARD_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.graveyard_casting import (
+            ExileInsteadOfGraveyardThisTurn,
+        )
+
+        return ExileInsteadOfGraveyardThisTurn()
     m = _ADD_N_MANA_ANY_COMBINATION_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.base import AddManaToPool

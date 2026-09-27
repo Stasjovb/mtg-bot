@@ -494,6 +494,26 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     _emit_flashback_casts(instant_speed=True)
 
+    # Yawgmoth's Will: cast spells from the graveyard for their normal
+    # cost (instant-speed ones now, the rest at sorcery timing below).
+    def _emit_graveyard_permission_casts(instant_speed: bool) -> None:
+        if not p.may_play_from_graveyard_this_turn:
+            return
+        for gcard in p.graveyard:
+            pr = gcard.printing
+            if pr.is_land:
+                continue
+            if (pr.is_instant or "flash" in pr.keywords) != instant_speed:
+                continue
+            if (
+                _can_cast(state, player_id, gcard, _effective_cost(gcard, pr.mana_cost))
+                and _targets_are_satisfiable(state, player_id, gcard)
+                and _additional_costs_payable(state, player_id, gcard)
+            ):
+                actions.append(CastSpell(gcard.id))
+
+    _emit_graveyard_permission_casts(instant_speed=True)
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool
@@ -507,6 +527,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         return actions
 
     _emit_flashback_casts(instant_speed=False)
+    _emit_graveyard_permission_casts(instant_speed=False)
 
     # Land plays per turn at sorcery speed. Base = 1, increased by
     # permanents granting "you may play an additional land" (Icetill
@@ -516,7 +537,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         for o in state.battlefield
         if o.controller_id == player_id
     )
-    grants_play_from_graveyard = any(
+    grants_play_from_graveyard = p.may_play_from_graveyard_this_turn or any(
         o.controller_id == player_id
         and o.printing.grants_play_lands_from_graveyard
         for o in state.battlefield

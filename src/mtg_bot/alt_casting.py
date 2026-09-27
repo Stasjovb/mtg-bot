@@ -247,5 +247,11 @@ def cost_plus(cost: ManaCost, extra: "ManaCost | None") -> ManaCost:
 
 def flashback_cost(card: "GameObject") -> "ManaCost | None":
     """The flashback cost ``card`` can currently be cast for from its
-    owner's graveyard, or ``None``."""
-    return card.printing.flashback_cost
+    owner's graveyard, or ``None``: the printed flashback cost, else a
+    granted "flashback cost equal to its mana cost" (the Flashback
+    card)."""
+    if card.printing.flashback_cost is not None:
+        return card.printing.flashback_cost
+    if card.flashback_granted_until_eot:
+        return card.printing.mana_cost
+    return None

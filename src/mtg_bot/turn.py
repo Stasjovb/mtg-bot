@@ -283,6 +283,13 @@ def move_off_battlefield(
     """
     if obj not in state.battlefield:
         return
+    if (
+        destination == "graveyard"
+        and not obj.printing.is_token
+        and state.player_by_id(obj.owner_id).graveyard_exile_replacement_this_turn
+    ):
+        # Yawgmoth's Will: exiled instead (it never dies).
+        destination = "exile"
     was_creature = is_creature_now(obj)
     # Persist LKI (CR 702.79a): read before the object leaves.
     persists = (
@@ -1268,6 +1275,15 @@ def run_cleanup_step(state: GameState) -> None:
         p.spells_cast_this_turn = 0
         p.noncreature_spells_cast_this_turn = 0
         p.cards_drawn_this_turn = 0
+        p.may_play_from_graveyard_this_turn = False
+        p.graveyard_exile_replacement_this_turn = False
+        if any(c.flashback_granted_until_eot for c in p.graveyard):
+            from mtg_bot.game import _CowList
+
+            if isinstance(p.graveyard, _CowList):
+                p.graveyard.fork()
+            for c in p.graveyard:
+                c.flashback_granted_until_eot = False
         p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0
@@ -1303,7 +1319,45 @@ def state_based_actions(state: GameState) -> bool:
         if not _state_based_actions_pass(state):
             break
         any_changed = True
+    if apply_graveyard_exile_replacement(state):
+        any_changed = True
     return any_changed
+
+
+def graveyard_exile_replacement_active(state: GameState, owner_id: int) -> bool:
+    """Yawgmoth's Will's "If a card would be put into your graveyard from
+    anywhere this turn, exile that card instead" is active for
+    ``owner_id``."""
+    return state.player_by_id(owner_id).graveyard_exile_replacement_this_turn
+
+
+def apply_graveyard_exile_replacement(state: GameState) -> bool:
+    """Catch-all for the Yawgmoth's Will replacement: every card that
+    reached an affected player's graveyard through a path that doesn't
+    consult the replacement directly (discard / mill / ...) is moved to
+    exile. The main paths — permanents leaving the battlefield
+    (``move_off_battlefield``) and spells leaving the stack
+    (``actions._send_to_graveyard_or_library``) — redirect before the
+    card ever lands, so "dies" triggers don't fire for them. Cards that
+    were already in the graveyard when the replacement started were
+    recorded in ``Player.graveyard_exile_snapshot`` and stay put.
+    """
+    changed = False
+    for p in state.players:
+        if not p.graveyard_exile_replacement_this_turn:
+            continue
+        keep = p.graveyard_exile_snapshot
+        movers = [c for c in p.graveyard if c.id not in keep]
+        for c in movers:
+            p.graveyard.remove(c)
+            c.zone = Zone.EXILE
+            p.exile.append(c)
+            state.log.append(
+                f"{c.printing.name} is exiled instead of staying in "
+                f"P{p.id}'s graveyard"
+            )
+            changed = True
+    return changed
 
 
 _SBA_MAX_PASSES = 50

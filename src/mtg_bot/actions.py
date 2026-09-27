@@ -1632,6 +1632,7 @@ def _cast_spell(
         cost = _fb_cost(card)
         cast_from_outside_hand = True
         p.graveyard.remove(card)
+        card.flashback_granted_until_eot = False
         card.cast_via_flashback = True
         card.cast_via_warp = False
         card.cast_via_hand = False
@@ -1692,6 +1693,23 @@ def _cast_spell(
                     f"P{player_id} pays {life_cost} life for warp "
                     f"(life: {p.life})"
                 )
+    elif (
+        not use_warp
+        and p.may_play_from_graveyard_this_turn
+        and (
+            yw_card := next(
+                (c for c in p.graveyard if c.id == card_id), None
+            )
+        ) is not None
+    ):
+        # Yawgmoth's Will: cast from the graveyard for the normal cost.
+        card = yw_card
+        cost = card.printing.mana_cost
+        cast_from_outside_hand = True
+        p.graveyard.remove(card)
+        card.cast_via_warp = False
+        card.cast_via_hand = False
+        card.flashback_granted_until_eot = False
     elif (
         use_warp
         and (
@@ -3313,6 +3331,12 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
     from mtg_bot.effects.predicates import Event
 
     owner = state.player_by_id(card.owner_id)
+    if owner.graveyard_exile_replacement_this_turn:
+        # Yawgmoth's Will: exiled instead of going to the graveyard.
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(f"{card.printing.name} is exiled instead")
+        return
     out = dispatch_replacement(
         state, Event.WOULD_GO_TO_GRAVEYARD,
         affected_player_id=card.owner_id,

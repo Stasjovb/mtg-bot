@@ -762,6 +762,11 @@ class GameObject:
     # the card is exiled instead of going anywhere else when it leaves
     # the stack (``actions.move_spell_off_stack``).
     cast_via_flashback: bool = False
+    # The Flashback card: "Target instant or sorcery card in your
+    # graveyard gains flashback until end of turn. The flashback cost is
+    # equal to its mana cost." Set on the graveyard card; cleared at
+    # cleanup and when the card is cast.
+    flashback_granted_until_eot: bool = False
 
 
 # Fast shallow cloner generated once at module load. ``blocked_by`` is the
@@ -2524,6 +2529,16 @@ class Player:
     # Spells this player has cast this game (Once Upon a Time's "If this
     # spell is the first spell you've cast this game").
     spells_cast_this_game: int = 0
+    # Yawgmoth's Will: "Until end of turn, you may play lands and cast
+    # spells from your graveyard." Cleared at cleanup.
+    may_play_from_graveyard_this_turn: bool = False
+    # Yawgmoth's Will: "If a card would be put into your graveyard from
+    # anywhere this turn, exile that card instead." Active while True;
+    # cleared at cleanup (see ``turn.apply_graveyard_exile_replacement``).
+    graveyard_exile_replacement_this_turn: bool = False
+    # Ids of cards already in the graveyard when that replacement began
+    # (they stay; anything newer is exiled by the catch-all sweep).
+    graveyard_exile_snapshot: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions
