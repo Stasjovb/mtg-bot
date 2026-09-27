@@ -62,17 +62,33 @@ systemctl stop tailscaled || true
 rm -rf /var/lib/tailscale/* 2>/dev/null || true
 systemctl start tailscaled
 
-# Wait for tailscaled socket to be ready (CLI responds).
-for i in $(seq 1 30); do
-  tailscale status >/dev/null 2>&1 && break
-  echo "waiting for tailscaled socket ($i/30)"
+# Wait for tailscaled to answer the CLI. NOT ``tailscale status``:
+# after the state wipe above the node is "Logged out" and ``status``
+# exits non-zero even though the daemon is ready, so that check spun
+# all 30 s (2026-09-27 validation run). ``version --daemon`` only
+# needs the local socket.
+for i in $(seq 1 60); do
+  tailscale version --daemon >/dev/null 2>&1 && break
+  echo "waiting for tailscaled socket ($i/60)"
   sleep 1
 done
 
 mark tailscale-up
-tailscale up --authkey="${MTG_BOT_TAILSCALE_AUTHKEY:?launcher did not inject MTG_BOT_TAILSCALE_AUTHKEY; export it in the launcher host's environment (never commit it)}" \
-  --hostname="${HOSTNAME_TAG}-${IID}" --accept-dns=true --ssh
-TS_UP_RC=$?
+# NOTE: keep this ${VAR:?message} free of apostrophes -- bash reads a
+# bare ' inside the expansion as an unterminated quote and the whole
+# script dies here at parse time (that is what took down both
+# validation instances on 2026-09-27; the message gained "host's"
+# with the 2026-09-22 key rotation).
+: "${MTG_BOT_TAILSCALE_AUTHKEY:?launcher did not inject MTG_BOT_TAILSCALE_AUTHKEY; export it in the launcher environment (never commit it)}"
+TS_UP_RC=1
+for attempt in 1 2 3; do
+  if tailscale up --authkey="$MTG_BOT_TAILSCALE_AUTHKEY" --hostname="${HOSTNAME_TAG}-${IID}" --accept-dns=true --ssh; then
+    TS_UP_RC=0; break
+  fi
+  TS_UP_RC=$?
+  echo "tailscale up attempt $attempt failed (rc=$TS_UP_RC); retrying in 5s"
+  sleep 5
+done
 echo "tailscale up exit=$TS_UP_RC"
 
 # Wait for IP assignment. ``tailscale ip -4`` returns empty until

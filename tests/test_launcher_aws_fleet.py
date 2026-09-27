@@ -325,6 +325,34 @@ def test_user_data_script_has_no_literal_tailscale_key(user_data_path: Path):
     assert "${MTG_BOT_TAILSCALE_AUTHKEY:?" in text
 
 
+def test_user_data_script_parses_under_bash(user_data_path: Path):
+    """Regression (2026-09-27): commit 44f43c34 put an apostrophe
+    ("host's") inside the ``${MTG_BOT_TAILSCALE_AUTHKEY:?...}`` message.
+    Bash reads a bare ``'`` inside a parameter expansion as an opened
+    quote, so the script died with "unexpected EOF while looking for
+    matching `}'" the moment cloud-init reached that line -- both
+    validation instances never joined the tailnet. Two guards: the
+    expansion messages stay apostrophe-free (always), and ``bash -n``
+    accepts the whole script (when a bash is on PATH)."""
+    import re
+    import shutil
+    import subprocess
+
+    text = user_data_path.read_text(encoding="utf-8")
+    for m in re.finditer(r"\$\{[A-Z_]+:\?([^}]*)\}", text):
+        assert "'" not in m.group(1), (
+            f"apostrophe inside ${{VAR:?...}} message: {m.group(0)!r}"
+        )
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on PATH")
+    proc = subprocess.run(
+        [bash, "-n", str(user_data_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_render_runspec_injects_env_into_user_data(
     template_path: Path, user_data_path: Path,
 ):

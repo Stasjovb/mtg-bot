@@ -27,7 +27,7 @@ from moto import mock_aws
 
 from mtg_bot.cli import iterate_distributed as id_mod
 from mtg_bot.cli.runs import db as runs_db
-from mtg_bot.launcher.aws_fleet import FleetManager
+from mtg_bot.launcher.aws_fleet import FleetHealthTimeoutError, FleetManager
 
 
 # ---------------------------------------------------------------------------
@@ -517,3 +517,61 @@ storage_uri = "null://"
     assert "--queue-url" in record["argv"]
     qi = record["argv"].index("--queue-url")
     assert record["argv"][qi + 1] == "http://desktop-j05412i:5099"
+
+
+@mock_aws
+@pytest.mark.parametrize(
+    "exc",
+    [FleetHealthTimeoutError("boot never IDLE", unhealthy_instance_ids=["i-x"]),
+     KeyboardInterrupt()],
+    ids=["health_timeout", "ctrl_c"],
+)
+def test_aws_mode_terminates_fleet_when_wait_for_healthy_fails(
+    aws_toml: Path, progress_dir: Path, stub_heartbeat,
+    runs_db_env: Path, monkeypatch, exc,
+):
+    """Regression (2026-09-27): the fleet-teardown finalize hook is
+    only registered once the cycle lifecycle opens, which happens
+    AFTER wait_for_healthy. A health timeout (or Ctrl-C) during the
+    boot wait therefore leaked two running spot instances. The
+    launcher must terminate the fleet itself before propagating."""
+    _seed_iam_instance_profile()
+    moto_client = boto3.client("ec2", region_name="us-east-1")
+    created: dict[str, Any] = {}
+    base_factory = _make_aws_fleet_factory(moto_client=moto_client)
+
+    def factory(*a, **kw):
+        fm = base_factory(*a, **kw)
+
+        def _fail(instances=None, **_kw):
+            raise exc
+        fm.wait_for_healthy = _fail
+        created["fleet"] = fm
+        return fm
+
+    monkeypatch.setattr(id_mod, "FleetManager", factory)
+    spawn_record: dict[str, Any] = {}
+    monkeypatch.setattr(
+        id_mod, "spawn_iterate_subprocess", _spawn_stub(spawn_record),
+    )
+
+    with pytest.raises(type(exc)):
+        id_mod.main([
+            "--config", str(aws_toml),
+            "--progress-dir", str(progress_dir),
+            "--deck-pool", "data/decks.json.gz",
+        ])
+    fm = created["fleet"]
+    assert fm._terminated is True
+    assert fm.instances, "launch_fleet should have created instances"
+    for inst in fm.instances:
+        assert inst.terminated_at is not None
+    # EC2 agrees: nothing left running.
+    states = {
+        i["State"]["Name"]
+        for r in moto_client.describe_instances()["Reservations"]
+        for i in r["Instances"]
+    }
+    assert "running" not in states and "pending" not in states
+    # iterate was never spawned.
+    assert "argv" not in spawn_record
