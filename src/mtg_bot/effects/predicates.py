@@ -133,6 +133,35 @@ class Event(str, Enum):
     # tapped" gate is encoded via ``Source(IsTapped())`` AND-ed onto
     # the source-self ``IsSelf()`` arm.
     BEGINNING_OF_POSTCOMBAT_MAIN = "beginning_of_postcombat_main"
+    # Beginning of the active player's draw step (Mana Vault's "At the
+    # beginning of your draw step, if this artifact is tapped, it deals
+    # 1 damage to you."). Dispatched by ``turn.run_draw_step`` right
+    # after the draw turn-based action (CR 504.1-504.2). Subject is the
+    # active Player, like the other turn-structure events.
+    BEGINNING_OF_DRAW_STEP = "beginning_of_draw_step"
+    # Blockers have been declared and at least one attacking creature is
+    # unblocked. Subjects: the attacking Player (``"player"``) and the
+    # defending Player (``"defender"``). Fired once per blocker
+    # declaration by ``combat.declare_blockers`` (Coveted Jewel: "Whenever
+    # one or more creatures an opponent controls attack you and aren't
+    # blocked"). The attacking player is also passed as the fixed target
+    # ``("player", id)`` so "that player …" effects can address them.
+    ATTACKERS_UNBLOCKED = "attackers_unblocked"
+    # A player created one or more creature tokens during the stack item
+    # that just resolved (batched per resolution by
+    # ``actions._flush_creature_token_creations``). Subject: that Player.
+    CREATURE_TOKENS_CREATED = "creature_tokens_created"
+    # A player discarded a specific card (dispatched alongside
+    # DISCARDS_CARD by ``turn.fire_opponent_discards_triggers`` when the
+    # card is known). Subjects: the discarding Player (``"player"``) and
+    # the discarded card (``"card"``); the card is also the fixed target
+    # ``("card_in_graveyard", id)``.
+    CARD_DISCARDED = "card_discarded"
+    # Combat damage dealt by ``source`` to the creature ``target``
+    # (dispatched per pair by ``combat._fire_combat_damage_to_creature_
+    # triggers``; the damaged creature is the fixed target). Separate
+    # from DEALS_COMBAT_DAMAGE, whose observers assume a player target.
+    DEALS_COMBAT_DAMAGE_TO_CREATURE = "deals_combat_damage_to_creature"
     # A Room has just had its second / final door unlocked, transitioning
     # ``unlocked_halves`` from a single-half set to the full set
     # (``len(unlocked_halves) == len(printing.room_halves)``). Subject is
@@ -232,6 +261,11 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
+    Event.BEGINNING_OF_DRAW_STEP: ("player",),
+    Event.ATTACKERS_UNBLOCKED: ("player", "defender"),
+    Event.CREATURE_TOKENS_CREATED: ("player",),
+    Event.CARD_DISCARDED: ("player", "card"),
+    Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
@@ -479,6 +513,50 @@ class IsHost(TriggerPredicate):
         if host_id is None:
             return False
         return getattr(obj, "id", None) == host_id
+
+
+@dataclass(frozen=True)
+class IsFormerHost(TriggerPredicate):
+    """The named subject is the permanent this Equipment/Aura was
+    attached to when that permanent left the battlefield — "Whenever
+    equipped creature dies" (Skullclamp).
+
+    ``move_off_battlefield`` unattaches Equipment from a leaving host
+    BEFORE dispatching DIES; it records the host id on the Equipment's
+    transient ``last_attached_to`` for the duration of that dispatch,
+    which this predicate reads.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        host_id = getattr(source, "last_attached_to", None)
+        if host_id is None:
+            return False
+        return getattr(obj, "id", None) == host_id
+
+
+@dataclass(frozen=True)
+class HostAttacksWithAnother(TriggerPredicate):
+    """"Whenever equipped creature and at least one other creature
+    attack" (Glimmer Lens): on the once-per-declaration YOU_ATTACK
+    event, the source's host is attacking and at least one other
+    creature its controller controls is attacking too."""
+
+    def matches(self, state, subjects, source):
+        host_id = getattr(source, "attached_to", None)
+        if host_id is None:
+            return False
+        attackers = [
+            o for o in state.battlefield
+            if o.attacking and o.controller_id == source.controller_id
+        ]
+        return (
+            any(o.id == host_id for o in attackers) and len(attackers) >= 2
+        )
 
 
 @dataclass(frozen=True)

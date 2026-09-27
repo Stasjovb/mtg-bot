@@ -59,7 +59,7 @@ class DiscardSelf(Effect):
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
             discarded_any = True
         return discarded_any
 
@@ -160,7 +160,7 @@ class EachOpponentDiscards(Effect):
                 state.log.append(
                     f"P{p.id} discards {card.printing.name}"
                 )
-                fire_opponent_discards_triggers(state, p.id)
+                fire_opponent_discards_triggers(state, p.id, card=card)
 
     def describe(self) -> str:
         if self.count == 1:

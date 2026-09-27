@@ -92,6 +92,7 @@ from mtg_bot.effects.object_predicates import (
     HasCounter,
     HasKeyword,
     HasPowerAtMost,
+    HasPowerToughness,
     HasSubtype,
     IsArtifact,
     IsCreature,
@@ -110,6 +111,7 @@ from mtg_bot.effects.state_predicates import (
     IsMonarch,
     LoneAttackerForYou,
     OpponentControlsMoreLandsThanYou,
+    NoncreatureSpellsCastThisTurn,
     SpellsCastThisTurn,
     VoidActive,
 )
@@ -119,6 +121,8 @@ from mtg_bot.effects.predicates import (
     Always,
     Controlled,
     Event,
+    HostAttacksWithAnother,
+    IsFormerHost,
     IsHost,
     IsSelf,
     Predicate,
@@ -560,6 +564,9 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "your second main phase": (
         Event.BEGINNING_OF_POSTCOMBAT_MAIN, Controlled(YOU),
     ),
+    # ``At the beginning of your draw step`` — Mana Vault's tapped-tax
+    # trigger. Dispatched by ``turn.run_draw_step`` after the draw.
+    "your draw step": (Event.BEGINNING_OF_DRAW_STEP, Controlled(YOU)),
 }
 
 
@@ -791,6 +798,50 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         Event.IS_CAST,
         Controlled(YOU, subject="controller") & StateBound(SpellsCastThisTurn(n=2)),
     ),
+    # ``Whenever you cast a noncreature spell`` (The Fantasticar) — the
+    # spell subject must be noncreature, cast by the source's controller.
+    # Coveted Jewel — once per blocker declaration, when an opponent's
+    # attacking creatures attacking you are (partly) unblocked.
+    "one or more creatures an opponent controls attack you and aren't "
+    "blocked": (
+        Event.ATTACKERS_UNBLOCKED,
+        Controlled(OPPONENT, subject="player")
+        & Controlled(YOU, subject="defender"),
+    ),
+    # Kaldra Compleat's granted ability (the damaged creature is the
+    # event's fixed target).
+    "this creature deals combat damage to a creature": (
+        Event.DEALS_COMBAT_DAMAGE_TO_CREATURE, IsSelf(subject="source"),
+    ),
+    # Sword of the Meek — a creature you control with P/T exactly 1/1.
+    "a 1/1 creature you control enters": (
+        Event.ENTERS,
+        Subject(None, IsCreature() & HasPowerToughness(1, 1)) & Controlled(YOU),
+    ),
+    # Currency Converter — the discarded card is the fixed target.
+    "you discard a card": (
+        Event.CARD_DISCARDED, Controlled(YOU, subject="player"),
+    ),
+    # Staff of the Storyteller — batched per resolving stack item.
+    "you create one or more creature tokens": (
+        Event.CREATURE_TOKENS_CREATED, Controlled(YOU),
+    ),
+    "you cast a noncreature spell": (
+        Event.IS_CAST,
+        Subject("spell", ~IsCreature()) & Controlled(YOU, subject="controller"),
+    ),
+    # ``Whenever you cast your fourth noncreature spell each turn`` (The
+    # Fantasticar). Latches on the controller's running noncreature
+    # count, gated on the triggering spell itself being noncreature.
+    **{
+        f"you cast your {word} noncreature spell each turn": (
+            Event.IS_CAST,
+            Subject("spell", ~IsCreature())
+            & Controlled(YOU, subject="controller")
+            & StateBound(NoncreatureSpellsCastThisTurn(n=n)),
+        )
+        for word, n in (("second", 2), ("third", 3), ("fourth", 4))
+    },
     # ``Whenever you sacrifice another creature or artifact`` — phase
     # 8 migrated from ``trigger="sacrifice_creature_or_artifact"``.
     # ``Event.IS_SACRIFICED`` carries the sacrificed permanent as
@@ -1019,6 +1070,21 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this land enters": (Event.ENTERS, IsSelf()),
     "this land attacks": (Event.ATTACKS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
+    # Cube Equipment / Vehicles: same type-blind ``IsSelf()`` family.
+    "this Equipment enters": (Event.ENTERS, IsSelf()),
+    "this Vehicle enters": (Event.ENTERS, IsSelf()),
+    "this Vehicle attacks": (Event.ATTACKS, IsSelf()),
+    # Equipment relational triggers (the Equipment is the source, its
+    # host the subject). ``equipped creature dies`` reads the host
+    # recorded at the moment it left (``IsFormerHost`` — the Equipment
+    # is already unattached when DIES dispatches); Skullclamp.
+    "equipped creature attacks": (Event.ATTACKS, IsHost(subject="attacker")),
+    "equipped creature dies": (Event.DIES, IsFormerHost()),
+    # Glimmer Lens — once per attack declaration, when the host and at
+    # least one other creature you control attack.
+    "equipped creature and at least one other creature attack": (
+        Event.YOU_ATTACK, Controlled(YOU) & HostAttacksWithAnother(),
+    ),
     # Batch 12 — Aura relational trigger family. Three trigger conditions
     # that fire based on what happens to the Aura's enchanted host:
     #
@@ -1193,6 +1259,11 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters or leaves the battlefield": (
         (Event.ENTERS, IsSelf()),
         (Event.LEAVES_BATTLEFIELD, IsSelf()),
+    ),
+    # Smuggler's Copter — "Whenever this Vehicle attacks or blocks".
+    "this Vehicle attacks or blocks": (
+        (Event.ATTACKS, IsSelf()),
+        (Event.BLOCKS, IsSelf(subject="blocker")),
     ),
     # Duskmourn "Eerie" ability-word trigger — fires both when an
     # enchantment under your control enters AND when you fully unlock
@@ -1400,6 +1471,10 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "there are seven or more cards in your graveyard": (
         StateBound(CardsInGraveyardAtLeast(7))
     ),
+    # Mana Vault: "At the beginning of your draw step, if this artifact
+    # is tapped, …" — the source-state gate (the event subject is the
+    # active player, so the check reads the source via ``Source``).
+    "this artifact is tapped": Source(IsTapped()),
 }
 
 

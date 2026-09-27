@@ -153,8 +153,11 @@ class DealDamageEachOpponent(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import player_damage_prevented
         for p in state.players:
             if p.id == controller_id or p.has_lost:
+                continue
+            if player_damage_prevented(state, p.id):
                 continue
             p.life -= self.amount
             state.log.append(
@@ -180,10 +183,11 @@ class DealDamageToControllerAndAddMana(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import ManaCoin
+        from mtg_bot.game import ManaCoin, player_damage_prevented
 
         p = state.player_by_id(controller_id)
-        p.life -= self.damage
+        if not player_damage_prevented(state, controller_id):
+            p.life -= self.damage
         state.log.append(
             f"{state.resolving_source.printing.name if state.resolving_source else 'land'} "
             f"deals {self.damage} to P{controller_id} (life: {p.life})"

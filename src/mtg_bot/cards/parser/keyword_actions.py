@@ -167,8 +167,15 @@ _SYNTH_TOKEN = re.compile(
     r"(?P<subtypes>[A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*)*) "
     r"(?P<artifact>artifact )?(?P<enchantment>enchantment )?creature tokens?"
     r"(?P<attacking> that's tapped and attacking)?"
-    r"(?: with (?P<body>[^\"]+?))?"
+    r"(?: with (?:(?P<body>[^\"]+?)|(?P<quoted>\"[^\"]*\")))?"
     r"(?P<attacking_after> that's tapped and attacking)?$"
+)
+# Quoted token abilities modeled as printing fields: Reckoner
+# Bankbuster's Pilot, "This token crews Vehicles as though its power
+# were N greater." -> ``CardPrinting.crew_power_bonus = N``. Any other
+# quoted ability keeps the card unclaimed.
+_TOKEN_CREW_BONUS_RIDER = re.compile(
+    r'^"This token crews Vehicles as though its power were (\d+) greater\."$'
 )
 _COLOR_LETTER = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
 _CARDINALS = {
@@ -210,6 +217,12 @@ def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
         if parsed is None:
             return None
         keywords = parsed
+    crew_bonus = 0
+    if m.group("quoted") is not None:
+        crew_m = _TOKEN_CREW_BONUS_RIDER.match(m.group("quoted"))
+        if crew_m is None:
+            return None
+        crew_bonus = int(crew_m.group(1))
     raw_count = m.group("count")
     count = int(raw_count) if raw_count.isdigit() else _CARDINALS[raw_count]
     colors = frozenset(
@@ -223,6 +236,9 @@ def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
         enchantment=m.group("enchantment") is not None,
         colors=colors,
     )
+    if crew_bonus:
+        from dataclasses import replace
+        printing = replace(printing, crew_power_bonus=crew_bonus)
     attacking = (
         m.group("attacking") is not None
         or m.group("attacking_after") is not None

@@ -145,6 +145,35 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
     return frozenset(kinds)
 
 
+def _citadel_top_card(state: GameState, player_id: int):
+    """The top card of ``player_id``'s library when they control a
+    permanent granting Bolas's Citadel's play-from-top, else None."""
+    p = state.player_by_id(player_id)
+    if not p.library:
+        return None
+    if not any(
+        o.controller_id == player_id
+        and o.printing.grants_play_from_top_paying_life
+        for o in state.battlefield
+    ):
+        return None
+    return p.library[0]
+
+
+def _can_cast_paying_life(
+    state: GameState, player_id: int, card: GameObject,
+) -> bool:
+    """Bolas's Citadel cast legality: life to pay the mana value (CR
+    119.4 — a player can pay life only up to their life total), plus the
+    usual target / additional-cost gates."""
+    p = state.player_by_id(player_id)
+    return (
+        p.life >= card.printing.mana_cost.total
+        and _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    )
+
+
 def _can_cast(
     state: GameState, player_id: int, card: GameObject, cost: ManaCost,
 ) -> bool:
@@ -180,11 +209,12 @@ def _targets_are_satisfiable(
     effect = card.printing.spell_effect
     if effect is None or not effect.requires_target():
         return True
+    from mtg_bot.game import drop_protected_players
     from mtg_bot.keyword_rules import filter_targetable
 
-    legal = filter_targetable(
+    legal = drop_protected_players(state, filter_targetable(
         state, effect.legal_targets(state, player_id), card, player_id,
-    )
+    ))
     if not legal:
         return False
     min_t, _max_t = effect.target_count_range()
@@ -539,6 +569,17 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     _emit_graveyard_permission_casts(instant_speed=True)
 
+    # Bolas's Citadel: the top card of the library may be cast paying
+    # life equal to its mana value (instant-speed spells here; the rest
+    # below at sorcery timing).
+    citadel_top = _citadel_top_card(state, player_id)
+    if citadel_top is not None and not citadel_top.printing.is_land and (
+        citadel_top.printing.is_instant
+        or "flash" in citadel_top.printing.keywords
+    ):
+        if _can_cast_paying_life(state, player_id, citadel_top):
+            actions.append(CastSpell(citadel_top.id))
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool
@@ -876,6 +917,20 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             ) and _targets_are_satisfiable(state, player_id, top):
                 actions.append(CastSpell(top.id))
 
+    # Bolas's Citadel at sorcery timing: the top card is a land (play it
+    # if a land drop remains) or a sorcery-speed spell (cast it paying
+    # life equal to its mana value).
+    if citadel_top is not None:
+        if citadel_top.printing.is_land:
+            if p.lands_played_this_turn < max_lands:
+                actions.append(PlayLand(citadel_top.id))
+        elif not (
+            citadel_top.printing.is_instant
+            or "flash" in citadel_top.printing.keywords
+        ) and _can_cast_paying_life(state, player_id, citadel_top):
+            if CastSpell(citadel_top.id) not in actions:
+                actions.append(CastSpell(citadel_top.id))
+
     # DSK Rooms: ``UnlockRoomHalf`` is sorcery-speed only (CR 715.4).
     # Surface one action per Room the controller controls + locked
     # half whose mana cost is currently payable. The unlock action is
@@ -943,6 +998,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if (
                 ability.activate_only_if is not None
                 and not ability.activate_only_if.matches(state, player_id)
+            ):
+                continue
+            # ``Activate only during your turn.`` (Wishclaw Talisman).
+            if (
+                ability.activate_only_during_your_turn
+                and state.active_player().id != player_id
             ):
                 continue
             # Cost payability checks. Apply ability-level mana
@@ -1048,6 +1109,45 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_desert:
                     continue
+            if ability.cost.sacrifice_n_nonland_permanents:
+                n_nonland = sum(
+                    1 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and not o2.printing.is_land
+                )
+                if n_nonland < ability.cost.sacrifice_n_nonland_permanents:
+                    continue
+            if ability.cost.crew:
+                from mtg_bot.game import crew_candidates, crew_power
+                total = sum(
+                    crew_power(state, o2)
+                    for o2 in crew_candidates(state, player_id, obj)
+                )
+                if total < ability.cost.crew:
+                    continue
+            if ability.cost.sacrifice_subtype:
+                wanted_sub = ability.cost.sacrifice_subtype
+                if not any(
+                    o2.controller_id == player_id
+                    and wanted_sub in effective_subtypes(state, o2)
+                    for o2 in state.battlefield
+                ):
+                    continue
+            if ability.cost.sacrifice_nontoken_artifact:
+                if not any(
+                    o2.controller_id == player_id
+                    and o2.printing.is_artifact
+                    and not o2.printing.is_token
+                    for o2 in state.battlefield
+                ):
+                    continue
+            if ability.cost.remove_counters_from_self_kind:
+                from mtg_bot.game import counter_count
+                if (
+                    counter_count(obj, ability.cost.remove_counters_from_self_kind)
+                    < ability.cost.remove_counters_from_self_amount
+                ):
+                    continue
             if ability.cost.requires_own_creature_power_at_least:
                 from mtg_bot.game import effective_power
                 threshold = ability.cost.requires_own_creature_power_at_least
@@ -1144,12 +1244,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if ability.effect.requires_target():
                 state.resolving_source = obj
                 try:
+                    from mtg_bot.game import drop_protected_players
                     from mtg_bot.keyword_rules import filter_targetable
 
-                    has_legal = bool(filter_targetable(
+                    has_legal = bool(drop_protected_players(state, filter_targetable(
                         state,
                         ability.effect.legal_targets(state, player_id),
                         obj, player_id,
+                    )
                     ))
                 finally:
                     state.resolving_source = None

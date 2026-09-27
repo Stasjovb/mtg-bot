@@ -737,6 +737,31 @@ class GameObject:
     # goader's next turn (cleared at the goader's untap step). See
     # ``mtg_bot.designations``.
     goaded_by: Optional[int] = None
+    # (``named_counters`` — defined above — also backs the cube
+    # artifacts' wish / story / burden / influence counters, read and
+    # written through ``counter_count`` / ``add_counters`` /
+    # ``remove_counters``, which route dedicated kinds to their own
+    # fields. ``put_into_battlefield`` resets it on entry: a new object,
+    # CR 400.7.)
+    # Imprint link (Chrome Mox): set on a card exiled by an imprint
+    # ability to ``(source_id, source_etb_timestamp)``. Pairing the id
+    # with the source's ``etb_timestamp`` makes the link die when the
+    # source leaves and re-enters (it becomes a new object), without a
+    # cleanup hook on every leave-the-battlefield path.
+    imprinted_on: Optional[tuple[int, int]] = None
+    # Transient: the id of the permanent this Equipment/Aura was attached
+    # to when that permanent left the battlefield. Set by
+    # ``move_off_battlefield`` only for the duration of the leave-event
+    # dispatch (``IsFormerHost`` — Skullclamp's "Whenever equipped
+    # creature dies"), then cleared.
+    last_attached_to: Optional[int] = None
+    # Harnessed designation (CR 701.64, The Mind Stone): turns on the
+    # permanent's ∞ abilities. Cleared when it enters the battlefield
+    # anew (``put_into_battlefield``).
+    harnessed: bool = False
+    # Sunburst: colors of mana spent to cast this card, recorded by
+    # ``actions._cast_spell`` and consumed (reset) as it enters.
+    sunburst_colors_spent: int = 0
     # DSK Haunted Screen "Activate only once" tracking. The printed
     # rider on Haunted Screen's ``{7}: …`` activation reads "Activate
     # only once." which the engine simulates by latching this flag to
@@ -1083,6 +1108,21 @@ def _static_bonuses(
     for source in state.battlefield:
         if source.attached_to != obj.id:
             continue
+        scaling = source.printing.equipment_bonus_per_controlled
+        if scaling is not None and not _source_layer6_wiped(state, source):
+            types, per_p, per_t = scaling
+            # Explicit loops (no genexp): this hot read must stay
+            # closure-free (tests/test_layered_read_closure_free.py).
+            n = 0
+            for o in state.battlefield:
+                if o.controller_id != source.controller_id:
+                    continue
+                for t in types:
+                    if t in o.printing.card_types:
+                        n += 1
+                        break
+            power_bonus += n * per_p
+            toughness_bonus += n * per_t
         eb = source.printing.equipment_bonuses
         if eb is None:
             continue
@@ -2228,6 +2268,109 @@ def add_charge_counters(
     return effective
 
 
+# Counter kinds stored in a dedicated ``GameObject`` scalar field.
+_DEDICATED_COUNTER_FIELDS: dict[str, str] = {
+    "+1/+1": "plus_one_counters",
+    "-1/-1": "minus_one_counters",
+    "charge": "charge_counters",
+    "stun": "stun_counters",
+    "loyalty": "loyalty_counters",
+    "flying": "flying_counters",
+    "time": "time_counters",
+    "lore": "lore_counters",
+}
+
+
+def player_damage_prevented(state: GameState, player_id: int) -> bool:
+    """True when damage to ``player_id`` is prevented (protection from
+    everything — The One Ring). Logs the prevention."""
+    p = state.player_by_id(player_id)
+    if p.protected_from_everything:
+        state.log.append(
+            f"damage to P{player_id} is prevented (protection from everything)"
+        )
+        return True
+    return False
+
+
+def drop_protected_players(state: GameState, targets: list) -> list:
+    """Remove players with protection from everything from a list of
+    candidate ``(kind, id)`` targets (CR 702.16b: they can't be
+    targeted)."""
+    return [
+        t for t in targets
+        if not (
+            t[0] == "player"
+            and state.player_by_id(t[1]).protected_from_everything
+        )
+    ]
+
+
+def crew_candidates(state: GameState, player_id: int, vehicle: GameObject):
+    """Untapped creatures ``player_id`` controls that can be tapped to
+    pay ``vehicle``'s Crew cost (the Vehicle itself excluded)."""
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and o.id != vehicle.id
+        and not o.tapped
+        and is_creature_now(o)
+    ]
+
+
+def crew_power(state: GameState, obj: GameObject) -> int:
+    """Power ``obj`` contributes to a Crew cost (never negative)."""
+    return max(0, effective_power(state, obj) + obj.printing.crew_power_bonus)
+
+
+def counter_count(obj: GameObject, kind: str) -> int:
+    """Number of ``kind`` counters on ``obj`` (any counter kind)."""
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        return getattr(obj, attr)
+    return named_counter_count(obj, kind)
+
+
+def _set_named_counter(obj: GameObject, kind: str, n: int) -> None:
+    set_named_counters(obj, kind, n)
+
+
+def add_counters(
+    state: GameState, obj: GameObject, kind: str, amount: int,
+) -> int:
+    """Put ``amount`` ``kind`` counters on ``obj``; returns the number
+    actually added. ``+1/+1`` and ``charge`` route through their
+    existing helpers (Loading-Zone doubling applies); other kinds are
+    added verbatim."""
+    if amount <= 0:
+        return 0
+    if kind == "+1/+1":
+        return add_plus_one_counters(state, obj, amount)
+    if kind == "charge":
+        return add_charge_counters(state, obj, amount)
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        setattr(obj, attr, getattr(obj, attr) + amount)
+        return amount
+    _set_named_counter(obj, kind, counter_count(obj, kind) + amount)
+    return amount
+
+
+def remove_counters(obj: GameObject, kind: str, amount: int) -> int:
+    """Remove up to ``amount`` ``kind`` counters from ``obj``; returns
+    the number actually removed."""
+    have = counter_count(obj, kind)
+    removed = min(have, max(amount, 0))
+    if removed == 0:
+        return 0
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        setattr(obj, attr, have - removed)
+    else:
+        _set_named_counter(obj, kind, have - removed)
+    return removed
+
+
 def add_stun_counters(
     state: GameState, obj: GameObject, amount: int
 ) -> int:
@@ -2623,6 +2766,19 @@ class Player:
     # run_untap_step installs the override at the start of this
     # player's next turn (saving the original agent in
     # ``agent_override_saved`` so cleanup can revert).
+    # "You gain protection from everything until your next turn." (The
+    # One Ring). While set: damage that would be dealt to this player is
+    # prevented (``player_damage_prevented``) and the player can't be
+    # the target of spells or abilities (``drop_protected_players`` at
+    # every target-selection site). Cleared at the start of this
+    # player's next untap step.
+    protected_from_everything: bool = False
+    # Latched by ``put_into_battlefield`` when a creature token enters
+    # under this player's control; flushed (and the
+    # CREATURE_TOKENS_CREATED event dispatched once) at the end of the
+    # resolving stack item — Staff of the Storyteller's "Whenever you
+    # create one or more creature tokens".
+    pending_creature_tokens_created: bool = False
     scheduled_agent_override: Optional["Agent"] = None
     scheduled_agent_override_by: Optional[int] = None
     agent_override_saved: Optional["Agent"] = None
@@ -2921,10 +3077,9 @@ class GameState:
     # built). Used by ``MVOfCostPaidObjectPlus`` and any future formula
     # that reads a per-object property of a cost-paid object.
     resolving_cost_paid_objects: tuple[GameObject, ...] = ()
-    # The instant / sorcery card currently resolving (None otherwise).
-    # Read by effects that refer to "this spell" as an object, e.g.
-    # Time Spiral's "Exile Time Spiral." (``ExileThisSpell``).
-    resolving_spell: Optional[GameObject] = None
+    # (``resolving_spell`` above is also read by effects that refer to
+    # "this spell" as an object, e.g. Time Spiral's "Exile Time Spiral."
+    # — ``ExileThisSpell``.)
     # The resolving spell's announced damage division (``StackItem.division``).
     resolving_division: tuple[int, ...] = ()
     # Number of cards moved by the most recent
@@ -3617,10 +3772,6 @@ class GameState:
         new_state.resolving_counter_amount = self.resolving_counter_amount
         new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
         new_state.resolving_division = self.resolving_division
-        new_state.resolving_spell = (
-            clone_obj(self.resolving_spell)
-            if self.resolving_spell is not None else None
-        )
         new_state.last_exile_recall_count = self.last_exile_recall_count
         new_state.suppress_exiled_by_source_on_leave_for = (
             self.suppress_exiled_by_source_on_leave_for

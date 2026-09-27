@@ -181,6 +181,23 @@ class Delirium(StatePredicate):
 
 
 @dataclass(frozen=True)
+class NoncreatureSpellsCastThisTurn(StatePredicate):
+    """The viewer has cast exactly ``n`` noncreature spells this turn
+    (``Player.noncreature_spells_cast_this_turn``, read post-increment
+    like ``SpellsCastThisTurn``). The Fantasticar's "Whenever you cast
+    your fourth noncreature spell each turn"."""
+
+    n: int
+
+    def test(self, state, viewer_id):
+        try:
+            player = state.player_by_id(viewer_id)
+        except (KeyError, AttributeError):
+            return False
+        return getattr(player, "noncreature_spells_cast_this_turn", 0) == self.n
+
+
+@dataclass(frozen=True)
 class SpellsCastThisTurn(StatePredicate):
     """The viewer has cast exactly ``n`` spells this turn (counted via
     ``Player.spells_cast_this_turn``).

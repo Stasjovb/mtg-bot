@@ -280,6 +280,35 @@ class IsTapped(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class HasPowerToughness(ObjectPredicate):
+    """The object's effective power and toughness are exactly
+    ``power``/``toughness`` ("a 1/1 creature" — Sword of the Meek)."""
+
+    power: int
+    toughness: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_power, effective_toughness
+
+        return (
+            effective_power(state, obj) == self.power
+            and effective_toughness(state, obj) == self.toughness
+        )
+
+
+@dataclass(frozen=True)
+class IsHarnessed(ObjectPredicate):
+    """The object is harnessed (CR 701.64 — The Mind Stone's
+    ``Harness``). Gates the Infinity (``∞ —``) abilities of Infinity
+    Stones: composed as ``Source(IsHarnessed())`` on their triggers."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "harnessed", False))
+
+
+@dataclass(frozen=True)
 class IsSource(ObjectPredicate):
     """The object IS the currently-resolving source.
 

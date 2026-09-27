@@ -1113,6 +1113,8 @@ _SEARCH_LIBRARY_REVEAL_HAND_SHUFFLE_FILTER: dict[str, tuple[str, bool]] = {
     # put it into your hand, then shuffle." The ``may_fail=True``
     # flag preserves graceful behaviour when the library has no Slivers.
     "Sliver": ("sliver", True),
+    # ``a land card`` — Expedition Map's tutor (any land, basic or not).
+    "land": ("land", True),
 }
 # "Search your library for a basic land card, put it onto the
 # battlefield tapped, then shuffle." — Moldering Gym's door trigger
@@ -1837,8 +1839,13 @@ _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
 # the existing ``ReturnTargetCreatureToOwnersHand`` paths in
 # ``spell_builder``) is deferred until a second example with a
 # varying piece exists.
+#
+# Parameterized over the ``up to one`` optionality: the bare
+# ``return target creature to its owner's hand`` (Aether Spellbomb's
+# activation) claims through the same recognizer with ``optional``
+# left False.
 _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
-    r"^return up to one target creature to its owner's hand$"
+    r"^return (up to one )?target creature to its owner's hand$"
 )
 # "Return up to one target nonland permanent to its owner's hand." —
 # Unnerving Grasp ``{2}{U}`` Sorcery (Duskmourn). Optional-target bounce
@@ -3345,13 +3352,14 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
             int(m.group(3)), int(m.group(4)),
         ):
             return _synthesize_creature_token_effect(phrase)
+        token_printing = registered
         # ``that's tapped and attacking`` qualifier — token enters declared
         # as an attacker in the current combat. Only meaningful during an
         # attack trigger; the ``attacking`` flag on ``CreateToken`` sets
         # obj.attacking=True and clears summoning sickness in ``resolve``.
         attacking = "that's tapped and attacking" in phrase
         return CreateToken(
-            token_printing=TOKEN_PRINTINGS[subtype],
+            token_printing=token_printing,
             count=count,
             tapped=tapped or attacking,  # attacking tokens are always tapped
             attacking=attacking,
@@ -3524,6 +3532,23 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
             return None
     else:
         return None
+    result = _parse_effect_pieces(pieces)
+    if result is None and pieces != _split_effect_sentences(phrase):
+        # The preferred in-sentence joiner split at the wrong boundary
+        # (Wishclaw Talisman's ``search your library for a card, put it
+        # into your hand, then shuffle. An opponent gains control of
+        # this artifact`` carries ``, then `` INSIDE its first
+        # sentence). Fall back to the sentence-boundary split; this only
+        # ever claims phrases the joiner split rejected outright.
+        sentences = _split_effect_sentences(phrase)
+        if len(sentences) >= 2:
+            result = _parse_effect_pieces(sentences)
+    return result
+
+
+def _parse_effect_pieces(pieces: list[str]) -> Effect | None:
+    """Parse every piece of a split compound phrase; ``Sequence`` of the
+    results, or ``None`` if any piece fails or more than one targets."""
     parsed: list[Effect] = []
     for piece in pieces:
         eff = _parse_effect(piece)
@@ -4801,6 +4826,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # dispatchers so this phrase can try other parse paths (belt-
         # and-suspenders; in practice the inner always either parses or
         # the card is unclaimed).
+    # Artifact-bucket recognizers (cube mana rocks / utility artifacts /
+    # Equipment / Vehicles) live in their own module; tried before the
+    # compound splitter so their multi-sentence shapes (``flip a coin.
+    # If you lose the flip, …``) stay welded together.
+    from mtg_bot.cards.parser.artifact_effects import (
+        _parse_artifact_effect_phrase,
+    )
+    artifact_effect = _parse_artifact_effect_phrase(phrase)
+    if artifact_effect is not None:
+        return artifact_effect
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
@@ -6115,15 +6150,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetCreatureToOwnersHand(
             allow_nonland_permanent=True, optional=True
         )
-    if _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(
-        phrase
-    ) is not None:
+    m = _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(phrase)
+    if m is not None:
         # ``return up to one target creature to its owner's hand`` —
         # Bottomless Pool's door trigger. ``up to one`` →
         # ``optional=True`` (resolves as a no-op fizzle if no target
         # chosen); no controller restriction (any creature, friend or
-        # foe, is a legal target).
-        return ReturnTargetCreatureToOwnersHand(optional=True)
+        # foe, is a legal target). The bare ``target creature`` form
+        # (Aether Spellbomb) is the mandatory single-target bounce.
+        return ReturnTargetCreatureToOwnersHand(
+            optional=m.group(1) is not None,
+        )
     m = _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS.match(
         phrase
     )
@@ -6942,7 +6979,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ext
     from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
 
-    return parse_card_flow_effect(phrase)
+    card_flow = parse_card_flow_effect(phrase)
+    if card_flow is not None:
+        return card_flow
+    # Artifact-bucket last-resort shapes ("you may X. If you do, Y").
+    from mtg_bot.cards.parser.artifact_effects import (
+        _parse_artifact_effect_fallback,
+    )
+    return _parse_artifact_effect_fallback(phrase)
 
 
 def _normalize_creature_effect_phrase(phrase: str) -> str:

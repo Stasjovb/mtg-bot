@@ -891,7 +891,17 @@ def _classify_sac_for_mana(
             or c.pay_life
             or c.discard_a_card
             or c.pay_energy
+            or c.discard_hand
+            or c.sacrifice_subtype
+            or c.sacrifice_nontoken_artifact
+            or c.remove_counters_from_self_kind
+            or c.crew
+            or c.sacrifice_n_nonland_permanents
         ):
+            continue
+        # ``Activate only as an instant.`` (Lion's Eye Diamond): the
+        # ability can't be activated mid-payment of another spell.
+        if ability.activate_only_as_instant:
             continue
         if not isinstance(ability.effect, AddManaToPool):
             continue
@@ -1091,6 +1101,7 @@ def _activate_sac_for_mana_for_cost(
 def auto_tap_for_cost(
     state: GameState, player_id: int, cost: ManaCost,
     spell_kind: "str | frozenset[str]" = "spell",
+    color_sources: "list | None" = None,
 ) -> list[GameObject]:
     """Pay ``cost`` by consuming floating mana first (respecting spend
     restrictions for ``spell_kind``), then tapping lands for the
@@ -1100,11 +1111,19 @@ def auto_tap_for_cost(
     ``spell_kind`` accepts a single string (legacy) or a frozenset of
     context tags — see ``_coin_satisfies_context`` for the supported
     tags.
+
+    ``color_sources`` (optional out-list, Sunburst): one frozenset per
+    mana unit spent, holding the colors that unit could have been
+    (a fixed-color coin / a colored pip -> that color; an ``any`` coin
+    -> WUBRG; a land paying generic -> the colors it can produce;
+    colorless -> empty). ``max_distinct_colors`` turns it into the
+    number of colors of mana spent.
     """
     if cost.phyrexian:
         # Unsettled Phyrexian pips (a payment path that didn't run
         # ``_settle_phyrexian_pips``) are paid with mana of their color.
         cost = cost.with_colored(cost.phyrexian)
+    track = color_sources is not None
     p = state.player_by_id(player_id)
     lands = _untapped_lands(state, player_id)
     used_coin_ids: list[int] = []  # indices into p.mana_pool
@@ -1120,6 +1139,8 @@ def auto_tap_for_cost(
                 continue
             if _coin_matches_color(coin, color):
                 used_coin_ids.append(idx)
+                if track:
+                    color_sources.append(frozenset({color}))
                 need -= 1
                 if need == 0:
                     break
@@ -1133,6 +1154,8 @@ def auto_tap_for_cost(
         for l in matching[:need]:
             used_lands.add(l.id)
             tapped.append(l)
+            if track:
+                color_sources.append(frozenset({color}))
     # Generic cost (including hybrid pips, treated as generic-1 per
     # the engine simplification): pool first, then lands. The hybrid
     # contribution to the bound was missing here, mirroring the same
@@ -1146,10 +1169,19 @@ def auto_tap_for_cost(
         if not _coin_satisfies_context(coin, spell_kind):
             continue
         used_coin_ids.append(idx)
+        if track:
+            color_sources.append(
+                _WUBRG_SET if coin.color == "any"
+                else frozenset({coin.color}) - {"C"}
+            )
         generic_need -= 1
     remaining_lands = [l for l in lands if l.id not in used_lands]
     for l in remaining_lands[:generic_need]:
         tapped.append(l)
+        if track:
+            color_sources.append(
+                frozenset(effective_land_produces(state, l)) & _WUBRG_SET
+            )
     # Remove consumed coins from the pool (high index first to keep
     # lower indices stable).
     for idx in sorted(used_coin_ids, reverse=True):
@@ -1169,6 +1201,31 @@ def auto_tap_for_cost(
                 f"{l.printing.name}'s mana (life: {p.life})"
             )
     return tapped
+
+
+_WUBRG_SET: frozenset[str] = frozenset({"W", "U", "B", "R", "G"})
+
+
+def max_distinct_colors(color_sources: list) -> int:
+    """Maximum number of distinct colors assignable to the spent mana
+    units (bipartite matching unit -> color; Sunburst counts "colors of
+    mana spent", and each flexible unit's color is its controller's
+    choice, taken here to maximize the count)."""
+    match: dict[str, int] = {}
+
+    def _augment(i: int, seen: set[str]) -> bool:
+        for c in color_sources[i]:
+            if c in seen:
+                continue
+            seen.add(c)
+            if c not in match or _augment(match[c], seen):
+                match[c] = i
+                return True
+        return False
+
+    for i in range(len(color_sources)):
+        _augment(i, set())
+    return len(match)
 
 
 def apply_action(state: GameState, player_id: int, action: Action) -> None:
@@ -1262,6 +1319,10 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         (c for c in p.graveyard if c.id == card_id), None
     )) is not None:
         p.graveyard.remove(card)
+    elif p.library and p.library[0].id == card_id:
+        # Bolas's Citadel: "You may play lands … from the top of your
+        # library" (legal_actions gates on the grant).
+        card = p.library.pop(0)
     else:
         card = next(
             (c for c in p.exile if c.id == card_id), None
@@ -1554,10 +1615,11 @@ def _select_spell_targets(
         if division_total is not None and x_hint is not None:
             max_t = min(max_t, max(1, division_total(state, player_id, x_hint)))
         if max_t > 0:
-            legal = filter_targetable(
+            from mtg_bot.game import drop_protected_players
+            legal = drop_protected_players(state, filter_targetable(
                 state, spell_effect.legal_targets(state, player_id),
                 card, player_id,
-            )
+            ))
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
             slot_kinds = spell_effect.target_slot_kinds()
@@ -1851,7 +1913,29 @@ def _cast_spell(
             # for the topmost card, and only if the controller has a
             # permanent granting it. legal_actions also requires the
             # card to be an artifact.
-            if (
+            citadel = bool(p.library) and p.library[0].id == card_id and any(
+                o.printing.grants_play_from_top_paying_life
+                for o in state.battlefield
+                if o.controller_id == player_id
+            )
+            if citadel:
+                # Bolas's Citadel: "pay life equal to its mana value
+                # rather than pay its mana cost" — an alternative cost,
+                # so the mana cost becomes zero (X is 0; additional
+                # costs such as kicker are still paid in mana below).
+                card = p.library.pop(0)
+                life = card.printing.mana_cost.total
+                p.life -= life
+                state.log.append(
+                    f"P{player_id} pays {life} life to cast "
+                    f"{card.printing.name} from the top of their library "
+                    f"(life: {p.life})"
+                )
+                cost = ManaCost()
+                cast_from_outside_hand = True
+                card.cast_via_warp = False
+                card.cast_via_hand = False
+            elif (
                 p.library
                 and p.library[0].id == card_id
                 and any(
@@ -2059,8 +2143,10 @@ def _cast_spell(
     haste_coins_before = sum(
         1 for c in p.mana_pool if c.grants_haste_to_creature_spell
     )
+    color_sources: "list | None" = [] if card.printing.sunburst else None
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
+        color_sources=color_sources,
     )
     # Arena of Glory: "If any of that mana is spent on a creature spell,
     # it gains haste until end of turn." A UEOT grant on the spell's
@@ -2079,6 +2165,10 @@ def _cast_spell(
             state.log.append(
                 f"{card.printing.name} gains haste until end of turn"
             )
+    if color_sources is not None:
+        # Sunburst (CR 702.44): remember how many colors of mana were
+        # spent; ``put_into_battlefield`` places that many counters.
+        card.sunburst_colors_spent = max_distinct_colors(color_sources)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -2569,7 +2659,7 @@ def _activate_hand_ability(
             f"P{player_id} discards {card.printing.name} "
             f"(cost for its ability)"
         )
-        fire_opponent_discards_triggers(state, player_id)
+        fire_opponent_discards_triggers(state, player_id, card=discarded)
         cost_paid_objects.append(card)
     elif ability.cost.exile_self:
         # "Exile this card from your hand" (Simian Spirit Guide shape).
@@ -2757,13 +2847,22 @@ def _activate_ability(
     # ``requires_target() == False`` but still offer a target choice;
     # the agent may decline (``choose_target`` -> None). Mirrors the
     # spell / trigger paths, which key on ``target_count_range``.
+    # "Untap X target lands" (Candelabra) takes exactly X targets.
+    x_targets = (
+        getattr(ability.effect, "target_count_is_x", False)
+        and ability_x_value > 0
+    )
     if (
         ability.effect.requires_target()
         or ability.effect.target_count_range()[1] > 0
+        or x_targets
     ):
         state.resolving_source = source
         try:
-            legal = ability.effect.legal_targets(state, player_id)
+            from mtg_bot.game import drop_protected_players
+            legal = drop_protected_players(
+                state, ability.effect.legal_targets(state, player_id),
+            )
         finally:
             state.resolving_source = None
         legal = filter_targetable(state, legal, source, player_id)
@@ -2772,6 +2871,10 @@ def _activate_ability(
         _, max_t = ability.effect.target_count_range()
         if max_t <= 0:
             max_t = 1  # back-compat with older requires_target-only effects
+        if getattr(ability.effect, "target_count_is_x", False):
+            # "Untap X target lands" (Candelabra of Tawnos): the target
+            # count is the X paid above.
+            max_t = ability_x_value
         if legal:
             p = state.player_by_id(player_id)
             chosen_list: list[tuple[str, int]] = []
@@ -3119,7 +3222,141 @@ def _activate_ability(
             f"P{player_id} discards {discarded.printing.name} "
             f"(cost for {source.printing.name}'s ability)"
         )
-        fire_opponent_discards_triggers(state, player_id)
+        fire_opponent_discards_triggers(state, player_id, card=discarded)
+    # Crew N cost (CR 702.122): tap untapped creatures with total power
+    # N or more. The activator picks one creature at a time until the
+    # total is reached; legal_actions already guaranteed it's reachable.
+    if ability.cost.crew:
+        from mtg_bot.game import crew_candidates, crew_power
+        from mtg_bot.turn import tap_permanent
+
+        p = state.player_by_id(player_id)
+        chosen_crew: list = []
+        total = 0
+        while total < ability.cost.crew:
+            options = [
+                o for o in crew_candidates(state, player_id, source)
+                if o not in chosen_crew
+            ]
+            if not options:
+                break
+            pick = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_permanent_to_tap(
+                    state, player_id, [o.id for o in options],
+                )
+                pick = next((o for o in options if o.id == pick_id), options[0])
+            chosen_crew.append(pick)
+            total += crew_power(state, pick)
+        for o in chosen_crew:
+            tap_permanent(state, o)
+            cost_paid_objects.append(o)
+        state.log.append(
+            f"P{player_id} crews {source.printing.name} with "
+            f"{', '.join(o.printing.name for o in chosen_crew)}"
+        )
+
+    # "Sacrifice N nonland permanents" cost (Bolas's Citadel). Picked one
+    # at a time; the source is a legal choice; legal_actions guaranteed
+    # at least N exist.
+    if ability.cost.sacrifice_n_nonland_permanents:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        picked: list = []
+        for _ in range(ability.cost.sacrifice_n_nonland_permanents):
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == player_id
+                and not o.printing.is_land
+                and o not in picked
+            ]
+            if not options:
+                break
+            chosen = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options],
+                )
+                chosen = next((o for o in options if o.id == pick_id), options[0])
+            picked.append(chosen)
+        for o in picked:
+            state.log.append(
+                f"P{player_id} sacrifices {o.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            _sacrifice(state, o)
+            cost_paid_objects.append(o)
+
+    # "Remove N <kind> counters from this <permanent>" cost (Staff of
+    # the Storyteller, Wishclaw Talisman, Reckoner Bankbuster).
+    if ability.cost.remove_counters_from_self_kind:
+        from mtg_bot.game import remove_counters
+
+        kind = ability.cost.remove_counters_from_self_kind
+        removed = remove_counters(
+            source, kind, ability.cost.remove_counters_from_self_amount,
+        )
+        state.log.append(
+            f"P{player_id} removes {removed} {kind} counter(s) from "
+            f"{source.printing.name} (cost)"
+        )
+
+    # "Sacrifice a <Subtype>" / "Sacrifice a nontoken artifact" costs
+    # (Retrofitter Foundry, Thopter Foundry). The source itself is a
+    # legal choice when it qualifies. legal_actions gates on one existing.
+    if ability.cost.sacrifice_subtype or ability.cost.sacrifice_nontoken_artifact:
+        from mtg_bot.game import effective_subtypes
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        p = state.player_by_id(player_id)
+        if ability.cost.sacrifice_subtype:
+            wanted_sub = ability.cost.sacrifice_subtype
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == player_id
+                and wanted_sub in effective_subtypes(state, o)
+            ]
+        else:
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == player_id
+                and o.printing.is_artifact and not o.printing.is_token
+            ]
+        if options:
+            chosen = options[0]
+            if p.agent is not None:
+                pick_id = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options]
+                )
+                chosen = next(
+                    (o for o in options if o.id == pick_id), options[0]
+                )
+            state.log.append(
+                f"P{player_id} sacrifices {chosen.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            _sacrifice(state, chosen)
+            cost_paid_objects.append(chosen)
+
+    # "Discard your hand" cost (Lion's Eye Diamond). Every card in the
+    # activator's hand goes to the graveyard; an empty hand is a legal
+    # zero-card payment. Discard observers fire once per card.
+    if ability.cost.discard_hand:
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import fire_opponent_discards_triggers
+
+        p = state.player_by_id(player_id)
+        discarded = list(p.hand)
+        p.hand.clear()
+        for card in discarded:
+            card.zone = Zone.GRAVEYARD
+            p.graveyard.append(card)
+            state.log.append(
+                f"P{player_id} discards {card.printing.name} "
+                f"(cost for {source.printing.name}'s ability)"
+            )
+            fire_opponent_discards_triggers(state, player_id, card=card)
 
     # Exile-self and sacrifice-self are paid LAST so the source is still
     # on the battlefield for target selection. exile_self moves the source
@@ -3161,11 +3398,18 @@ def _activate_ability(
     if ability.is_mana_ability:
         state.resolving_source = source
         state.resolving_cost_paid_objects = tuple(cost_paid_objects)
+        # Mana abilities with an {X} cost (Wizard's Rockets' "Add X
+        # mana in any combination of colors") read the paid X through
+        # the same ``resolving_x_value`` channel stack-resolved
+        # abilities use.
+        prior_x = state.resolving_x_value
+        state.resolving_x_value = ability_x_value
         try:
             ability.effect.resolve(state, player_id, targets)
         finally:
             state.resolving_source = None
             state.resolving_cost_paid_objects = ()
+            state.resolving_x_value = prior_x
         state.log.append(
             f"P{player_id} activates {source.printing.name}'s mana ability"
         )
@@ -3567,6 +3811,31 @@ def drain_stack(state: GameState) -> None:
 
 
 def resolve_top_of_stack(state: GameState) -> None:
+    """Resolve the top stack item, then report any creature-token
+    creation it performed (see ``_flush_creature_token_creations``)."""
+    _resolve_top_of_stack_item(state)
+    _flush_creature_token_creations(state)
+
+
+def _flush_creature_token_creations(state: GameState) -> None:
+    """Dispatch ``Event.CREATURE_TOKENS_CREATED`` once per player who
+    created one or more creature tokens during the resolution that just
+    finished ("Whenever you create one or more creature tokens" —
+    Staff of the Storyteller). ``put_into_battlefield`` latches
+    ``Player.pending_creature_tokens_created`` for every creature token
+    entering; this flush batches them per resolution."""
+    for p in state.players:
+        if not p.pending_creature_tokens_created:
+            continue
+        p.pending_creature_tokens_created = False
+        from mtg_bot.effects.predicates import Event as _Event
+        dispatch_event(
+            state, _Event.CREATURE_TOKENS_CREATED,
+            label="creature-tokens-created", player=p,
+        )
+
+
+def _resolve_top_of_stack_item(state: GameState) -> None:
     item = state.stack.pop()
 
     # Countered spells: no effects, no ETBs; the card goes to its owner's
@@ -3937,8 +4206,33 @@ def put_into_battlefield(
     you control enters" triggers on other permanents the controller
     controls if the entering object is an artifact.
     """
+    # Mox Diamond-style self-replacement (CR 614.1c): "If this would
+    # enter, you may discard a land card instead. If you do, put it onto
+    # the battlefield. If you don't, put it into its owner's graveyard."
+    if obj.printing.enters_only_by_discarding_land:
+        if not _discard_land_to_enter(state, obj, controller_id):
+            return
     obj.zone = Zone.BATTLEFIELD
     obj.controller_id = controller_id
+    # A permanent entering the battlefield is a new object (CR 400.7):
+    # it carries no named counters except those it enters with, and no
+    # harnessed designation.
+    obj.named_counters = ()
+    obj.harnessed = False
+    if obj.printing.enters_with_counters:
+        from mtg_bot.game import add_counters
+        for kind, amount in obj.printing.enters_with_counters:
+            add_counters(state, obj, kind, amount)
+    # Sunburst (CR 702.44a): a +1/+1 counter per color of mana spent to
+    # cast it if it's a creature, otherwise a charge counter. Zero when
+    # it wasn't cast (``sunburst_colors_spent`` is only set by the cast).
+    if obj.printing.sunburst:
+        from mtg_bot.game import add_counters
+        n = obj.sunburst_colors_spent
+        obj.sunburst_colors_spent = 0
+        add_counters(
+            state, obj, "+1/+1" if obj.printing.is_creature else "charge", n,
+        )
     # ``enters_tapped`` is the printing-level flag flipped by the
     # land-builder (Planets, utility lands), the parser's new
     # creature-side ``This creature enters tapped.`` recognizer
@@ -3959,7 +4253,11 @@ def put_into_battlefield(
     # Both branches are explicit because the GameObject dataclass
     # default is `summoning_sick: bool = True` — relying on that
     # default for non-creatures would preserve the divergence.
-    if obj.printing.is_creature:
+    # Vehicles are noncreature permanents that can become creatures;
+    # CR 302.6 applies to them once crewed, so they enter "sick" too
+    # (only read while the Vehicle is a creature: attacking and {T}
+    # costs check ``is_creature_now`` first).
+    if obj.printing.is_creature or "Vehicle" in obj.printing.subtypes:
         obj.summoning_sick = True
     else:
         obj.summoning_sick = False
@@ -4106,6 +4404,8 @@ def put_into_battlefield(
     # put-onto-battlefield effects that don't go through _play_land.
     if obj.printing.is_land:
         state.player_by_id(controller_id).lands_entered_this_turn += 1
+    if obj.printing.is_token and obj.printing.is_creature:
+        state.player_by_id(controller_id).pending_creature_tokens_created = True
     if obj.printing.is_artifact:
         # Track per-player "an artifact entered under your control
         # this turn" for static-ability gates like Mechan Shieldmate's
@@ -4115,6 +4415,40 @@ def put_into_battlefield(
             controller_id
         ).artifacts_entered_under_your_control_this_turn += 1
     _trigger_etb_abilities(state, obj)
+
+
+def _discard_land_to_enter(
+    state: GameState, obj: "GameObject", controller_id: int,
+) -> bool:
+    """Resolve Mox Diamond's entry replacement. Returns ``True`` when a
+    land card was discarded (the permanent enters), ``False`` when the
+    controller declined or had no land card (the card goes to its
+    owner's graveyard instead)."""
+    from mtg_bot.turn import fire_opponent_discards_triggers
+
+    p = state.player_by_id(controller_id)
+    options = [c.id for c in p.hand if c.printing.is_land]
+    picked = None
+    if options and p.agent is not None:
+        picked = p.agent.choose_card_from_hand(state, controller_id, options)
+    if picked in options:
+        card = next(c for c in p.hand if c.id == picked)
+        p.hand.remove(card)
+        card.zone = Zone.GRAVEYARD
+        p.graveyard.append(card)
+        state.log.append(
+            f"P{controller_id} discards {card.printing.name} so "
+            f"{obj.printing.name} can enter"
+        )
+        fire_opponent_discards_triggers(state, controller_id, card=card)
+        return True
+    obj.zone = Zone.GRAVEYARD
+    state.player_by_id(obj.owner_id).graveyard.append(obj)
+    state.log.append(
+        f"{obj.printing.name} is put into its owner's graveyard "
+        f"(no land card discarded)"
+    )
+    return False
 
 
 def _apply_devour(
@@ -4204,7 +4538,10 @@ def push_triggered_ability(
             state.resolving_source = source
             state.resolving_combat_damage_amount = combat_damage_amount
             try:
-                legal = effect.legal_targets(state, controller_id)
+                from mtg_bot.game import drop_protected_players
+                legal = drop_protected_players(
+                    state, effect.legal_targets(state, controller_id),
+                )
             finally:
                 state.resolving_source = None
                 state.resolving_combat_damage_amount = 0
@@ -4390,6 +4727,8 @@ def dispatch_event(
         for ability_index, ability in enumerate(
             source.printing.triggered_abilities
         ):
+            if ability.functions_in_graveyard:
+                continue
             if not ability.matches_event(event, subjects, source, state):
                 continue
             # Counter-creature-combat-damage aggregated observer: fired by
@@ -4440,6 +4779,73 @@ def dispatch_event(
                     ),
                     counter_amount=counter_amount,
                     fixed_targets=ability_fixed_targets,
+                )
+    # Triggered abilities granted by attached Equipment (Kaldra
+    # Compleat) belong to the equipped creature: evaluate them with the
+    # host as their source.
+    for equipment in permanents:
+        granted = equipment.printing.equipment_granted_triggers
+        if not granted or equipment.attached_to is None:
+            continue
+        host = next(
+            (o for o in state.battlefield if o.id == equipment.attached_to),
+            None,
+        )
+        if host is None:
+            continue
+        for ability in granted:
+            if not ability.matches_event(event, subjects, host, state):
+                continue
+            push_triggered_ability(
+                state,
+                source=host,
+                ability=ability,
+                ability_index=-1,
+                controller_id=host.controller_id,
+                label=label,
+                combat_damage_amount=combat_damage_amount,
+                combat_damage_source_controller_id=(
+                    combat_damage_source_controller_id
+                ),
+                counter_amount=counter_amount,
+                fixed_targets=fixed_targets,
+            )
+    _dispatch_graveyard_triggers(state, event, label, subjects)
+
+
+def _dispatch_graveyard_triggers(
+    state: GameState, event, label: str, subjects: dict,
+) -> None:
+    """Fire ``functions_in_graveyard`` triggered abilities of cards in
+    graveyards (Sword of the Meek). The event's ``obj`` subject (the
+    entering creature for ENTERS) is handed to the ability as its fixed
+    target so "that creature" can address it."""
+    for p in state.players:
+        for card in list(p.graveyard):
+            if not card.printing.has_graveyard_triggers:
+                continue
+            for ability_index, ability in enumerate(
+                card.printing.triggered_abilities
+            ):
+                if not ability.functions_in_graveyard:
+                    continue
+                if card not in p.graveyard:
+                    continue
+                if not ability.matches_event(event, subjects, card, state):
+                    continue
+                obj = subjects.get("obj")
+                fixed = (
+                    (("creature", obj.id),)
+                    if obj is not None and hasattr(obj, "printing") else None
+                )
+                push_triggered_ability(
+                    state,
+                    source=card,
+                    ability=ability,
+                    ability_index=ability_index,
+                    controller_id=card.owner_id,
+                    label=label,
+                    fixed_targets=fixed,
                 )
 
 

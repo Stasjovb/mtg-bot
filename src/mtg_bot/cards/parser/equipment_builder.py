@@ -63,6 +63,7 @@ recognized here with narrow regexes scoped to this builder.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
@@ -103,10 +104,77 @@ from mtg_bot.effects.predicates import Controlled, Event, IsHost, IsSelf, YOU
 # granted-keyword rider, when present, is a comma-joined list of
 # evergreens routed through ``_KEYWORD_LINES`` for normalization to
 # the engine's lowercase spelling.
+#
+# The bonus integers are signed so negative riders (Skullclamp's
+# ``+1/-1``) claim through the same regex.
 _EQUIPPED_CREATURE_GETS_RE = re.compile(
-    r"^Equipped creature gets \+(\d+)/\+(\d+)"
+    r"^Equipped creature gets ([+-]\d+)/([+-]\d+)"
     r"(?: and has (.+?))?\.$"
 )
+
+
+# "Equipped creature gets +N/+M for each <group> you control." —
+# Nettlecyst (``artifact and/or enchantment``). Feeds
+# ``CardPrinting.equipment_bonus_per_controlled`` (per-unit bonus times
+# the number of permanents of the listed types the Equipment's
+# controller controls, recomputed continuously).
+_EQUIPPED_CREATURE_GETS_PER_CONTROLLED_RE = re.compile(
+    r"^Equipped creature gets \+(\d+)/\+(\d+) for each "
+    r"(artifact and/or enchantment|artifact|creature|land|enchantment) "
+    r"you control\.$"
+)
+_PER_CONTROLLED_TYPES: dict[str, tuple[str, ...]] = {
+    "artifact and/or enchantment": ("Artifact", "Enchantment"),
+    "artifact": ("Artifact",),
+    "creature": ("Creature",),
+    "land": ("Land",),
+    "enchantment": ("Enchantment",),
+}
+
+
+# "Equipped creature gets +N/+M and has <keywords>, and "<quoted
+# triggered ability>"" — Kaldra Compleat. The keyword list parses like
+# every other rider; the quoted ability is granted to the equipped
+# creature (``CardPrinting.equipment_granted_triggers``). Only quoted
+# abilities in ``_GRANTED_QUOTED_TRIGGERS`` are accepted.
+_EQUIPPED_GETS_KEYWORDS_AND_QUOTED_RE = re.compile(
+    r'^Equipped creature gets \+(\d+)/\+(\d+) and has (.+), and "(.+)"$'
+)
+
+
+def _granted_quoted_trigger(text: str):
+    """Triggered ability for a quoted granted ability, or None.
+
+    Literal table: Kaldra Compleat is the only Equipment in the pool
+    granting a quoted trigger; its "that creature" is the damaged
+    creature delivered as the DEALS_COMBAT_DAMAGE_TO_CREATURE event's
+    fixed target (hence a dedicated entry rather than the unified
+    effect grammar, where "that creature" has no general referent)."""
+    from mtg_bot.effects.generic import ExileThatCreature
+
+    if text == (
+        "Whenever this creature deals combat damage to a creature, exile "
+        "that creature."
+    ):
+        return TriggeredAbility(
+            event=Event.DEALS_COMBAT_DAMAGE_TO_CREATURE,
+            predicate=IsSelf(subject="source"),
+            effect=ExileThatCreature(),
+        )
+    return None
+
+
+# Keyword-action lines that create a creature token and attach the
+# Equipment to it (CR 702.92 Living weapon: a 0/0 black Phyrexian Germ;
+# CR 702.163 For Mirrodin!: a 2/2 red Rebel). Both are ETB triggers.
+_CREATE_AND_ATTACH_KEYWORD_TOKENS: dict[
+    str, tuple[str, int, int, tuple[str, ...], frozenset[str]]
+] = {
+    "Living weapon": (
+        "Phyrexian Germ", 0, 0, ("Phyrexian", "Germ"), frozenset({"B"}),
+    ),
+    "For Mirrodin!": ("Rebel", 2, 2, ("Rebel",), frozenset({"R"})),
+}
 
 
 # "Equipped creature has <keyword>[, <keyword>...]" — granted-keyword-
@@ -313,7 +381,9 @@ def _parse_granted_keyword_list(rider: str) -> frozenset[str] | None:
     Reuses ``_KEYWORD_LINES`` so the parser can never grant a keyword
     the engine doesn't model.
     """
-    pieces = [p.strip() for p in rider.split(",")]
+    pieces = [
+        p.strip() for p in re.split(r", and |, | and ", rider) if p.strip()
+    ]
     # Equipment riders use sentence-case ("flying"), unlike standalone
     # keyword lines which use title-case ("Flying"). Normalize to
     # title-case for the lookup so we share the existing whitelist.
@@ -351,6 +421,9 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
     activated: list[ActivatedAbility] = []
     equip_cost: str | None = None
     grants_control_opponent_ability = False
+    bonus_per_controlled: tuple[tuple[str, ...], int, int] | None = None
+    has_graveyard_triggers = False
+    granted_triggers: list[TriggeredAbility] = []
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -542,14 +615,78 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         if kw_tuple is not None:
             self_keywords.update(kw_tuple)
             continue
-        # Anything else — Void rider, granted-quoted-ability, custom
-        # attack trigger — falls through and we skip the whole card.
+        # Kaldra Compleat: keywords + a quoted granted trigger.
+        m = _EQUIPPED_GETS_KEYWORDS_AND_QUOTED_RE.match(line)
+        if m is not None:
+            kw = _parse_granted_keyword_list(m.group(3))
+            granted = _granted_quoted_trigger(m.group(4))
+            if kw is None or granted is None:
+                return None
+            power_bonus = int(m.group(1))
+            toughness_bonus = int(m.group(2))
+            granted_keywords |= kw
+            granted_triggers.append(granted)
+            continue
+        # "Equipped creature gets +N/+M for each <types> you control."
+        m = _EQUIPPED_CREATURE_GETS_PER_CONTROLLED_RE.match(line)
+        if m is not None:
+            if bonus_per_controlled is not None:
+                return None
+            bonus_per_controlled = (
+                _PER_CONTROLLED_TYPES[m.group(3)],
+                int(m.group(1)), int(m.group(2)),
+            )
+            continue
+        # Living weapon / For Mirrodin! — ETB create-token-and-attach.
+        token_spec = _CREATE_AND_ATTACH_KEYWORD_TOKENS.get(line)
+        if token_spec is not None:
+            from mtg_bot.cards.base import make_token_creature
+            tname, tp, tt, tsubtypes, tcolors = token_spec
+            triggers.append(
+                TriggeredAbility(
+                    event=Event.ENTERS, predicate=IsSelf(),
+                    effect=CreateTokenAndAttachSelf(
+                        token_printing=make_token_creature(
+                            tname, tp, tt, subtypes=tsubtypes,
+                            colors=tcolors,
+                        ),
+                    ),
+                )
+            )
+            continue
+        # Anything else goes through the unified clause grammar
+        # (triggered / activated / static lines such as Skateboard's
+        # ``When this Equipment enters, tap target permanent.`` or
+        # Skullclamp's ``Whenever equipped creature dies, draw two
+        # cards.``). A line the unified grammar doesn't know skips the
+        # whole card.
+        from mtg_bot.cards.parser.clause import _parse_clause
+        clause = _parse_clause(line, name=card["name"])
+        if clause is None:
+            return None
+        if clause.triggers:
+            from mtg_bot.cards.parser.artifact_effects import (
+                _functions_from_graveyard,
+            )
+            for t in clause.triggers:
+                if _functions_from_graveyard(t.effect):
+                    t = replace(t, functions_in_graveyard=True)
+                    has_graveyard_triggers = True
+                triggers.append(t)
+            continue
+        if clause.activated is not None:
+            activated.append(clause.activated)
+            continue
+        if clause.keywords:
+            self_keywords.update(clause.keywords)
+            continue
+        # Static lines have no Equipment-side bucket today.
         return None
 
     if equip_cost is None:
         return None
 
-    return make_equipment(
+    printing = make_equipment(
         name=card["name"],
         cost=card["mana_cost"],
         legendary="Legendary" in supertypes,
@@ -564,3 +701,14 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
             grants_control_opponent_ability
         ),
     )
+    if bonus_per_controlled is not None:
+        printing = replace(
+            printing, equipment_bonus_per_controlled=bonus_per_controlled,
+        )
+    if has_graveyard_triggers:
+        printing = replace(printing, has_graveyard_triggers=True)
+    if granted_triggers:
+        printing = replace(
+            printing, equipment_granted_triggers=tuple(granted_triggers),
+        )
+    return printing

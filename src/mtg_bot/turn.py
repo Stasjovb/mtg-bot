@@ -47,6 +47,11 @@ def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
     ap.turns_started += 1
+    # "… protection from everything until your next turn" (The One Ring)
+    # ends as this player's turn begins.
+    if ap.protected_from_everything:
+        ap.protected_from_everything = False
+        state.log.append(f"P{ap.id}'s protection from everything ends")
     # "Until your next turn" expiry: drop every continuous-effect
     # registry entry tagged ``expires_at="controller_untap"`` whose
     # ``expires_at_player_id`` is this active player. Matches Mouth of
@@ -111,6 +116,17 @@ def run_untap_step(state: GameState) -> None:
                 obj.exerted = False
                 state.log.append(
                     f"{obj.printing.name} stays tapped (exerted)"
+                )
+                continue
+            if obj.printing.doesnt_untap_during_untap_step and obj.tapped:
+                # "This artifact doesn't untap during your untap step."
+                # (Grim Monolith, Mana Vault, Time Vault). Summoning
+                # sickness still clears — the rider only suppresses the
+                # untap turn-based action for this permanent.
+                obj.summoning_sick = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (doesn't untap "
+                    f"during its controller's untap step)"
                 )
                 continue
             obj.tapped = False
@@ -233,7 +249,23 @@ def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
 
 
 def run_draw_step(state: GameState) -> None:
-    draw_n_cards(state, state.active_player().id, 1)
+    """The draw turn-based action (CR 504.1), then the "at the
+    beginning of your draw step" triggers (CR 504.2) — Mana Vault.
+
+    Both turn loops (``simulate.run_step`` and the search adapter)
+    call this only when the active player actually draws, so the
+    starting player's skipped first draw step fires no draw-step
+    triggers (documented in docs/SEARCH_LIMITATIONS.md).
+    """
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    ap = state.active_player()
+    draw_n_cards(state, ap.id, 1)
+    dispatch_event(
+        state, Event.BEGINNING_OF_DRAW_STEP,
+        label="beginning-of-draw-step", player=ap,
+    )
 
 
 def _reset_left_battlefield_object(obj: "GameObject") -> None:
@@ -360,6 +392,7 @@ def move_off_battlefield(
     # battlefield, attached_to cleared); Auras are sent to their
     # owners' graveyards.
     auras_to_bury: list = []
+    detached_equipment: list = []
     for att in state.battlefield:
         if att.attached_to != obj.id:
             continue
@@ -367,6 +400,8 @@ def move_off_battlefield(
             auras_to_bury.append(att)
         else:
             att.attached_to = None
+            att.last_attached_to = obj.id
+            detached_equipment.append(att)
     for aura in auras_to_bury:
         state.log.append(
             f"{aura.printing.name} is put into the graveyard "
@@ -454,6 +489,8 @@ def move_off_battlefield(
     # triggered ability. Used by Cryogen Relic ("enters or leaves →
     # draw a card").
     _fire_leaves_battlefield_triggers(state, obj)
+    for att in detached_equipment:
+        att.last_attached_to = None
 
     # Return any cards this object exiled with "until this leaves" to
     # their owner's battlefield. Applies whether the source is destroyed
@@ -574,7 +611,7 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
 
 
 def fire_opponent_discards_triggers(
-    state: GameState, discarding_player_id: int
+    state: GameState, discarding_player_id: int, card=None,
 ) -> None:
     """Dispatch the phase-8 predicate-style ``Event.DISCARDS_CARD``
     event so opponent-discards observer triggers (Entropic
@@ -598,6 +635,17 @@ def fire_opponent_discards_triggers(
         fixed_targets=(("player", discarding_player_id),),
         player=discarding_player,
     )
+    # Card-aware twin (Currency Converter's "Whenever you discard a
+    # card, you may exile that card from your graveyard"): the discarded
+    # card rides along as the fixed target so "that card" can address
+    # it. A separate event keeps DISCARDS_CARD's player-target contract
+    # (Entropic Battlecruiser) untouched.
+    if card is not None:
+        dispatch_event(
+            state, _Event.CARD_DISCARDED, label="card-discarded",
+            fixed_targets=(("card_in_graveyard", card.id),),
+            player=discarding_player, card=card,
+        )
 
 
 def should_fire_trigger(
@@ -901,6 +949,7 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
     from mtg_bot.designations import on_beginning_of_upkeep
 
     on_beginning_of_upkeep(state)
+    run_delayed_upkeep_triggers(state)
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:
@@ -981,14 +1030,17 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
     refactor. Any leftover string-action entry is a bug; we raise
     ``ValueError`` rather than silently bypass the stack.
     """
-    from mtg_bot.actions import push_triggered_ability
-    from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import Always, Event
+    from mtg_bot.effects.predicates import Event
 
     ap_id = state.active_player().id
     remaining: list[dict] = []
     to_push: list[dict] = []
     for entry in state.delayed_triggers:
+        # Upkeep-scheduled entries ("at the beginning of the next turn's
+        # upkeep") are fired by ``run_delayed_upkeep_triggers``.
+        if entry.get("step", "end") != "end":
+            remaining.append(entry)
+            continue
         # ``any_player_end_step`` entries ("at the beginning of the
         # next end step") fire on whichever player's end step comes
         # first; the rest fire on their controller's end step.
@@ -1004,6 +1056,41 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
         else:
             remaining.append(entry)
     state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, Event.BEGINNING_OF_END_STEP)
+
+
+def run_delayed_upkeep_triggers(state: GameState) -> None:
+    """Push delayed triggers scheduled for "the beginning of the next
+    turn's upkeep" (Mishra's Bauble, Urza's Bauble). An entry carries
+    ``"step": "upkeep"`` and ``fire_at_turn`` = the turn after the one
+    it was scheduled in; it fires at that turn's upkeep whoever the
+    active player is. Called from ``run_beginning_of_upkeep_triggers``.
+    """
+    from mtg_bot.effects.predicates import Event
+
+    remaining: list[dict] = []
+    to_push: list[dict] = []
+    for entry in state.delayed_triggers:
+        if (
+            entry.get("step") == "upkeep"
+            and entry["fire_at_turn"] <= state.turn_number
+        ):
+            to_push.append(entry)
+        else:
+            remaining.append(entry)
+    if not to_push:
+        return
+    state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, Event.BEGINNING_OF_UPKEEP)
+
+
+def _push_delayed_entries(state: GameState, to_push: list[dict], event) -> None:
+    """Convert fired ``state.delayed_triggers`` entries into synthetic
+    triggered abilities on the stack (shared by the end-step and upkeep
+    runners)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always
 
     for entry in to_push:
         if "effect" not in entry:
@@ -1024,7 +1111,7 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
             # silent-no-op behavior. Skip the push.
             continue
         ability = TriggeredAbility(
-            event=Event.BEGINNING_OF_END_STEP,
+            event=event,
             predicate=Always(),
             effect=effect,
         )

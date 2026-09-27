@@ -50,6 +50,10 @@ class SearchLibraryForCard(Effect):
     # (landcycling "Search your library for a Plains card", typecycling
     # "... for a Wizard card").
     subtypes: tuple[str, ...] = ()
+    # ``False`` for tutors whose text doesn't say "reveal it" (Wishclaw
+    # Talisman's "Search your library for a card, put it into your
+    # hand"): the fetched card stays hidden from the opponent.
+    reveal: bool = True
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name
@@ -73,6 +77,12 @@ class SearchLibraryForCard(Effect):
             )
         if fn == "artifact":
             return printing.is_artifact
+        # Expedition Map — "a land card" (basic or nonbasic).
+        if fn == "land":
+            return printing.is_land
+        # Wishclaw Talisman — "a card" (no quality: any card).
+        if fn == "any":
+            return True
         # Tezzeret, Cruel Captain's -3 ability — "an artifact card with
         # mana value 1 or less". Artifact filter + an MV cap (reuses the
         # ``max_mv`` field the ``creature_small`` filter already uses).
@@ -131,7 +141,8 @@ class SearchLibraryForCard(Effect):
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to hand"
         )
-        reveal_to_all(state, card)
+        if self.reveal:
+            reveal_to_all(state, card)
         shuffle_library(state, controller_id)
 
     def describe(self) -> str:

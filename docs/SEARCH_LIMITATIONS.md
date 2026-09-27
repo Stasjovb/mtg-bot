@@ -18932,3 +18932,76 @@ Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of My
 **Impact estimate.** Zero perf cost on EoE games (every hook is gated on a cube-only field). Small strength cost for cube decks playing these cards.
 
 **Pinned by:** `tests/test_cube_spells_*.py` (card-flow, alt-casting, reanimation, misc, graveyard-casting, copies, divided damage, polarity / Sunfall, splice, MDFC, plot, escape).
+---
+
+## PowerLSV cube artifact bucket — deliberate simplifications (2026-09-27, `feature/cube-artifacts`)
+
+Engine / parser shortcuts taken while modeling the cube's artifacts
+(mana rocks, utility artifacts, Equipment, Vehicles). Each is local to
+the new mechanics; none changes EoE-pool behavior.
+
+1. **Draw-step triggers need an actual draw.** `turn.run_draw_step`
+   (both turn loops call it only when the active player draws)
+   dispatches `Event.BEGINNING_OF_DRAW_STEP` after the draw. The
+   starting player's skipped turn-1 draw step therefore fires no
+   "at the beginning of your draw step" triggers. *OK because* the only
+   consumer (Mana Vault's tapped tax) can't be tapped before turn 1's
+   draw step. *Fix scope:* a dispatch in `simulate.run_step` and the
+   search adapter's `_enter_step` (search code, out of this bucket).
+2. **"Whenever you create one or more creature tokens" is batched per
+   resolved stack item** (`actions._flush_creature_token_creations`,
+   latched by `put_into_battlefield`). A single resolution that creates
+   creature tokens through two separate instructions counts once (CR
+   would count two events). *Impact:* Staff of the Storyteller may
+   under-count in that rare case.
+3. **Sunburst counts colors of the mana the auto-payer spent**
+   (`auto_tap_for_cost(color_sources=…)` + `max_distinct_colors`). Units
+   whose color is the controller's choice (`any` coins, multi-color
+   lands paying generic) are assigned to maximize the count, but the
+   engine's payment allocation itself (which coin pays which pip) is
+   the existing greedy one, which can spend a flexible coin on a
+   colored pip a land could have paid. *Impact:* Pentad Prism can enter
+   with fewer counters than optimal play would get.
+4. **Crew never taps the Vehicle itself and counts negative power as 0**
+   (`game.crew_candidates` / `crew_power`). Both are strictly dominated
+   choices, not legality changes that matter.
+5. **Vehicles enter summoning-sick** (`put_into_battlefield`) even
+   though non-creature permanents otherwise don't — the flag is only
+   read while the Vehicle is a creature (attack / `{T}` gates check
+   `is_creature_now` first), which is exactly CR 302.6.
+6. **Bolas's Citadel:** a spell cast from the top of the library this
+   way has X = 0 (its mana cost is replaced by life equal to its printed
+   mana value), and when both Citadel and Mm'menon grants apply to the
+   same artifact the cast pays life (`actions._cast_spell`).
+7. **"If you cast it" (The One Ring's protection)** rides the existing
+   `ConditionalIfCastFromHand`, which always runs its inner effect (its
+   docstring's documented degradation, pinned by the Weftwalking Rust
+   parity test). A One Ring put onto the battlefield without being cast
+   would wrongly grant protection.
+8. **Player protection from everything (The One Ring)** prevents damage
+   (every player-damage site, honoring can't-be-prevented combat
+   damage) and removes the player from every target-selection site
+   (`game.drop_protected_players`). Resolution-time target re-checks
+   don't re-test it (a target chosen before the protection began still
+   resolves). The engine has no player-attached permanents, so the
+   "can't be enchanted" half is vacuous.
+9. **Graveyard-functioning triggers (Sword of the Meek)** evaluate with
+   the card's `controller_id` as last recorded (a card that died while
+   stolen keeps its thief as "you" for `Controlled(YOU)` until it moves
+   again) and hand the event's `obj` subject to the ability as its
+   fixed target.
+10. **Coveted Jewel's `ATTACKERS_UNBLOCKED` event assumes a single
+    defending player** (2-player engine) and reassigns control
+    indefinitely by overwriting `controller_id` (same model as
+    Sliver Overlord / Wishclaw Talisman), not via a layer-2 entry.
+11. **Sensei's Divining Top's reorder reuses `choose_card_from_library`**
+    (pick the card to put on top, then the next, …) instead of a
+    dedicated ordering hook; declining keeps the current order.
+12. **Wizard's Rockets' "put into a graveyard from the battlefield"**
+    uses the parser's existing LEAVES_BATTLEFIELD mapping for that
+    phrase (also fires if exiled) — pre-existing simplification shared
+    with Chromatic Star / Nutrient Block.
+13. **Synthesized creature tokens are colorless**
+    (`artifact_effects._synthesize_creature_token`) like every
+    registered token; `feature/cube-keywords` adds a color indicator
+    in its own token synthesizer — prefer that one when both merge.

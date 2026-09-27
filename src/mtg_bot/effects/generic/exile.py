@@ -1004,15 +1004,18 @@ class SacrificeSelf(Effect):
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
-    ) -> None:
+    ) -> bool:
         from mtg_bot.turn import sacrifice as _sacrifice
 
         source = state.resolving_source
         if source is None:
-            return
+            return False
         if source not in state.battlefield:
-            return
+            return False
         _sacrifice(state, source)
+        # ``True`` lets ``IfYouDo`` gate "you may sacrifice this. If you
+        # do, …" (The Fantasticar) on the sacrifice actually happening.
+        return True
 
     def describe(self) -> str:
         return "sacrifice this permanent"

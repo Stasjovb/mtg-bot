@@ -320,7 +320,7 @@ class EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage(Effect):
                         f"P{opp.id} discards {card.printing.name} "
                         f"({source.printing.name})"
                     )
-                    fire_opponent_discards_triggers(state, opp.id)
+                    fire_opponent_discards_triggers(state, opp.id, card=card)
             else:
                 non_compliant.append(opp.id)
         if not non_compliant:

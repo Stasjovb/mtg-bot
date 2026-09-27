@@ -803,6 +803,55 @@ class CardPrinting:
     # When True, this card always enters the battlefield tapped
     # (Planet-style utility lands and other "enters tapped" permanents).
     enters_tapped: bool = False
+    # "This artifact doesn't untap during your untap step." (Grim
+    # Monolith, Basalt Monolith, Mana Vault, Time Vault). Honored by
+    # ``turn.run_untap_step``: the permanent itself stays tapped through
+    # its controller's untap step. Other untap effects (its own
+    # ``{N}: Untap this artifact.`` ability, Voltaic Key) still work.
+    doesnt_untap_during_untap_step: bool = False
+    # "This <permanent> enters with N <kind> counters on it." (Reckoner
+    # Bankbuster's charge counters, Wishclaw Talisman's wish counters).
+    # Applied by ``actions.put_into_battlefield`` as the object enters.
+    enters_with_counters: tuple[tuple[str, int], ...] = ()
+    # Mox Diamond: "If this artifact would enter, you may discard a land
+    # card instead. If you do, put this artifact onto the battlefield.
+    # If you don't, put it into its owner's graveyard." Replacement
+    # effect applied at the top of ``actions.put_into_battlefield``.
+    enters_only_by_discarding_land: bool = False
+    # Time Vault: "If you would begin your turn while this artifact is
+    # tapped, you may skip that turn instead. If you do, untap this
+    # artifact." Replacement applied by
+    # ``simulate._advance_to_next_active_player`` when the controller's
+    # turn would begin.
+    may_skip_turn_to_untap: bool = False
+    # "Equipped creature gets +P/+T for each <types> you control."
+    # (Nettlecyst: ``(("Artifact", "Enchantment"), 1, 1)``). Added to the
+    # equipped creature's layer-7c bonus by ``game._static_bonuses``,
+    # counting permanents with ANY of the listed card types controlled
+    # by the Equipment's controller (each permanent counted once).
+    equipment_bonus_per_controlled: "tuple[tuple[str, ...], int, int] | None" = None
+    # "This token crews Vehicles as though its power were N greater."
+    # (Reckoner Bankbuster's Pilot token). Added to the creature's power
+    # when it is tapped to pay a Crew cost.
+    crew_power_bonus: int = 0
+    # Fast-path flag for ``actions._dispatch_graveyard_triggers``: True
+    # iff some triggered ability has ``functions_in_graveyard`` (Sword
+    # of the Meek). Set by the builder alongside those abilities.
+    has_graveyard_triggers: bool = False
+    # Sunburst (CR 702.44, Pentad Prism): enters with a charge counter
+    # (+1/+1 counter if a creature) per color of mana spent to cast it.
+    sunburst: bool = False
+    # Bolas's Citadel: "You may play lands and cast spells from the top
+    # of your library. If you cast a spell this way, pay life equal to
+    # its mana value rather than pay its mana cost." Honored by
+    # ``legal_actions`` (offers the top card) and ``_cast_spell`` /
+    # ``_play_land`` (source zone + life payment).
+    grants_play_from_top_paying_life: bool = False
+    # Triggered abilities an Equipment grants to the equipped creature
+    # (Kaldra Compleat: "… and has 'Whenever this creature deals combat
+    # damage to a creature, exile that creature.'"). ``dispatch_event``
+    # evaluates them with the equipped creature as their source.
+    equipment_granted_triggers: tuple = ()
     # Duskmourn "horror dual" cycle (Bleeding Woods, Etched Cornfield,
     # …). When > 0, the land enters tapped unless any player's life
     # total is at or below this threshold at ETB time. No agent choice
@@ -1597,6 +1646,9 @@ def make_artifact(
     paints_all_objects_chosen_color_at_etb: bool = False,
     subtype: str | None = None,
     looks_at_opponents_face_down_creatures: bool = False,
+    enters_tapped: bool = False,
+    doesnt_untap_during_untap_step: bool = False,
+    grants_play_lands_from_graveyard: bool = False,
 ) -> CardPrinting:
     """Build a non-creature, non-Spacecraft Artifact permanent.
 
@@ -1639,6 +1691,9 @@ def make_artifact(
         looks_at_opponents_face_down_creatures=(
             looks_at_opponents_face_down_creatures
         ),
+        enters_tapped=enters_tapped,
+        doesnt_untap_during_untap_step=doesnt_untap_during_untap_step,
+        grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
     )
 
 

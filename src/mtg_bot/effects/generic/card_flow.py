@@ -180,7 +180,7 @@ def discard_card(state: "GameState", player: "Player", card: "GameObject") -> No
     card.zone = Zone.GRAVEYARD
     player.graveyard.append(card)
     state.log.append(f"P{player.id} discards {card.printing.name}")
-    fire_opponent_discards_triggers(state, player.id)
+    fire_opponent_discards_triggers(state, player.id, card=card)
 
 
 def _agent_pick(options: list, picked_id) -> "GameObject | None":

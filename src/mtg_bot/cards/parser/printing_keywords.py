@@ -241,18 +241,41 @@ def _parse_devour_line(line: str) -> int | None:
 # would land its own entry rather than parameterizing this one,
 # matching the ``Ward—Discard`` precedent above where each surface
 # gets its own 1:1 recognizer.
-_ENTERS_TAPPED_LINE = "This creature enters tapped."
+#
+# Parameterized over the self-reference noun so the artifact builder's
+# ``This artifact enters tapped.`` (Time Vault, Wizard's Rockets) claims
+# through the same recognizer.
+_ENTERS_TAPPED_LINE = re.compile(
+    r"^This (?:creature|artifact|Vehicle|Equipment) "
+    r"enters tapped\.$"
+)
 
 
 def _parse_enters_tapped_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the printing-level ``This creature
+    """Return ``True`` if ``line`` is the printing-level ``This <noun>
     enters tapped.`` clause, else ``False``. Used by
-    ``creature_builder._build_creature_printing`` to flip the
-    ``enters_tapped`` kwarg on ``make_creature`` directly — distinct
+    ``creature_builder._build_creature_printing`` and the artifact
+    builder to flip the ``enters_tapped`` kwarg directly — distinct
     from the triggered-ability path because the ETB-tapped behavior is
     a static replacement effect, not an event-firing trigger.
     """
-    return line.strip() == _ENTERS_TAPPED_LINE
+    return _ENTERS_TAPPED_LINE.match(line.strip()) is not None
+
+
+# ``This artifact doesn't untap during your untap step.`` — printing-
+# level static (Grim Monolith, Basalt Monolith, Mana Vault, Time Vault).
+# Flips ``CardPrinting.doesnt_untap_during_untap_step``, honored by
+# ``turn.run_untap_step``. Parameterized over the self-reference noun.
+_DOESNT_UNTAP_LINE = re.compile(
+    r"^This (?:artifact|creature|land|permanent) doesn't untap during "
+    r"your untap step\.$"
+)
+
+
+def _parse_doesnt_untap_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``This <noun> doesn't untap
+    during your untap step.`` static, else ``False``."""
+    return _DOESNT_UNTAP_LINE.match(line.strip()) is not None
 
 
 # ``This creature must be blocked if able.`` — printing-level static
@@ -1177,3 +1200,95 @@ def _parse_cycling_line(line: str) -> "ActivatedAbility | None":
         ),
         effect=effect,
     )
+# Mox Diamond's entry replacement: ``If this artifact would enter, you
+# may discard a land card instead. If you do, put this artifact onto
+# the battlefield. If you don't, put it into its owner's graveyard.``
+# Flips ``CardPrinting.enters_only_by_discarding_land``, honored at the
+# top of ``actions.put_into_battlefield``. Literal: Mox Diamond is the
+# only card in the pool with this replacement; a second "discard a
+# <type> card instead" printing would parameterize the card type.
+_DISCARD_LAND_TO_ENTER_LINE = (
+    "If this artifact would enter, you may discard a land card instead. "
+    "If you do, put this artifact onto the battlefield. If you don't, "
+    "put it into its owner's graveyard."
+)
+
+
+def _parse_discard_land_to_enter_line(line: str) -> bool:
+    """Return ``True`` for Mox Diamond's discard-a-land entry
+    replacement line."""
+    return line.strip() == _DISCARD_LAND_TO_ENTER_LINE
+
+
+# ``This artifact enters with three wish counters on it.`` (Wishclaw
+# Talisman) / ``This Vehicle enters with three charge counters on it.``
+# (Reckoner Bankbuster) — an entry replacement placing named counters.
+# Returns ``(kind, amount)`` for ``CardPrinting.enters_with_counters``.
+# ``+1/+1`` counters on creatures keep their dedicated recognizers in
+# ``triggers.py``; this one is consulted by the artifact builder only.
+_ENTERS_WITH_NAMED_COUNTERS_LINE = re.compile(
+    r"^This (?:artifact|Vehicle|Equipment) enters with "
+    r"(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) "
+    r"([a-z]+) counters? on it\.$"
+)
+_ENTERS_WITH_CARDINALS: dict[str, int] = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _parse_enters_with_named_counters_line(
+    line: str,
+) -> tuple[str, int] | None:
+    m = _ENTERS_WITH_NAMED_COUNTERS_LINE.match(line.strip())
+    if m is None:
+        return None
+    token = m.group(1)
+    amount = int(token) if token.isdigit() else _ENTERS_WITH_CARDINALS[token]
+    return (m.group(2), amount)
+
+
+# Time Vault's turn-skip replacement. Literal: Time Vault is the only
+# card in the pool with an "if you would begin your turn" replacement;
+# broader grammar deferred until a second example exists.
+_SKIP_TURN_TO_UNTAP_LINE = (
+    "If you would begin your turn while this artifact is tapped, you may "
+    "skip that turn instead. If you do, untap this artifact."
+)
+
+
+def _parse_skip_turn_to_untap_line(line: str) -> bool:
+    """Return ``True`` for Time Vault's turn-skip replacement line."""
+    return line.strip() == _SKIP_TURN_TO_UNTAP_LINE
+
+
+# ``Crew N`` (CR 702.122) — the Vehicle keyword ability. Reminder text
+# is stripped before this sees the line. Returns N; the artifact
+# builder turns it into the crew ``ActivatedAbility``.
+_CREW_LINE = re.compile(r"^Crew (\d+)$")
+
+
+def _parse_crew_line(line: str) -> int | None:
+    m = _CREW_LINE.match(line.strip())
+    return int(m.group(1)) if m is not None else None
+
+
+# ``Sunburst`` (CR 702.44) — keyword line (reminder text stripped).
+# Flips ``CardPrinting.sunburst``; the counters are placed by
+# ``actions.put_into_battlefield`` from the colors recorded at cast.
+def _parse_sunburst_line(line: str) -> bool:
+    return line.strip() == "Sunburst"
+
+
+# Bolas's Citadel's play-from-top grant with its life-payment
+# alternative cost. Literal (only card in the pool with this grant);
+# flips ``CardPrinting.grants_play_from_top_paying_life``.
+_PLAY_FROM_TOP_PAYING_LIFE_LINE = (
+    "You may play lands and cast spells from the top of your library. If "
+    "you cast a spell this way, pay life equal to its mana value rather "
+    "than pay its mana cost."
+)
+
+
+def _parse_play_from_top_paying_life_line(line: str) -> bool:
+    return line.strip() == _PLAY_FROM_TOP_PAYING_LIFE_LINE

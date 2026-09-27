@@ -294,6 +294,27 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
             state, Event.BLOCKS, label="blocks",
             blocker=blocker, attacker=attacker,
         )
+    # "Whenever one or more creatures … attack you and aren't blocked"
+    # (Coveted Jewel): once per declaration, if any attacker is
+    # unblocked. The attacking player rides along as the fixed target.
+    unblocked = [
+        o for o in state.battlefield if o.attacking and not o.blocked_by
+    ]
+    if unblocked:
+        attacking_player = state.player_by_id(unblocked[0].controller_id)
+        defender = next(
+            (
+                p for p in state.players
+                if p.id != attacking_player.id and not p.has_lost
+            ),
+            None,
+        )
+        if defender is not None:
+            dispatch_event(
+                state, Event.ATTACKERS_UNBLOCKED, label="attackers-unblocked",
+                fixed_targets=(("player", attacking_player.id),),
+                player=attacking_player, defender=defender,
+            )
 
 
 def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
@@ -549,6 +570,7 @@ def _resolve_damage_step(
     # one can independently matter for triggers and SBAs.
     player_life_damage: dict[int, int] = {}
     sources_hit_player: list[tuple[int, int, int]] = []
+    sources_hit_creature: list[tuple[int, int, int]] = []
     for (
         kind, target_id, amount, source_id, source_kws, source_controller,
     ) in damage_events_typed:
@@ -557,6 +579,16 @@ def _resolve_damage_step(
         has_infect = "infect" in source_kws
         if kind == "player":
             p = state.player_by_id(target_id)
+            if (
+                p.protected_from_everything
+                and not _source_bypasses_prevention(state, source_id)
+            ):
+                # Protection from everything (The One Ring) prevents the
+                # damage — and with it lifelink / "deals combat damage to
+                # a player" triggers for this event.
+                from mtg_bot.game import player_damage_prevented
+                player_damage_prevented(state, target_id)
+                continue
             if has_infect:
                 # Infect: damage to a player becomes that many poison
                 # counters instead of life loss. Per-event log preserved
@@ -592,6 +624,7 @@ def _resolve_damage_step(
                 else:
                     obj.damage += amount
                     obj.damaged_this_turn = True
+                sources_hit_creature.append((source_id, target_id, amount))
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
                 # Fire "whenever enchanted creature is dealt damage"
@@ -624,6 +657,35 @@ def _resolve_damage_step(
     from mtg_bot.designations import on_combat_damage_to_players
 
     on_combat_damage_to_players(state, sources_hit_player)
+    _fire_combat_damage_to_creature_triggers(state, sources_hit_creature)
+
+
+def _fire_combat_damage_to_creature_triggers(
+    state: GameState, sources_hit_creature: list[tuple[int, int, int]],
+) -> None:
+    """Dispatch ``Event.DEALS_COMBAT_DAMAGE_TO_CREATURE`` per
+    (source, damaged creature) pair — Kaldra Compleat's granted
+    "Whenever this creature deals combat damage to a creature, exile
+    that creature." The damaged creature is the fixed target. Kept
+    separate from DEALS_COMBAT_DAMAGE, whose observers assume a player
+    target."""
+    if not sources_hit_creature:
+        return
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    for source_id, target_id, amount in sources_hit_creature:
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        target = next((o for o in state.battlefield if o.id == target_id), None)
+        if source is None or target is None:
+            continue
+        dispatch_event(
+            state, Event.DEALS_COMBAT_DAMAGE_TO_CREATURE,
+            label="combat-damage-to-creature",
+            combat_damage_amount=amount,
+            fixed_targets=(("creature", target_id),),
+            source=source, target=target,
+        )
 
 
 def _fire_enchanted_dealt_damage_triggers(

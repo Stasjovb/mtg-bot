@@ -412,7 +412,44 @@ def _advance_to_next_active_player(state: GameState) -> None:
     next. Otherwise fall back to the natural next-alive rotation.
     Exposed as a top-level helper so the extra-turn branches are
     directly unit-testable.
+
+    Turn-skip replacements (Time Vault: "If you would begin your turn
+    while this artifact is tapped, you may skip that turn instead")
+    are applied here: a skipped turn never begins, so the pick repeats
+    for the following turn.
     """
+    _pick_next_active_player(state)
+    while _maybe_skip_turn(state):
+        _pick_next_active_player(state)
+
+
+def _maybe_skip_turn(state: GameState) -> bool:
+    """Offer the incoming active player each tapped
+    ``may_skip_turn_to_untap`` permanent they control; on the first
+    acceptance, untap it and report the turn skipped."""
+    ap = state.active_player()
+    if ap.agent is None:
+        return False
+    for obj in state.battlefield:
+        if (
+            obj.controller_id != ap.id
+            or not obj.tapped
+            or not obj.printing.may_skip_turn_to_untap
+        ):
+            continue
+        if ap.agent.choose_yes_no(
+            state, ap.id,
+            f"Skip your turn to untap {obj.printing.name}?",
+        ):
+            obj.tapped = False
+            state.log.append(
+                f"P{ap.id} skips their turn; {obj.printing.name} untaps"
+            )
+            return True
+    return False
+
+
+def _pick_next_active_player(state: GameState) -> None:
     queued_next_player = None
     while state.extra_turn_queue:
         candidate_id = state.extra_turn_queue.pop(0)

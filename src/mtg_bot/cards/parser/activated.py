@@ -89,8 +89,11 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.effects.generic import (
     AddChargeCounterManaOfChosenColor,
+    AddManaInAnyCombination,
     AddManaOfColorPerCount,
     AddNManaOfChosenColor,
+    AddOneManaOfColorAmongControlled,
+    AddOneManaOfImprintedColors,
     AddOneOfManaCombinations,
 )
 from mtg_bot.cards.parser.effects import _parse_effect
@@ -111,8 +114,11 @@ from mtg_bot.effects.object_predicates import (
 )
 
 
+# The effect may end in a quoted ability whose closing quote follows
+# the period (Reckoner Bankbuster's Pilot token: ``… with "This token
+# crews Vehicles as though its power were 2 greater."``).
 _ACTIVATED_ABILITY_LINE = re.compile(
-    r"^([^:]+): (.+\.)$"
+    r"^([^:]+): (.+\.\"?)$"
 )
 
 # A bare mana cost is one or more brace-wrapped mana symbols, no commas.
@@ -236,6 +242,38 @@ _DEDICATED_COUNTER_KINDS = frozenset(
     {"charge", "time", "stun", "loyalty", "lore", "luck"}
 )
 
+# "Sacrifice a <Subtype>" — Retrofitter Foundry ("Sacrifice a Servo",
+# "Sacrifice a Thopter"). Capitalized single-word subtypes only; the
+# lowercase card-type forms ("Sacrifice a land") and the subtypes with
+# their own dedicated fields (Food, Desert) are matched earlier.
+_SACRIFICE_A_SUBTYPE_PIECE = re.compile(r"^Sacrifice an? ([A-Z][a-z]+)$")
+
+# "Sacrifice a nontoken artifact" — Thopter Foundry.
+_SACRIFICE_NONTOKEN_ARTIFACT_PIECE = "Sacrifice a nontoken artifact"
+
+# "Remove a/N <kind> counter(s) from this <permanent>" — self counter
+# removal (Staff of the Storyteller, Wishclaw Talisman, Reckoner
+# Bankbuster, Pentad Prism).
+_REMOVE_COUNTERS_FROM_SELF_PIECE = re.compile(
+    r"^Remove (a|an|one|two|three|\d+) ([a-z]+) counters? from this "
+    r"(?:artifact|creature|Vehicle|Equipment|permanent)$"
+)
+_COST_CARDINALS: dict[str, int] = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+# "Sacrifice N nonland permanents" — Bolas's Citadel (ten).
+_SACRIFICE_N_NONLAND_PERMANENTS_PIECE = re.compile(
+    r"^Sacrifice (two|three|four|five|six|seven|eight|nine|ten|\d+) "
+    r"nonland permanents$"
+)
+
+# "Discard your hand" — Lion's Eye Diamond's cost atom. Maps to
+# ``ActivationCost.discard_hand``; the whole hand (possibly empty) is
+# discarded when the cost is paid.
+_DISCARD_HAND_PIECE = "Discard your hand"
+
 
 @dataclass(frozen=True)
 class _CostPiece:
@@ -291,14 +329,39 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     if piece in _EXERT_SELF_PIECES:
         return _CostPiece(kind="exert_self")
     named = _REMOVE_NAMED_COUNTER_FROM_SELF_PIECE.match(piece)
-    if named is not None:
-        if named.group("kind") in _DEDICATED_COUNTER_KINDS:
-            return None
+    if named is not None and named.group("kind") not in _DEDICATED_COUNTER_KINDS:
         return _CostPiece(kind="remove_named_counter", field=named.group("kind"))
     energy_match = _PAY_ENERGY_PIECE.match(piece)
     if energy_match is not None:
         return _CostPiece(
             kind="pay_energy", amount=energy_match.group(1).count("{E}"),
+        )
+    # Dedicated-field kinds ("Remove a charge counter from this
+    # artifact" — Pentad Prism) and multi-counter / Vehicle forms go
+    # through ``_REMOVE_COUNTERS_FROM_SELF_PIECE`` below, whose cost is
+    # paid via ``game.remove_counters`` (dedicated fields stay the only
+    # store for their kinds).
+    if piece == _DISCARD_HAND_PIECE:
+        return _CostPiece(kind="discard_hand")
+    if piece == _SACRIFICE_NONTOKEN_ARTIFACT_PIECE:
+        return _CostPiece(kind="sacrifice_nontoken_artifact")
+    n_match = _SACRIFICE_N_NONLAND_PERMANENTS_PIECE.match(piece)
+    if n_match is not None:
+        token = n_match.group(1)
+        return _CostPiece(
+            kind="sacrifice_n_nonland_permanents",
+            amount=int(token) if token.isdigit() else _COST_CARDINALS[token],
+        )
+    sub_match = _SACRIFICE_A_SUBTYPE_PIECE.match(piece)
+    if sub_match is not None:
+        return _CostPiece(kind="sacrifice_subtype", field=sub_match.group(1))
+    counter_match = _REMOVE_COUNTERS_FROM_SELF_PIECE.match(piece)
+    if counter_match is not None:
+        token = counter_match.group(1)
+        amount = int(token) if token.isdigit() else _COST_CARDINALS[token]
+        return _CostPiece(
+            kind="remove_counters_from_self",
+            field=counter_match.group(2), amount=amount,
         )
     pay_life_match = _PAY_LIFE_PIECE.match(piece)
     if pay_life_match is not None:
@@ -350,6 +413,12 @@ def _build_cost_from_pieces(
     exert_self = False
     discard_a_card = False
     pay_energy = 0
+    discard_hand = False
+    sacrifice_subtype = ""
+    sacrifice_nontoken_artifact = False
+    remove_counter_kind = ""
+    remove_counter_amount = 0
+    sacrifice_n_nonland = 0
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -414,6 +483,30 @@ def _build_cost_from_pieces(
             if pay_energy:
                 return None
             pay_energy = p.amount
+        elif p.kind == "discard_hand":
+            if discard_hand:
+                return None
+            discard_hand = True
+        elif p.kind == "sacrifice_subtype":
+            if sacrifice_seen:
+                return None
+            sacrifice_subtype = p.field
+            sacrifice_seen = True
+        elif p.kind == "sacrifice_nontoken_artifact":
+            if sacrifice_seen:
+                return None
+            sacrifice_nontoken_artifact = True
+            sacrifice_seen = True
+        elif p.kind == "sacrifice_n_nonland_permanents":
+            if sacrifice_seen:
+                return None
+            sacrifice_n_nonland = p.amount
+            sacrifice_seen = True
+        elif p.kind == "remove_counters_from_self":
+            if remove_counter_kind:
+                return None
+            remove_counter_kind = p.field
+            remove_counter_amount = p.amount
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -443,7 +536,10 @@ def _build_cost_from_pieces(
     if exert_self:
         kwargs["exert_self"] = True
     if discard_self:
-        if tap_self or sacrifice_seen or remove_named_counter or exert_self:
+        if (
+            tap_self or sacrifice_seen or remove_named_counter or exert_self
+            or remove_counter_kind
+        ):
             # A card in hand can't also be tapped / sacrificed.
             return None
         kwargs["discard_self"] = True
@@ -451,6 +547,17 @@ def _build_cost_from_pieces(
         kwargs["discard_a_card"] = True
     if pay_energy:
         kwargs["pay_energy"] = pay_energy
+    if discard_hand:
+        kwargs["discard_hand"] = True
+    if sacrifice_subtype:
+        kwargs["sacrifice_subtype"] = sacrifice_subtype
+    if sacrifice_nontoken_artifact:
+        kwargs["sacrifice_nontoken_artifact"] = True
+    if sacrifice_n_nonland:
+        kwargs["sacrifice_n_nonland_permanents"] = sacrifice_n_nonland
+    if remove_counter_kind:
+        kwargs["remove_counters_from_self_kind"] = remove_counter_kind
+        kwargs["remove_counters_from_self_amount"] = remove_counter_amount
     return ActivationCost(**kwargs)
 
 
@@ -567,6 +674,39 @@ _HAND_SIZE_EXACTLY_PHRASE = re.compile(
 )
 _ACTIVATE_ONLY_IF_NUMBER_WORDS: dict[str, int] = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+# Inline timing / condition riders that restrict WHEN an ability may be
+# activated. Each is glued to the end of the activation line after the
+# effect's terminating period and lifts to a field on the resulting
+# ``ActivatedAbility`` / ``ActivationCost``:
+#
+# * ``Activate only as an instant.`` -> ``activate_only_as_instant``
+#   (Lion's Eye Diamond).
+# * ``Activate only during your turn.`` ->
+#   ``activate_only_during_your_turn`` (Wishclaw Talisman).
+# * ``Activate only if you control <N> or more artifacts.`` ->
+#   ``ActivationCost.requires_own_artifact_count_at_least=N`` (Mox
+#   Opal's Metalcraft; the same legal-actions gate Inventors' Fair's
+#   land-builder wiring uses).
+_INLINE_ACTIVATE_ONLY_AS_INSTANT_RIDER_SUFFIX = " Activate only as an instant."
+_INLINE_ACTIVATE_ONLY_DURING_YOUR_TURN_RIDER_SUFFIX = (
+    " Activate only during your turn."
+)
+_INLINE_ACTIVATE_ONLY_IF_CONTROL_N_ARTIFACTS_RIDER = re.compile(
+    r" Activate only if you control (\d+|one|two|three|four|five|six|seven"
+    r"|eight|nine|ten) or more artifacts\.$"
+)
+# ``<Ability Word> — {cost}: <effect>.`` — an ability word (CR 207.2c:
+# no rules meaning; Mox Opal's ``Metalcraft —``) or a flavor word in
+# front of an activation. Stripped before the cost/effect split; the
+# lookahead requires a ``{`` mana/tap symbol right after the dash so
+# em-dashes elsewhere never match.
+_ACTIVATED_ABILITY_WORD_PREFIX = re.compile(
+    r"^[A-Z][A-Za-z]*(?: [A-Za-z]+)* — (?=\{)"
+)
+_RIDER_CARDINALS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
 
@@ -717,20 +857,35 @@ def _is_mana_ability_effect(effect) -> bool:
         and not effect.requires_target()
     ):
         return True
-    if isinstance(
-        effect,
-        (
-            AddManaToPool,
-            AddChargeCounterManaOfChosenColor,
-            AddManaOfColorPerCount,
-            AddNManaOfChosenColor,
-            AddOneOfManaCombinations,
-        ),
-    ):
+    if isinstance(effect, _MANA_PRODUCING_EFFECTS):
         if effect.requires_target():
             return False
         return True
+    # CR 605.1a: an activated ability that could add mana and doesn't
+    # target is a mana ability even when it does other things too —
+    # the Talismans' ``Add {U} or {B}. This artifact deals 1 damage to
+    # you.`` is a ``Sequence`` of a mana primitive and a self-damage
+    # rider, and still bypasses the stack.
+    if isinstance(effect, Sequence):
+        if any(e.requires_target() for e in effect.effects):
+            return False
+        return any(
+            isinstance(e, _MANA_PRODUCING_EFFECTS) for e in effect.effects
+        )
     return False
+
+
+# Mana-producing effect classes recognized by ``_is_mana_ability_effect``.
+_MANA_PRODUCING_EFFECTS: tuple[type, ...] = (
+    AddManaToPool,
+    AddChargeCounterManaOfChosenColor,
+    AddManaOfColorPerCount,
+    AddNManaOfChosenColor,
+    AddOneOfManaCombinations,
+    AddManaInAnyCombination,
+    AddOneManaOfColorAmongControlled,
+    AddOneManaOfImprintedColors,
+)
 
 
 def _parse_activated_ability_line(
@@ -759,7 +914,7 @@ def _parse_activated_ability_line(
     marked ``is_mana_ability=True`` so the engine bypasses the stack
     on activation per CR 605.
     """
-    stripped = line.strip()
+    stripped = _ACTIVATED_ABILITY_WORD_PREFIX.sub("", line.strip(), count=1)
     sorcery_speed = False
     if stripped.endswith(_INLINE_SORCERY_RIDER_SUFFIX):
         # Drop the rider but keep the effect's terminating period so
@@ -775,6 +930,44 @@ def _parse_activated_ability_line(
         # today), so the two checks operate independently.
         stripped = stripped[: -len(_INLINE_ACTIVATE_ONLY_ONCE_RIDER_SUFFIX)]
         activate_only_once = True
+    activate_only_as_instant = False
+    activate_only_during_your_turn = False
+    requires_artifact_count = 0
+    # The timing / condition riders are independent of each other and of
+    # the sorcery / once riders above; strip whichever trail the line
+    # (at most one of each).
+    while True:
+        if stripped.endswith(_INLINE_ACTIVATE_ONLY_AS_INSTANT_RIDER_SUFFIX):
+            if activate_only_as_instant:
+                return None
+            stripped = stripped[
+                : -len(_INLINE_ACTIVATE_ONLY_AS_INSTANT_RIDER_SUFFIX)
+            ]
+            activate_only_as_instant = True
+            continue
+        if stripped.endswith(
+            _INLINE_ACTIVATE_ONLY_DURING_YOUR_TURN_RIDER_SUFFIX
+        ):
+            if activate_only_during_your_turn:
+                return None
+            stripped = stripped[
+                : -len(_INLINE_ACTIVATE_ONLY_DURING_YOUR_TURN_RIDER_SUFFIX)
+            ]
+            activate_only_during_your_turn = True
+            continue
+        artifact_rider = _INLINE_ACTIVATE_ONLY_IF_CONTROL_N_ARTIFACTS_RIDER.search(
+            stripped
+        )
+        if artifact_rider is not None:
+            if requires_artifact_count:
+                return None
+            token = artifact_rider.group(1)
+            requires_artifact_count = (
+                int(token) if token.isdigit() else _RIDER_CARDINALS[token]
+            )
+            stripped = stripped[: artifact_rider.start()]
+            continue
+        break
     activate_only_if = None
     only_if_match = _INLINE_ACTIVATE_ONLY_IF_RIDER.search(stripped)
     if only_if_match is not None:
@@ -848,7 +1041,21 @@ def _parse_activated_ability_line(
     # ability can't pay it.
     if cost.discard_self != from_hand:
         return None
-    effect = _parse_effect(_normalize_activated_effect_phrase(m.group(2)))
+    if requires_artifact_count:
+        cost = replace(
+            cost, requires_own_artifact_count_at_least=requires_artifact_count,
+        )
+    phrase = _normalize_activated_effect_phrase(m.group(2))
+    effect = _parse_effect(phrase)
+    if effect is None and phrase.startswith("it deals "):
+        # ``It deals N damage …`` — in an activated ability the pronoun
+        # is the source (Pyrite Spellbomb's ``{R}, Sacrifice this
+        # artifact: It deals 2 damage to any target.``). Retry without
+        # it so the body reaches the same subject-less damage grammar
+        # trigger bodies use (the creature-trigger normalizer strips
+        # ``it `` the same way). Tried second so pronoun-bearing literal
+        # bodies (Survey Mechan) keep matching first.
+        effect = _parse_effect(phrase[len("it "):])
     if effect is None:
         return None
     ability = ActivatedAbility(
@@ -856,6 +1063,8 @@ def _parse_activated_ability_line(
         cost_reductions=cost_reductions,
         activate_only_once=activate_only_once,
         activate_only_if=activate_only_if,
+        activate_only_as_instant=activate_only_as_instant,
+        activate_only_during_your_turn=activate_only_during_your_turn,
     )
     if _is_mana_ability_effect(effect):
         ability = replace(ability, is_mana_ability=True)

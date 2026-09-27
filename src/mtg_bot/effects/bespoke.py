@@ -164,8 +164,11 @@ class TannukEnsignLandfallEffect(Effect):
     ) -> None:
         source = state.resolving_source
         # Damage each opponent 1 (log even without a source).
+        from mtg_bot.game import player_damage_prevented
         for p in state.players:
             if p.id == controller_id or p.has_lost:
+                continue
+            if player_damage_prevented(state, p.id):
                 continue
             p.life -= 1
             state.log.append(
@@ -402,6 +405,9 @@ class PainForAllETBEffect(Effect):
         if amount <= 0:
             return
         if kind == "player":
+            from mtg_bot.game import player_damage_prevented
+            if player_damage_prevented(state, target_id):
+                return
             victim = state.player_by_id(target_id)
             victim.life -= amount
             state.log.append(
@@ -447,8 +453,11 @@ class PainForAllDamageEchoEffect(Effect):
         amount = state.resolving_combat_damage_amount
         if amount <= 0:
             return
+        from mtg_bot.game import player_damage_prevented
         for p in state.players:
             if p.id == controller_id or p.has_lost:
+                continue
+            if player_damage_prevented(state, p.id):
                 continue
             p.life -= amount
             state.log.append(
@@ -2232,7 +2241,7 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
                 f"P{p.id} discards {card.printing.name} "
                 f"(Alpharael artifact dodge)"
             )
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
             return
 
         # Fallback: discard two cards (any). Mirrors DiscardSelf(amount=2).
@@ -2246,7 +2255,7 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
 
     def describe(self) -> str:
         return "discard two cards unless you discard an artifact card"
@@ -2872,7 +2881,7 @@ class FanaticOfTheHarrowingETBEffect(Effect):
                 f"P{p.id} discards {card.printing.name} "
                 f"(Fanatic of the Harrowing)"
             )
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
             if p.id == controller_id:
                 controller_discarded = True
         if controller_discarded:
@@ -3268,11 +3277,13 @@ class SurveyMechanActivationEffect(Effect):
                 # pool (legal_targets includes players there too).
                 try:
                     _p = state.player_by_id(_id)
-                    _p.life -= 3
-                    state.log.append(
-                        f"P{_id} takes 3 damage from Survey Mechan "
-                        f"(life: {_p.life})"
-                    )
+                    from mtg_bot.game import player_damage_prevented
+                    if not player_damage_prevented(state, _id):
+                        _p.life -= 3
+                        state.log.append(
+                            f"P{_id} takes 3 damage from Survey Mechan "
+                            f"(life: {_p.life})"
+                        )
                 except KeyError:
                     state.log.append(
                         f"Survey Mechan damage target P{_id} not found"

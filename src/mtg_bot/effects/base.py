@@ -290,6 +290,9 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     """
     kind, target_id = target
     if kind == "player":
+        from mtg_bot.game import player_damage_prevented
+        if player_damage_prevented(state, target_id):
+            return
         p = state.player_by_id(target_id)
         p.life -= amount
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
@@ -443,6 +446,36 @@ class ActivationCost:
     # count via the existing ``choose_x`` agent hook; the engine taps
     # the lowest-id-first X untapped artifacts deterministically.
     tap_x_untapped_artifacts_you_control: bool = False
+    # "Discard your hand" — Lion's Eye Diamond. The activator discards
+    # every card in their hand as part of the cost (an empty hand is a
+    # legal, zero-card payment). Discard triggers fire per card.
+    discard_hand: bool = False
+    # "Sacrifice a <Subtype>" (Retrofitter Foundry's "Sacrifice a Servo"
+    # / "Sacrifice a Thopter"). Any permanent the activator controls
+    # with that (effective) subtype is a legal sacrifice, the source
+    # included if it has the subtype. Empty string disables.
+    sacrifice_subtype: str = ""
+    # "Sacrifice a nontoken artifact" (Thopter Foundry). Any nontoken
+    # artifact the activator controls, the source itself included.
+    sacrifice_nontoken_artifact: bool = False
+    # "Remove N <kind> counter(s) from this <permanent>" (Staff of the
+    # Storyteller's story counter, Wishclaw Talisman's wish counter,
+    # Reckoner Bankbuster's charge counter, Pentad Prism). ``kind`` is
+    # the printed counter name; legal only while the source has at least
+    # ``remove_counters_from_self_amount`` such counters.
+    remove_counters_from_self_kind: str = ""
+    remove_counters_from_self_amount: int = 0
+    # Crew N (CR 702.122): "Tap any number of untapped creatures you
+    # control with total power N or more". The activator picks the
+    # creatures one at a time (``Agent.choose_permanent_to_tap``) until
+    # the total reaches N; summoning-sick creatures may crew. A
+    # creature's ``crew_power_bonus`` (Reckoner Bankbuster's Pilot:
+    # "crews Vehicles as though its power were 2 greater") is added.
+    crew: int = 0
+    # "Sacrifice N nonland permanents" (Bolas's Citadel: ten). The
+    # activator picks them one at a time (``choose_sacrifice``); the
+    # source itself is a legal choice.
+    sacrifice_n_nonland_permanents: int = 0
     # **Planeswalker loyalty cost (CR 606).** Signed loyalty cost.
     # Positive values are PAY costs (the walker LOSES N loyalty
     # counters); negative values are ADD costs (the walker GAINS |N|
@@ -528,6 +561,24 @@ class ActivationCost:
             parts.append("Sacrifice a Desert")
         if self.tap_x_untapped_artifacts_you_control:
             parts.append("Tap X untapped artifacts you control")
+        if self.discard_hand:
+            parts.append("Discard your hand")
+        if self.sacrifice_subtype:
+            parts.append(f"Sacrifice a {self.sacrifice_subtype}")
+        if self.sacrifice_nontoken_artifact:
+            parts.append("Sacrifice a nontoken artifact")
+        if self.crew:
+            parts.append(f"Crew {self.crew}")
+        if self.sacrifice_n_nonland_permanents:
+            parts.append(
+                f"Sacrifice {self.sacrifice_n_nonland_permanents} nonland "
+                f"permanents"
+            )
+        if self.remove_counters_from_self_kind:
+            parts.append(
+                f"Remove {self.remove_counters_from_self_amount} "
+                f"{self.remove_counters_from_self_kind} counter(s) from ~"
+            )
         if self.loyalty:
             # Printed-sign convention: positive cost.loyalty is a "-N"
             # ability, negative is "+N".
@@ -603,6 +654,19 @@ class ActivatedAbility:
     # omits the activation while it's False and ``_activate_ability``
     # refuses it defensively. ``None`` = no restriction.
     activate_only_if: "Condition | None" = None
+    # ``Activate only as an instant.`` rider (Lion's Eye Diamond). The
+    # ability may be activated only when its controller could cast an
+    # instant — i.e. while holding priority. Every activation in this
+    # engine already happens through ``legal_actions`` at priority, so
+    # the rider's observable consequence is that the ability may NOT
+    # be activated in the middle of paying another spell's cost: the
+    # sac-for-mana auto-payment path (``_classify_sac_for_mana``)
+    # skips abilities carrying this flag.
+    activate_only_as_instant: bool = False
+    # ``Activate only during your turn.`` rider (Wishclaw Talisman).
+    # ``legal_actions`` filters the ability out unless the activator is
+    # the active player.
+    activate_only_during_your_turn: bool = False
 
     def describe(self) -> str:
         return f"{self.cost.describe()}: {self.effect.describe()}"
@@ -842,6 +906,12 @@ class TriggeredAbility:
     # ``unlocked_halves``), the ability is inert and won't fire.
     # ``None`` for non-Room triggers — always active.
     room_half: "str | None" = None
+    # True for abilities that function only while their source card is
+    # in its owner's graveyard (Sword of the Meek's "Whenever a 1/1
+    # creature you control enters, you may return this card from your
+    # graveyard …"). ``actions.dispatch_event`` scans graveyards for these
+    # and never fires them from the battlefield.
+    functions_in_graveyard: bool = False
 
     def __post_init__(self) -> None:
         if self.event is not None and self.trigger:
