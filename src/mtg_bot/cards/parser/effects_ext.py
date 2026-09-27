@@ -334,6 +334,27 @@ _PUT_TARGET_INTO_LIBRARY_NTH_FROM_TOP = re.compile(
     r"(?P<nth>second|third|fourth|fifth) from the top$"
 )
 _YOU_GET_AN_EMBLEM_WITH = re.compile(r'^you get an emblem with "(?P<body>.+)"$')
+# Karn, Scion of Urza's +1 -- only card in the pool with the
+# opponent-chooses-one-of-the-revealed-cards shape; the revealed count
+# and the counter kind are captured, the rest stays literal until a
+# second printing varies it.
+_REVEAL_TOP_OPPONENT_CHOOSES_ONE = re.compile(
+    rf"^reveal the top (?P<n>{_COUNT}) cards of your library\. [Aa]n "
+    r"opponent chooses one of them\. [Pp]ut that card into your hand and "
+    r"exile the other with an? (?P<counter>silver) counter on it$"
+)
+_PUT_CARD_WITH_COUNTER_FROM_EXILE = re.compile(
+    r"^put a card you own with an? (?P<counter>silver) counter on it from "
+    r"exile into your hand$"
+)
+# Stat token whose only rider is a quoted self-anthem scaling with a
+# count: 'with "This token gets +N/+M for each <noun> you control."'
+_CREATE_TOKEN_WITH_PER_COUNT_ANTHEM = re.compile(
+    rf"^create (?P<count>{_COUNT}) (?P<p>\d+)/(?P<t>\d+) (?:{_COLOR}) "
+    r"(?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
+    r"(?P<artifact>artifact )?creature tokens? with \"This token gets "
+    r"\+(?P<pb>\d+)/\+(?P<tb>\d+) for each (?P<each>[a-z]+) you control\.\"$"
+)
 
 # Closed condition phrasebook for the ``if <condition>, <effect>`` shape.
 _CONDITION_PHRASES = {
@@ -369,6 +390,7 @@ def _target_spec(noun: str, up_to_one: bool):
 def _token_printing(
     name: str, power: str, toughness: str, subtypes: str,
     artifact: bool, keywords: frozenset[str], legendary: bool = False,
+    static_abilities: tuple = (),
 ):
     from mtg_bot.cards.base import make_token_creature
 
@@ -380,6 +402,7 @@ def _token_printing(
         keywords=keywords,
         artifact=artifact,
         legendary=legendary,
+        static_abilities=static_abilities,
     )
 
 
@@ -545,6 +568,50 @@ def parse_ext_effect(phrase: str) -> Effect | None:
         if spec is not None:
             return PutTargetIntoOwnersLibraryNthFromTop(
                 position=_ORDINALS[m.group("nth")], targets=(spec,),
+            )
+
+    m = _REVEAL_TOP_OPPONENT_CHOOSES_ONE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_walkers import (
+            RevealTopNOpponentChoosesOneRestExiledWithCounter,
+        )
+
+        return RevealTopNOpponentChoosesOneRestExiledWithCounter(
+            n=_count(m.group("n")), counter=m.group("counter"),
+        )
+
+    m = _PUT_CARD_WITH_COUNTER_FROM_EXILE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.cube_walkers import (
+            PutCardYouOwnWithCounterFromExileIntoHand,
+        )
+
+        return PutCardYouOwnWithCounterFromExileIntoHand(
+            counter=m.group("counter"),
+        )
+
+    m = _CREATE_TOKEN_WITH_PER_COUNT_ANTHEM.match(phrase)
+    if m is not None:
+        each = parse_target_noun_phrase(m.group("each"))
+        if each is not None:
+            from mtg_bot.cards.base import StaticAbility, StaticScope
+            from mtg_bot.effects.conditions import PerControlled
+            from mtg_bot.effects.generic.tokens import CreateToken
+
+            anthem = StaticAbility(
+                scope=StaticScope.SELF,
+                power_bonus=int(m.group("pb")),
+                toughness_bonus=int(m.group("tb")),
+                condition=PerControlled(each),
+                bonus_per_condition_count=True,
+            )
+            return CreateToken(
+                token_printing=_token_printing(
+                    m.group("sub"), m.group("p"), m.group("t"),
+                    m.group("sub"), bool(m.group("artifact")), frozenset(),
+                    static_abilities=(anthem,),
+                ),
+                count=_count(m.group("count")),
             )
 
     m = _YOU_GET_AN_EMBLEM_WITH.match(phrase)

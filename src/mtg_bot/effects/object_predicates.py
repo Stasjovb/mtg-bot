@@ -415,6 +415,7 @@ _COUNTER_ATTRS: dict[str, str] = {
     "+1/+1": "plus_one_counters",
     "charge": "charge_counters",
     "stun": "stun_counters",
+    "silver": "silver_counters",
     "loyalty": "loyalty_counters",
 }
 

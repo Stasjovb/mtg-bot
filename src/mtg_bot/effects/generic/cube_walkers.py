@@ -1072,7 +1072,130 @@ class GainControlOfTriggeringSpellTargets(Effect):
         return "gain control of the triggering spell's targeted permanents"
 
 
+# ---------------------------------------------------------------------------
+# Karn, Scion of Urza (library_lookat / graveyard-exile cluster)
+# ---------------------------------------------------------------------------
+
+_COUNTER_FIELDS = {"silver": "silver_counters"}
+
+
+@dataclass(frozen=True)
+class RevealTopNOpponentChoosesOneRestExiledWithCounter(Effect):
+    """"Reveal the top N cards of your library. An opponent chooses one
+    of them. Put that card into your hand and exile the other with a
+    <kind> counter on it." (Karn, Scion of Urza's +1, N=2).
+
+    The revealed cards are public (``reveal_to_all``); an opponent's
+    agent picks via ``choose_card_from_library``. The other card(s) go
+    to exile carrying one ``counter`` counter each. With one card left
+    it goes to hand; with none the ability does nothing."""
+
+    n: int = 2
+    counter: str = "silver"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        revealed = list(p.library[:self.n])
+        if not revealed:
+            return
+        for c in revealed:
+            p.library.remove(c)
+            reveal_to_all(state, c)
+        chooser = next(
+            (o for o in state.players
+             if o.id != controller_id and not o.has_lost),
+            None,
+        )
+        pick_id = None
+        if chooser is not None and chooser.agent is not None:
+            pick_id = chooser.agent.choose_card_from_library(
+                state, chooser.id, [c.id for c in revealed],
+            )
+        chosen = next((c for c in revealed if c.id == pick_id), revealed[0])
+        chosen.zone = Zone.HAND
+        p.hand.append(chosen)
+        state.log.append(
+            f"P{controller_id} puts {chosen.printing.name} into their hand "
+            f"(chosen by an opponent)"
+        )
+        attr = _COUNTER_FIELDS[self.counter]
+        for c in revealed:
+            if c is chosen:
+                continue
+            c.zone = Zone.EXILE
+            setattr(c, attr, getattr(c, attr) + 1)
+            p.exile.append(c)
+            state.log.append(
+                f"P{controller_id} exiles {c.printing.name} with a "
+                f"{self.counter} counter on it"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"reveal the top {self.n} cards of your library; an opponent "
+            f"chooses one for your hand; exile the rest with a "
+            f"{self.counter} counter"
+        )
+
+
+@dataclass(frozen=True)
+class PutCardYouOwnWithCounterFromExileIntoHand(Effect):
+    """"Put a card you own with a <kind> counter on it from exile into
+    your hand." (Karn, Scion of Urza's -1). Untargeted; the controller
+    picks among their eligible exiled cards via
+    ``choose_card_from_library``. The card leaves exile as a new object
+    (CR 400.7), so its counters are removed."""
+
+    counter: str = "silver"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        attr = _COUNTER_FIELDS[self.counter]
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.exile
+            if c.owner_id == controller_id and getattr(c, attr) > 0
+        ]
+        if not options:
+            state.log.append(
+                f"P{controller_id} has no exiled card with a "
+                f"{self.counter} counter"
+            )
+            return
+        pick_id = None
+        if p.agent is not None:
+            pick_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == pick_id), options[0])
+        p.exile.remove(card)
+        setattr(card, attr, 0)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} from exile into "
+            f"their hand"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put a card you own with a {self.counter} counter on it from "
+            f"exile into your hand"
+        )
+
+
 __all__ = [
+    "PutCardYouOwnWithCounterFromExileIntoHand",
+    "RevealTopNOpponentChoosesOneRestExiledWithCounter",
     "GainControlOfTriggeringSpellTargets",
     "SpellTargetsMatching",
     "AtBeginningOfNextEndStep",

@@ -691,6 +691,13 @@ class StaticAbility:
     # effective state at the declared layer. Unused today — empty
     # for every existing card.
     continuous_effect: "ContinuousModifier | None" = None
+    # "gets +N/+M for each <X> you control": when True the
+    # ``power_bonus`` / ``toughness_bonus`` are PER UNIT of
+    # ``condition.multiplier(state, controller)`` (a variable-amount
+    # condition such as ``PerControlled(IsArtifact())``) instead of
+    # flat. Read by ``game._static_bonuses``. Karn, Scion of Urza's
+    # Construct token.
+    bonus_per_condition_count: bool = False
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""

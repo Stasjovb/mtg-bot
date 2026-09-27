@@ -339,6 +339,51 @@ def test_spell_target_binding_edge_cases():
     assert "targeted permanents" in eff.describe()
 
 
+def test_karn_shapes_parse():
+    from mtg_bot.effects.generic.cube_walkers import (
+        PutCardYouOwnWithCounterFromExileIntoHand,
+        RevealTopNOpponentChoosesOneRestExiledWithCounter,
+    )
+    assert _parse_effect(
+        "reveal the top two cards of your library. An opponent chooses "
+        "one of them. Put that card into your hand and exile the other "
+        "with a silver counter on it"
+    ) == RevealTopNOpponentChoosesOneRestExiledWithCounter(
+        n=2, counter="silver",
+    )
+    assert _parse_effect(
+        "put a card you own with a silver counter on it from exile into "
+        "your hand"
+    ) == PutCardYouOwnWithCounterFromExileIntoHand(counter="silver")
+    tok = _parse_effect(
+        'create a 0/0 colorless Construct artifact creature token with '
+        '"This token gets +1/+1 for each artifact you control."'
+    )
+    anthem = tok.token_printing.static_abilities[0]
+    assert anthem.bonus_per_condition_count
+    assert (anthem.power_bonus, anthem.toughness_bonus) == (1, 1)
+    assert parse_ext_effect(
+        'create a 0/0 colorless Construct artifact creature token with '
+        '"This token gets +1/+1 for each spell you control."'
+    ) is None
+    assert "silver" in RevealTopNOpponentChoosesOneRestExiledWithCounter(
+    ).describe()
+    assert "exile" in PutCardYouOwnWithCounterFromExileIntoHand().describe()
+
+
+def test_karn_plus_one_without_opponent_agent_takes_first():
+    from mtg_bot.effects.generic.cube_walkers import (
+        RevealTopNOpponentChoosesOneRestExiledWithCounter,
+    )
+    s = _state()
+    p = s.player_by_id(0)
+    lib = [s.new_object(BASIC_LANDS["Forest"], 0, Zone.LIBRARY)
+           for _ in range(2)]
+    p.library.extend(lib)
+    RevealTopNOpponentChoosesOneRestExiledWithCounter().resolve(s, 0)
+    assert p.hand == [lib[0]] and p.exile == [lib[1]]
+
+
 def test_draws_card_event_fires_once_per_card():
     from mtg_bot.cards.base import make_emblem
     from mtg_bot.effects.base import TriggeredAbility

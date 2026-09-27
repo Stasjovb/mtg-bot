@@ -1919,6 +1919,7 @@ def make_token_creature(
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     can_only_block_creatures_with_flying: bool = False,
     legendary: bool = False,
+    static_abilities: tuple[StaticAbility, ...] = (),
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -1952,6 +1953,7 @@ def make_token_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         activated_abilities=tuple(activated_abilities),
+        static_abilities=tuple(static_abilities),
         can_only_block_creatures_with_flying=(
             can_only_block_creatures_with_flying
         ),

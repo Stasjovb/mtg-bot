@@ -545,6 +545,10 @@ class GameObject:
     # Stun counters: a permanent with stun counters doesn't untap during
     # its controller's untap step — instead one stun counter is removed.
     stun_counters: int = 0
+    # Silver counters (Karn, Scion of Urza exiles a card "with a silver
+    # counter on it"; his -1 returns such a card). Carried on the card
+    # object while it sits in exile.
+    silver_counters: int = 0
     # Until-end-of-turn bonuses applied by pump effects (e.g. "+3/+0 until
     # end of turn"). Cleared on the cleanup step. Stacked additively when
     # multiple pumps hit the same object.
@@ -1026,8 +1030,15 @@ def _static_bonuses(
                 continue
             granted |= ability.granted_keywords
             if not wiped:
-                power_bonus += ability.power_bonus
-                toughness_bonus += ability.toughness_bonus
+                if ability.bonus_per_condition_count:
+                    per = ability.condition.multiplier(
+                        state, source.controller_id,
+                    )
+                    power_bonus += ability.power_bonus * per
+                    toughness_bonus += ability.toughness_bonus * per
+                else:
+                    power_bonus += ability.power_bonus
+                    toughness_bonus += ability.toughness_bonus
     # Equipment attached to obj contributes its equipment_bonuses.
     # The keyword grants and P/T bonuses on the equipment riders
     # follow the same layer split as static abilities above.

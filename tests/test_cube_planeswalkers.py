@@ -144,7 +144,6 @@ def test_bucket_planeswalker_is_claimed(name):
 @pytest.mark.parametrize("name", [
     "Wrenn and Six",
     "Oko, Thief of Crowns",
-    "Karn, Scion of Urza",
     "Chandra, Torch of Defiance",
 ])
 def test_unparseable_loyalty_body_leaves_walker_unclaimed(name):
@@ -948,3 +947,71 @@ def test_dack_emblem_steals_permanents_your_spells_target():
     s.priority_player_idx = 1
     apply_action(s, 1, CastSpell(card2.id))
     assert len(s.stack) == 1
+
+
+# ---------------------------------------------------------------------------
+# Karn, Scion of Urza
+# ---------------------------------------------------------------------------
+
+
+def test_karn_plus_one_opponent_picks_card_other_exiled_with_silver():
+    s = _state()
+    karn = _put(s, _P["Karn, Scion of Urza"], 0)
+    lib = _library(s, 0, 3)
+    first, second = lib[0], lib[1]
+    s.player_by_id(1).agent.library_pick = second.id
+    _activate(s, 0, karn, +1)
+    p = s.player_by_id(0)
+    assert p.hand == [second]
+    assert p.exile == [first]
+    assert first.silver_counters == 1
+    assert karn.loyalty_counters == 6
+
+
+def test_karn_plus_one_with_one_or_zero_cards():
+    s = _state()
+    karn = _put(s, _P["Karn, Scion of Urza"], 0)
+    lib = _library(s, 0, 1)
+    only = lib[0]
+    _activate(s, 0, karn, +1)
+    assert s.player_by_id(0).hand == [only]
+    assert s.player_by_id(0).exile == []
+    s.loyalty_activated_this_turn.clear()
+    _activate(s, 0, karn, +1)  # empty library: nothing happens
+    assert s.player_by_id(0).hand == [only]
+
+
+def test_karn_minus_one_returns_silver_card_only():
+    s = _state()
+    karn = _put(s, _P["Karn, Scion of Urza"], 0)
+    p = s.player_by_id(0)
+    plain = s.new_object(BASIC_LANDS["Forest"], 0, Zone.EXILE)
+    silver = s.new_object(BASIC_LANDS["Island"], 0, Zone.EXILE)
+    silver.silver_counters = 1
+    p.exile.extend([plain, silver])
+    _activate(s, 0, karn, -1)
+    assert p.hand == [silver]
+    assert silver.silver_counters == 0
+    assert p.exile == [plain]
+    s.loyalty_activated_this_turn.clear()
+    _activate(s, 0, karn, -1)  # nothing eligible
+    assert p.hand == [silver]
+
+
+def test_karn_minus_two_construct_scales_with_artifacts():
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.game import effective_power, effective_toughness
+    s = _state()
+    karn = _put(s, _P["Karn, Scion of Urza"], 0)
+    _activate(s, 0, karn, -2)
+    construct = next(
+        o for o in s.battlefield if o.printing.name == "Construct"
+    )
+    assert construct.printing.is_artifact
+    assert (effective_power(s, construct),
+            effective_toughness(s, construct)) == (1, 1)
+    _put(s, make_artifact("Rock", "{2}"), 0)
+    _put(s, make_artifact("Opp Rock", "{2}"), 1)
+    assert effective_power(s, construct) == 2
+    state_based_actions(s)
+    assert construct in s.battlefield
