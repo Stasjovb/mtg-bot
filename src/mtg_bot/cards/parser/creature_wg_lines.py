@@ -69,6 +69,52 @@ _RECOGNIZERS = (
 )
 
 
+# ---------------------------------------------------------------------
+# Linked exile abilities (CR 607.2a)
+# ---------------------------------------------------------------------
+
+
+def _is_exiling_effect(effect) -> bool:
+    from mtg_bot.effects.generic.exile import Exile, ExileTargetCardFromGraveyard
+
+    return isinstance(effect, (Exile, ExileTargetCardFromGraveyard))
+
+
+def _consumes_exile_link(ability) -> bool:
+    effect = getattr(ability, "effect", None)
+    condition = getattr(ability, "condition", None)
+    return bool(
+        getattr(effect, "consumes_exile_link", False)
+        or getattr(condition, "consumes_exile_link", False)
+    )
+
+
+def link_exile_abilities(
+    triggers: list, activated: list, statics: list,
+) -> None:
+    """When a card prints an ability that refers to "the exiled card" /
+    "cards exiled with this creature", its exiling ability is the other
+    half of a linked pair: wrap every exiling triggered / activated
+    ability in ``LinkExiledCardsToSource`` (in place). A card without a
+    link consumer is left untouched."""
+    from dataclasses import replace
+
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        LinkExiledCardsToSource,
+    )
+
+    if not any(
+        _consumes_exile_link(a) for a in (*triggers, *activated, *statics)
+    ):
+        return
+    for abilities in (triggers, activated):
+        for i, ability in enumerate(abilities):
+            if _is_exiling_effect(ability.effect):
+                abilities[i] = replace(
+                    ability, effect=LinkExiledCardsToSource(ability.effect),
+                )
+
+
 def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
     """The :class:`WGLine` for ``line`` (one reminder-stripped oracle line
     of ``card``), or ``None`` when no W/G bucket recognizer claims it."""

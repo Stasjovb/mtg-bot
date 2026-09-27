@@ -63,7 +63,10 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
-from mtg_bot.cards.parser.creature_wg_lines import parse_wg_creature_line
+from mtg_bot.cards.parser.creature_wg_lines import (
+    link_exile_abilities,
+    parse_wg_creature_line,
+)
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.cost_reduction import (
     _parse_cost_reduction_line,
@@ -879,6 +882,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         if parsed.statics:
             statics.extend(parsed.statics)
 
+    # Cube W/G creature bucket: linked "exiled with" ability pairs.
+    link_exile_abilities(triggers, activated, statics)
     printing = make_creature(
         name=card["name"],
         cost=card["mana_cost"],

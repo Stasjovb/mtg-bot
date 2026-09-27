@@ -36,9 +36,17 @@ if TYPE_CHECKING:  # pragma: no cover
 
 def become_monarch(state: "GameState", player_id: int) -> None:
     """CR 724.1: ``player_id`` becomes the monarch; nobody else is."""
+    was_monarch = state.player_by_id(player_id).is_monarch
     for p in state.players:
         p.is_monarch = p.id == player_id
     state.log.append(f"P{player_id} becomes the monarch")
+    if not was_monarch:
+        # "... until an opponent becomes the monarch" (Palace Jailer).
+        from mtg_bot.effects.generic.cube_creatures_wg import (
+            release_exiled_until_opponent_monarch,
+        )
+
+        release_exiled_until_opponent_monarch(state, player_id)
 
 
 def monarch_id(state: "GameState") -> int | None:
