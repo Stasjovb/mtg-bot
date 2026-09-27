@@ -122,14 +122,20 @@ def test_parse_spell_effect_phrase_recognizes_pump_and_gains():
 
 
 def test_parse_effect_returns_none_for_unknown_granted_keyword():
-    # ``protection from black`` is not on the evergreen-keyword
-    # whitelist — the keyword-grant body validation rejects, the whole
-    # pump-and-gain phrase rejects, and the wrapping card stays
-    # unclaimed rather than silently dropping the granted ability.
+    # ``banding`` is not a modeled keyword — the keyword-grant body
+    # validation rejects, the whole pump-and-gain phrase rejects, and
+    # the wrapping card stays unclaimed rather than silently dropping
+    # the granted ability. (``protection from black`` used to be the
+    # example here; protection is modeled now — see
+    # ``mtg_bot.keyword_rules`` — so it parses.)
+    assert _parse_effect(
+        "target creature gets +1/+1 and gains banding "
+        "until end of turn"
+    ) is None
     assert _parse_effect(
         "target creature gets +1/+1 and gains protection from black "
         "until end of turn"
-    ) is None
+    ) is not None
 
 
 def test_parse_effect_returns_none_for_pump_and_gains_without_duration():

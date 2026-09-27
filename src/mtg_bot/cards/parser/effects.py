@@ -176,7 +176,10 @@ from mtg_bot.cards.base import (
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     ConsultTheStarChartsEffect,
 )
-from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+from mtg_bot.cards.parser.keywords import (
+    _KEYWORD_LINES,
+    _parse_granted_keyword_piece,
+)
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
@@ -3261,10 +3264,17 @@ def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
     whitelist in ``parser.keywords`` (``_KEYWORD_LINES``) — adding a new
     evergreen keyword there automatically makes it grantable here.
     """
-    pieces = [p.strip() for p in body.split(" and ")]
-    if not all(p in _KEYWORD_LINES.values() for p in pieces):
-        return None
-    return frozenset(pieces)
+    # ``protection from X and from Y`` joins its qualities with
+    # `` and from `` — re-glue those before splitting on `` and ``.
+    glued = body.replace(" and from ", "\x00")
+    pieces = [p.strip().replace("\x00", " and from ") for p in glued.split(" and ")]
+    out: set[str] = set()
+    for p in pieces:
+        parsed = _parse_granted_keyword_piece(p)
+        if parsed is None:
+            return None
+        out.update(parsed)
+    return frozenset(out)
 
 
 def _parse_amount(token: str) -> int:

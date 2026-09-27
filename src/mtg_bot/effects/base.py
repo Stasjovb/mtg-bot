@@ -296,6 +296,17 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     elif kind == "creature":
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:
+            from mtg_bot.keyword_rules import (
+                current_damage_source, is_protected_from,
+            )
+
+            source = current_damage_source(state)
+            if is_protected_from(state, obj, source):
+                state.log.append(
+                    f"{amount} damage to {obj.printing.name} from "
+                    f"{source.printing.name} is prevented (protection)"
+                )
+                return
             obj.damage += amount
             obj.damaged_this_turn = True
             state.log.append(f"{obj.printing.name} takes {amount} damage")

@@ -9,6 +9,10 @@ tuple. Adding a new evergreen keyword is a one-line addition to
 
 from __future__ import annotations
 
+import re
+
+from mtg_bot.keyword_rules import PROTECTION_QUALITIES, protection_keyword
+
 
 _KEYWORD_LINES: dict[str, str] = {
     "Flying": "flying",
@@ -26,7 +30,51 @@ _KEYWORD_LINES: dict[str, str] = {
     "Prowess": "prowess",
     "Hexproof": "hexproof",
     "Indestructible": "indestructible",
+    "Shroud": "shroud",
+    "Exalted": "exalted",
 }
+
+
+# ``Protection from <quality>`` / ``Protection from <q1> and from <q2>``
+# (CR 702.16). Each named quality becomes its own engine keyword
+# ``"protection from <quality>"`` (see ``mtg_bot.keyword_rules``). A
+# quality outside ``PROTECTION_QUALITIES`` (``the chosen player``,
+# ``spells that are one or more colors``) doesn't match, so the card
+# stays unclaimed rather than carrying a keyword nothing enforces.
+_PROTECTION_PIECE = re.compile(
+    r"^[Pp]rotection from (?P<first>[a-z]+)(?P<rest>(?: and from [a-z]+)*)$"
+)
+
+
+def _parse_protection_piece(piece: str) -> tuple[str, ...] | None:
+    """Engine keywords for one ``protection from ...`` piece, or None."""
+    m = _PROTECTION_PIECE.match(piece)
+    if m is None:
+        return None
+    qualities = [m.group("first")] + re.findall(
+        r" and from ([a-z]+)", m.group("rest"),
+    )
+    if not all(q in PROTECTION_QUALITIES for q in qualities):
+        return None
+    return tuple(protection_keyword(q) for q in qualities)
+
+
+def _parse_keyword_piece(piece: str) -> tuple[str, ...] | None:
+    """Engine keywords for one comma-separated keyword-line piece
+    (capitalized per ``_parse_keyword_line``'s normalization)."""
+    if piece in _KEYWORD_LINES:
+        return (_KEYWORD_LINES[piece],)
+    return _parse_protection_piece(piece)
+
+
+def _parse_granted_keyword_piece(piece: str) -> tuple[str, ...] | None:
+    """Engine keywords for a lowercase granted-keyword piece as it
+    appears mid-sentence (``gains hexproof``, ``has protection from
+    red``). Accepts every engine spelling in ``_KEYWORD_LINES`` plus
+    the protection family."""
+    if piece in _KEYWORD_LINES.values():
+        return (piece,)
+    return _parse_protection_piece(piece)
 
 
 def _parse_keyword_line(line: str) -> tuple[str, ...] | None:
@@ -55,6 +103,10 @@ def _parse_keyword_line(line: str) -> tuple[str, ...] | None:
     normalized = [pieces[0]] + [
         p[:1].upper() + p[1:] if p else p for p in pieces[1:]
     ]
-    if not all(p in _KEYWORD_LINES for p in normalized):
-        return None
-    return tuple(_KEYWORD_LINES[p] for p in normalized)
+    out: list[str] = []
+    for p in normalized:
+        parsed = _parse_keyword_piece(p)
+        if parsed is None:
+            return None
+        out.extend(parsed)
+    return tuple(out)

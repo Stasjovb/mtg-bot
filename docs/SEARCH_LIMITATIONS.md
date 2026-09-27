@@ -18858,3 +18858,16 @@ Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of My
 
 **11. Two-target copy effects enumerate slots per filter; the copy is a printing swap.**
 *Where:* `actions._activate_ability` consults an effect's optional `legal_targets_for_slot` hook (Saheeli, Sublime Artificer's -2) so each target slot uses its own filter and stays distinct. The copy itself follows the Cytoshape layer-1 precedent (`original_printing` snapshot + `is_copy` registry entry reverted at cleanup / zone change), keeping the copier's token status. The spell-cast pipeline does not have the per-slot hook yet (activation-only).
+## Hexproof / shroud / protection: targeting filtered at choice chokepoints; partial-target resolution not re-checked — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `src/mtg_bot/keyword_rules.py` (`filter_targetable`, `targets_all_illegal_on_resolution`, `current_damage_source`); call sites in `legal.py::_targets_are_satisfiable` / the activated-ability legality gate, `actions.py::_select_spell_targets` (incl. Aura enchant picks), `_activate_ability`, `push_triggered_ability`, `resolve_top_of_stack`; damage prevention in `effects/base.py::_apply_damage` and `combat.py::_prevented_by_protection`.
+
+**What the shortcuts are.**
+1. Target enumeration is per-effect (`Effect.legal_targets` overrides), so hexproof / shroud / protection are applied as a post-filter where an enumerated pool becomes a choice, not inside each enumerator. Nested sub-effects that enumerate their own targets internally at resolution (none in the pool today) would bypass the filter.
+2. On resolution (CR 608.2b) the spell/ability is removed only when EVERY target became illegal through these rules. A multi-target spell where only SOME targets gained protection still affects all of them (damage to a protected creature is still prevented by the damage path).
+3. Non-combat damage source = the resolving ability's source, else the resolving spell. "Fight"/"deals damage equal to its power" effects whose real source is a creature on the battlefield are checked against the spell/ability source instead. Two bespoke EoE damage paths (`bespoke.py` enchanted-creature damage) don't check protection.
+4. Player-level protection/hexproof (`you gain protection from everything`, `protection from the chosen player`) is not modeled; the parser refuses those qualities.
+
+**Failure mode / impact.** Rare multi-target and fight edge cases over-apply damage/effects to a protected permanent. No perf-relevant change beyond one `effective_keywords` walk per battlefield candidate target.
+
+**Fix scope estimate.** Per-slot resolution re-check + threading a `damage_source` through `_apply_damage`: ~1 day.

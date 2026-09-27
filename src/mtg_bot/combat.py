@@ -60,10 +60,7 @@ def can_block(
     legal. (Damage-prevention and targeting protections are handled
     elsewhere; only the block-legality clause lives here.)
     """
-    from mtg_bot.game import (
-        effective_colors, effective_protection_from_colors,
-        is_cant_be_blocked,
-    )
+    from mtg_bot.game import is_cant_be_blocked
 
     attacker_kws = effective_keywords(state, attacker)
     blocker_kws = effective_keywords(state, blocker)
@@ -75,11 +72,10 @@ def can_block(
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
             return False
-    attacker_protect = effective_protection_from_colors(state, attacker)
-    if attacker_protect:
-        blocker_colors = effective_colors(state, blocker)
-        if attacker_protect & blocker_colors:
-            return False
+    from mtg_bot.keyword_rules import blocked_by_protection
+
+    if blocked_by_protection(state, attacker, blocker):
+        return False
     return True
 
 
@@ -170,7 +166,7 @@ def _fire_exalted_pumps(state: GameState) -> None:
     for source in state.battlefield:
         if source.controller_id != controller_id:
             continue
-        if "exalted" in source.printing.keywords:
+        if "exalted" in effective_keywords(state, source):
             exalted_count += 1
     if exalted_count == 0:
         return
@@ -335,6 +331,30 @@ def _source_bypasses_prevention(state: GameState, source_id: int) -> bool:
     return False
 
 
+def _prevented_by_protection(
+    state: GameState, kind: str, target_id: int, source_id: int,
+) -> bool:
+    """True when protection on the damaged creature prevents this
+    combat-damage event (and the source's damage can be prevented)."""
+    from mtg_bot.keyword_rules import is_protected_from
+
+    if kind != "creature":
+        return False
+    target = next((o for o in state.battlefield if o.id == target_id), None)
+    source = next((o for o in state.battlefield if o.id == source_id), None)
+    if target is None or source is None:
+        return False
+    if source.printing.combat_damage_cant_be_prevented:
+        return False
+    if is_protected_from(state, target, source):
+        state.log.append(
+            f"combat damage from {source.printing.name} to "
+            f"{target.printing.name} is prevented (protection)"
+        )
+        return True
+    return False
+
+
 def _effective_combat_damage_amount(
     state: GameState, obj: "GameObject", base_power: int
 ) -> int:
@@ -490,6 +510,14 @@ def _resolve_damage_step(
         damage_events_typed = surviving
         if not damage_events_typed:
             return
+
+    # Protection (CR 702.16e): damage a protected creature would be
+    # dealt by a source with the protected-from quality is prevented —
+    # unless the source's damage can't be prevented (CR 614.16).
+    damage_events_typed = [
+        ev for ev in damage_events_typed
+        if not _prevented_by_protection(state, ev[0], ev[1], ev[3])
+    ]
 
     # Combat damage in MTG is simultaneous, so aggregate damage to each
     # player into a single end-of-step log line ("P0 takes 5 (life:

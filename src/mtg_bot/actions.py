@@ -8,6 +8,9 @@ from mtg_bot.cards import ManaCost
 from mtg_bot.game import (
     GameObject, GameState, StackItem, Zone, effective_land_produces,
 )
+from mtg_bot.keyword_rules import (
+    filter_targetable, targets_all_illegal_on_resolution,
+)
 
 
 def _format_log_targets(state: GameState, targets: tuple) -> str:
@@ -1421,7 +1424,10 @@ def _select_spell_targets(
         )
         min_t, max_t = spell_effect.target_count_range()
         if max_t > 0:
-            legal = spell_effect.legal_targets(state, player_id)
+            legal = filter_targetable(
+                state, spell_effect.legal_targets(state, player_id),
+                card, player_id,
+            )
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
             slot_kinds = spell_effect.target_slot_kinds()
@@ -1474,6 +1480,7 @@ def _select_spell_targets(
                 if o.printing.is_creature
                 and (not yours_only or o.controller_id == player_id)
             ]
+        legal = filter_targetable(state, legal, card, player_id)
         if legal:
             chosen = p.agent.choose_target(state, player_id, legal)
             if chosen is not None:
@@ -1939,6 +1946,47 @@ def _cast_spell(
         state, _Event.IS_CAST, label="is-cast",
         spell=card, controller=p,
     )
+    if not card.printing.is_creature:
+        fire_prowess_triggers(state, player_id)
+
+
+# Prowess (CR 702.108): "Whenever you cast a noncreature spell, this
+# creature gets +1/+1 until end of turn." Modeled as a keyword so a
+# granted prowess (a token "with prowess", an Equipment rider) triggers
+# exactly like a printed one: the cast pipeline walks every permanent
+# the caster controls whose effective keywords include ``"prowess"``
+# and stacks one trigger each. The ability index 2000 keeps the
+# synthesized trigger off the printed-ability once-per-turn ledger.
+_PROWESS_ABILITY_INDEX = 2000
+
+
+def _prowess_ability():
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.effects.predicates import Event as _Event
+
+    return TriggeredAbility(
+        event=_Event.IS_CAST,
+        effect=PumpSelfUntilEOT(power_bonus=1, toughness_bonus=1),
+    )
+
+
+def fire_prowess_triggers(state: GameState, caster_id: int) -> None:
+    from mtg_bot.game import effective_keywords
+
+    for obj in list(state.battlefield):
+        if obj.controller_id != caster_id:
+            continue
+        if "prowess" not in effective_keywords(state, obj):
+            continue
+        push_triggered_ability(
+            state,
+            source=obj,
+            ability=_prowess_ability(),
+            ability_index=_PROWESS_ABILITY_INDEX,
+            controller_id=caster_id,
+            label="prowess",
+        )
 
 
 def _apply_ward_check(
@@ -2326,6 +2374,7 @@ def _activate_ability(
             legal = ability.effect.legal_targets(state, player_id)
         finally:
             state.resolving_source = None
+        legal = filter_targetable(state, legal, source, player_id)
         if ability.cost.sacrifice_self or ability.cost.exile_self:
             legal = [t for t in legal if t[1] != source.id]
         _, max_t = ability.effect.target_count_range()
@@ -2901,6 +2950,7 @@ def _declare_blockers(
     assignments: tuple[tuple[int, int], ...],
 ) -> None:
     from mtg_bot.combat import can_block, declare_blockers, eligible_blockers
+    from mtg_bot.game import effective_keywords
 
     eligible_ids = {o.id for o in eligible_blockers(state, player_id)}
     attackers = {o.id: o for o in state.battlefield if o.attacking}
@@ -2925,7 +2975,7 @@ def _declare_blockers(
         blockers_by_attacker.setdefault(aid, []).append(bid)
     for aid, blocker_ids in blockers_by_attacker.items():
         if (
-            "menace" in attackers[aid].printing.keywords
+            "menace" in effective_keywords(state, attackers[aid])
             and len(blocker_ids) < 2
         ):
             for bid in blocker_ids:
@@ -3038,6 +3088,16 @@ def resolve_top_of_stack(state: GameState) -> None:
             if isinstance(item.ability, ActivatedAbility)
             else "triggered"
         )
+        # CR 608.2b: every target became illegal (hexproof / shroud /
+        # protection gained in response) -> the ability doesn't resolve.
+        if targets_all_illegal_on_resolution(
+            state, item.targets, item.source, item.controller_id,
+        ):
+            state.log.append(
+                f"{item.source.printing.name}'s {kind} ability fizzles "
+                f"(all targets illegal)"
+            )
+            return
         state.log.append(
             f"{item.source.printing.name}'s {kind} ability resolves"
         )
@@ -3072,10 +3132,22 @@ def resolve_top_of_stack(state: GameState) -> None:
 
     # Spell resolution
     card = item.source
+    # CR 608.2b: a spell whose every target became illegal (hexproof /
+    # shroud / protection gained in response) doesn't resolve and goes
+    # to its owner's graveyard.
+    if targets_all_illegal_on_resolution(
+        state, item.targets, card, item.controller_id,
+    ):
+        state.log.append(
+            f"{card.printing.name} fizzles (all targets illegal)"
+        )
+        _send_to_graveyard_or_library(state, card)
+        return
     state.resolving_x_value = item.x_value
     state.resolving_kicked = item.kicked
     state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
     state.resolving_modes = item.chosen_modes
+    state.resolving_spell = card
     try:
         if card.printing.is_permanent and not (
             card.printing.is_instant or card.printing.is_sorcery
@@ -3156,6 +3228,7 @@ def resolve_top_of_stack(state: GameState) -> None:
             return
         raise ValueError(f"don't know how to resolve {card.printing.name}")
     finally:
+        state.resolving_spell = None
         state.resolving_x_value = 0
         state.resolving_kicked = False
         state.resolving_additional_cost_choice_id = None
@@ -3602,6 +3675,7 @@ def push_triggered_ability(
             finally:
                 state.resolving_source = None
                 state.resolving_combat_damage_amount = 0
+            legal = filter_targetable(state, legal, source, controller_id)
             if not legal and min_t > 0:
                 state.log.append(
                     f"{source.printing.name}'s {label} trigger has no "

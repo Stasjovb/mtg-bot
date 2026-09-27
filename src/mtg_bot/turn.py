@@ -7,6 +7,7 @@ from enum import Enum
 from mtg_bot.game import (
     GameState, Zone, effective_keywords, effective_toughness, is_creature_now,
 )
+from mtg_bot.keyword_rules import attachment_illegal_by_protection
 
 
 class Step(Enum):
@@ -1445,6 +1446,12 @@ def _state_based_actions_pass(state: GameState) -> bool:
             if not target.printing.is_land:
                 auras_to_bury.append(obj)
         # Other kinds (e.g., player-enchant) aren't in scope.
+        # Protection (CR 702.16c): a permanent with protection from a
+        # quality the Aura has can't be enchanted by it.
+        if obj not in auras_to_bury and attachment_illegal_by_protection(
+            state, obj, target,
+        ):
+            auras_to_bury.append(obj)
     for aura in auras_to_bury:
         state.log.append(
             f"{aura.printing.name} put into graveyard "
@@ -1473,6 +1480,14 @@ def _state_based_actions_pass(state: GameState) -> bool:
             state.log.append(
                 f"{obj.printing.name} unattaches "
                 f"(no longer attached to a creature)"
+            )
+            changed = True
+        elif attachment_illegal_by_protection(state, obj, target):
+            # CR 702.16d: protection from a quality the Equipment has.
+            obj.attached_to = None
+            state.log.append(
+                f"{obj.printing.name} unattaches "
+                f"({target.printing.name} has protection from it)"
             )
             changed = True
 

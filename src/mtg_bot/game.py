@@ -2781,6 +2781,13 @@ class GameState:
     # "put a +1/+1 counter on this creature" can reach the source without
     # having to thread it through every resolve() signature.
     resolving_source: Optional[GameObject] = None
+    # The instant / sorcery / Aura spell currently resolving (the card
+    # object), or ``None``. Distinct from ``resolving_source`` (which
+    # is only set for abilities, and which many effects read as "this
+    # permanent"). Consumed by the protection damage-prevention check
+    # (``keyword_rules.current_damage_source``) so a red burn spell's
+    # damage to a creature with protection from red is prevented.
+    resolving_spell: Optional[GameObject] = None
     # Controller id pinned for the current legal-targets enumeration.
     # Set transiently by ``Effect._enumerate_for_filter`` (and by
     # any peer call that consults a ``TargetFilter``) so controller-
@@ -3506,6 +3513,10 @@ class GameState:
             if self.delayed_triggers else []
         )
         new_state.resolving_source = new_resolving_source
+        new_state.resolving_spell = (
+            clone_obj(self.resolving_spell)
+            if self.resolving_spell is not None else None
+        )
         new_state.resolving_controller_id = self.resolving_controller_id
         new_state.resolving_x_value = self.resolving_x_value
         new_state.resolving_kicked = self.resolving_kicked

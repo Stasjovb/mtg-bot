@@ -180,7 +180,11 @@ def _targets_are_satisfiable(
     effect = card.printing.spell_effect
     if effect is None or not effect.requires_target():
         return True
-    legal = effect.legal_targets(state, player_id)
+    from mtg_bot.keyword_rules import filter_targetable
+
+    legal = filter_targetable(
+        state, effect.legal_targets(state, player_id), card, player_id,
+    )
     if not legal:
         return False
     min_t, _max_t = effect.target_count_range()
@@ -959,9 +963,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             if ability.effect.requires_target():
                 state.resolving_source = obj
                 try:
-                    has_legal = bool(
-                        ability.effect.legal_targets(state, player_id)
-                    )
+                    from mtg_bot.keyword_rules import filter_targetable
+
+                    has_legal = bool(filter_targetable(
+                        state,
+                        ability.effect.legal_targets(state, player_id),
+                        obj, player_id,
+                    ))
                 finally:
                     state.resolving_source = None
                 if not has_legal:

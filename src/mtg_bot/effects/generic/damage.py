@@ -1157,6 +1157,10 @@ class MayHaveSourceDealDamageToTarget(Effect):
         source = state.resolving_source
         if source is None:
             return
+        from mtg_bot.keyword_rules import is_protected_from
+
+        if is_protected_from(state, tgt, source):
+            return
         target_controller = state.player_by_id(tgt.controller_id)
         if target_controller.has_lost or target_controller.agent is None:
             return
