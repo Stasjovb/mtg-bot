@@ -73,6 +73,10 @@ Shapes:
 * ``put a +1/+1 counter on target <noun>. Whenever that creature attacks
   the monarch this turn, it gains <keywords> until end of turn`` ->
   :class:`CounterThenWhenItAttacksMonarch` (Okoye)
+* ``<effect>. Then if you have the city's blessing, for each token you
+  control that entered this turn, create a token that's a copy of it``
+  -> ``Sequence`` + :class:`CopyEachTokenYouControlEnteredThisTurn`
+  (Ocelot Pride)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -195,6 +199,10 @@ _COUNTER_THEN_ATTACKS_MONARCH_RE = re.compile(
     r"^put a \+1/\+1 counter on target (?P<noun>.+?)\. Whenever that "
     r"creature attacks the monarch this turn, it gains (?P<kw>.+) until end "
     r"of turn$"
+)
+_THEN_IF_BLESSING_COPY_TOKENS_RE = re.compile(
+    r"^(?P<first>.+?)\. Then if you have the city's blessing, for each token "
+    r"you control that entered this turn, create a token that's a copy of it$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -452,6 +460,21 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    m = _THEN_IF_BLESSING_COPY_TOKENS_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.combinators import IfConditionElse, Sequence
+        from mtg_bot.effects.state_predicates import HasCitysBlessing
+
+        first = _parse_effect(m.group("first"))
+        if first is not None:
+            return Sequence(effects=(
+                first,
+                IfConditionElse(
+                    condition=HasCitysBlessing(),
+                    then_effect=wg.CopyEachTokenYouControlEnteredThisTurn(),
+                ),
+            ))
     m = _MILL_CHOOSE_OPPONENT_ATTACK_PUMP_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects_ext import _keywords

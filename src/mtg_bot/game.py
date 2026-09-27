@@ -2926,6 +2926,9 @@ class Player:
     # library/graveyard-exile watch sweep (only kept while a watcher such
     # as Laelia is on the battlefield).
     library_graveyard_watch: frozenset = frozenset()
+    # Ascend (CR 702.131): the city's blessing, kept for the rest of the
+    # game once gained (``creature_statics_wg.apply_ascend``).
+    has_citys_blessing: bool = False
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this

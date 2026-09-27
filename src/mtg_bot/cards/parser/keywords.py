@@ -37,6 +37,9 @@ _KEYWORD_LINES: dict[str, str] = {
     "Battle cry": "battle cry",
     "Devoid": "devoid",
     "Persist": "persist",
+    # Ascend (CR 702.131) on a permanent: ``creature_statics_wg.
+    # apply_ascend`` grants the city's blessing (cube W/G bucket).
+    "Ascend": "ascend",
 }
 
 

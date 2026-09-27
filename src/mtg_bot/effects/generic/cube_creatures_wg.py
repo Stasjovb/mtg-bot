@@ -1309,3 +1309,31 @@ class Backup(Effect):
 
     def describe(self) -> str:
         return f"backup {self.n}"
+
+
+# ---------------------------------------------------------------------
+# Ocelot Pride
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CopyEachTokenYouControlEnteredThisTurn(Effect):
+    """"For each token you control that entered this turn, create a
+    token that's a copy of it." (Ocelot Pride's city's-blessing rider.)
+    The set is fixed before any copy is created."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        entered = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_token
+            and o.entered_battlefield_turn == state.turn_number
+        ]
+        for tok in entered:
+            CreateToken(token_printing=token_copy_printing(tok.printing)).resolve(
+                state, controller_id,
+            )
+
+    def describe(self) -> str:
+        return "copy each token you control that entered this turn"

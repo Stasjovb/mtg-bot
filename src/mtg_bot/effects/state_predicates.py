@@ -294,6 +294,24 @@ class HasInitiative(StatePredicate):
 
 
 @dataclass(frozen=True)
+class GainedLifeThisTurn(StatePredicate):
+    """The viewer gained life this turn -- ``if you gained life this
+    turn`` (Ocelot Pride)."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).life_gained_this_turn > 0
+
+
+@dataclass(frozen=True)
+class HasCitysBlessing(StatePredicate):
+    """The viewer has the city's blessing (Ascend, CR 702.131) -- ``if
+    you have the city's blessing``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).has_citys_blessing
+
+
+@dataclass(frozen=True)
 class CompletedADungeon(StatePredicate):
     """The viewer has completed at least one dungeon (CR 309.7) —
     ``if you've completed a dungeon``."""

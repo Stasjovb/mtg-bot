@@ -304,3 +304,43 @@ def test_backup_counters_and_keyword_grant():
     assert "backup" in eff.describe()
     GrantKeywordsToObjectUEOT(obj_id=999).resolve(state, 0)
     assert "gains" in GrantKeywordsToObjectUEOT().describe()
+
+
+def test_ocelot_pride_end_step_cat_and_blessing_copies():
+    from mtg_bot.creature_statics_wg import apply_ascend
+    from mtg_bot.game import gain_life
+    from mtg_bot.turn import run_beginning_of_end_step_triggers
+
+    pr = cube()["Ocelot Pride"]
+    assert {"first strike", "lifelink", "ascend"} <= pr.keywords
+    state = make_state()
+    put(state, 0, pr)
+    state.step = Step.END
+    run_beginning_of_end_step_triggers(state)
+    drain(state)
+    assert not any(o.printing.name == "Cat" for o in state.battlefield)
+    gain_life(state, 0, 1)
+    run_beginning_of_end_step_triggers(state)
+    drain(state)
+    cats = [o for o in state.battlefield if o.printing.name == "Cat"]
+    assert len(cats) == 1
+    # City's blessing: ten permanents.
+    add_lands(state, 0, "Plains", 8)
+    apply_ascend(state)
+    assert state.players[0].has_citys_blessing
+    run_beginning_of_end_step_triggers(state)
+    drain(state)
+    # A new Cat, then a copy of each token that entered this turn (2 Cats).
+    assert sum(o.printing.name == "Cat" for o in state.battlefield) == 4
+
+
+def test_ascend_needs_ten_permanents_and_an_ascend_source():
+    from mtg_bot.creature_statics_wg import apply_ascend
+
+    state = make_state()
+    add_lands(state, 0, "Plains", 12)
+    apply_ascend(state)
+    assert not state.players[0].has_citys_blessing
+    put(state, 1, "Ocelot Pride")
+    apply_ascend(state)
+    assert not state.players[1].has_citys_blessing

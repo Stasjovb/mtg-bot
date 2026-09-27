@@ -230,3 +230,23 @@ def exile_instead_of_entering(state: "GameState", obj: "GameObject") -> bool:
         f"{pr.name} would enter without being cast -- exiled instead"
     )
     return True
+
+
+# ---------------------------------------------------------------------
+# Ascend (CR 702.131)
+# ---------------------------------------------------------------------
+
+
+def apply_ascend(state: "GameState") -> None:
+    """A permanent with ascend gives its controller the city's blessing
+    as soon as they control ten or more permanents (checked with the
+    state-based actions)."""
+    for o in state.battlefield:
+        if "ascend" not in o.printing.keywords:
+            continue
+        p = state.player_by_id(o.controller_id)
+        if p.has_citys_blessing:
+            continue
+        if sum(1 for x in state.battlefield if x.controller_id == p.id) >= 10:
+            p.has_citys_blessing = True
+            state.log.append(f"P{p.id} gets the city's blessing")

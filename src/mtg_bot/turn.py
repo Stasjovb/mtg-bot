@@ -1499,10 +1499,14 @@ def state_based_actions(state: GameState) -> bool:
         any_changed = True
     # "When <this> is put into a graveyard from anywhere" triggers
     # (Worldspine Wurm; ``mtg_bot.creature_statics_wg``).
-    from mtg_bot.creature_statics_wg import fire_graveyard_arrival_triggers
+    from mtg_bot.creature_statics_wg import (
+        apply_ascend,
+        fire_graveyard_arrival_triggers,
+    )
 
     if fire_graveyard_arrival_triggers(state):
         any_changed = True
+    apply_ascend(state)
     return any_changed
 
 

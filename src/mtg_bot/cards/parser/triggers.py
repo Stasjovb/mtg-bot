@@ -107,6 +107,8 @@ from mtg_bot.effects.state_predicates import (
     CardsInGraveyardAtLeast,
     CompletedADungeon,
     Delirium,
+    GainedLifeThisTurn,
+    HasCitysBlessing,
     HasInitiative,
     IsMonarch,
     LoneAttackerForYou,
@@ -1505,6 +1507,9 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "you have the initiative": StateBound(HasInitiative()),
     "you're the monarch": StateBound(IsMonarch()),
     "you've completed a dungeon": StateBound(CompletedADungeon()),
+    # Cube W/G bucket: Ocelot Pride's end-step gate / city's blessing.
+    "you gained life this turn": StateBound(GainedLifeThisTurn()),
+    "you have the city's blessing": StateBound(HasCitysBlessing()),
     # Threshold (``Threshold —`` ability word strips upstream).
     "there are seven or more cards in your graveyard": (
         StateBound(CardsInGraveyardAtLeast(7))
