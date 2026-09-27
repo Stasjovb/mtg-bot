@@ -450,6 +450,7 @@ def move_off_battlefield(
     obj.monstrous = False
     obj.entered_via_cast = False
     obj.kick_count = 0
+    obj.evoked = False
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False

@@ -7003,7 +7003,13 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
     # Cube creatures (R / multicolor / colorless) bucket shapes -- last.
     from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_effect
 
-    return parse_rmc_effect(phrase)
+    rmc = parse_rmc_effect(phrase)
+    if rmc is not None:
+        return rmc
+    # Cube W/G creature bucket shapes -- the very last fallback.
+    from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
+
+    return parse_wg_effect(phrase)
 
 
 def _normalize_creature_effect_phrase(phrase: str) -> str:

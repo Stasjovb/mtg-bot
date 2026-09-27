@@ -871,6 +871,12 @@ class GameObject:
     # Number of times the spell this permanent resolved from was kicked
     # (multikicker; Batroc the Leaper).
     kick_count: int = 0
+    # ── Cube W/G creature bucket ─────────────────────────────────────
+    # Evoke (CR 702.74): set when this object was cast for its evoke
+    # cost; read by the evoke sacrifice trigger's intervening-if at
+    # trigger and resolution time. Cleared whenever the object leaves
+    # the battlefield (a flickered evoked creature is a new object).
+    evoked: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

@@ -63,6 +63,7 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.creature_wg_lines import parse_wg_creature_line
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.cost_reduction import (
     _parse_cost_reduction_line,
@@ -373,6 +374,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         rmc_graveyard_abilities.extend(rmc.graveyard_abilities)
         rmc_printing_fields.update(rmc.printing_fields)
 
+    # Cube W/G creature bucket (``creature_wg_lines``): printing fields
+    # contributed by lines the pre-existing grammar declines.
+    wg_fields: dict = {}
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -847,9 +851,19 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         parsed = _parse_clause(line, name=card["name"])
         if parsed is None:
             rmc = parse_rmc_creature_line_post(line, card["name"])
-            if rmc is None:
+            if rmc is not None:
+                _absorb_rmc_line(rmc)
+                continue
+            # Cube W/G creature bucket: consulted only for lines the
+            # grammar above declined, so it can't change a claim.
+            wg = parse_wg_creature_line(line, card)
+            if wg is None:
                 return None
-            _absorb_rmc_line(rmc)
+            wg_fields.update(wg.fields)
+            keywords.update(wg.keywords)
+            triggers.extend(wg.triggers)
+            activated.extend(wg.activated)
+            statics.extend(wg.statics)
             continue
         keywords.update(parsed.keywords)
         # ``triggers`` is a tuple — one entry per condition arm. A
@@ -956,4 +970,6 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         return None
     if rmc_printing_fields:
         printing = replace(printing, **rmc_printing_fields)
+    if wg_fields:
+        printing = replace(printing, **wg_fields)
     return printing

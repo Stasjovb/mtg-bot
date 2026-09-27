@@ -1,0 +1,79 @@
+"""Creature oracle-line recognizers for the cube W/G creature bucket.
+
+``creature_builder._build_creature_printing`` consults
+:func:`parse_wg_creature_line` only for a line the pre-existing grammar
+(printing keywords + ``clause._parse_clause``) declined, so nothing here
+can change how an already-claimed card parses.
+
+Each recognizer returns a :class:`WGLine` describing what the line adds
+to the printing: ``CardPrinting`` field values, keywords and triggered /
+activated / static abilities. Shapes (reminder text already stripped):
+
+* ``Evoke—Exile a <filter> card from your hand.`` / ``Evoke {cost}`` —
+  :mod:`mtg_bot.evoke` (the evoke sacrifice trigger rides along).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+
+@dataclass
+class WGLine:
+    """What one recognized oracle line contributes to a creature
+    printing."""
+
+    fields: dict = field(default_factory=dict)
+    keywords: tuple[str, ...] = ()
+    triggers: tuple = ()
+    activated: tuple = ()
+    statics: tuple = ()
+
+
+# ---------------------------------------------------------------------
+# Evoke
+# ---------------------------------------------------------------------
+
+_EVOKE_LINE_RE = re.compile(
+    r"^Evoke(?: (?P<mana>(?:\{[^}]+\})+)|—Exile (?P<desc>an? .+? card) "
+    r"from your hand\.)$"
+)
+
+
+def _parse_evoke_line(line: str, card: dict) -> WGLine | None:
+    m = _EVOKE_LINE_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.evoke import EVOKE_SACRIFICE_TRIGGER
+
+    if m.group("mana") is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        fields = {
+            "evoke_cost": parse_mana_cost(m.group("mana")),
+            "evoke_cost_str": m.group("mana"),
+        }
+    else:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        f = parse_card_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        fields = {"evoke_exile_from_hand": f}
+    return WGLine(fields=fields, triggers=(EVOKE_SACRIFICE_TRIGGER,))
+
+
+_RECOGNIZERS = (
+    _parse_evoke_line,
+)
+
+
+def parse_wg_creature_line(line: str, card: dict) -> WGLine | None:
+    """The :class:`WGLine` for ``line`` (one reminder-stripped oracle line
+    of ``card``), or ``None`` when no W/G bucket recognizer claims it."""
+    for recognizer in _RECOGNIZERS:
+        out = recognizer(line, card)
+        if out is not None:
+            return out
+    return None

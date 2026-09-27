@@ -1310,6 +1310,17 @@ class CardPrinting:
     # "<This> enters with a +1/+1 counter on it for each time it was
     # kicked." (Batroc the Leaper)
     enters_with_counter_per_kick: bool = False
+    # ── Cube W/G creature bucket (casting / printing mechanics) ──────
+    # Evoke (CR 702.74): "Evoke—<cost>". The alternative cost is either
+    # mana (``evoke_cost``) or "Exile a <filter> card from your hand"
+    # (``evoke_exile_from_hand``, a ``CardFilter`` — Solitude / Endurance
+    # / the Modern Horizons 2 Incarnations). Offered as
+    # ``CastSpell(id, use_evoke=True)`` (``mtg_bot.evoke``); the printing
+    # also carries the evoke sacrifice trigger ("When this permanent
+    # enters, if its evoke cost was paid, its controller sacrifices it").
+    evoke_cost: ManaCost | None = None
+    evoke_cost_str: str = ""
+    evoke_exile_from_hand: "object | None" = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

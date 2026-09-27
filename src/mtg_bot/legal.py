@@ -747,6 +747,33 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     # Exile play permissions — instants / flash cards at any priority.
     actions.extend(_exile_permission_plays(state, player_id, sorcery_window=False))
 
+    # Evoke (CR 702.74; ``mtg_bot.evoke``): cast from hand for the
+    # evoke cost -- at instant speed for flash creatures, otherwise at
+    # sorcery timing. Same-name hand copies dedup like the other hand
+    # casts.
+    from mtg_bot.evoke import evoke_castable as _evoke_castable
+
+    seen_evoke: set[str] = set()
+    for card in p.hand:
+        pr = card.printing
+        if pr.name in seen_evoke:
+            continue
+        fast = pr.is_instant or "flash" in pr.keywords
+        if not (fast or sorcery_timing):
+            continue
+        if (
+            _evoke_castable(
+                state, player_id, card,
+                lambda cost, _c=card: _can_cast(
+                    state, player_id, _c, _effective_cost(_c, cost),
+                ),
+            )
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            seen_evoke.add(pr.name)
+            actions.append(CastSpell(card.id, use_evoke=True))
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool

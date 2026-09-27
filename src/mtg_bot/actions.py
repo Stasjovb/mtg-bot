@@ -121,6 +121,9 @@ class CastSpell(Action):
     # Dash (CR 702.109): cast from hand for the dash cost; the permanent
     # gains haste and returns to hand at the next end step.
     use_dash: bool = False
+    # Evoke (CR 702.74; ``mtg_bot.evoke``): cast from hand for the evoke
+    # cost; the permanent is sacrificed as it enters.
+    use_evoke: bool = False
 
 
 @dataclass(frozen=True)
@@ -1252,6 +1255,7 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
             use_buyback=action.use_buyback,
             use_escape=action.use_escape,
             use_dash=action.use_dash,
+            use_evoke=action.use_evoke,
         )
         return
     if isinstance(action, UnlockRoomHalf):
@@ -1871,6 +1875,7 @@ def _cast_spell(
     use_buyback: bool = False,
     use_escape: bool = False,
     use_dash: bool = False,
+    use_evoke: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
     from mtg_bot.legal import _is_sorcery_timing
@@ -1941,6 +1946,10 @@ def _cast_spell(
         elif use_dash:
             # Dash (CR 702.109): an alternative cost from hand.
             cost = card.printing.dash_cost
+        elif use_evoke:
+            from mtg_bot.evoke import evoke_mana_cost as _evoke_mana_cost
+
+            cost = _evoke_mana_cost(card.printing)
         elif use_warp:
             # Innate warp first, then battlefield-granted warp
             # (Tannuk, Steadfast Second's hand-warp grant). The
@@ -1964,6 +1973,7 @@ def _cast_spell(
         # counter init to avoid double-application if a future
         # effect blinks the permanent.
         card.cast_via_impending = bool(use_impending)
+        card.evoked = bool(use_evoke)
         # Cast-from-hand provenance flag. Distinct from ``cast_via_warp``
         # / ``cast_via_impending``: a warp-from-hand or impending-from-
         # hand cast still originated from the hand (the printed cost
@@ -2346,6 +2356,12 @@ def _cast_spell(
             # Mastery's {1}{B}, Overload); its other parts are paid with
             # the additional costs below.
             cost = card.printing.alternative_costs[alt_cost_index].mana_cost()
+    # Evoke's "Exile a <filter> card from your hand" cost (CR 702.74).
+    if use_evoke:
+        from mtg_bot.evoke import pay_evoke_exile as _pay_evoke_exile
+
+        _pay_evoke_exile(state, player_id, card)
+        state.log.append(f"P{player_id} evokes {card.printing.name}")
     # Build the set of spend-restriction context tags for this cast.
     # A spell can match more than one (e.g., a legendary artifact
     # spell satisfies both "artifact_spell" and "legendary_spell"
