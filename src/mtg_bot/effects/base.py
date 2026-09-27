@@ -365,6 +365,10 @@ class ActivationCost:
     # sacrifice_self) so target selection and other cost payments can
     # still read the source from the battlefield.
     exile_self: bool = False
+    # "Discard a card" — the activator discards a card of their choice
+    # from hand as a cost (Blood token, Iron-Shield Elf). Legal only
+    # with a nonempty hand.
+    discard_a_card: bool = False
     # "Tap an untapped permanent you control" — Gene Pollinator's mana
     # ability. The activating player picks any other untapped permanent
     # they control (not the source) and taps it as a cost.

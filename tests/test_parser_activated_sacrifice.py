@@ -133,7 +133,7 @@ def test_sacrifice_paired_with_unknown_piece_returns_none():
     # that genuinely doesn't classify as anything.
     assert (
         _parse_activation_cost(
-            "Sacrifice this creature, Discard a card"
+            "Sacrifice this creature, Mill a card"
         )
         is None
     )

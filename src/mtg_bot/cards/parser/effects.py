@@ -180,6 +180,7 @@ from mtg_bot.cards.parser.keywords import (
     _KEYWORD_LINES,
     _parse_granted_keyword_piece,
 )
+from mtg_bot.cards.parser.keyword_actions import _parse_keyword_action_effect
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
@@ -5650,6 +5651,9 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))
+    keyword_action = _parse_keyword_action_effect(phrase)
+    if keyword_action is not None:
+        return keyword_action
     m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(phrase)
     if m is not None:
         # ``look at the top N cards of your library. Put one of them

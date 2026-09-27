@@ -154,6 +154,7 @@ _TAP_PERMANENT_YOU_CONTROL_PIECE = "Tap an untapped permanent you control"
 _EXILE_ARTIFACT_FROM_GRAVEYARD_PIECE = (
     "Exile an artifact card from your graveyard"
 )
+_DISCARD_A_CARD_PIECE = "Discard a card"
 
 # Pure sacrifice-another-creature-or-artifact cost piece. The exact
 # literal phrase from Umbral Collar Zealot's
@@ -268,6 +269,8 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="tap_permanent_you_control")
     if piece == _EXILE_ARTIFACT_FROM_GRAVEYARD_PIECE:
         return _CostPiece(kind="exile_artifact_from_graveyard")
+    if piece == _DISCARD_A_CARD_PIECE:
+        return _CostPiece(kind="discard_a_card")
     if piece == _SACRIFICE_ANOTHER_CREATURE_OR_ARTIFACT_PIECE:
         return _CostPiece(
             kind="named_sac",
@@ -338,6 +341,7 @@ def _build_cost_from_pieces(
     discard_self = False
     remove_named_counter = ""
     exert_self = False
+    discard_a_card = False
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -394,6 +398,10 @@ def _build_cost_from_pieces(
             if remove_named_counter:
                 return None
             remove_named_counter = p.field
+        elif p.kind == "discard_a_card":
+            if discard_a_card:
+                return None
+            discard_a_card = True
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -427,6 +435,8 @@ def _build_cost_from_pieces(
             # A card in hand can't also be tapped / sacrificed.
             return None
         kwargs["discard_self"] = True
+    if discard_a_card:
+        kwargs["discard_a_card"] = True
     return ActivationCost(**kwargs)
 
 

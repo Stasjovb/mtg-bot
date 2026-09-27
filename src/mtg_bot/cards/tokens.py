@@ -41,6 +41,68 @@ def _make_lander_token() -> CardPrinting:
     )
 
 
+def _make_artifact_token(
+    name: str, ability: ActivatedAbility,
+) -> CardPrinting:
+    """A colorless ``Token Artifact — <name>`` with one activated
+    ability — the shape shared by the predefined tokens (CR 111.10):
+    Clue, Food, Map, Blood."""
+    type_line = f"Token Artifact — {name}"
+    supertypes, card_types, subtypes = _parse_type_line(type_line)
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line=type_line,
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        activated_abilities=(ability,),
+    )
+
+
+def _predefined_artifact_tokens() -> dict[str, CardPrinting]:
+    from mtg_bot.effects.generic.keyword_actions import Explore
+
+    return {
+        # CR 111.10f Clue: "{2}, Sacrifice this token: Draw a card."
+        "Clue": _make_artifact_token("Clue", ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost("{2}"), mana_str="{2}",
+                sacrifice_self=True,
+            ),
+            effect=DrawCards(amount=1),
+        )),
+        # CR 111.10b Food: "{2}, {T}, Sacrifice this token: You gain 3 life."
+        "Food": _make_artifact_token("Food", ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost("{2}"), mana_str="{2}",
+                tap_self=True, sacrifice_self=True,
+            ),
+            effect=GainLife(amount=3),
+        )),
+        # CR 111.10k Map: "{1}, {T}, Sacrifice this token: Target
+        # creature you control explores. Activate only as a sorcery."
+        "Map": _make_artifact_token("Map", ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost("{1}"), mana_str="{1}",
+                tap_self=True, sacrifice_self=True,
+            ),
+            effect=Explore(target=True),
+            sorcery_speed=True,
+        )),
+        # CR 111.10g Blood: "{1}, {T}, Discard a card, Sacrifice this
+        # token: Draw a card."
+        "Blood": _make_artifact_token("Blood", ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost("{1}"), mana_str="{1}",
+                tap_self=True, discard_a_card=True, sacrifice_self=True,
+            ),
+            effect=DrawCards(amount=1),
+        )),
+    }
+
+
 TOKEN_PRINTINGS: dict[str, CardPrinting] = {
     "Human Soldier": make_token_creature(
         "Human Soldier", 1, 1, subtypes=("Human", "Soldier")
@@ -187,3 +249,5 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
         keywords=frozenset({"flying"}),
     ),
 }
+
+TOKEN_PRINTINGS.update(_predefined_artifact_tokens())

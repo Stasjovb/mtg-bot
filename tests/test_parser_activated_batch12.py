@@ -266,10 +266,10 @@ def test_remove_minus_one_counter_phrasing_returns_none():
 
 def test_remove_counter_paired_with_unknown_atom_returns_none():
     """Counter-removal paired with a piece that doesn't classify
-    (here the still-unsupported ``Discard a card``) bails out — the
+    (here the still-unsupported ``Mill a card``) bails out — the
     bag-merge fails fast on the first unrecognized piece."""
     assert _parse_activation_cost(
-        "Remove a +1/+1 counter from a creature you control, Discard a card"
+        "Remove a +1/+1 counter from a creature you control, Mill a card"
     ) is None
 
 

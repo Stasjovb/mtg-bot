@@ -782,6 +782,7 @@ def _classify_sac_for_mana(
             or c.tap_permanent_you_control
             or c.exile_artifact_from_graveyard
             or c.pay_life
+            or c.discard_a_card
         ):
             continue
         if not isinstance(ability.effect, AddManaToPool):
@@ -2717,6 +2718,29 @@ def _activate_ability(
         p.graveyard.remove(chosen_card)
         p.exile.append(chosen_card)
         cost_paid_objects.append(chosen_card)
+
+    if ability.cost.discard_a_card:
+        from mtg_bot.turn import fire_opponent_discards_triggers
+
+        p = state.player_by_id(player_id)
+        if not p.hand:
+            return
+        hand_ids = [c.id for c in p.hand]
+        pick_id = hand_ids[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_discard(state, player_id, hand_ids)
+        discarded = next(
+            (c for c in p.hand if c.id == pick_id), p.hand[0],
+        )
+        p.hand.remove(discarded)
+        discarded.zone = Zone.GRAVEYARD
+        p.graveyard.append(discarded)
+        cost_paid_objects.append(discarded)
+        state.log.append(
+            f"P{player_id} discards {discarded.printing.name} "
+            f"(cost for {source.printing.name}'s ability)"
+        )
+        fire_opponent_discards_triggers(state, player_id)
 
     # Exile-self and sacrifice-self are paid LAST so the source is still
     # on the battlefield for target selection. exile_self moves the source

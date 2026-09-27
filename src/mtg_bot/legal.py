@@ -989,6 +989,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     obj, ability.cost.remove_named_counter_from_self,
                 ) < 1:
                     continue
+            if ability.cost.discard_a_card and not p.hand:
+                continue
             if ability.cost.exile_artifact_from_graveyard:
                 # "Exile an artifact card from your graveyard" — Rust
                 # Harvester. Requires at least one artifact card in the

@@ -145,7 +145,7 @@ def test_pay_life_paired_with_unknown_piece_returns_none():
     """``Pay 1 life, <something-not-tap-or-mana>`` falls through every
     two-piece branch (tap-pair, sac-pair, and mana+pay-life)."""
     assert (
-        _parse_activation_cost("Pay 1 life, Discard a card") is None
+        _parse_activation_cost("Pay 1 life, Mill a card") is None
     )
 
 
