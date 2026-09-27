@@ -490,3 +490,17 @@ class HasToughnessAtMost(ObjectPredicate):
         except Exception:
             return False
         return toughness <= self.n
+
+
+@dataclass(frozen=True)
+class HasCardType(ObjectPredicate):
+    """The object's printed card types include ``card_type`` — the
+    zone-agnostic check the spell-cast trigger family needs
+    (``Whenever you cast a noncreature spell`` / ``an instant or
+    sorcery spell``), where the subject is a card on the stack."""
+
+    card_type: str
+
+    def test(self, obj, state):
+        printing = getattr(obj, "printing", None)
+        return printing is not None and self.card_type in printing.card_types

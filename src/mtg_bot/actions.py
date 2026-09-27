@@ -783,6 +783,7 @@ def _classify_sac_for_mana(
             or c.exile_artifact_from_graveyard
             or c.pay_life
             or c.discard_a_card
+            or c.pay_energy
         ):
             continue
         if not isinstance(ability.effect, AddManaToPool):
@@ -2058,6 +2059,22 @@ def _apply_ward_check(
                 f"to pay Ward for {obj.printing.name}"
             )
             continue
+        # Ward—Pay N life (Sedgemoor Witch). Auto-paid like the other
+        # ward costs; a caster whose life total is below N can't pay.
+        if obj.printing.ward_life_cost:
+            p = state.player_by_id(caster_id)
+            n = obj.printing.ward_life_cost
+            if p.life < n:
+                state.log.append(
+                    f"Spell countered by {obj.printing.name}'s Ward "
+                    f"(can't pay {n} life)"
+                )
+                return True
+            p.life -= n
+            state.log.append(
+                f"P{caster_id} pays {n} life for {obj.printing.name}'s Ward"
+            )
+            continue
         ward, ward_str = effective_ward_cost(state, obj)
         if ward is None:
             continue
@@ -2524,6 +2541,14 @@ def _activate_ability(
         state.log.append(
             f"P{player_id} removes a {kind} counter from "
             f"{source.printing.name} ({have - 1} left)"
+        )
+
+    if ability.cost.pay_energy:
+        p = state.player_by_id(player_id)
+        p.energy -= ability.cost.pay_energy
+        state.log.append(
+            f"P{player_id} pays {ability.cost.pay_energy} energy "
+            f"(cost for {source.printing.name}'s ability)"
         )
 
     # "Pay N life" cost (Mana Confluence etc.). Straight life debit.

@@ -283,3 +283,15 @@ class CompletedADungeon(StatePredicate):
 
     def test(self, state, viewer_id):
         return state.player_by_id(viewer_id).dungeons_completed > 0
+
+
+@dataclass(frozen=True)
+class CardsInGraveyardAtLeast(StatePredicate):
+    """The viewer has at least ``n`` cards in their graveyard —
+    Threshold's ``if there are seven or more cards in your graveyard``
+    (``n=7``)."""
+
+    n: int = 7
+
+    def test(self, state, viewer_id):
+        return len(state.player_by_id(viewer_id).graveyard) >= self.n

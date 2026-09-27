@@ -99,6 +99,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
+    _parse_ward_pay_life_line,
     _parse_warp_castable_from_graveyard_line,
     _parse_warp_line,
     _parse_warp_with_life_cost_line,
@@ -325,6 +326,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward: str | None = None
     ward_discard_chosen = False
     ward_discard_random = False
+    ward_life_cost = 0
     devour: int = 0
     impending: str | None = None
     impending_count: int = 0
@@ -448,6 +450,10 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 ward_discard_random = True
             else:
                 ward_discard_chosen = True
+            continue
+        ward_life = _parse_ward_pay_life_line(line)
+        if ward_life is not None:
+            ward_life_cost = ward_life
             continue
         devour_n = _parse_devour_line(line)
         if devour_n is not None:
@@ -832,6 +838,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward=ward,
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
+        ward_life_cost=ward_life_cost,
         devour_land_multiplier=devour,
         impending=impending,
         impending_count=impending_count,

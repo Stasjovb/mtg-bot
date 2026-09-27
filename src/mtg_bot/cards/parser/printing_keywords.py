@@ -136,6 +136,17 @@ def _parse_ward_discard_line(line: str) -> str | None:
     return "random" if m.group("random") else "chosen"
 
 
+_WARD_PAY_LIFE_LINE = re.compile(r"^Ward—Pay (\d+) life\.$")
+
+
+def _parse_ward_pay_life_line(line: str) -> int | None:
+    """``Ward—Pay N life.`` (CR 702.21a with a life-payment cost) ->
+    ``N``; consumed by ``actions._apply_ward_check`` via
+    ``CardPrinting.ward_life_cost``."""
+    m = _WARD_PAY_LIFE_LINE.match(line.strip())
+    return int(m.group(1)) if m is not None else None
+
+
 _IMPENDING_LINE = re.compile(
     # Impending N—{cost}. Scryfall uses an em-dash (U+2014). The
     # reminder text is stripped per-line by ``_strip_reminder_text``

@@ -889,6 +889,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 )
                 if not has_food:
                     continue
+            if ability.cost.pay_energy and p.energy < ability.cost.pay_energy:
+                continue
             if ability.cost.pay_life:
                 if p.life <= ability.cost.pay_life:
                     # MTG lets you pay to 0 life (it kills you) but

@@ -369,6 +369,9 @@ class ActivationCost:
     # from hand as a cost (Blood token, Iron-Shield Elf). Legal only
     # with a nonempty hand.
     discard_a_card: bool = False
+    # "Pay {E}{E}" — spend N energy counters (CR 122.1). Legal only with
+    # at least N energy.
+    pay_energy: int = 0
     # "Tap an untapped permanent you control" — Gene Pollinator's mana
     # ability. The activating player picks any other untapped permanent
     # they control (not the source) and taps it as a cost.

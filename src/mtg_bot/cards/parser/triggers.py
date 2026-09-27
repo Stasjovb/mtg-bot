@@ -88,6 +88,7 @@ from mtg_bot.cards.parser.effects import (
     _parse_effect_phrase,
 )
 from mtg_bot.effects.object_predicates import (
+    HasCardType,
     HasCounter,
     HasKeyword,
     HasPowerAtMost,
@@ -102,6 +103,7 @@ from mtg_bot.effects.object_predicates import (
 )
 from mtg_bot.effects.state_predicates import (
     AnyPlayerControlsNoCreatures,
+    CardsInGraveyardAtLeast,
     CompletedADungeon,
     Delirium,
     HasInitiative,
@@ -745,6 +747,24 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         Event.IS_CAST,
         Subject("spell", IsArtifact()) & Controlled(YOU, subject="controller"),
     ),
+    # The prowess-condition family (Dragon's Rage Channeler "Whenever
+    # you cast a noncreature spell"; the instant-or-sorcery and
+    # creature-spell siblings).
+    "you cast a noncreature spell": (
+        Event.IS_CAST,
+        Subject("spell", ~HasCardType("Creature"))
+        & Controlled(YOU, subject="controller"),
+    ),
+    "you cast a creature spell": (
+        Event.IS_CAST,
+        Subject("spell", HasCardType("Creature"))
+        & Controlled(YOU, subject="controller"),
+    ),
+    "you cast an instant or sorcery spell": (
+        Event.IS_CAST,
+        Subject("spell", HasCardType("Instant") | HasCardType("Sorcery"))
+        & Controlled(YOU, subject="controller"),
+    ),
     # ``Whenever a nontoken artifact you control enters`` — Weapons
     # Manufacturing's trigger. ``Event.ENTERS`` carries ``("source",)``;
     # ``IsNontoken()`` excludes token artifacts (Landers, Drones, etc.)
@@ -1376,6 +1396,10 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     "you have the initiative": StateBound(HasInitiative()),
     "you're the monarch": StateBound(IsMonarch()),
     "you've completed a dungeon": StateBound(CompletedADungeon()),
+    # Threshold (``Threshold —`` ability word strips upstream).
+    "there are seven or more cards in your graveyard": (
+        StateBound(CardsInGraveyardAtLeast(7))
+    ),
 }
 
 

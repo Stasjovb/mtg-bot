@@ -761,6 +761,11 @@ class CardPrinting:
     # to discard from their hand to pay the ward; if their hand is empty,
     # the spell is countered.
     ward_discard_chosen: bool = False
+    # ``Ward—Pay N life.`` — the caster of a spell targeting this
+    # permanent pays N life or the spell is countered (CR 702.21a;
+    # life can be paid only if the caster's life total is >= N,
+    # CR 119.4). 0 = no life-cost ward.
+    ward_life_cost: int = 0
     # Equipment: continuous bonuses granted to the equipped creature.
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
@@ -1234,6 +1239,7 @@ def make_creature(
     ward: str | None = None,
     ward_discard_random: bool = False,
     ward_discard_chosen: bool = False,
+    ward_life_cost: int = 0,
     grants_additional_land_per_turn: int = 0,
     grants_play_lands_from_graveyard: bool = False,
     grants_look_at_top_of_library: bool = False,
@@ -1291,6 +1297,7 @@ def make_creature(
         ward_cost_str=ward or "",
         ward_discard_random=ward_discard_random,
         ward_discard_chosen=ward_discard_chosen,
+        ward_life_cost=ward_life_cost,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         grants_look_at_top_of_library=grants_look_at_top_of_library,

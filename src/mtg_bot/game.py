@@ -2551,6 +2551,9 @@ class Player:
     # the initiative (CR 725) and the player's Undercity venture marker
     # (CR 309; ``None`` = not in a dungeon) + completed-dungeon count
     # ("if you've completed a dungeon").
+    # Energy counters (CR 122.1, ``{E}``): gained by "you get {E}",
+    # spent by "Pay {E}" costs.
+    energy: int = 0
     is_monarch: bool = False
     has_initiative: bool = False
     dungeon_room: Optional[str] = None

@@ -206,3 +206,24 @@ class GrantProtectionOfChoiceUEOT(Effect):
             if self.allow_colorless else "the color of your choice"
         )
         return f"{who} creature you control gains protection from {what} until end of turn"
+
+
+@dataclass(frozen=True)
+class GetEnergy(Effect):
+    """``you get {E}{E}`` — the controller gets ``amount`` energy
+    counters (CR 122.1)."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        p = state.player_by_id(controller_id)
+        p.energy += self.amount
+        state.log.append(
+            f"P{controller_id} gets {self.amount} energy (now {p.energy})"
+        )
+
+    def describe(self) -> str:
+        return "you get " + "{E}" * self.amount

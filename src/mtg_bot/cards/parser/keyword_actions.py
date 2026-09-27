@@ -17,6 +17,9 @@ from mtg_bot.effects.base import Effect
 _INVESTIGATE = re.compile(
     r"^investigate(?: (?P<n>twice|\d+ times|one|two|three|four|five)(?: times)?)?$"
 )
+# ``you get {E}{E}`` / ``get {E}`` (the second arm of a compound
+# ``you gain 1 life and get {E}``).
+_GET_ENERGY = re.compile(r"^(?:you )?get ((?:\{E\})+)$")
 _COUNT_WORDS = {
     "twice": 2, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
 }
@@ -94,10 +97,13 @@ def _parse_keyword_grant_effect(phrase: str) -> Effect | None:
 def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     from mtg_bot.cards.tokens import TOKEN_PRINTINGS
     from mtg_bot.effects.generic.keyword_actions import (
-        BecomeMonarch, Explore, TakeInitiative,
+        BecomeMonarch, Explore, GetEnergy, TakeInitiative,
     )
     from mtg_bot.effects.generic.tokens import CreateToken
 
+    m = _GET_ENERGY.match(phrase)
+    if m is not None:
+        return GetEnergy(amount=m.group(1).count("{E}"))
     m = _INVESTIGATE.match(phrase)
     if m is not None:
         return CreateToken(

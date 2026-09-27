@@ -183,6 +183,7 @@ _NAMED_SACRIFICE_PIECES: dict[str, str] = {
 # Pay-life cost piece. ``Pay 1 life``, ``Pay 2 life``, etc. The
 # integer is captured into the ``pay_life`` field on ActivationCost.
 _PAY_LIFE_PIECE = re.compile(r"^Pay (\d+) life$")
+_PAY_ENERGY_PIECE = re.compile(r"^Pay ((?:\{E\})+)$")
 
 # "Remove a +1/+1 counter from a creature you control" cost piece —
 # Sunstar Chaplain's activated ability prints exactly this literal as
@@ -293,6 +294,11 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         if named.group("kind") in _DEDICATED_COUNTER_KINDS:
             return None
         return _CostPiece(kind="remove_named_counter", field=named.group("kind"))
+    energy_match = _PAY_ENERGY_PIECE.match(piece)
+    if energy_match is not None:
+        return _CostPiece(
+            kind="pay_energy", amount=energy_match.group(1).count("{E}"),
+        )
     pay_life_match = _PAY_LIFE_PIECE.match(piece)
     if pay_life_match is not None:
         return _CostPiece(
@@ -342,6 +348,7 @@ def _build_cost_from_pieces(
     remove_named_counter = ""
     exert_self = False
     discard_a_card = False
+    pay_energy = 0
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -402,6 +409,10 @@ def _build_cost_from_pieces(
             if discard_a_card:
                 return None
             discard_a_card = True
+        elif p.kind == "pay_energy":
+            if pay_energy:
+                return None
+            pay_energy = p.amount
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -437,6 +448,8 @@ def _build_cost_from_pieces(
         kwargs["discard_self"] = True
     if discard_a_card:
         kwargs["discard_a_card"] = True
+    if pay_energy:
+        kwargs["pay_energy"] = pay_energy
     return ActivationCost(**kwargs)
 
 
