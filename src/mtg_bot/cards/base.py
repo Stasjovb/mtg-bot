@@ -1205,6 +1205,13 @@ class CardPrinting:
     # Springs). ``legal_actions`` offers ``PlayLand`` for the card from
     # hand; ``actions._play_land`` turns it to this face.
     mdfc_back_face: "CardPrinting | None" = None
+    # "Plot {cost}" (CR 702.170): as a sorcery, pay the plot cost and
+    # exile the card from hand; on a later turn it may be cast from
+    # exile without paying its mana cost, as a sorcery. The special
+    # action is ``CastSpell(id, use_plot=True)``; the later cast is
+    # ``CastSpell(id, cast_for_free=True)`` from exile.
+    plot_cost: ManaCost | None = None
+    plot_cost_str: str = ""
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

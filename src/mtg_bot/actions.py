@@ -112,6 +112,10 @@ class CastSpell(Action):
     # Buyback (CR 702.27): pay the optional buyback cost; the spell
     # returns to its owner's hand as it resolves.
     use_buyback: bool = False
+    # Plot (CR 702.170): NOT a cast — the plot special action (pay the
+    # plot cost, exile the card from hand face up). Encoded as a
+    # CastSpell variant so the existing action vocabulary covers it.
+    use_plot: bool = False
 
 
 @dataclass(frozen=True)
@@ -1171,6 +1175,9 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
     if isinstance(action, PlayLand):
         _play_land(state, player_id, action.card_id)
         return
+    if isinstance(action, CastSpell) and action.use_plot:
+        _plot_card(state, player_id, action.card_id)
+        return
     if isinstance(action, CastSpell):
         _cast_spell(
             state, player_id, action.card_id,
@@ -1608,6 +1615,31 @@ def _select_spell_targets(
     return targets
 
 
+def _plot_card(state: GameState, player_id: int, card_id: int) -> None:
+    """The plot special action (CR 702.170a): pay the card's plot cost
+    and exile it from hand face up, remembering the turn. It doesn't use
+    the stack and isn't a spell cast."""
+    from mtg_bot.game import reveal_to_all
+
+    p = state.player_by_id(player_id)
+    card = next((c for c in p.hand if c.id == card_id), None)
+    if card is None or card.printing.plot_cost is None:  # pragma: no cover - legal_actions gates
+        raise ValueError(f"card {card_id} not plottable by P{player_id}")
+    cost = _activate_sac_for_mana_for_cost(
+        state, player_id, card.printing.plot_cost, frozenset({"spell"}),
+    )
+    auto_tap_for_cost(state, player_id, cost, spell_kind=frozenset({"spell"}))
+    p.hand.remove(card)
+    card.zone = Zone.EXILE
+    card.plotted_turn = state.turn_number
+    p.exile.append(card)
+    reveal_to_all(state, card)
+    state.log.append(
+        f"P{player_id} plots {card.printing.name} "
+        f"({card.printing.plot_cost_str})"
+    )
+
+
 def _cast_spell(
     state: GameState, player_id: int, card_id: int,
     use_warp: bool = False, kicked: bool = False,
@@ -1768,6 +1800,7 @@ def _cast_spell(
                     or c.playable_from_exile_this_turn
                     or c.play_from_exile_requires_kavu
                     or c.cast_from_exile_with_lightstall_surcharge
+                    or c.plotted_turn >= 0
                 )
             ),
             None,
@@ -1790,6 +1823,7 @@ def _cast_spell(
             card.playable_from_exile_this_turn = False
             card.play_from_exile_requires_kavu = False
             card.cast_from_exile_with_lightstall_surcharge = False
+            card.plotted_turn = -1
             card.cast_via_warp = False
             # Cast from exile is NOT a cast from hand — clear any stale
             # provenance flag from a prior hand-cast so cast-from-hand-

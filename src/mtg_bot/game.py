@@ -774,6 +774,9 @@ class GameObject:
     # A modal DFC played as its back face: the front-face printing to
     # restore when the permanent leaves the battlefield (CR 712.8).
     mdfc_front_printing: Optional["CardPrinting"] = None
+    # Plot: the turn number the card was plotted (exiled face up) on;
+    # -1 when not plotted. Castable for free from exile on a later turn.
+    plotted_turn: int = -1
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

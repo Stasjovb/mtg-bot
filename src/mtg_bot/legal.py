@@ -534,6 +534,26 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     _emit_flashback_casts(instant_speed=False)
     _emit_graveyard_permission_casts(instant_speed=False)
 
+    # Plot (CR 702.170): the special action from hand (sorcery timing),
+    # and casting a card plotted on an earlier turn from exile for free
+    # (as a sorcery, whatever its type).
+    seen_plot: set[str] = set()
+    for card in p.hand:
+        pc = card.printing.plot_cost
+        if pc is None or card.printing.name in seen_plot:
+            continue
+        if _can_cast(state, player_id, card, pc):
+            seen_plot.add(card.printing.name)
+            actions.append(CastSpell(card.id, use_plot=True))
+    for card in p.exile:
+        if card.plotted_turn < 0 or card.plotted_turn >= state.turn_number:
+            continue
+        if (
+            _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            actions.append(CastSpell(card.id, cast_for_free=True))
+
     # Land plays per turn at sorcery speed. Base = 1, increased by
     # permanents granting "you may play an additional land" (Icetill
     # Explorer).

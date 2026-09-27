@@ -650,6 +650,10 @@ _PITCH_ALT_COST_LINE_RE = re.compile(
 )
 
 
+# "Plot {cost}" (CR 702.170) -> ``plot_cost``.
+_PLOT_LINE_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
+
+
 # "Splice onto <subtype> {cost}" (CR 702.47) -> ``splice_onto`` /
 # ``splice_cost``.
 _SPLICE_LINE_RE = re.compile(
@@ -662,6 +666,10 @@ def _casting_keyword_fields(clause: str) -> dict | None:
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
+    m = _PLOT_LINE_RE.match(clause.strip())
+    if m is not None:
+        cost = m.group("cost")
+        return {"plot_cost": parse_mana_cost(cost), "plot_cost_str": cost}
     m = _SPLICE_LINE_RE.match(clause.strip())
     if m is not None:
         cost = m.group("cost")
