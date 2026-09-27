@@ -9,7 +9,7 @@ from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_creature_line
 from mtg_bot.effects.generic.cube_creatures_ub import (
     GainControlOfTargetThenAttachIfEquipment,
 )
-from mtg_bot.effects.object_predicates import ManaValueAtMostSourceX, WasKicked
+from mtg_bot.effects.object_predicates import ManaValueAtMostSourceX
 from mtg_bot.game import Zone
 from mtg_bot.legal import legal_actions
 from tests._spells_b_helpers import PRINTINGS, ScriptedAgent, add, add_lands, make_state
@@ -36,7 +36,7 @@ def test_kicked_skydiver_steals_and_equips():
     agent.scripts["target"] = [("permanent", greaves.id)]
     apply_action(state, 0, CastSpell(sky.id, kicked=True))
     drain_stack(state)
-    assert sky.was_kicked and sky.entered_x_value == 2
+    assert sky.kick_count == 1 and sky.entered_x_value == 2
     assert greaves.controller_id == 0 and greaves.attached_to == sky.id
     assert ring.controller_id == 1
 
@@ -49,14 +49,13 @@ def test_unkicked_skydiver_does_nothing_and_kicker_needs_a_spare_mana():
     assert CastSpell(sky.id, kicked=True) not in legal_actions(state, 0)
     apply_action(state, 0, CastSpell(sky.id))
     drain_stack(state)
-    assert not sky.was_kicked
+    assert sky.kick_count == 0
     assert all(o.controller_id == 1 for o in state.battlefield if o.printing.name == "Sol Ring")
 
 
 def test_predicates_and_edges():
     state = make_state()
     ring = add(state, 1, "Sol Ring", Zone.BATTLEFIELD)
-    assert not WasKicked().test(ring, state)
     assert not ManaValueAtMostSourceX().test(ring, state)
     sky = add(state, 0, "Thieving Skydiver", Zone.BATTLEFIELD)
     sky.entered_x_value = 1

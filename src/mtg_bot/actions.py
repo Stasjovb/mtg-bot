@@ -5231,10 +5231,8 @@ def put_into_battlefield(
     if state.resolving_spell is not obj:
         obj.squad_paid_count = 0
         obj.offspring_paid = False
-        obj.was_kicked = False
         obj.entered_x_value = 0
     else:
-        obj.was_kicked = state.resolving_kicked
         obj.entered_x_value = state.resolving_x_value
     obj.saddled = False   # a new object is never saddled
     # Death-tracker-gated ETB replacement: enters with one +1/+1

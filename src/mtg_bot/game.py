@@ -941,10 +941,9 @@ class GameObject:
     # when the source leaves (Emperor of Bones) -- unlike
     # ``exiled_by_source`` (the "until it leaves the battlefield" link).
     exiled_with: Optional[int] = None
-    # Whether this permanent's spell was kicked, and its X (Thieving
-    # Skydiver: "if it was kicked", "mana value X or less"). Kept only
-    # when the object entered by resolving as that spell.
-    was_kicked: bool = False
+    # The X its spell was cast with (Thieving Skydiver's kicker {X}:
+    # "mana value X or less"). Kept only when the object entered by
+    # resolving as that spell.
     entered_x_value: int = 0
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
@@ -1545,9 +1544,7 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
         kws.add("flying")
     # Keyword counters (CR 122.1b) kept as named counters -- Arwen's
     # indestructible / lifelink counters, Leatherhead's hexproof counter
-    # (cube W/G bucket).
-    # Keyword counters (CR 122.1b) kept as named counters ("with a
-    # lifelink counter on it", Metamorphosis Fanatic).
+    # (cube W/G bucket); Metamorphosis Fanatic's lifelink counter.
     for kind, n in obj.named_counters:
         if n > 0 and kind in KEYWORD_COUNTER_KINDS:
             kws.add(kind)
@@ -1559,11 +1556,6 @@ KEYWORD_COUNTER_KINDS: frozenset[str] = frozenset({
     "first strike", "double strike", "deathtouch", "haste", "hexproof",
     "indestructible", "lifelink", "menace", "reach", "shadow", "trample",
     "vigilance",
-# CR 122.1b keyword counters: a permanent with one has that keyword.
-KEYWORD_COUNTER_KINDS = frozenset({
-    "flying", "first strike", "double strike", "deathtouch", "decayed",
-    "exalted", "haste", "hexproof", "indestructible", "lifelink",
-    "menace", "reach", "shadow", "trample", "vigilance",
 })
 
 

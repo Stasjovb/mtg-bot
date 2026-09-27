@@ -88,7 +88,6 @@ from mtg_bot.cards.parser.effects import (
     _parse_effect_phrase,
 )
 from mtg_bot.effects.object_predicates import (
-    WasKicked,
     HasCardType,
     HasCounter,
     HasKeyword,
@@ -1505,8 +1504,6 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # Vaultborn Tyrant's dies trigger (cube W/G bucket): "if it's not a
     # token" -- the dying object (the trigger's subject) isn't a token.
     "it's not a token": Subject(None, IsNontoken()),
-    # "if it was kicked" on a permanent's ETB (Thieving Skydiver).
-    "it was kicked": Source(WasKicked()),
     # Designation gates (``mtg_bot.designations``): Feywild Caretaker /
     # Passageway Seer ``if you have the initiative``, the monarch
     # family ``if you're the monarch``, White Plume Adventurer-style

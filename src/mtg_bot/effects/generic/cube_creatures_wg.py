@@ -1655,11 +1655,15 @@ def _own_spell_item(state, source):
 class ThisSpellWasKicked(TriggerPredicate):
     """Intervening-if "if it was kicked" on a "When you cast this spell"
     trigger (Sowing Mycospawn): the source spell's stack item was cast
-    with its kicker paid."""
+    with its kicker paid. On a permanent's trigger (Thieving Skydiver's
+    ETB) the source is no longer on the stack: its ``kick_count``
+    (copied from the resolving spell) answers instead."""
 
     def matches(self, state, subjects, source):
         item = _own_spell_item(state, source)
-        return item is not None and bool(item.kicked or item.kick_count)
+        if item is None:
+            return getattr(source, "kick_count", 0) > 0
+        return bool(item.kicked or item.kick_count)
 
 
 @dataclass(frozen=True)

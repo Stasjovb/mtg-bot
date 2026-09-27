@@ -559,15 +559,6 @@ class HasCardType(ObjectPredicate):
 
 
 @dataclass(frozen=True)
-class WasKicked(ObjectPredicate):
-    """"if it was kicked" -- the permanent entered by resolving as a
-    kicked spell (``GameObject.was_kicked``)."""
-
-    def test(self, obj, state):
-        return bool(getattr(obj, "was_kicked", False))
-
-
-@dataclass(frozen=True)
 class ManaValueAtMostSourceX(ObjectPredicate):
     """"with mana value X or less" where X is the resolving source's X
     (``GameObject.entered_x_value``, Thieving Skydiver's kicker X)."""
