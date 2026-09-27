@@ -19304,3 +19304,89 @@ repeated here.
     for printings that exist only in the EoE-era pools, so no EoE
     printing's parse changes (the Rust parity tests are pinned to those
     parses).
+
+## PowerLSV cube W/G creature bucket — deliberate simplifications (2026-09-27, `feature/cube-creatures-wg`)
+
+Engine / parser shortcuts behind the W/G creatures (parser:
+`cards/parser/creature_wg_lines.py`, `creature_wg_effects.py`; effects:
+`effects/generic/cube_creatures_wg.py`; rules hooks: `evoke.py`,
+`creature_statics_wg.py`, `graveyard_casting_wg.py`). None changes an
+EoE printing (the two EoE-era printings the new shapes would have
+claimed -- Kona, Rescue Beastie and Enduring Courage -- are pinned off
+the bucket's grammar in `creature_wg_effects.EOE_PINNED_NAMES`; Enduring
+Innocence, a bucket card that is also a Duskmourn printing, becomes
+claimed in both pools).
+
+1. **Evoke trigger order is fixed** (`evoke.EVOKE_SACRIFICE_TRIGGER`,
+   appended after the printed abilities). The evoke sacrifice trigger is
+   pushed last and so resolves first; the controller doesn't choose the
+   order of the simultaneous ETB triggers (CR 603.3b). No cube Incarnation
+   cares (their ETB targets are chosen on trigger and the effects don't
+   need the creature on the battlefield), but a flicker-in-response line
+   (sacrifice trigger still on the stack) is only reachable with the
+   printed ETB resolving second.
+2. **"Exiled with" links** (`GameObject.exiled_with`, `cube_creatures_wg.
+   LinkExiledCardsToSource`) pin a card to one battlefield incarnation of
+   its source (id + ETB timestamp) and are consumed by the linked
+   ability. A linked card that leaves exile and later returns to exile by
+   another route keeps a stale tag; consumers scan exile only, so the tag
+   is inert unless the same source incarnation is still around.
+3. **Reflexive triggers resolve immediately** (`ReflexiveWhenYouDo` --
+   Leatherhead, Guide of Souls). "You may <cost>. When you do, <effect>"
+   chooses the reflexive trigger's target and resolves it inside the
+   parent ability instead of putting a new object on the stack, so no
+   player gets priority between paying and the effect (CR 603.12).
+4. **Two-player readings.** Questing Beast's "target planeswalker that
+   player controls" is "target planeswalker an opponent controls"; Adeline
+   and Mobilize tokens attack the (single) defending player, never a
+   planeswalker; Ursine Monstrosity's random opponent and Okoye's "attacks
+   the monarch" use the engine's one defending player.
+5. **Batched "one or more ... enter" trigger** (Enduring Innocence) is the
+   per-object ENTERS trigger with `once_per_turn`; the recognizer only
+   accepts the form with "This ability triggers only once each turn.",
+   where the two are equivalent.
+6. **"Put into a graveyard from anywhere"** (Worldspine Wurm,
+   `creature_statics_wg.fire_graveyard_arrival_triggers`) is detected
+   during state-based-action checks (so the trigger goes on the stack
+   before the next priority, CR 603.3) and re-armed only when the
+   trigger resolves (`ShuffleSourceIntoOwnersLibrary`). A countered
+   trigger leaves the card un-armed until one resolves.
+7. **Cast restrictions are a `legal_actions` post-filter**
+   (`creature_statics_wg.filter_cast_restrictions` / `filter_activation_locks`
+   -- Voice of Victory, Archon of Emeria, Clarion Conqueror). Casts that
+   happen inside a resolving effect (free casts from an effect) aren't
+   re-checked. Clarion Conqueror also locks mana abilities (as printed);
+   the automatic payer never taps artifact lands for their mana, so a
+   locked artifact land still pays through `auto_tap_for_cost`'s land
+   path (none is in the cube pool).
+8. **Anointed Peacekeeper names among visible cards.** "Choose any card
+   name" offers the (sorted) names of the opponent's hand, graveyard and
+   nontoken battlefield cards (`creature_statics_wg.choose_card_name_as_enters`);
+   naming a card the opponent hasn't shown isn't offered. *Impact:* the
+   bot can't pre-emptively name a known deck card that isn't visible.
+9. **Elite Spellbinder rides the Lightstall exile permission**
+   (`cast_from_exile_with_lightstall_surcharge` + `exile_cast_extra_surcharge`),
+   inheriting its sorcery-timing-only cast from exile (an exiled instant
+   can't be cast at instant speed).
+10. **Serra Paragon's land permission** is spent only when no unlimited
+    land-from-graveyard permission (Icetill Explorer, Mole Man,
+    Yawgmoth's Will) covers the play -- the player-favorable choice is
+    made for them. Its granted rider is a per-object counter
+    (`GameObject.leaves_to_graveyard_exile_gain_life`) fired from
+    `move_off_battlefield`, not a layer-6 granted ability.
+11. **Keyword counters survive "lose all abilities"**
+    (`game.KEYWORD_COUNTER_KINDS` in `effective_keywords`), following the
+    existing flying-counter precedent rather than CR 613's timestamp
+    interaction.
+12. **Scythecat Cub's resolution count** (`GameObject.resolutions_this_turn`)
+    is per object and survives a same-turn flicker (the engine keeps the
+    object id).
+13. **New per-object / per-player state is not part of search hashing**:
+    `evoked`, `exiled_with`, `exiled_until_opponent_monarch_of`,
+    `graveyard_arrival_pending`, `resolutions_this_turn`,
+    `cast_uncounterable`, `must_attack_turn`, `exile_cast_extra_surcharge`,
+    `graveyard_permission_used_turn`, `leaves_to_graveyard_exile_gain_life`,
+    `chosen_card_name` (`GameObject`) and `has_citys_blessing` (`Player`)
+    aren't in the canonical-state / info-set hashes (search code is
+    outside this bucket), so two states differing only in them can share
+    a transposition entry.
