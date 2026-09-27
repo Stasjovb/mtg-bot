@@ -403,13 +403,13 @@ def test_spellbinder_effect_edges():
 
 
 def test_figure_of_fable_levels_up():
-    from mtg_bot.effects.generic.cube_creatures_wg import BecomeTypesWithBasePT
+    from mtg_bot.effects.generic.cube_creatures_rmc import SourceBecomesIfSubtype
     from mtg_bot.game import effective_power, effective_subtypes, effective_toughness
 
     pr = cube()["Figure of Fable"]
     scout, soldier, avatar = (a.effect for a in pr.activated_abilities)
-    assert isinstance(avatar, BecomeTypesWithBasePT)
-    assert avatar.if_subtype == "Soldier" and avatar.keywords
+    assert isinstance(avatar, SourceBecomesIfSubtype)
+    assert avatar.requires_subtype == "Soldier" and avatar.keywords
     state = make_state()
     fig = put(state, 0, pr)
     add_lands(state, 0, "Forest", 6)

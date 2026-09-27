@@ -1684,8 +1684,10 @@ class EachOpponentChoiceDestroyOneAtRandom(Effect):
 class SourceBecomesIfSubtype(Effect):
     """Figure of Destiny: "[If this creature is a <Req>, ]it becomes a
     <Subtypes> with base power and toughness P/T[, <keywords>]." — a
-    permanent change (no duration): subtypes and keywords are added and
-    the base P/T set (latest timestamp wins)."""
+    permanent change (no duration): the creature types are replaced
+    (CR 205.1b; layer 4 ``set_creature_subtypes``), keywords are added
+    and the base P/T set (latest timestamp wins). Also Figure of Fable
+    ("... 7/8 and protection from each of your opponents")."""
 
     subtypes: tuple[str, ...] = ()
     base_pt: tuple = (0, 0)
@@ -1709,10 +1711,12 @@ class SourceBecomesIfSubtype(Effect):
                 f"{me.printing.name} isn't a {self.requires_subtype}; nothing happens"
             )
             return
-        BecomeType(
-            subtypes_to_add=tuple(s for s in self.subtypes if s not in current),
-            base_pt=self.base_pt,
-        ).resolve(state, controller_id, ())
+        state.add_continuous_effect(
+            source_id=me.id, layer=4, kind="set_creature_subtypes",
+            target_id=me.id, params=tuple(self.subtypes),
+            description=f"{me.printing.name} becomes a {' '.join(self.subtypes)}",
+        )
+        BecomeType(base_pt=self.base_pt).resolve(state, controller_id, ())
         for kw in sorted(self.keywords):
             state.add_continuous_effect(
                 source_id=me.id, layer=6, kind="grant_keyword",

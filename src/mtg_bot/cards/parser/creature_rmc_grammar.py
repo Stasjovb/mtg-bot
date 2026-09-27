@@ -720,7 +720,7 @@ _CHOOSE_PER_OPPONENT_DESTROY_RANDOM = (
 _BECOMES_WITH_BASE_PT = re.compile(
     r"^(?:if this creature is an? (?P<req>[A-Z][a-z]+), it|this creature) "
     r"becomes an? (?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) with base power and "
-    r"toughness (?P<p>\d+)/(?P<t>\d+)(?:, (?P<kw>[a-z ,]+))?$"
+    r"toughness (?P<p>\d+)/(?P<t>\d+)(?:(?:,| and) (?P<kw>[a-z ,]+))?$"
 )
 
 

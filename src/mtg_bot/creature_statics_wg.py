@@ -187,35 +187,6 @@ def combat_damage_unpreventable(state: "GameState", source: "GameObject") -> boo
 
 
 # ---------------------------------------------------------------------
-# "When <this> is put into a graveyard from anywhere" (Worldspine Wurm)
-# ---------------------------------------------------------------------
-
-
-def fire_graveyard_arrival_triggers(state: "GameState") -> bool:
-    """Put the "put into a graveyard from anywhere" triggers of cards
-    that arrived in a graveyard since the last check onto the stack
-    (CR 603.3: a triggered ability goes on the stack the next time a
-    player would receive priority). Returns True when any fired."""
-    from mtg_bot.actions import push_triggered_ability
-
-    fired = False
-    for p in state.players:
-        for card in list(p.graveyard):
-            abilities = card.printing.graveyard_arrival_triggers
-            if not abilities or card.graveyard_arrival_pending:
-                continue
-            card.graveyard_arrival_pending = True
-            for ability in abilities:
-                push_triggered_ability(
-                    state, source=card, ability=ability, ability_index=-1,
-                    controller_id=card.owner_id,
-                    label="put into a graveyard",
-                )
-                fired = True
-    return fired
-
-
-# ---------------------------------------------------------------------
 # Activation locks (Clarion Conqueror)
 # ---------------------------------------------------------------------
 

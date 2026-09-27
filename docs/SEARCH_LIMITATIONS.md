@@ -19345,12 +19345,10 @@ claimed in both pools).
    per-object ENTERS trigger with `once_per_turn`; the recognizer only
    accepts the form with "This ability triggers only once each turn.",
    where the two are equivalent.
-6. **"Put into a graveyard from anywhere"** (Worldspine Wurm,
-   `creature_statics_wg.fire_graveyard_arrival_triggers`) is detected
-   during state-based-action checks (so the trigger goes on the stack
-   before the next priority, CR 603.3) and re-armed only when the
-   trigger resolves (`ShuffleSourceIntoOwnersLibrary`). A countered
-   trigger leaves the card un-armed until one resolves.
+6. **"Put into a graveyard from anywhere"** (Worldspine Wurm) rides the
+   R/multi/colorless bucket's graveyard watch
+   (`cube_creatures_rmc.sweep_graveyard_watch`, see that section); this
+   bucket only adds the `ShuffleSourceIntoOwnersLibrary` effect.
 7. **Cast restrictions are a `legal_actions` post-filter**
    (`creature_statics_wg.filter_cast_restrictions` / `filter_activation_locks`
    -- Voice of Victory, Archon of Emeria, Clarion Conqueror). Casts that
@@ -19383,7 +19381,7 @@ claimed in both pools).
     object id).
 13. **New per-object / per-player state is not part of search hashing**:
     `evoked`, `exiled_until_opponent_monarch_of`,
-    `graveyard_arrival_pending`, `resolutions_this_turn`,
+    `resolutions_this_turn`,
     `cast_uncounterable`, `must_attack_turn`, `exile_cast_extra_surcharge`,
     `graveyard_permission_used_turn`, `leaves_to_graveyard_exile_gain_life`,
     `chosen_card_name`, `bestowed`, `earthbent` (`GameObject`) and
@@ -19400,6 +19398,10 @@ claimed in both pools).
     self-sourced registry entries (they end only when the permanent leaves
     the battlefield); `set_creature_subtypes` replaces the whole subtype
     list (fine for creatures, whose subtypes are all creature types).
+    Figure of Fable's level-ups run through the R/multi/colorless bucket's
+    `SourceBecomesIfSubtype` (shared with Figure of Destiny), which now
+    replaces the creature types via `set_creature_subtypes` (CR 205.1b)
+    instead of adding them.
 16. **"Whenever you tap a creature for mana"** (Badgermole Cub) fires after
     a creature's {T} mana ability activated through `ActivateAbility`;
     creatures tapped by the automatic sacrifice-for-mana payer don't add

@@ -7,12 +7,10 @@ from __future__ import annotations
 from mtg_bot.actions import ActivateAbility, CastSpell, apply_action, apply_cost_reductions
 from mtg_bot.cards.parser.creature_wg_lines import (
     parse_wg_creature_line,
-    parse_wg_hand_ability_line,
 )
 from mtg_bot.combat import can_block
 from mtg_bot.creature_statics_wg import (
     combat_damage_unpreventable,
-    fire_graveyard_arrival_triggers,
     spell_cost_increase,
 )
 from mtg_bot.effects.generic.cube_creatures_wg import (
@@ -141,8 +139,6 @@ def test_elvish_spirit_guide_exiles_from_hand_for_green():
     apply_action(state, 0, act)
     assert esg in state.players[0].exile
     assert [c.color for c in state.players[0].mana_pool] == ["G"]
-    assert parse_wg_hand_ability_line("Exile this card from your hand: dance.") is None
-    assert parse_wg_hand_ability_line("Draw a card.") is None
 
 
 # ---------------------------------------------------------------------
@@ -153,16 +149,20 @@ def test_elvish_spirit_guide_exiles_from_hand_for_green():
 def test_worldspine_wurm_discarded_shuffles_into_library():
     pr = cube()["Worldspine Wurm"]
     assert "trample" in pr.keywords
-    (gy_trig,) = pr.graveyard_arrival_triggers
-    assert isinstance(gy_trig.effect, ShuffleSourceIntoOwnersLibrary)
+    assert pr.watched_in_graveyard
+    assert any(
+        isinstance(t.effect, ShuffleSourceIntoOwnersLibrary)
+        for t in pr.triggered_abilities
+    )
     state = make_state()
     wurm = put(state, 0, pr, Zone.GRAVEYARD)
     state_based_actions(state)
-    assert wurm.graveyard_arrival_pending and len(state.stack) == 1
-    # Already pending: no second trigger.
-    assert not fire_graveyard_arrival_triggers(state)
+    assert len(state.stack) == 1
+    # Same graveyard stay: no second trigger.
+    state_based_actions(state)
+    assert len(state.stack) == 1
     drain(state)
-    assert wurm in state.players[0].library and not wurm.graveyard_arrival_pending
+    assert wurm in state.players[0].library
 
 
 def test_worldspine_wurm_dies_into_three_wurms_and_shuffles():
@@ -185,22 +185,10 @@ def test_worldspine_trigger_after_leaving_graveyard_does_nothing():
     wurm.zone = Zone.EXILE
     state.players[0].exile.append(wurm)
     drain(state)
-    assert wurm in state.players[0].exile and not wurm.graveyard_arrival_pending
+    assert wurm in state.players[0].exile
     state.resolving_source = None
     ShuffleSourceIntoOwnersLibrary().resolve(state, 0)
     assert "shuffle" in ShuffleSourceIntoOwnersLibrary().describe()
-
-
-def test_graveyard_arrival_line_needs_a_rearming_effect():
-    card = {"name": "Big Wurm"}
-    assert parse_wg_creature_line(
-        "When Big Wurm is put into a graveyard from anywhere, draw a card.",
-        card,
-    ) is None
-    assert parse_wg_creature_line(
-        "When Big Wurm is put into a graveyard from anywhere, shuffle it "
-        "into its owner's library.", card,
-    ).fields["graveyard_arrival_triggers"]
 
 
 # ---------------------------------------------------------------------

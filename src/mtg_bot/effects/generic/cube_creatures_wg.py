@@ -580,12 +580,8 @@ class DealCombatDamageAmountToTarget(Effect):
 class ShuffleSourceIntoOwnersLibrary(Effect):
     """"Shuffle it into its owner's library." -- the resolving source
     card, if it's still in its owner's graveyard (Worldspine Wurm's
-    put-into-a-graveyard trigger). Re-arms the card's graveyard-arrival
-    trigger."""
-
-    # The only effects a "put into a graveyard from anywhere" trigger
-    # may carry: each clears ``graveyard_arrival_pending``.
-    rearms_graveyard_arrival = True
+    put-into-a-graveyard trigger, stacked by the R/multi/colorless
+    bucket's ``cube_creatures_rmc.sweep_graveyard_watch``)."""
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, shuffle_library
@@ -593,7 +589,6 @@ class ShuffleSourceIntoOwnersLibrary(Effect):
         card = state.resolving_source
         if card is None:
             return
-        card.graveyard_arrival_pending = False
         owner = state.player_by_id(card.owner_id)
         if card not in owner.graveyard:
             return
@@ -1367,69 +1362,6 @@ class MillThenMayPutLandIntoHand(Effect):
         return (
             f"mill {self.n} cards; you may put a land card from among them "
             f"into your hand"
-        )
-
-
-# ---------------------------------------------------------------------
-# Figure of Fable
-# ---------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class BecomeTypesWithBasePT(Effect):
-    """"[If this creature is a <Subtype>, it | This creature] becomes a
-    <Subtypes> with base power and toughness P/T[ and <keywords>]."
-    (Figure of Fable's level-up chain.) Permanent characteristic changes
-    sourced by the creature itself (they end when it leaves the
-    battlefield): layer 4 ``set_creature_subtypes``, layer 7b
-    ``set_base_pt``, layer 6 keyword grants."""
-
-    subtypes: tuple = ()
-    power: int = 0
-    toughness: int = 0
-    keywords: frozenset = frozenset()
-    if_subtype: "str | None" = None
-
-    def resolve(self, state, controller_id, targets=()):
-        from mtg_bot.game import effective_subtypes
-
-        source = state.resolving_source
-        if source is None or source not in state.battlefield:
-            return
-        if (
-            self.if_subtype is not None
-            and self.if_subtype not in effective_subtypes(state, source)
-        ):
-            state.log.append(
-                f"{source.printing.name} isn't a {self.if_subtype}: nothing"
-            )
-            return
-        state.add_continuous_effect(
-            source_id=source.id, layer=4, kind="set_creature_subtypes",
-            target_id=source.id, params=tuple(self.subtypes),
-            description=f"{source.printing.name} becomes a {' '.join(self.subtypes)}",
-        )
-        state.add_continuous_effect(
-            source_id=source.id, layer=7, sublayer=1, kind="set_base_pt",
-            target_id=source.id, params=(self.power, self.toughness),
-            description=(
-                f"{source.printing.name} has base P/T "
-                f"{self.power}/{self.toughness}"
-            ),
-        )
-        for kw in sorted(self.keywords):
-            state.add_continuous_effect(
-                source_id=source.id, layer=6, kind="grant_keyword",
-                target_id=source.id, params=(kw,),
-                description=f"{source.printing.name} has {kw}",
-            )
-        state._invalidate_layered_cache()
-
-    def describe(self) -> str:
-        cond = f"if a {self.if_subtype}, " if self.if_subtype else ""
-        return (
-            f"{cond}becomes a {' '.join(self.subtypes)} with base P/T "
-            f"{self.power}/{self.toughness}"
         )
 
 

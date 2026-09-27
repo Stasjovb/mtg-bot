@@ -881,11 +881,6 @@ class GameObject:
     # id of the player whose opponent's becoming the monarch returns
     # this card from exile. ``None`` otherwise.
     exiled_until_opponent_monarch_of: Optional[int] = None
-    # Set when this card's "put into a graveyard from anywhere"
-    # trigger went on the stack for its current graveyard stay; cleared
-    # when that trigger resolves (``ShuffleSourceIntoOwnersLibrary`` and
-    # peers), so the next arrival triggers again.
-    graveyard_arrival_pending: bool = False
     # ``(turn number, count)`` of this permanent's "this ability has
     # resolved N times this turn" ability (Scythecat Cub); ``()`` until
     # it first resolves.

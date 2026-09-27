@@ -230,31 +230,6 @@ def _parse_your_creatures_damage_unpreventable_line(
     })
 
 
-_PUT_INTO_GRAVEYARD_FROM_ANYWHERE_RE = re.compile(
-    r"^When this creature is put into a graveyard from anywhere, "
-    r"(?P<eff>.+)\.$"
-)
-
-
-def _parse_graveyard_arrival_line(line: str, card: dict) -> WGLine | None:
-    """``When <this> is put into a graveyard from anywhere, <effect>.``
-    (Worldspine Wurm) -> ``graveyard_arrival_triggers`` (the triggers
-    fire from the graveyard, not the battlefield dispatch)."""
-    m = _PUT_INTO_GRAVEYARD_FROM_ANYWHERE_RE.match(line)
-    if m is None:
-        return None
-    from mtg_bot.cards.parser.effects import _parse_effect_phrase
-    from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import Always, Event
-
-    effect = _parse_effect_phrase(m.group("eff"))
-    if effect is None or not getattr(effect, "rearms_graveyard_arrival", False):
-        return None
-    return WGLine(fields={"graveyard_arrival_triggers": (TriggeredAbility(
-        event=Event.DIES, predicate=Always(), effect=effect,
-    ),)})
-
-
 # ---------------------------------------------------------------------
 # Enters with named / keyword counters
 # ---------------------------------------------------------------------
@@ -577,7 +552,6 @@ _RECOGNIZERS = (
     _parse_spells_cost_more_line,
     _parse_cant_be_blocked_by_line,
     _parse_your_creatures_damage_unpreventable_line,
-    _parse_graveyard_arrival_line,
     _parse_enters_with_counters_line,
     _parse_exiled_with_card_types_static,
     _parse_quote_final_line,
@@ -636,36 +610,6 @@ def link_exile_abilities(
                 abilities[i] = replace(
                     ability, effect=LinkExiledCardsToSource(ability.effect),
                 )
-
-
-# ---------------------------------------------------------------------
-# Hand-activated abilities (``source._split_hand_abilities``)
-# ---------------------------------------------------------------------
-
-_EXILE_FROM_HAND_ABILITY_RE = re.compile(
-    r"^Exile this card from your hand: (?P<eff>.+)\.$"
-)
-
-
-def parse_wg_hand_ability_line(line: str):
-    """``Exile this card from your hand: <effect>.`` (Elvish Spirit Guide)
-    -> a hand-activated ``ActivatedAbility`` paying ``exile_self`` (a
-    mana effect makes it a mana ability, CR 605)."""
-    m = _EXILE_FROM_HAND_ABILITY_RE.match(line.strip())
-    if m is None:
-        return None
-    from mtg_bot.cards.parser.activated import _is_mana_ability_effect
-    from mtg_bot.cards.parser.effects import _parse_effect_phrase
-    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
-
-    effect = _parse_effect_phrase(m.group("eff")[0].lower() + m.group("eff")[1:])
-    if effect is None:
-        return None
-    return ActivatedAbility(
-        cost=ActivationCost(exile_self=True),
-        effect=effect,
-        is_mana_ability=_is_mana_ability_effect(effect),
-    )
 
 
 # ---------------------------------------------------------------------

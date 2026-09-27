@@ -1341,12 +1341,6 @@ class CardPrinting:
     # "Combat damage that would be dealt by creatures you control can't
     # be prevented." (Questing Beast).
     your_creatures_combat_damage_cant_be_prevented: bool = False
-    # "When <this> is put into a graveyard from anywhere, <effect>."
-    # (Worldspine Wurm): triggered abilities that fire as the card
-    # arrives in a graveyard from any zone (detected by
-    # ``creature_statics_wg.fire_graveyard_arrival_triggers`` during
-    # state-based-action checks, i.e. before the next priority).
-    graveyard_arrival_triggers: tuple = ()
     # "Activated abilities of <types> can't be activated." (Clarion
     # Conqueror): the card types whose permanents' activated abilities
     # (mana abilities included) are locked while this is on the

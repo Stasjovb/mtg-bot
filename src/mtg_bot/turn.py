@@ -1530,15 +1530,9 @@ def state_based_actions(state: GameState) -> bool:
         any_changed = True
     if sweep_library_graveyard_exile_watch(state):
         any_changed = True
-    # "When <this> is put into a graveyard from anywhere" triggers
-    # (Worldspine Wurm; ``mtg_bot.creature_statics_wg``).
-    from mtg_bot.creature_statics_wg import (
-        apply_ascend,
-        fire_graveyard_arrival_triggers,
-    )
+    # Ascend (CR 702.131; ``mtg_bot.creature_statics_wg``).
+    from mtg_bot.creature_statics_wg import apply_ascend
 
-    if fire_graveyard_arrival_triggers(state):
-        any_changed = True
     apply_ascend(state)
     return any_changed
 

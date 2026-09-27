@@ -55,15 +55,8 @@ def _split_hand_abilities(card: dict) -> tuple[dict, tuple]:
         return card, ()
     kept: list[str] = []
     abilities = []
-    from mtg_bot.cards.parser.creature_wg_lines import (
-        parse_wg_hand_ability_line,
-    )
-
     for raw in text.split("\n"):
         ability = _parse_cycling_line(_strip_reminder_text(raw))
-        if ability is None:
-            # Cube W/G bucket: "Exile this card from your hand: <effect>."
-            ability = parse_wg_hand_ability_line(_strip_reminder_text(raw))
         if ability is None:
             kept.append(raw)
         else:
