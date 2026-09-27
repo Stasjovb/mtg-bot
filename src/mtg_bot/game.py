@@ -1674,7 +1674,12 @@ def effective_colors(
         color set. Matches Painter's Servant-style "is the chosen
         color in addition to its other colors" clauses.
     """
-    colors: set[str] = set(obj.printing.mana_cost.colors) | set(
+    # Devoid (CR 702.114a): the object is colorless regardless of cost.
+    base_cost_colors = (
+        () if "devoid" in obj.printing.keywords
+        else obj.printing.mana_cost.colors
+    )
+    colors: set[str] = set(base_cost_colors) | set(
         obj.printing.color_indicator
     )
     # Real registry layer-5 entries on this object.

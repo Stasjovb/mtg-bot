@@ -176,3 +176,95 @@ def test_has_card_type_predicate():
     assert HasCardType("Instant").test(obj, state)
     assert not HasCardType("Creature").test(obj, state)
     assert not HasCardType("Instant").test(object(), state)
+
+
+# ---------------------------------------------------------------- infect / shadow / battle cry / devoid / persist / ward-in-line
+
+
+def test_new_keyword_lines_parse():
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+    from mtg_bot.cards.parser.printing_keywords import _parse_keyword_line_with_ward
+
+    assert _parse_keyword_line("Trample, infect, indestructible") == (
+        "trample", "infect", "indestructible",
+    )
+    for line, kw in (("Shadow", "shadow"), ("Battle cry", "battle cry"),
+                     ("Devoid", "devoid"), ("Persist", "persist")):
+        assert _parse_keyword_line(line) == (kw,)
+    assert _parse_keyword_line_with_ward("Flying, ward {1}") == (("flying",), "{1}")
+    assert _parse_keyword_line_with_ward("Flying, ward—Pay 2 life") is None
+    assert _parse_keyword_line_with_ward("Banding, ward {1}") is None
+
+
+def test_keyword_line_with_ward_builds_ward_cost():
+    printing = _build_printing({
+        "name": "Warded Flier", "type_line": "Creature — Sphinx",
+        "mana_cost": "{3}{U}", "power": "2", "toughness": "3",
+        "oracle_text": "Flying, ward {1}", "layout": "normal",
+    })
+    assert "flying" in printing.keywords and printing.ward_cost_str == "{1}"
+
+
+def test_shadow_blocking_rules():
+    from mtg_bot.combat import can_block
+
+    state = _state()
+    shade = _put(state, make_creature("Shade", "{B}", 1, 1, keywords={"shadow"}), 0)
+    shade2 = _put(state, make_creature("Shade2", "{B}", 1, 1, keywords={"shadow"}), 1)
+    plain = _put(state, make_creature("Plain", "{G}", 1, 1), 1)
+    assert not can_block(state, plain, shade)
+    assert can_block(state, shade2, shade)
+    assert not can_block(state, shade2, _put(state, make_creature("P0", "{G}", 1, 1), 0))
+
+
+def test_battle_cry_pumps_other_attackers():
+    from tests._rules_helpers import _simulate_combat_step
+
+    state = _state()
+    crier = _put(state, make_creature("Crier", "{R}", 1, 1, keywords={"battle cry"}), 0)
+    buddy = _put(state, make_creature("Buddy", "{R}", 2, 2), 0)
+    _simulate_combat_step(state, [crier.id, buddy.id])
+    assert state.players[1].life == 20 - 1 - 3
+
+
+def test_devoid_is_colorless():
+    from mtg_bot.game import effective_colors
+
+    state = _state()
+    obj = _put(state, make_creature("Void", "{1}{B}", 1, 1, keywords={"devoid"}), 0)
+    assert effective_colors(state, obj) == frozenset()
+
+
+def test_persist_returns_once_with_a_minus_counter():
+    from mtg_bot.turn import move_off_battlefield
+
+    state = _state()
+    primus = _put(state, make_creature("Primus", "{5}{G}", 6, 6, keywords={"persist"}), 0)
+    move_off_battlefield(state, primus, destination="graveyard")
+    drain_stack(state)
+    assert primus in state.battlefield and primus.minus_one_counters == 1
+    move_off_battlefield(state, primus, destination="graveyard")
+    drain_stack(state)
+    assert primus in state.players[0].graveyard
+
+
+def test_persist_return_is_a_noop_if_card_left_graveyard():
+    from mtg_bot.effects.generic.keyword_actions import ReturnPersistedCard
+
+    state = _state()
+    obj = _put(state, make_creature("Gone", "{1}", 1, 1), 0, Zone.HAND)
+    state.resolving_source = obj
+    ReturnPersistedCard().resolve(state, 0, ())
+    state.resolving_source = None
+    ReturnPersistedCard().resolve(state, 0, ())
+    assert obj in state.players[0].hand
+    assert "-1/-1" in ReturnPersistedCard().describe()
+
+
+def test_infect_combat_damage_gives_poison():
+    from tests._rules_helpers import _simulate_combat_step
+
+    state = _state()
+    atk = _put(state, make_creature("Infector", "{B}", 2, 2, keywords={"infect"}), 0)
+    _simulate_combat_step(state, [atk.id])
+    assert state.players[1].poison_counters == 2 and state.players[1].life == 20

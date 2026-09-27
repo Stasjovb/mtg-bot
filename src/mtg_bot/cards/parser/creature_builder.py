@@ -100,6 +100,7 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_ward_discard_line,
     _parse_ward_line,
     _parse_ward_pay_life_line,
+    _parse_keyword_line_with_ward,
     _parse_warp_castable_from_graveyard_line,
     _parse_warp_line,
     _parse_warp_with_life_cost_line,
@@ -454,6 +455,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward_life = _parse_ward_pay_life_line(line)
         if ward_life is not None:
             ward_life_cost = ward_life
+            continue
+        kw_with_ward = _parse_keyword_line_with_ward(line)
+        if kw_with_ward is not None:
+            # ``Flying, ward {1}`` — keyword line whose last piece is a
+            # Ward {cost} (Raffine, Scheming Seer).
+            keywords.update(kw_with_ward[0])
+            ward = kw_with_ward[1]
             continue
         devour_n = _parse_devour_line(line)
         if devour_n is not None:

@@ -32,6 +32,11 @@ _KEYWORD_LINES: dict[str, str] = {
     "Indestructible": "indestructible",
     "Shroud": "shroud",
     "Exalted": "exalted",
+    "Infect": "infect",
+    "Shadow": "shadow",
+    "Battle cry": "battle cry",
+    "Devoid": "devoid",
+    "Persist": "persist",
 }
 
 

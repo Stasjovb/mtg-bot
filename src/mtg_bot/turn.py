@@ -256,6 +256,14 @@ def move_off_battlefield(
     if obj not in state.battlefield:
         return
     was_creature = is_creature_now(obj)
+    # Persist LKI (CR 702.79a): read before the object leaves.
+    persists = (
+        destination == "graveyard"
+        and was_creature
+        and not obj.printing.is_token
+        and obj.minus_one_counters == 0
+        and "persist" in effective_keywords(state, obj)
+    )
     # Mark Void state: any non-land permanent leaving the battlefield this
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
@@ -359,6 +367,10 @@ def move_off_battlefield(
         # unqualified "if a creature died this turn" surface.
         state.creatures_died_this_turn += 1
         _fire_dies_triggers(state, obj)
+        if persists:
+            from mtg_bot.actions import push_persist_trigger
+
+            push_persist_trigger(state, obj)
 
     # Predicate-style ``Event.DIES`` dispatch. Phase-4 widens the
     # legacy creature-only DIES fire path to also cover artifacts so

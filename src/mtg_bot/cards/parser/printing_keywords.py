@@ -137,6 +137,22 @@ def _parse_ward_discard_line(line: str) -> str | None:
 
 
 _WARD_PAY_LIFE_LINE = re.compile(r"^Ward—Pay (\d+) life\.$")
+_KEYWORDS_THEN_WARD = re.compile(
+    r"^(?P<kws>.+), ward (?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_keyword_line_with_ward(line: str) -> tuple[tuple[str, ...], str] | None:
+    """``<keyword line>, ward {cost}`` -> ``(keywords, ward_cost)``."""
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+    m = _KEYWORDS_THEN_WARD.match(line.strip())
+    if m is None:
+        return None
+    kws = _parse_keyword_line(m.group("kws"))
+    if kws is None:
+        return None
+    return kws, m.group("cost")
 
 
 def _parse_ward_pay_life_line(line: str) -> int | None:

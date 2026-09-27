@@ -1991,6 +1991,31 @@ def fire_prowess_triggers(state: GameState, caster_id: int) -> None:
         )
 
 
+# Persist (CR 702.79a): "When this creature dies, if it had no -1/-1
+# counters on it, return it to the battlefield under its owner's
+# control with a -1/-1 counter on it." ``turn.move_off_battlefield``
+# reads the LKI (keyword + counter state) and calls this after the
+# object reached the graveyard.
+_PERSIST_ABILITY_INDEX = 2001
+
+
+def push_persist_trigger(state: GameState, dead: GameObject) -> None:
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.keyword_actions import ReturnPersistedCard
+    from mtg_bot.effects.predicates import Event as _Event
+
+    push_triggered_ability(
+        state,
+        source=dead,
+        ability=TriggeredAbility(
+            event=_Event.DIES, effect=ReturnPersistedCard(),
+        ),
+        ability_index=_PERSIST_ABILITY_INDEX,
+        controller_id=dead.owner_id,
+        label="persist",
+    )
+
+
 def _apply_ward_check(
     state: GameState, caster_id: int,
     targets: tuple[tuple[str, int], ...],

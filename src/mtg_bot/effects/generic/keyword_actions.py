@@ -227,3 +227,35 @@ class GetEnergy(Effect):
 
     def describe(self) -> str:
         return "you get " + "{E}" * self.amount
+
+
+@dataclass(frozen=True)
+class ReturnPersistedCard(Effect):
+    """Persist's return (CR 702.79a): if the resolving source is still
+    in its owner's graveyard, it returns to the battlefield under its
+    owner's control as a new object with one -1/-1 counter."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import add_minus_one_counters
+
+        card = state.resolving_source
+        if card is None:
+            return
+        owner = state.player_by_id(card.owner_id)
+        if card not in owner.graveyard:
+            return
+        owner.graveyard.remove(card)
+        card.plus_one_counters = 0
+        card.minus_one_counters = 0
+        card.temp_power_bonus = 0
+        card.temp_toughness_bonus = 0
+        put_into_battlefield(state, card, card.owner_id)
+        add_minus_one_counters(state, card, 1)
+        state.log.append(f"{card.printing.name} persists")
+
+    def describe(self) -> str:
+        return "return it to the battlefield with a -1/-1 counter on it"

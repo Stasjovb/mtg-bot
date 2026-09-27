@@ -72,6 +72,10 @@ def can_block(
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
             return False
+    # Shadow (CR 702.28b): creatures with shadow can block or be blocked
+    # only by creatures with shadow.
+    if ("shadow" in attacker_kws) != ("shadow" in blocker_kws):
+        return False
     from mtg_bot.keyword_rules import blocked_by_protection
 
     if blocked_by_protection(state, attacker, blocker):
@@ -115,6 +119,7 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     # each Exalted permanent the attacker's controller has applies its
     # own +1/+1.
     _fire_exalted_pumps(state)
+    _fire_battle_cry_pumps(state)
     # Once-per-pass ``Event.YOU_ATTACK`` dispatch (DSK "Whenever you
     # attack" family — Razorkin Hordecaller, Most Valuable Slayer,
     # Lionheart Glimmer). Distinct from ``Event.ATTACKS`` which fires
@@ -176,6 +181,24 @@ def _fire_exalted_pumps(state: GameState) -> None:
         f"{attacker.printing.name} gets +{exalted_count}/+{exalted_count} "
         f"until end of turn (Exalted x{exalted_count})"
     )
+
+
+def _fire_battle_cry_pumps(state: GameState) -> None:
+    """Battle cry (CR 702.91a): "Whenever this creature attacks, each
+    other attacking creature gets +1/+0 until end of turn." Applied at
+    declaration like Exalted (no stack)."""
+    attackers = [o for o in state.battlefield if o.attacking]
+    for crier in attackers:
+        if "battle cry" not in effective_keywords(state, crier):
+            continue
+        for other in attackers:
+            if other.id == crier.id:
+                continue
+            state.grant_pt_pump_ueot(
+                source_id=crier.id, target_id=other.id, power=1, toughness=0,
+                description=f"{crier.printing.name}: battle cry",
+            )
+        state.log.append(f"{crier.printing.name}'s battle cry")
 
 
 def _fire_attacks_triggers(state: GameState, attacker) -> None:
