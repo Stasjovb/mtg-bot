@@ -2431,6 +2431,15 @@ def _cast_spell(
             # Mastery's {1}{B}, Overload); its other parts are paid with
             # the additional costs below.
             cost = card.printing.alternative_costs[alt_cost_index].mana_cost()
+        # Cost increases still apply to a spell cast without paying its
+        # mana cost (CR 601.2f -- Thalia on a pitched Force of Will).
+        from mtg_bot.creature_statics_wg import spell_cost_increase
+
+        free_tax = spell_cost_increase(state, card.printing, player_id)
+        if free_tax:
+            from mtg_bot.alt_casting import cost_plus as _cost_plus
+
+            cost = _cost_plus(cost, ManaCost(generic=free_tax))
     # Evoke's "Exile a <filter> card from your hand" cost (CR 702.74).
     if use_evoke:
         from mtg_bot.evoke import pay_evoke_exile as _pay_evoke_exile

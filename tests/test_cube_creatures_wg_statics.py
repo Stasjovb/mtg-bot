@@ -381,3 +381,26 @@ def test_peacekeeper_with_empty_opponent_zones_names_nothing():
     put(state, 1, "Brainstorm", Zone.GRAVEYARD)
     choose_card_name_as_enters(state, pk, 0)
     assert pk.chosen_card_name == "Brainstorm"
+
+
+def test_thalia_taxes_free_casts_too():
+    state = make_state()
+    put(state, 1, "Thalia, Guardian of Thraben")
+    fow = put(state, 0, "Force of Will", Zone.HAND)
+    put(state, 0, "Brainstorm", Zone.HAND)  # blue card to pitch
+    bolt = put(state, 1, "Lightning Bolt", Zone.HAND)
+    add_lands(state, 1, "Mountain", 2)
+    state.active_player_idx = 1
+    state.priority_player_idx = 1
+    state.players[1].agent.scripts["target"] = [("player", 0)]
+    apply_action(state, 1, CastSpell(bolt.id))
+    state.priority_player_idx = 0
+    free = CastSpell(fow.id, cast_for_free=True)
+    assert free not in legal_actions(state, 0)  # needs {1} for Thalia
+    land = add_lands(state, 0, "Island", 1)[0]
+    assert free in legal_actions(state, 0)
+    apply_action(state, 0, free)
+    assert land.tapped
+    drain(state)
+    # Countered; Force of Will's alternative cost paid 1 life.
+    assert bolt in state.players[1].graveyard and state.players[0].life == 19

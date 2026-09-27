@@ -488,6 +488,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
 
     from mtg_bot.alt_casting import pitch_options as _pitch_options
 
+    def _free_cast_tax_payable(card) -> bool:
+        # Cost increases (Thalia) still apply to free casts (CR 601.2f).
+        from mtg_bot.creature_statics_wg import spell_cost_increase
+
+        tax = spell_cost_increase(state, card.printing, player_id)
+        return tax == 0 or _can_cast(state, player_id, card, ManaCost(generic=tax))
+
     def _own_free_cast(card) -> bool:
         cond = card.printing.free_cast_condition
         if cond is not None and cond.matches(state, player_id):
@@ -613,6 +620,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             (free_first_cast_active or _own_free_cast(card))
             and _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
+            and _free_cast_tax_payable(card)
         ):
             _emit_hand_cast(card, cast_for_free=True)
 
@@ -863,6 +871,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if (
             _targets_are_satisfiable(state, player_id, card)
             and _additional_costs_payable(state, player_id, card)
+            and _free_cast_tax_payable(card)
         ):
             actions.append(CastSpell(card.id, cast_for_free=True))
 
@@ -1042,6 +1051,7 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 (free_first_cast_active or _own_free_cast(card))
                 and _targets_are_satisfiable(state, player_id, card)
                 and _additional_costs_payable(state, player_id, card)
+                and _free_cast_tax_payable(card)
             ):
                 _emit_hand_sorcery_cast(card, cast_for_free=True)
 
