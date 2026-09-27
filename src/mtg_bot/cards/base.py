@@ -1079,6 +1079,11 @@ class CardPrinting:
     # for now; extend to a frozenset if real cards need protection
     # from multiple colors at once.
     protection_from_color: str | None = None
+    # Color indicator / token color (CR 204, CR 111.4): colors an
+    # object has that its mana cost doesn't show — a "1/1 white Spirit
+    # creature token" is white. ``game.effective_colors`` unions this
+    # with ``mana_cost.colors`` as the layer-5 base.
+    color_indicator: frozenset[str] = frozenset()
     # Convoke (CR 702.51): "Your creatures can help cast this spell.
     # Each creature you tap while casting this spell pays for {1} or
     # one mana of that creature's color." Wires the per-cast prompt
@@ -1913,6 +1918,8 @@ def make_token_creature(
     can_only_block_creatures_with_flying: bool = False,
     legendary: bool = False,
     static_abilities: tuple[StaticAbility, ...] = (),
+    colors: frozenset[str] | set[str] | tuple[str, ...] = (),
+    enchantment: bool = False,
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -1927,8 +1934,10 @@ def make_token_creature(
     rule applies to it.
     """
     subtypes_str = " ".join(subtypes)
-    extra_type = "Artifact " if artifact else ""
     legend = "Legendary " if legendary else ""
+    extra_type = ("Artifact " if artifact else "") + (
+        "Enchantment " if enchantment else ""
+    )
     type_line = (
         f"{legend}Token {extra_type}Creature — {subtypes_str}"
         if subtypes else f"{legend}Token {extra_type}Creature"
@@ -1950,6 +1959,7 @@ def make_token_creature(
         can_only_block_creatures_with_flying=(
             can_only_block_creatures_with_flying
         ),
+        color_indicator=frozenset(colors),
     )
 
 

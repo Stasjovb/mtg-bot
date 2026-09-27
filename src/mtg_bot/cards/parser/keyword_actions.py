@@ -113,3 +113,88 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     if phrase == "target creature you control explores":
         return Explore(target=True)
     return _parse_keyword_grant_effect(phrase)
+
+
+# ── Creature tokens described by their printed characteristics ───────
+#
+# ``create <count> [tapped ]<P>/<T> <colors> <Subtypes> [artifact ]
+# [enchantment ]creature token[s][ that's tapped and attacking]
+# [ with <keywords>]`` — when the subtype phrase isn't a registered
+# ``TOKEN_PRINTINGS`` entry, the token printing is built from the text
+# itself (CR 111.4: a token's characteristics are exactly what the
+# effect that created it says). Only keyword riders are accepted after
+# ``with``; a quoted granted ability or ``named <Name>`` keeps the card
+# unclaimed.
+_COLOR_WORD = r"(?:white|blue|black|red|green)"
+_SYNTH_TOKEN = re.compile(
+    r"^create (?P<count>a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+    r"(?P<tapped>tapped )?(?P<p>\d+)/(?P<t>\d+) "
+    rf"(?P<colors>colorless|{_COLOR_WORD}(?:(?:, | and |, and ){_COLOR_WORD})*) "
+    r"(?P<subtypes>[A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*)*) "
+    r"(?P<artifact>artifact )?(?P<enchantment>enchantment )?creature tokens?"
+    r"(?P<attacking> that's tapped and attacking)?"
+    r"(?: with (?P<body>[^\"]+?))?"
+    r"(?P<attacking_after> that's tapped and attacking)?$"
+)
+_COLOR_LETTER = {"white": "W", "blue": "U", "black": "B", "red": "R", "green": "G"}
+_CARDINALS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _parse_token_keyword_list(body: str) -> frozenset[str] | None:
+    """``flying`` / ``trample and haste`` / ``flying, vigilance, and
+    lifelink`` -> engine keyword set, or None on any unknown piece."""
+    from mtg_bot.cards.parser.keywords import _parse_granted_keyword_piece
+
+    normalized = body.replace(", and ", ", ").replace(" and from ", "\x00")
+    pieces = [
+        p.strip().replace("\x00", " and from ")
+        for chunk in normalized.split(", ")
+        for p in chunk.split(" and ")
+    ]
+    out: set[str] = set()
+    for piece in pieces:
+        parsed = _parse_granted_keyword_piece(piece)
+        if parsed is None:
+            return None
+        out.update(parsed)
+    return frozenset(out)
+
+
+def _synthesize_creature_token_effect(phrase: str) -> Effect | None:
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+
+    m = _SYNTH_TOKEN.match(phrase)
+    if m is None:
+        return None
+    keywords: frozenset[str] = frozenset()
+    if m.group("body") is not None:
+        parsed = _parse_token_keyword_list(m.group("body"))
+        if parsed is None:
+            return None
+        keywords = parsed
+    raw_count = m.group("count")
+    count = int(raw_count) if raw_count.isdigit() else _CARDINALS[raw_count]
+    colors = frozenset(
+        _COLOR_LETTER[w] for w in re.findall(_COLOR_WORD, m.group("colors"))
+    )
+    subtypes = tuple(m.group("subtypes").split(" "))
+    printing = make_token_creature(
+        m.group("subtypes"), int(m.group("p")), int(m.group("t")),
+        subtypes=subtypes, keywords=keywords,
+        artifact=m.group("artifact") is not None,
+        enchantment=m.group("enchantment") is not None,
+        colors=colors,
+    )
+    attacking = (
+        m.group("attacking") is not None
+        or m.group("attacking_after") is not None
+    )
+    return CreateToken(
+        token_printing=printing, count=count,
+        tapped=m.group("tapped") is not None or attacking,
+        attacking=attacking,
+    )

@@ -180,7 +180,10 @@ from mtg_bot.cards.parser.keywords import (
     _KEYWORD_LINES,
     _parse_granted_keyword_piece,
 )
-from mtg_bot.cards.parser.keyword_actions import _parse_keyword_action_effect
+from mtg_bot.cards.parser.keyword_actions import (
+    _parse_keyword_action_effect,
+    _synthesize_creature_token_effect,
+)
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
@@ -3332,7 +3335,7 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
         # parser parity bug caught downstream.
         subtype = m.group(6)
         if subtype not in TOKEN_PRINTINGS:
-            return None
+            return _synthesize_creature_token_effect(phrase)
         # ``that's tapped and attacking`` qualifier — token enters declared
         # as an attacker in the current combat. Only meaningful during an
         # attack trigger; the ``attacking`` flag on ``CreateToken`` sets
@@ -3393,7 +3396,7 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
             tapped=tapped,
             each_player=True,
         )
-    return None
+    return _synthesize_creature_token_effect(phrase)
 
 
 # Sentence-boundary split for compound effect phrases — period

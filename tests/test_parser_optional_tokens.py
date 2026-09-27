@@ -119,15 +119,16 @@ def test_parse_bare_name_token_shape(
 # ---------- token-creation: negative cases ----------
 
 def test_parse_creature_token_unknown_subtype_is_synthesized():
-    # A subtype that doesn't appear in TOKEN_PRINTINGS is synthesized
-    # from the printed characteristics (P/T, subtypes, keywords) by the
-    # effects_ext stat-token recognizer. A rider it can't read still
-    # rejects the phrase.
+    # A stat-bearing creature token whose subtype isn't registered in
+    # TOKEN_PRINTINGS is built from its printed characteristics
+    # (``parser.keyword_actions._synthesize_creature_token_effect``,
+    # CR 111.4). An unmodeled rider still refuses the parse.
     eff = _parse_effect("create a 4/4 red Dragon creature token")
     assert eff.token_printing.name == "Dragon"
     assert (eff.token_printing.power, eff.token_printing.toughness) == (4, 4)
+    assert eff.token_printing.color_indicator == frozenset({"R"})
     assert _parse_effect(
-        "create a 4/4 red Dragon creature token with frobnication"
+        "create a 4/4 red Dragon creature token with banding"
     ) is None
 
 

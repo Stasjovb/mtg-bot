@@ -187,3 +187,64 @@ def test_self_explore_uses_resolving_source_and_target_edge_cases():
     assert bear.plus_one_counters == 1
     assert Explore().describe() == "this creature explores"
     assert "target" in Explore(target=True).describe()
+
+
+# ---------------------------------------------------------------- synthesized creature tokens
+
+
+@pytest.mark.parametrize(
+    "phrase,name,count,pt,kws,colors,flags",
+    [
+        ("create three 5/5 green Wurm creature tokens with trample",
+         "Wurm", 3, (5, 5), {"trample"}, {"G"}, (False, False)),
+        ("create a 1/1 blue Faerie Dragon creature token with flying",
+         "Faerie Dragon", 1, (1, 1), {"flying"}, {"U"}, (False, False)),
+        ("create a 2/2 white and blue Bird creature token with flying, vigilance, and lifelink",
+         "Bird", 1, (2, 2), {"flying", "vigilance", "lifelink"}, {"W", "U"}, (False, False)),
+        ("create a 3/3 colorless Golem artifact creature token",
+         "Golem", 1, (3, 3), set(), set(), (False, False)),
+        ("create a tapped 4/4 green Beast creature token",
+         "Beast", 1, (4, 4), set(), {"G"}, (True, False)),
+        ("create a 4/1 black Skeleton creature token with menace that's tapped and attacking",
+         "Skeleton", 1, (4, 1), {"menace"}, {"B"}, (True, True)),
+        ("create 2 1/1 white Cat enchantment creature tokens",
+         "Cat", 2, (1, 1), set(), {"W"}, (False, False)),
+    ],
+)
+def test_synthesized_creature_tokens(phrase, name, count, pt, kws, colors, flags):
+    eff = _parse_effect(phrase)
+    assert isinstance(eff, CreateToken)
+    tok = eff.token_printing
+    assert tok.name == name and eff.count == count
+    assert (tok.power, tok.toughness) == pt
+    assert tok.keywords == frozenset(kws)
+    assert tok.color_indicator == frozenset(colors)
+    assert (eff.tapped, eff.attacking) == flags
+    assert "Token" in tok.supertypes and tok.is_creature
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        'create a 1/1 green Minion creature token named Moloid with "Whenever this token attacks, you may mill a card."',
+        "create a 1/1 red Goblin creature token with banding",
+        'create a 1/1 black Rat creature token with "This creature can\'t block."',
+    ],
+)
+def test_synthesized_tokens_refuse_unmodeled_riders(phrase):
+    assert _parse_effect(phrase) is None
+
+
+def test_registered_token_still_wins_over_synthesis():
+    eff = _parse_effect("create a 2/2 colorless Robot artifact creature token")
+    assert eff.token_printing is TOKEN_PRINTINGS["Robot"]
+
+
+def test_token_color_indicator_feeds_effective_colors():
+    from mtg_bot.game import effective_colors
+
+    state = _state()
+    eff = _parse_effect("create a 1/1 white Spirit creature token with flying")
+    eff.resolve(state, 0, ())
+    spirit = next(o for o in state.battlefield if o.printing.name == "Spirit")
+    assert effective_colors(state, spirit) == frozenset({"W"})

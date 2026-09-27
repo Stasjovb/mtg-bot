@@ -1674,7 +1674,9 @@ def effective_colors(
         color set. Matches Painter's Servant-style "is the chosen
         color in addition to its other colors" clauses.
     """
-    colors: set[str] = set(obj.printing.mana_cost.colors)
+    colors: set[str] = set(obj.printing.mana_cost.colors) | set(
+        obj.printing.color_indicator
+    )
     # Real registry layer-5 entries on this object.
     layer5: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
