@@ -507,11 +507,16 @@ the first run in the lineage whose value head does not overfit. The
 value target was the binding lever; D3-D5's regularisation/calibration
 work was treating the symptom.
 
-Follow-ups: 300-game head-to-head v13 vs v15 (`ladder_runs/s2_v13_vs_v15/`)
-to promote `current_best`; then resume AlphaZero cycles from v15 with
-`--value-target root` (NN self-play now records the NN-PIMC root value,
-so the target stays dense) and see whether self-play data stops
-poisoning the window once the value head carries real information.
+**Follow-up (2026-09-27): AlphaZero cycles from v15 with `--value-target
+root`.** Three cycles (v17/v18/v19; `docs/STRENGTH_LADDER.md` 2026-09-27):
+held-out corr held at 0.44-0.45 while the NN-play share of the window rose
+25 % -> 58 % (the pre-D6 loop lost corr and strength every cycle); the
+arena vs v15 tied all three times (49.7 / 52.0 / 50.5 %); the ladder says
+v18 is the best net so far (47.7 % vs heuristic, 91 % vs random). So the
+self-play data no longer poisons the window, but 300-game arenas cannot
+resolve the per-cycle gain. Next: always-promote cycles (nodes 200,
+1,000 games) with the ladder as yardstick; if that also plateaus, the
+remaining levers are deeper self-play search (nodes 400) and trunk width.
 
 ## Synthesis — what this means for the next iterate cycle
 

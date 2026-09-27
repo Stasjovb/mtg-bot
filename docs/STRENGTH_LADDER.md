@@ -231,3 +231,25 @@ Both trained on the same 6,000 dense root-value heuristic games (batches
 (heuristic anchored at +462 / +423 / +411 in the three runs.) v15 is the first
 net inside ~50 Elo of the teacher; every earlier version sat ~200 below.
 Decisive head-to-head vs v13 (300 games/pair) in `ladder_runs/s2_v13_vs_v15/`.
+
+### 2026-09-27 -- root-value AlphaZero cycles 11-13 from v15 (`--value-target root`)
+
+Self-play driven by v15 records the NN-PIMC root value per row; training
+regresses it on the newest 6,000 shards (NN-play share grows each cycle:
+25 % -> 50 % -> 58 %). Arena = 300 games vs v15 at the cycle's search
+depth; ladder at nodes 100 / samples 2, 200 games per pair.
+
+| cycle | self-play | version | held-out corr | arena vs v15 | ladder vs heuristic | vs random | Elo (heuristic same run) |
+|---|---|---|---:|---|---|---|---:|
+| 11 | 1,500 @ nodes 100 | v17 | 0.446 | 148-150 (49.7 %) | _ladder crashed (CPython 3.13 pool fault)_ | | |
+| 12 | 1,500 @ nodes 100 | v18 | 0.441 | 156-144 (52.0 %) | **95-104 (47.7 %)** | 182-18 (91.0 %) | +398 (heuristic +413) |
+| 13 | 500 @ nodes 200 | v19 | 0.436 | 151-148 (50.5 %) | 83-116 (41.7 %) | 182-18 (91.0 %) | +398 (heuristic +455) |
+
+Reading: with root-value targets the self-play cycles no longer degrade
+the net (the whole v9-v11 story was monotone decay), the value head stays
+at corr ~0.44 as NN-play data displaces heuristic data, and v18 posts the
+best ladder yet -- but no cycle clears the promotion gate in a 300-game
+head-to-head. The gains per cycle (if real) are below what 300 games can
+resolve. v18 promoted to `current_best` on the ladder evidence; the next
+run switches to always-promote (accept 0.0) at nodes 200 / 1,000 games
+per cycle with the ladder as the yardstick.
