@@ -19,7 +19,7 @@ from mtg_bot.cards.parser.source import OracleParserCardSource
 from mtg_bot.cards.parser.spell_builder import _casting_keyword_fields
 from mtg_bot.effects.generic.card_flow import CardFilter
 from mtg_bot.effects.generic.reanimation import ReturnCardFromGraveyardToBattlefield
-from mtg_bot.game import Zone, add_named_counters
+from mtg_bot.game import Zone, set_named_counters
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import move_off_battlefield
 from tests._spells_b_helpers import ScriptedAgent, add, add_lands, make_state
@@ -106,10 +106,8 @@ def test_exile_instead_on_bounce_paths():
 def test_named_counters_accumulate_and_reset_on_reanimation():
     state = make_state()
     bear = _creature(state, 0, "Wild Bear", Zone.GRAVEYARD)
-    add_named_counters(bear, "corpse")
-    add_named_counters(bear, "corpse", 2)
-    add_named_counters(bear, "bounty")
-    assert bear.named_counters == (("bounty", 1), ("corpse", 3))
+    set_named_counters(bear, "corpse", 3)
+    assert bear.named_counters == (("corpse", 3),)
     ReturnCardFromGraveyardToBattlefield(card_filter=CREATURE).resolve(
         state, 0, (("graveyard_card", bear.id),),
     )

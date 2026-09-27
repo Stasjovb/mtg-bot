@@ -150,9 +150,12 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
         if card not in state.battlefield:  # pragma: no cover - defensive
             return
         if self.with_counter is not None:
-            from mtg_bot.game import add_named_counters
+            from mtg_bot.game import named_counter_count, set_named_counters
 
-            add_named_counters(card, self.with_counter)
+            set_named_counters(
+                card, self.with_counter,
+                named_counter_count(card, self.with_counter) + 1,
+            )
         if self.exile_if_it_would_leave:
             card.exile_instead_of_leaving = True
         if self.haste is not None:
