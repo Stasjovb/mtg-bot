@@ -312,3 +312,15 @@ class CardsInGraveyardAtLeast(StatePredicate):
 
     def test(self, state, viewer_id):
         return len(state.player_by_id(viewer_id).graveyard) >= self.n
+
+
+@dataclass(frozen=True)
+class LandsPlayedThisTurnAtLeast(StatePredicate):
+    """The viewer has played at least ``n`` lands this turn — Fastbond's
+    ``if it wasn't the first land you played this turn`` (``n=2``,
+    checked after the land play that triggered it is counted)."""
+
+    n: int = 2
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).lands_played_this_turn >= self.n

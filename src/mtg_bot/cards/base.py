@@ -1267,6 +1267,16 @@ class CardPrinting:
     escape_cost: ManaCost | None = None
     escape_cost_str: str = ""
     escape_exile_count: int = 0
+    # Granted escape (Underworld Breach): "Each nonland card in your
+    # graveyard has escape. The escape cost is equal to the card's mana
+    # cost plus exile N other cards from your graveyard." Nonzero N
+    # grants that escape to every nonland card in this permanent's
+    # controller's graveyard (``alt_casting.escape_terms``).
+    grants_graveyard_escape_exile_count: int = 0
+    # Necromancy: "If you cast it any time a sorcery couldn't have been
+    # cast, the controller of the permanent it becomes sacrifices it at
+    # the beginning of the next cleanup step."
+    sacrifice_at_cleanup_if_cast_without_sorcery_timing: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

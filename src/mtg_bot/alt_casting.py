@@ -374,29 +374,64 @@ def offer_splices(
 # ---------------------------------------------------------------------
 
 
+def escape_terms(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> "tuple[ManaCost, int] | None":
+    """``(mana cost, other-cards-to-exile)`` for escaping ``card`` from
+    ``player_id``'s graveyard, or ``None`` if it has no escape.
+
+    The card's own printed escape wins; otherwise a permanent
+    ``player_id`` controls with ``grants_graveyard_escape_exile_count``
+    (Underworld Breach) grants escape to each nonland card in that
+    player's graveyard for its mana cost plus exiling N other cards. A
+    card without a mana cost can't be cast this way (its escape cost
+    would include an unpayable mana cost)."""
+    pr = card.printing
+    if pr.escape_cost is not None:
+        return pr.escape_cost, pr.escape_exile_count
+    if pr.is_land or not pr.mana_cost_str:
+        return None
+    if card not in state.player_by_id(player_id).graveyard:
+        return None
+    for o in state.battlefield:
+        n = o.printing.grants_graveyard_escape_exile_count
+        if n and o.controller_id == player_id:
+            return pr.mana_cost, n
+    return None
+
+
 def escape_payable(state: "GameState", player_id: int, card: "GameObject") -> bool:
     """Enough *other* cards in the graveyard for the escape exile part."""
+    terms = escape_terms(state, player_id, card)
+    if terms is None:
+        return False
     p = state.player_by_id(player_id)
     others = sum(1 for c in p.graveyard if c.id != card.id)
-    return others >= card.printing.escape_exile_count
+    return others >= terms[1]
 
 
-def pay_escape_exile(state: "GameState", player_id: int, card: "GameObject") -> None:
-    """Exile ``escape_exile_count`` other graveyard cards (cards without
-    flashback / escape first, oldest first — which cards is not offered
-    as a choice, like delve; ``docs/SEARCH_LIMITATIONS.md``)."""
+def pay_escape_exile(
+    state: "GameState", player_id: int, card: "GameObject",
+    count: int | None = None,
+) -> None:
+    """Exile ``count`` (default ``escape_exile_count``) other graveyard
+    cards (cards without flashback / escape first, oldest first — which
+    cards is not offered as a choice, like delve;
+    ``docs/SEARCH_LIMITATIONS.md``)."""
     from mtg_bot.game import Zone
 
+    if count is None:
+        count = card.printing.escape_exile_count
     p = state.player_by_id(player_id)
     pool = [c for c in p.graveyard if c.id != card.id]
     pool.sort(key=lambda c: (
         c.printing.flashback_cost is not None or c.printing.escape_cost is not None
     ))
-    for c in pool[: card.printing.escape_exile_count]:
+    for c in pool[:count]:
         p.graveyard.remove(c)
         c.zone = Zone.EXILE
         p.exile.append(c)
     state.log.append(
-        f"P{player_id} exiles {card.printing.escape_exile_count} other card(s) "
+        f"P{player_id} exiles {count} other card(s) "
         f"to escape {card.printing.name}"
     )

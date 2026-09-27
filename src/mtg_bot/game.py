@@ -820,6 +820,24 @@ class GameObject:
     # putting it anywhere else." (From the Catacombs) — honored by every
     # leave-battlefield path while the object stays on the battlefield.
     exile_instead_of_leaving: bool = False
+    # Reanimation Auras (cube enchantments). ``aura_enchant_override``
+    # is the enchant restriction this permanent has NOW when it differs
+    # from the printed one: Animate Dead "loses 'enchant creature card
+    # in a graveyard' and gains 'enchant creature put onto the
+    # battlefield with this Aura'", Necromancy "becomes an Aura with
+    # ..." (a non-Aura printing that is an Aura while this is set).
+    # Cleared when the permanent leaves the battlefield.
+    aura_enchant_override: Optional[str] = None
+    # ``(id, etb_timestamp)`` of the creature this permanent returned
+    # to the battlefield ("that creature" of "When this Aura leaves the
+    # battlefield, that creature's controller sacrifices it"). The
+    # timestamp makes the link die if that creature changes zones.
+    linked_creature: Optional[tuple[int, int]] = None
+    # Necromancy: this spell was cast when a sorcery couldn't have been
+    # (set at cast for printings with
+    # ``sacrifice_at_cleanup_if_cast_without_sorcery_timing``; consumed
+    # when the permanent enters).
+    cast_without_sorcery_timing: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

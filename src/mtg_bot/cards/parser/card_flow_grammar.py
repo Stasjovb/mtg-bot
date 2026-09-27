@@ -441,11 +441,12 @@ _FLIP_STEAL_OR_COUNTER_RE = re.compile(
     r"lose the flip, counter that spell$"
 )
 
-# Through the Breach.
+# Through the Breach ("Sacrifice that creature"), Sneak Attack's
+# activation ("Sacrifice the creature").
 _PUT_CREATURE_HASTE_SAC_AT_END_RE = re.compile(
     r"^you may put a creature card from your hand onto the battlefield\. "
-    r"That creature gains haste\. Sacrifice that creature at the beginning "
-    r"of the next end step$"
+    r"That creature gains haste\. Sacrifice (?:that|the) creature at the "
+    r"beginning of the next end step$"
 )
 
 # Sunfall.

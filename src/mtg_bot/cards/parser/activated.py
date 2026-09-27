@@ -96,6 +96,9 @@ from mtg_bot.effects.generic import (
     AddOneManaOfImprintedColors,
     AddOneOfManaCombinations,
 )
+from mtg_bot.effects.generic.enchantment_mechanics import (
+    AddOneManaSacrificedLandCouldProduce,
+)
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
@@ -251,6 +254,14 @@ _SACRIFICE_A_SUBTYPE_PIECE = re.compile(r"^Sacrifice an? ([A-Z][a-z]+)$")
 # "Sacrifice a nontoken artifact" — Thopter Foundry.
 _SACRIFICE_NONTOKEN_ARTIFACT_PIECE = "Sacrifice a nontoken artifact"
 
+# "Sacrifice a <card type>" — lowercase card-type forms without a
+# dedicated field (Goblin Bombardment's "Sacrifice a creature"). Maps to
+# ``ActivationCost.sacrifice_a_permanent_type``. "land" keeps its
+# dedicated ``sacrifice_a_land`` field (matched earlier).
+_SACRIFICE_A_PERMANENT_TYPE_PIECE = re.compile(
+    r"^Sacrifice an? (creature|artifact|enchantment|planeswalker)$"
+)
+
 # "Remove a/N <kind> counter(s) from this <permanent>" — self counter
 # removal (Staff of the Storyteller, Wishclaw Talisman, Reckoner
 # Bankbuster, Pentad Prism).
@@ -345,6 +356,11 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="discard_hand")
     if piece == _SACRIFICE_NONTOKEN_ARTIFACT_PIECE:
         return _CostPiece(kind="sacrifice_nontoken_artifact")
+    type_match = _SACRIFICE_A_PERMANENT_TYPE_PIECE.match(piece)
+    if type_match is not None:
+        return _CostPiece(
+            kind="sacrifice_a_permanent_type", field=type_match.group(1),
+        )
     n_match = _SACRIFICE_N_NONLAND_PERMANENTS_PIECE.match(piece)
     if n_match is not None:
         token = n_match.group(1)
@@ -416,6 +432,7 @@ def _build_cost_from_pieces(
     discard_hand = False
     sacrifice_subtype = ""
     sacrifice_nontoken_artifact = False
+    sacrifice_a_permanent_type = ""
     remove_counter_kind = ""
     remove_counter_amount = 0
     sacrifice_n_nonland = 0
@@ -497,6 +514,11 @@ def _build_cost_from_pieces(
                 return None
             sacrifice_nontoken_artifact = True
             sacrifice_seen = True
+        elif p.kind == "sacrifice_a_permanent_type":
+            if sacrifice_seen:
+                return None
+            sacrifice_a_permanent_type = p.field
+            sacrifice_seen = True
         elif p.kind == "sacrifice_n_nonland_permanents":
             if sacrifice_seen:
                 return None
@@ -553,6 +575,8 @@ def _build_cost_from_pieces(
         kwargs["sacrifice_subtype"] = sacrifice_subtype
     if sacrifice_nontoken_artifact:
         kwargs["sacrifice_nontoken_artifact"] = True
+    if sacrifice_a_permanent_type:
+        kwargs["sacrifice_a_permanent_type"] = sacrifice_a_permanent_type
     if sacrifice_n_nonland:
         kwargs["sacrifice_n_nonland_permanents"] = sacrifice_n_nonland
     if remove_counter_kind:
@@ -630,6 +654,13 @@ def _parse_activation_cost(cost_str: str) -> ActivationCost | None:
     return _build_cost_from_pieces(classified)
 
 
+# ``this <permanent type> `` subject ahead of ``deals`` in an activated
+# ability's body — the source itself (see ``_parse_activated_ability_line``).
+_SELF_SUBJECT_DEALS = re.compile(
+    r"^this (?:enchantment|artifact|creature|land|permanent) (?=deals )"
+)
+
+
 def _normalize_activated_effect_phrase(phrase: str) -> str:
     """Strip the trailing period and lowercase the first letter so the
     activated-ability surface form (``Put a +1/+1 counter on target
@@ -701,9 +732,12 @@ _INLINE_ACTIVATE_ONLY_IF_CONTROL_N_ARTIFACTS_RIDER = re.compile(
 # no rules meaning; Mox Opal's ``Metalcraft —``) or a flavor word in
 # front of an activation. Stripped before the cost/effect split; the
 # lookahead requires a ``{`` mana/tap symbol right after the dash so
-# em-dashes elsewhere never match.
+# em-dashes elsewhere never match. ``Exhaust —`` is NOT an ability word
+# but a keyword ability (CR 702.177: "Activate each exhaust ability only
+# once") whose restriction isn't modeled, so it is never stripped — the
+# line stays unparsed rather than losing the restriction.
 _ACTIVATED_ABILITY_WORD_PREFIX = re.compile(
-    r"^[A-Z][A-Za-z]*(?: [A-Za-z]+)* — (?=\{)"
+    r"^(?!Exhaust )[A-Z][A-Za-z]*(?: [A-Za-z]+)* — (?=\{)"
 )
 _RIDER_CARDINALS: dict[str, int] = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
@@ -885,6 +919,7 @@ _MANA_PRODUCING_EFFECTS: tuple[type, ...] = (
     AddManaInAnyCombination,
     AddOneManaOfColorAmongControlled,
     AddOneManaOfImprintedColors,
+    AddOneManaSacrificedLandCouldProduce,
 )
 
 
@@ -1056,6 +1091,14 @@ def _parse_activated_ability_line(
         # ``it `` the same way). Tried second so pronoun-bearing literal
         # bodies (Survey Mechan) keep matching first.
         effect = _parse_effect(phrase[len("it "):])
+    if effect is None:
+        # ``This <permanent> deals N damage …`` — the same source-subject
+        # strip for a self-named subject (Goblin Bombardment's
+        # ``Sacrifice a creature: This enchantment deals 1 damage to any
+        # target.``). Only reached when the whole body failed to parse.
+        subject = _SELF_SUBJECT_DEALS.match(phrase)
+        if subject is not None:
+            effect = _parse_effect(phrase[subject.end():])
     if effect is None:
         # A multi-sentence body whose first sentence carries an in-
         # sentence ``, then `` joiner (Wishclaw Talisman's "search your

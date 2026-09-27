@@ -397,6 +397,37 @@ class TargetMatches(Condition):
 
 
 @dataclass(frozen=True)
+class PerBasicLandTypeAmongLandsYouControl(Condition):
+    """Variable-amount Domain count: the number of basic land types
+    (Plains, Island, Swamp, Mountain, Forest) among lands the viewer
+    controls, read through ``effective_subtypes`` so type-changing
+    effects and chosen-type lands count. ``matches`` is true iff the
+    count is at least 1; ``multiplier`` returns the count.
+
+    Models Leyline Binding's "Domain — This spell costs {1} less to
+    cast for each basic land type among lands you control."
+    """
+
+    def _types(self, state, viewer_id) -> set[str]:
+        from mtg_bot.game import _BASIC_LAND_TYPE_TO_COLOR, effective_subtypes
+
+        found: set[str] = set()
+        for o in state.battlefield:
+            if o.controller_id == viewer_id and o.printing.is_land:
+                found.update(
+                    s for s in effective_subtypes(state, o)
+                    if s in _BASIC_LAND_TYPE_TO_COLOR
+                )
+        return found
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return bool(self._types(state, viewer_id))
+
+    def multiplier(self, state, viewer_id, chosen_targets=None):
+        return len(self._types(state, viewer_id))
+
+
+@dataclass(frozen=True)
 class PerDifferentlyNamedLand(Condition):
     """Variable-amount: count distinctly-named lands the viewer
     controls. ``matches`` is true iff the count is at least 1;

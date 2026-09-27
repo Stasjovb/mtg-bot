@@ -571,12 +571,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     _emit_flashback_casts(instant_speed=True)
 
     from mtg_bot.alt_casting import escape_payable as _escape_payable
+    from mtg_bot.alt_casting import escape_terms as _escape_terms
 
     def _emit_escape_casts(instant_speed: bool) -> None:
         for gcard in p.graveyard:
-            ec = gcard.printing.escape_cost
-            if ec is None:
+            terms = _escape_terms(state, player_id, gcard)
+            if terms is None:
                 continue
+            ec = terms[0]
             fast = gcard.printing.is_instant or "flash" in gcard.printing.keywords
             if fast != instant_speed:
                 continue
@@ -1190,6 +1192,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     and o2.printing.is_artifact
                     and not o2.printing.is_token
                     for o2 in state.battlefield
+                ):
+                    continue
+            if ability.cost.sacrifice_a_permanent_type:
+                from mtg_bot.effects.generic.enchantment_mechanics import (
+                    sacrifice_type_candidates,
+                )
+                if not sacrifice_type_candidates(
+                    state, player_id, ability.cost.sacrifice_a_permanent_type,
                 ):
                     continue
             if ability.cost.remove_counters_from_self_kind:

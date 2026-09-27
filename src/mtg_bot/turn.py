@@ -408,7 +408,7 @@ def move_off_battlefield(
     for att in state.battlefield:
         if att.attached_to != obj.id:
             continue
-        if att.printing.is_aura:
+        if att.printing.is_aura or att.aura_enchant_override is not None:
             auras_to_bury.append(att)
         else:
             att.attached_to = None
@@ -435,6 +435,7 @@ def move_off_battlefield(
     # If the departing permanent itself was Equipment, clear its
     # attachment state.
     obj.attached_to = None
+    obj.aura_enchant_override = None
     if obj.printing.is_token:
         state.log.append(f"{obj.printing.name} token ceases to exist")
     elif destination == "graveyard":
@@ -1418,6 +1419,13 @@ def run_cleanup_step(state: GameState) -> None:
     state.loyalty_activated_this_turn.clear()
     # Reset per-turn ability-resolution counters.
     state.ability_resolutions_this_turn.clear()
+    # "At the beginning of the next cleanup step" delayed triggers
+    # (Necromancy's instant-speed rider).
+    if state.delayed_triggers:
+        from mtg_bot.effects.generic.enchantment_mechanics import (
+            run_delayed_cleanup_triggers,
+        )
+        run_delayed_cleanup_triggers(state)
 
 
 def state_based_actions(state: GameState) -> bool:
@@ -1655,10 +1663,22 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # by a Lignified manland's animation expiring).
     auras_to_bury: list = []
     for obj in state.battlefield:
-        if not obj.printing.is_aura:
-            continue
+        kind = obj.aura_enchant_override
+        if kind is None:
+            if not obj.printing.is_aura:
+                continue
+            kind = obj.printing.aura_enchant_type
         if obj.attached_to is None:
             auras_to_bury.append(obj)
+            continue
+        if kind == "creature_card_in_graveyard":
+            # Animate Dead before its enters trigger resolves: it
+            # enchants a creature card in a graveyard.
+            from mtg_bot.effects.generic.enchantment_mechanics import (
+                enchanted_graveyard_card,
+            )
+            if enchanted_graveyard_card(state, obj) is None:
+                auras_to_bury.append(obj)
             continue
         target = next(
             (o for o in state.battlefield if o.id == obj.attached_to),
@@ -1667,7 +1687,6 @@ def _state_based_actions_pass(state: GameState) -> bool:
         if target is None:
             auras_to_bury.append(obj)
             continue
-        kind = obj.printing.aura_enchant_type
         if kind == "creature":
             if not is_creature_now(target):
                 auras_to_bury.append(obj)
@@ -1697,7 +1716,7 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # unattached but stays on the battlefield. Default scope:
     # Equipment must be attached to a creature.
     for obj in state.battlefield:
-        if obj.printing.is_aura:
+        if obj.printing.is_aura or obj.aura_enchant_override is not None:
             continue
         if "Equipment" not in obj.printing.subtypes:
             continue

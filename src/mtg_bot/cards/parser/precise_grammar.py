@@ -101,6 +101,9 @@ def _recognizers() -> tuple[Callable[[str], Effect | None], ...]:
         parse_effect_with_instead_rider,
     )
     from mtg_bot.cards.parser.counter_phrases import parse_counter
+    from mtg_bot.cards.parser.enchantment_phrases import (
+        parse_enchantment_phrase,
+    )
     from mtg_bot.cards.parser.removal_phrases import (
         parse_damage_to_target,
         parse_destroy_all,
@@ -127,6 +130,7 @@ def _recognizers() -> tuple[Callable[[str], Effect | None], ...]:
         parse_chain_copy_damage,
         parse_this_turn_trigger,
         parse_energy_paid_damage,
+        parse_enchantment_phrase,
     )
 
 

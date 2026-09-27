@@ -515,6 +515,13 @@ class ActivationCost:
     # ``GameObject.exerted`` so the source skips its controller's next
     # untap step (Arena of Glory).
     exert_self: bool = False
+    # "Sacrifice a <card type>" for a lowercase card type
+    # (Goblin Bombardment's "Sacrifice a creature"). Any permanent the
+    # activator controls of that (current) type is a legal sacrifice,
+    # the source included when it qualifies. "" = no such cost. The
+    # dedicated land field (``sacrifice_a_land``, Dust Bowl) keeps its
+    # own source-excluding semantics.
+    sacrifice_a_permanent_type: str = ""
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -565,6 +572,8 @@ class ActivationCost:
             parts.append("Discard your hand")
         if self.sacrifice_subtype:
             parts.append(f"Sacrifice a {self.sacrifice_subtype}")
+        if self.sacrifice_a_permanent_type:
+            parts.append(f"Sacrifice a {self.sacrifice_a_permanent_type}")
         if self.sacrifice_nontoken_artifact:
             parts.append("Sacrifice a nontoken artifact")
         if self.crew:

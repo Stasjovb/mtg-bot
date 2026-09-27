@@ -102,11 +102,14 @@ def test_three_piece_tap_mana_sacrifice_cost_now_parses():
 
 def test_sacrifice_other_phrasing_returns_none():
     """Sacrifice phrasings that aren't a literal sacrifice-self or one
-    of the recognized named-sacrifice atoms are unsupported. ``Sacrifice
-    a creature`` (target sac, no engine field), ``Sacrifice another
-    creature`` (no engine field), and the reminder-only ``Sacrifice this
-    token`` phrasing all fall through."""
-    assert _parse_activation_cost("Sacrifice a creature") is None
+    of the recognized named-sacrifice atoms are unsupported.
+    ``Sacrifice another creature`` (no engine field) and the
+    reminder-only ``Sacrifice this token`` phrasing fall through.
+    ``Sacrifice a creature`` is the card-type atom
+    (``sacrifice_a_permanent_type``, Goblin Bombardment)."""
+    assert _parse_activation_cost("Sacrifice a creature") == ActivationCost(
+        sacrifice_a_permanent_type="creature",
+    )
     assert _parse_activation_cost("Sacrifice another creature") is None
     # ``Sacrifice this token`` only appears inside parenthesized
     # reminder text on token-creating cards; it isn't a legal piece

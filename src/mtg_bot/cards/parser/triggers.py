@@ -115,6 +115,7 @@ from mtg_bot.effects.state_predicates import (
     SpellsCastThisTurn,
     VoidActive,
 )
+from mtg_bot.effects.state_predicates import LandsPlayedThisTurnAtLeast
 from mtg_bot.effects.predicates import (
     OPPONENT,
     YOU,
@@ -567,6 +568,12 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # ``At the beginning of your draw step`` — Mana Vault's tapped-tax
     # trigger. Dispatched by ``turn.run_draw_step`` after the draw.
     "your draw step": (Event.BEGINNING_OF_DRAW_STEP, Controlled(YOU)),
+    # Cube enchantments: ``At the beginning of the end step`` (Underworld
+    # Breach) is every end step, the same event as ``each end step``;
+    # ``At the beginning of each player's upkeep`` (Oath of Druids)
+    # fires on every upkeep regardless of whose turn it is.
+    "the end step": (Event.BEGINNING_OF_END_STEP, Always()),
+    "each player's upkeep": (Event.BEGINNING_OF_UPKEEP, Always()),
 }
 
 
@@ -654,6 +661,11 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # the source's controller.
     "an opponent plays a land": (
         Event.PLAYS_LAND, Controlled(by=OPPONENT, subject="controller"),
+    ),
+    # ``Whenever you play a land`` — Fastbond. The acting player is the
+    # source's controller; the source itself is never a land here.
+    "you play a land": (
+        Event.PLAYS_LAND, Controlled(YOU, subject="controller"),
     ),
     # ``When you play another land`` — City of Traitors. Same
     # ``Event.PLAYS_LAND`` dispatch, gated on the acting player being
@@ -1075,6 +1087,15 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters": (Event.ENTERS, IsSelf()),
     "this enchantment enters": (Event.ENTERS, IsSelf()),
     "this Aura enters": (Event.ENTERS, IsSelf()),
+    # Cube enchantments' own leaves triggers (Parallax Wave, Animate
+    # Dead, Necromancy): the same type-blind ``IsSelf()`` as
+    # ``this creature leaves the battlefield``.
+    "this enchantment leaves the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    "this Aura leaves the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
     # Lands print "this land" as their self-reference (surveil lands'
     # "When this land enters, surveil 1."); same type-blind ``IsSelf()``.
     "this land enters": (Event.ENTERS, IsSelf()),
@@ -1485,6 +1506,11 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # is tapped, …" — the source-state gate (the event subject is the
     # active player, so the check reads the source via ``Source``).
     "this artifact is tapped": Source(IsTapped()),
+    # Fastbond: "if it wasn't the first land you played this turn" —
+    # checked after the triggering land play is counted.
+    "it wasn't the first land you played this turn": (
+        StateBound(LandsPlayedThisTurnAtLeast(2))
+    ),
 }
 
 

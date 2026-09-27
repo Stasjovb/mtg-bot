@@ -894,6 +894,7 @@ def _classify_sac_for_mana(
             or c.discard_hand
             or c.sacrifice_subtype
             or c.sacrifice_nontoken_artifact
+            or c.sacrifice_a_permanent_type
             or c.remove_counters_from_self_kind
             or c.crew
             or c.sacrifice_n_nonland_permanents
@@ -1721,7 +1722,13 @@ def _select_spell_targets(
     if card.printing.is_aura:
         enchant_type = card.printing.aura_enchant_type
         yours_only = card.printing.aura_yours_only
-        if enchant_type == "artifact":
+        if enchant_type == "creature_card_in_graveyard":
+            # Animate Dead: "Enchant creature card in a graveyard".
+            from mtg_bot.effects.generic.enchantment_mechanics import (
+                graveyard_creature_card_targets,
+            )
+            legal = graveyard_creature_card_targets(state)
+        elif enchant_type == "artifact":
             legal = [
                 (enchant_type, o.id)
                 for o in state.battlefield
@@ -1847,6 +1854,11 @@ def _cast_spell(
     use_escape: bool = False,
 ) -> None:
     p = state.player_by_id(player_id)
+    from mtg_bot.legal import _is_sorcery_timing
+
+    # Necromancy's "if you cast it any time a sorcery couldn't have been
+    # cast" reads the timing before the spell moves to the stack.
+    sorcery_timing_at_cast = _is_sorcery_timing(state, player_id)
 
     # A spell can be cast from the hand (normal or warp cost), from
     # the "warped" / impulse-playable exile zone (normal cost), or —
@@ -1862,10 +1874,15 @@ def _cast_spell(
         # Escape (CR 702.138): cast from the graveyard for the escape
         # cost; the "exile N other cards" part is paid with the other
         # additional costs below.
+        from mtg_bot.alt_casting import escape_terms as _escape_terms
+
         card = next((c for c in p.graveyard if c.id == card_id), None)
-        if card is None or card.printing.escape_cost is None:  # pragma: no cover - legal_actions gates
+        terms = (
+            _escape_terms(state, player_id, card) if card is not None else None
+        )
+        if terms is None:  # pragma: no cover - legal_actions gates
             raise ValueError(f"card {card_id} not escape-castable by P{player_id}")
-        cost = card.printing.escape_cost
+        cost, escape_exile_n = terms
         cast_from_outside_hand = True
         p.graveyard.remove(card)
         card.cast_via_warp = False
@@ -2410,10 +2427,10 @@ def _cast_spell(
         )
 
         _pay_additional_sacrifice(state, player_id, card)
-    if use_escape and card.printing.escape_exile_count:
+    if use_escape and escape_exile_n:
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 
-        _pay_escape_exile(state, player_id, card)
+        _pay_escape_exile(state, player_id, card, escape_exile_n)
     if life_x_paid is not None:
         p.life -= life_x_paid
         x_value = life_x_paid
@@ -2497,6 +2514,10 @@ def _cast_spell(
     # Dark Endurance's "costs {1} less if it targets a blocking
     # creature" — could see the choice.
     countered = _apply_ward_check(state, player_id, targets)
+    card.cast_without_sorcery_timing = (
+        card.printing.sacrifice_at_cleanup_if_cast_without_sorcery_timing
+        and not sorcery_timing_at_cast
+    )
     state.stack.append(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
@@ -3521,12 +3542,24 @@ def _activate_ability(
     # "Sacrifice a <Subtype>" / "Sacrifice a nontoken artifact" costs
     # (Retrofitter Foundry, Thopter Foundry). The source itself is a
     # legal choice when it qualifies. legal_actions gates on one existing.
-    if ability.cost.sacrifice_subtype or ability.cost.sacrifice_nontoken_artifact:
+    if (
+        ability.cost.sacrifice_subtype
+        or ability.cost.sacrifice_nontoken_artifact
+        or ability.cost.sacrifice_a_permanent_type
+    ):
         from mtg_bot.game import effective_subtypes
         from mtg_bot.turn import sacrifice as _sacrifice
 
         p = state.player_by_id(player_id)
-        if ability.cost.sacrifice_subtype:
+        if ability.cost.sacrifice_a_permanent_type:
+            # "Sacrifice a creature" (Goblin Bombardment).
+            from mtg_bot.effects.generic.enchantment_mechanics import (
+                sacrifice_type_candidates,
+            )
+            options = sacrifice_type_candidates(
+                state, player_id, ability.cost.sacrifice_a_permanent_type,
+            )
+        elif ability.cost.sacrifice_subtype:
             wanted_sub = ability.cost.sacrifice_subtype
             options = [
                 o for o in state.battlefield
@@ -4160,7 +4193,31 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             # Aura: check the cast-time target is still a legal creature/
             # artifact depending on aura_enchant_type. If not, the Aura
             # fizzles to its owner's graveyard without entering.
-            if card.printing.is_aura:
+            if (
+                card.printing.is_aura
+                and card.printing.aura_enchant_type
+                == "creature_card_in_graveyard"
+            ):
+                # Animate Dead: enters enchanting the targeted creature
+                # card in a graveyard (its enters trigger returns it).
+                from mtg_bot.effects.generic.enchantment_mechanics import (
+                    graveyard_creature_card_targets,
+                )
+                if not item.targets or item.targets[0] not in (
+                    graveyard_creature_card_targets(state)
+                ):
+                    state.log.append(
+                        f"{card.printing.name} fizzles (no legal enchant "
+                        f"target)"
+                    )
+                    _send_to_graveyard_or_library(state, card)
+                    return
+                card.attached_to = item.targets[0][1]
+                state.log.append(
+                    f"{card.printing.name} enters enchanting a card in a "
+                    f"graveyard"
+                )
+            elif card.printing.is_aura:
                 enchant_type = card.printing.aura_enchant_type
                 target_obj = None
                 if item.targets:
@@ -4219,6 +4276,14 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                         f"{item.cast_room_half}"
                     )
             put_into_battlefield(state, card, item.controller_id)
+            if card.cast_without_sorcery_timing:
+                # Necromancy: cast when a sorcery couldn't have been ->
+                # its controller sacrifices it at the next cleanup step.
+                card.cast_without_sorcery_timing = False
+                from mtg_bot.effects.generic.enchantment_mechanics import (
+                    schedule_sacrifice_at_next_cleanup,
+                )
+                schedule_sacrifice_at_next_cleanup(state, card)
             return
         if card.printing.is_instant or card.printing.is_sorcery:
             state.log.append(f"{card.printing.name} resolves")

@@ -56,6 +56,7 @@ from mtg_bot.effects.conditions import (
     NthSpellThisTurn,
     OpponentsControlAtLeast,
     PerControlled,
+    PerBasicLandTypeAmongLandsYouControl,
     PerDifferentlyNamedLand,
     TargetMatches,
     VoidActiveCondition,
@@ -118,6 +119,19 @@ _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND = (
     "This spell costs {X} less to cast, where X is the number of "
     "differently named lands you control."
 )
+
+
+_COST_REDUCTION_LINE_FOR_EACH = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?This spell costs \{(\d+)\} less to cast "
+    r"for each (?P<what>.+)\.$"
+)
+# Counted things for the ``for each <what>`` shape -> variable-amount
+# ``Condition`` (``multiplier`` = the count).
+_COST_REDUCTION_PER_EACH: dict[str, Condition] = {
+    "basic land type among lands you control": (
+        PerBasicLandTypeAmongLandsYouControl()
+    ),
+}
 
 
 # Conditions recognized as cost-reduction triggers. The mapping is from
@@ -255,6 +269,17 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     convention used elsewhere in the parser.
     """
     stripped = line.strip()
+    # ``[<Ability word> — ]This spell costs {N} less to cast for each
+    # <counted thing>.`` (Leyline Binding's ``Domain —`` reduction). The
+    # ability word has no rules meaning (CR 207.2c); the counted thing
+    # resolves through ``_COST_REDUCTION_PER_EACH`` to a variable-amount
+    # condition whose ``multiplier`` scales the unit amount.
+    m = _COST_REDUCTION_LINE_FOR_EACH.match(stripped)
+    if m is not None:
+        condition = _COST_REDUCTION_PER_EACH.get(m.group("what"))
+        if condition is None:
+            return None
+        return CostReduction(amount=int(m.group(1)), condition=condition)
     # Per-differently-named-land variable-amount X-cost reduction
     # (Fungal Colossus). Tried first because the ``{X} less`` template
     # is a unique gate that can't be confused with the ``{N} less``
