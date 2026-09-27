@@ -31,7 +31,7 @@ export PYTHONPATH=src PYTHONIOENCODING=utf-8
 # keep it in a private file outside the repo (never in the TOML / git).
 KEYF="$HOME/.mtg_bot/tailscale_authkey"
 if [ -z "${MTG_BOT_TAILSCALE_AUTHKEY:-}" ] && [ -s "$KEYF" ]; then export MTG_BOT_TAILSCALE_AUTHKEY="$(tr -d '
-' < \"$KEYF\")"; fi
+' < "$KEYF")"; fi
 export MTG_BOT_STRUCTURED_CACHE_DIR="${S2_CACHE:-E:/mtg_bot_structured_cache}"
 N="${1:-1}"
 CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
