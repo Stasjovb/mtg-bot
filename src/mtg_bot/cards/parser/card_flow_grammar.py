@@ -240,6 +240,77 @@ _ADD_N_MANA_ANY_COMBINATION_RE = re.compile(
 )
 
 
+# Reanimation: base sentence + optional anaphoric rider sentences.
+_REANIMATE_RE = re.compile(
+    r"^(?:put target (?P<any_desc>.+? card) from a graveyard onto the "
+    r"battlefield under your control|return target (?P<your_desc>.+? card) "
+    r"from your graveyard to the battlefield|return the top "
+    r"(?P<top_desc>.+? card) of your graveyard to the battlefield)"
+    r"(?:\. (?P<riders>.+))?$"
+)
+_REANIMATE_RIDERS: dict[str, tuple[str, object]] = {
+    "that creature gains haste until end of turn": ("haste", "until_end_of_turn"),
+    "that creature gains haste": ("haste", "permanent"),
+    "exile it at the beginning of the next end step": (
+        "exile_at_next_end_step", True,
+    ),
+    "you lose life equal to that card's mana value": (
+        "lose_life_equal_mv", True,
+    ),
+}
+_EACH_PLAYER_REANIMATES_RE = re.compile(
+    r"^each player puts (?P<desc>an? .+? card) from their graveyard onto "
+    r"the battlefield$"
+)
+_PUT_INTO_LIBRARY_RE = re.compile(
+    r"^put target (?P<desc>.+?) into its owner's library "
+    r"(?P<pos>second from the top|just beneath the top X cards of that "
+    r"library)(?:\. [Ii]ts controller gains (?P<life>\d+) life)?$"
+)
+_ALL_CREATURES_GET_UEOT_RE = re.compile(
+    r"^all creatures get (?P<p>[+-](?:\d+|X))/(?P<t>[+-](?:\d+|X)) "
+    r"until end of turn$"
+)
+
+
+def _pt_part(token: str) -> tuple[int, int]:
+    """``+2`` -> (2, 0); ``-X`` -> (0, -1)."""
+    sign = -1 if token[0] == "-" else 1
+    body = token[1:]
+    if body == "X":
+        return 0, sign
+    return sign * int(body), 0
+
+
+def _parse_reanimate(m: re.Match) -> Effect | None:
+    from mtg_bot.effects.generic.reanimation import (
+        ReturnCardFromGraveyardToBattlefield,
+    )
+
+    if m.group("any_desc") is not None:
+        source, desc = "target_any_graveyard", m.group("any_desc")
+    elif m.group("your_desc") is not None:
+        source, desc = "target_your_graveyard", m.group("your_desc")
+    else:
+        source, desc = "top_of_your_graveyard", m.group("top_desc")
+    # "target creature card" / "the top creature card" carry no article.
+    f = parse_card_descriptor("a " + desc)
+    if f is None:
+        return None
+    kwargs: dict = {}
+    riders = m.group("riders")
+    if riders is not None:
+        for sentence in riders.split(". "):
+            key = sentence[0].lower() + sentence[1:]
+            rider = _REANIMATE_RIDERS.get(key)
+            if rider is None or rider[0] in kwargs:
+                return None
+            kwargs[rider[0]] = rider[1]
+    return ReturnCardFromGraveyardToBattlefield(
+        card_filter=f, source=source, **kwargs,
+    )
+
+
 def _rest_fields(rest: str) -> tuple[str, bool]:
     if rest == "into your graveyard":
         return "graveyard", False
@@ -402,6 +473,45 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         for c in re.findall(r"\{([WUBRGC])\}", m.group("pips")):
             counts[c] = counts.get(c, 0) + 1
         return AddManaToPool(produces=tuple(counts.items()))
+    m = _REANIMATE_RE.match(phrase)
+    if m is not None:
+        return _parse_reanimate(m)
+    m = _EACH_PLAYER_REANIMATES_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.reanimation import (
+            EachPlayerPutsCardFromGraveyardOntoBattlefield,
+        )
+
+        f = parse_card_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return EachPlayerPutsCardFromGraveyardOntoBattlefield(card_filter=f)
+    m = _PUT_INTO_LIBRARY_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.reanimation import (
+            PutTargetPermanentIntoOwnersLibrary,
+        )
+
+        f = parse_permanent_descriptor("a " + m.group("desc"))
+        if f is None:
+            return None
+        return PutTargetPermanentIntoOwnersLibrary(
+            card_filter=f,
+            position=(
+                "second_from_top" if m.group("pos") == "second from the top"
+                else "beneath_top_x"
+            ),
+            controller_gains_life=int(m.group("life") or 0),
+        )
+    m = _ALL_CREATURES_GET_UEOT_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.mass_effects import PumpAllCreaturesUEOT
+
+        p, xp = _pt_part(m.group("p"))
+        t, xt = _pt_part(m.group("t"))
+        return PumpAllCreaturesUEOT(
+            power=p, toughness=t, x_power=xp, x_toughness=xt,
+        )
     m = _ADD_N_MANA_ANY_COMBINATION_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.base import AddManaToPool

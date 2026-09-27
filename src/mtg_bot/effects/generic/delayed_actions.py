@@ -154,3 +154,54 @@ class RemoveChargeCountersFromSourceDelayed(Effect):
         return (
             f"remove {self.amount} charge counters from this permanent"
         )
+
+
+def schedule_at_next_end_step(
+    state: "GameState", controller_id: int, source_id: int, effect: Effect,
+) -> None:
+    """Schedule ``effect`` as a delayed trigger "at the beginning of the
+    next end step" (CR 603.7) — whoever's turn that end step belongs to.
+
+    ``source_id`` is the object the effect acts on (read back through
+    ``state.resolving_source`` when the delayed trigger resolves). If the
+    current turn's end step has already begun, the trigger waits for the
+    following turn's end step.
+    """
+    from mtg_bot.turn import Step
+
+    fire_turn = state.turn_number
+    if state.step in (Step.END, Step.CLEANUP):
+        fire_turn += 1
+    state.delayed_triggers.append({
+        "fire_at_turn": fire_turn,
+        "controller_id": controller_id,
+        "source_id": source_id,
+        "effect": effect,
+        "any_player_end_step": True,
+    })
+
+
+@dataclass(frozen=True)
+class ExileSourceDelayed(Effect):
+    """Delayed-triggered "exile it" (Shallow Grave / Corpse Dance /
+    Goryo's Vengeance: "Exile it at the beginning of the next end
+    step."). Exiles the scheduled object if it is still on the
+    battlefield; no-op otherwise (CR 603.6c)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        ref = state.resolving_source
+        if ref is None:
+            return
+        obj = next((o for o in state.battlefield if o.id == ref.id), None)
+        if obj is None:
+            return
+        state.log.append(f"{obj.printing.name} is exiled (delayed trigger)")
+        move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return "exile it"

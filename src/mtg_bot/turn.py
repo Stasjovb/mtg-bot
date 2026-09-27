@@ -973,9 +973,15 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
     remaining: list[dict] = []
     to_push: list[dict] = []
     for entry in state.delayed_triggers:
+        # ``any_player_end_step`` entries ("at the beginning of the
+        # next end step") fire on whichever player's end step comes
+        # first; the rest fire on their controller's end step.
         fires_now = (
             entry["fire_at_turn"] == state.turn_number
-            and entry["controller_id"] == ap_id
+            and (
+                entry.get("any_player_end_step", False)
+                or entry["controller_id"] == ap_id
+            )
         )
         if fires_now:
             to_push.append(entry)
