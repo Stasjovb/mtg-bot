@@ -1057,6 +1057,20 @@ def _parse_activated_ability_line(
         # bodies (Survey Mechan) keep matching first.
         effect = _parse_effect(phrase[len("it "):])
     if effect is None:
+        # A multi-sentence body whose first sentence carries an in-
+        # sentence ``, then `` joiner (Wishclaw Talisman's "search your
+        # library for a card, put it into your hand, then shuffle. An
+        # opponent gains control of this artifact") defeats the compound
+        # splitter's joiner precedence; retry sentence by sentence. Only
+        # reached when the whole body failed to parse.
+        from mtg_bot.cards.parser.effects import (
+            _parse_effect_pieces,
+            _split_effect_sentences,
+        )
+        sentences = _split_effect_sentences(phrase)
+        if len(sentences) >= 2:
+            effect = _parse_effect_pieces(sentences)
+    if effect is None:
         return None
     ability = ActivatedAbility(
         cost=cost, effect=effect, sorcery_speed=sorcery_speed,

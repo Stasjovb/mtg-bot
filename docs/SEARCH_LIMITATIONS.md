@@ -18994,14 +18994,29 @@ the new mechanics; none changes EoE-pool behavior.
     defending player** (2-player engine) and reassigns control
     indefinitely by overwriting `controller_id` (same model as
     Sliver Overlord / Wishclaw Talisman), not via a layer-2 entry.
-11. **Sensei's Divining Top's reorder reuses `choose_card_from_library`**
-    (pick the card to put on top, then the next, …) instead of a
-    dedicated ordering hook; declining keeps the current order.
+11. **Sensei's Divining Top's reorder rides spells-B's `ReorderTopCards`**
+    (`effects/generic/card_flow.py`), which builds the order top-down
+    through `choose_card_from_library` picks instead of a dedicated
+    ordering hook.
 12. **Wizard's Rockets' "put into a graveyard from the battlefield"**
     uses the parser's existing LEAVES_BATTLEFIELD mapping for that
     phrase (also fires if exiled) — pre-existing simplification shared
     with Chromatic Star / Nutrient Block.
-13. **Synthesized creature tokens are colorless**
-    (`artifact_effects._synthesize_creature_token`) like every
-    registered token; `feature/cube-keywords` adds a color indicator
-    in its own token synthesizer — prefer that one when both merge.
+13. **Creature tokens are synthesized by the keyword substrate's
+    `keyword_actions._synthesize_creature_token_effect`** (carries
+    colors). The artifact bucket only adds the Pilot token's quoted
+    rider ("This token crews Vehicles as though its power were N
+    greater.") as `crew_power_bonus`; any other quoted rider leaves the
+    phrase unparsed rather than dropping the rider.
+14. **Enter-with-counters is one field.** The artifact bucket's
+    "enters with N <kind> counters" lines (Wishclaw Talisman's wish
+    counters, Reckoner Bankbuster's charge counters) ride the lands'
+    `enters_with_named_counters`; sunburst stays separate;
+    `put_into_battlefield` applies it through `add_counters` so
+    dedicated-kind counters (+1/+1, loyalty, charge) land on their
+    dedicated fields.
+15. **Activated abilities whose effect is several sentences** (Wishclaw
+    Talisman) fall back to a sentence-by-sentence parse in
+    `activated.py` only after the whole-effect parse failed; spell
+    text keeps the base compound grammar (so Ponder's nested shape is
+    unchanged).

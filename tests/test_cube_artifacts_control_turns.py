@@ -64,17 +64,20 @@ def _bear(name="Bear"):
 # --- grammar --------------------------------------------------------------
 
 def test_compound_sentence_fallback_when_then_split_fails():
-    eff = _parse_effect(
-        "search your library for a card, put it into your hand, then "
-        "shuffle. An opponent gains control of this artifact"
-    )
+    from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+    eff = _parse_activated_ability_line(
+        "{1}: Search your library for a card, put it into your hand, then "
+        "shuffle. An opponent gains control of this artifact."
+    ).effect
     # The tutor half is the base card-flow grammar's unrevealed search.
     assert isinstance(eff, Sequence)
     assert type(eff.effects[0]).__name__ == "SearchLibrary"
     assert eff.effects[0].reveal is False
     assert eff.effects[1] == OpponentGainsControlOfSource()
     # still rejects when no split works
-    assert _parse_effect("frobnicate, then shuffle. Wibble") is None
+    assert _parse_activated_ability_line(
+        "{1}: Frobnicate, then shuffle. Wibble."
+    ) is None
 
 
 @pytest.mark.parametrize("line,expected", [

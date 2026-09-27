@@ -3348,7 +3348,6 @@ def _activate_ability(
     # activator's hand goes to the graveyard; an empty hand is a legal
     # zero-card payment. Discard observers fire once per card.
     if ability.cost.discard_hand:
-        from mtg_bot.game import Zone
         from mtg_bot.turn import fire_opponent_discards_triggers
 
         p = state.player_by_id(player_id)

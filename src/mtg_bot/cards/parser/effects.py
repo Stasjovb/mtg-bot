@@ -3530,18 +3530,7 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
             return None
     else:
         return None
-    result = _parse_effect_pieces(pieces)
-    if result is None and pieces != _split_effect_sentences(phrase):
-        # The preferred in-sentence joiner split at the wrong boundary
-        # (Wishclaw Talisman's ``search your library for a card, put it
-        # into your hand, then shuffle. An opponent gains control of
-        # this artifact`` carries ``, then `` INSIDE its first
-        # sentence). Fall back to the sentence-boundary split; this only
-        # ever claims phrases the joiner split rejected outright.
-        sentences = _split_effect_sentences(phrase)
-        if len(sentences) >= 2:
-            result = _parse_effect_pieces(sentences)
-    return result
+    return _parse_effect_pieces(pieces)
 
 
 def _parse_effect_pieces(pieces: list[str]) -> Effect | None:
