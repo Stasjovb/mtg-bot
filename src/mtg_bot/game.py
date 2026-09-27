@@ -664,6 +664,8 @@ class GameObject:
     # Consumed by ``effective_colors`` when synthesizing layer-5
     # ``"add_colors"`` entries from this Painter source.
     painter_chosen_color: Optional[str] = None
+    # Player chosen "as this enters" (``chooses_player_as_enters``).
+    chosen_player_id: Optional[int] = None
     # Face-down marker. CR 701.34 / 707.2: a face-down permanent has
     # no name, no subtypes, and no abilities; it's a 2/2 creature.
     # We keep ``printing`` intact (so ``TurnFaceUp`` can read the

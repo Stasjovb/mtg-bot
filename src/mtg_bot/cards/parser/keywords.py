@@ -47,7 +47,9 @@ _KEYWORD_LINES: dict[str, str] = {
 # ``spells that are one or more colors``) doesn't match, so the card
 # stays unclaimed rather than carrying a keyword nothing enforces.
 _PROTECTION_PIECE = re.compile(
-    r"^[Pp]rotection from (?P<first>[a-z]+)(?P<rest>(?: and from [a-z]+)*)$"
+    r"^[Pp]rotection from "
+    r"(?P<first>the chosen player|each of your opponents|[a-z]+)"
+    r"(?P<rest>(?: and from [a-z]+)*)$"
 )
 
 

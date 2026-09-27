@@ -1007,6 +1007,10 @@ class CardPrinting:
     # interleaves correctly with Scuttlemutt-style set_colors per
     # CR 613 layer-5 timestamp rules.
     paints_all_objects_chosen_color_at_etb: bool = False
+    # "As this creature enters, choose a player." (True-Name Nemesis) —
+    # the chosen player's id lands on ``GameObject.chosen_player_id``
+    # (read by the ``protection from the chosen player`` quality).
+    chooses_player_as_enters: bool = False
     # Found Footage (Duskmourn): "You may look at face-down creatures
     # your opponents control any time." Today the engine doesn't model
     # hidden information for face-down permanents (the controller can
@@ -1240,6 +1244,7 @@ def make_creature(
     ward_discard_random: bool = False,
     ward_discard_chosen: bool = False,
     ward_life_cost: int = 0,
+    chooses_player_as_enters: bool = False,
     grants_additional_land_per_turn: int = 0,
     grants_play_lands_from_graveyard: bool = False,
     grants_look_at_top_of_library: bool = False,
@@ -1298,6 +1303,7 @@ def make_creature(
         ward_discard_random=ward_discard_random,
         ward_discard_chosen=ward_discard_chosen,
         ward_life_cost=ward_life_cost,
+        chooses_player_as_enters=chooses_player_as_enters,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         grants_look_at_top_of_library=grants_look_at_top_of_library,

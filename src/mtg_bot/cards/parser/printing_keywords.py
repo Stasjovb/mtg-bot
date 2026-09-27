@@ -137,6 +137,26 @@ def _parse_ward_discard_line(line: str) -> str | None:
 
 
 _WARD_PAY_LIFE_LINE = re.compile(r"^Ward—Pay (\d+) life\.$")
+
+
+def _parse_chooses_player_line(line: str) -> bool:
+    """``As this creature enters, choose a player.``"""
+    return line.strip() == "As this creature enters, choose a player."
+
+
+_SELF_HAS_KEYWORDS = re.compile(r"^This creature has (?P<body>.+)\.$")
+
+
+def _parse_self_has_keywords_line(line: str) -> frozenset[str] | None:
+    """``This creature has <keywords>.`` — a static that just states a
+    keyword the card always has (``This creature has protection from
+    the chosen player.``)."""
+    from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+    m = _SELF_HAS_KEYWORDS.match(line.strip())
+    if m is None:
+        return None
+    return _parse_keyword_grant_body(m.group("body"))
 _KEYWORDS_THEN_WARD = re.compile(
     r"^(?P<kws>.+), ward (?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
 )

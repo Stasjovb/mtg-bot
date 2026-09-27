@@ -3614,6 +3614,19 @@ def put_into_battlefield(
             state.log.append(
                 f"{obj.printing.name} enters; chose color {chosen}"
             )
+    # "As this creature enters, choose a player." (True-Name Nemesis).
+    if obj.printing.chooses_player_as_enters:
+        options = [("player", pl.id) for pl in state.players if not pl.has_lost]
+        agent = state.player_by_id(controller_id).agent
+        pick = agent.choose_target(state, controller_id, options) if agent else None
+        if pick not in options:
+            # Default: an opponent (the only sensible choice for the
+            # protection/punisher cards that ask).
+            pick = next(
+                (o for o in options if o[1] != controller_id), options[0],
+            )
+        obj.chosen_player_id = pick[1]
+        state.log.append(f"{obj.printing.name} enters; chose P{pick[1]}")
     # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's

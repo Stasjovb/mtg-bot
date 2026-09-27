@@ -49,6 +49,10 @@ PROTECTION_QUALITIES: frozenset[str] = frozenset(
         "colorless", "multicolored", "monocolored", "everything",
         "creatures", "artifacts", "enchantments", "instants",
         "sorceries", "planeswalkers",
+        # Player qualities (CR 702.16j): sources controlled by that
+        # player. Resolved against the protected object in
+        # ``is_protected_from``.
+        "the chosen player", "each of your opponents",
     }
 )
 
@@ -127,10 +131,19 @@ def is_protected_from(
     """True when ``obj`` has protection from a quality ``source`` has."""
     if source is None:
         return False
-    return any(
-        source_has_quality(state, source, q)
-        for q in protection_qualities(state, obj)
-    )
+    for q in protection_qualities(state, obj):
+        if q == "the chosen player":
+            if (
+                obj.chosen_player_id is not None
+                and source.controller_id == obj.chosen_player_id
+            ):
+                return True
+        elif q == "each of your opponents":
+            if source.controller_id != obj.controller_id:
+                return True
+        elif source_has_quality(state, source, q):
+            return True
+    return False
 
 
 def can_be_targeted_by(

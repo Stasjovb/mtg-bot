@@ -190,7 +190,7 @@ def test_source_has_quality(quality, cost, expected):
 
 def test_protection_keyword_rejects_unknown_quality():
     with pytest.raises(ValueError):
-        protection_keyword("the chosen player")
+        protection_keyword("the chosen ones")
 
 
 def test_protection_qualities_fold_printing_color_field():
@@ -323,7 +323,7 @@ def test_keyword_line_parses_shroud_exalted_and_protection():
 @pytest.mark.parametrize(
     "line",
     [
-        "Protection from the chosen player",
+        "Protection from the chosen ones",
         "Protection from spells that are one or more colors",
         "Flying, protection from purple",
     ],
@@ -340,7 +340,7 @@ def test_granted_keyword_body_accepts_protection_and_shroud():
     assert _parse_keyword_grant_body("hexproof and indestructible") == frozenset(
         {"hexproof", "indestructible"}
     )
-    assert _parse_keyword_grant_body("protection from the chosen player") is None
+    assert _parse_keyword_grant_body("protection from the chosen ones") is None
 
 
 # ---------------------------------------------------------------- prowess / menace / exalted
@@ -406,3 +406,73 @@ def test_granted_exalted_pumps_lone_attacker():
     _grant(state, helper, "exalted")
     _simulate_combat_step(state, [attacker.id])
     assert state.players[1].life == 18
+
+
+# ---------------------------------------------------------------- player-quality protection
+
+
+def test_true_name_nemesis_protection_from_chosen_player():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    tnn = OracleParserCardSource(pool="cube").get_printings()["True-Name Nemesis"]
+    assert tnn.chooses_player_as_enters
+    state = _state()
+    obj = state.new_object(tnn, 0, Zone.HAND)
+    put_into_battlefield(state, obj, 0)
+    # _RecordingAgent picks the first offered player (P0) — the engine
+    # honours the agent's choice.
+    assert obj.chosen_player_id == 0
+    obj.chosen_player_id = 1
+    theirs = _put(state, make_creature("Theirs", "{R}", 3, 3), 1)
+    mine = _put(state, make_creature("Mine", "{R}", 3, 3), 0)
+    assert is_protected_from(state, obj, theirs)
+    assert not is_protected_from(state, obj, mine)
+    assert not can_be_targeted_by(state, obj, theirs, 1)
+    assert not can_block(state, theirs, obj)
+
+
+def test_chosen_player_default_and_opponents_quality():
+    from mtg_bot.actions import put_into_battlefield
+
+    class _BadAgent(_RecordingAgent):
+        def choose_target(self, state, player_id, legal_targets):
+            return ("player", 99)
+
+    state = _state(agent0=_BadAgent())
+    card = make_creature("Chooser", "{1}", 1, 1, chooses_player_as_enters=True)
+    obj = state.new_object(card, 0, Zone.HAND)
+    put_into_battlefield(state, obj, 0)
+    assert obj.chosen_player_id == 1
+    guarded = _put(
+        state,
+        make_creature("Guarded", "{W}", 1, 1,
+                      keywords={protection_keyword("each of your opponents")}),
+        0,
+    )
+    assert is_protected_from(state, guarded, _put(state, make_creature("O", "{R}", 1, 1), 1))
+    assert not is_protected_from(state, guarded, _put(state, make_creature("M", "{R}", 1, 1), 0))
+    unset = _put(
+        state,
+        make_creature("Unset", "{W}", 1, 1,
+                      keywords={protection_keyword("the chosen player")}),
+        0,
+    )
+    assert not is_protected_from(state, unset, _put(state, make_creature("Q", "{R}", 1, 1), 1))
+
+
+def test_self_has_keywords_and_choose_player_lines():
+    from mtg_bot.cards.parser.printing_keywords import (
+        _parse_chooses_player_line,
+        _parse_self_has_keywords_line,
+    )
+
+    assert _parse_chooses_player_line("As this creature enters, choose a player.")
+    assert _parse_self_has_keywords_line("This creature has flying and haste.") == frozenset(
+        {"flying", "haste"}
+    )
+    assert _parse_self_has_keywords_line("This creature has banding.") is None
+    assert _parse_self_has_keywords_line("Flying") is None
+    assert _parse_keyword_line("Protection from each of your opponents") == (
+        "protection from each of your opponents",
+    )

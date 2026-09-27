@@ -101,6 +101,8 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_ward_line,
     _parse_ward_pay_life_line,
     _parse_keyword_line_with_ward,
+    _parse_chooses_player_line,
+    _parse_self_has_keywords_line,
     _parse_warp_castable_from_graveyard_line,
     _parse_warp_line,
     _parse_warp_with_life_cost_line,
@@ -328,6 +330,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward_discard_chosen = False
     ward_discard_random = False
     ward_life_cost = 0
+    chooses_player_as_enters = False
     devour: int = 0
     impending: str | None = None
     impending_count: int = 0
@@ -482,6 +485,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # somehow had two we keep the last — parity against the static
             # registry will catch drift.
             impending_count, impending = impending_result
+            continue
+        if _parse_chooses_player_line(line):
+            chooses_player_as_enters = True
+            continue
+        self_kws = _parse_self_has_keywords_line(line)
+        if self_kws is not None:
+            keywords.update(self_kws)
             continue
         if _parse_enters_tapped_line(line):
             # ``This creature enters tapped.`` — printing-level static
@@ -847,6 +857,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
         ward_life_cost=ward_life_cost,
+        chooses_player_as_enters=chooses_player_as_enters,
         devour_land_multiplier=devour,
         impending=impending,
         impending_count=impending_count,
