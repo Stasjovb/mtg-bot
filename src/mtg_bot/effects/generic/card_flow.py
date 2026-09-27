@@ -354,49 +354,6 @@ class EachPlayerDiscardsHand(Effect):
         return "each player discards their hand"
 
 
-@dataclass(frozen=True)
-class PutCardsFromHandOnTopOfLibrary(Effect):
-    """"Put N cards from your hand on top of your library in any order."
-    (Brainstorm's second half.)
-
-    Each pick goes through the controller's ``choose_discard`` hook (the
-    "which hand card do I give up" decision); every picked card is put
-    on top in turn, so the LAST pick ends on top. The cards stay known
-    to their owner (``reveal_to``).
-    """
-
-    amount: int = 1
-
-    def resolve(self, state, controller_id, targets=()):
-        from mtg_bot.game import Zone, reveal_to
-
-        p = state.player_by_id(controller_id)
-        moved = 0
-        for _ in range(self.amount):
-            if not p.hand:
-                break
-            chosen = p.hand[0]
-            if p.agent is not None:
-                picked = p.agent.choose_discard(
-                    state, controller_id, [c.id for c in p.hand],
-                )
-                chosen = _agent_pick(p.hand, picked) or p.hand[0]
-            p.hand.remove(chosen)
-            chosen.zone = Zone.LIBRARY
-            p.library.insert(0, chosen)
-            reveal_to(chosen, controller_id)
-            moved += 1
-        state.log.append(
-            f"P{controller_id} puts {moved} card(s) from hand on top of "
-            f"their library"
-        )
-
-    def describe(self) -> str:
-        return (
-            f"put {self.amount} card(s) from your hand on top of your "
-            f"library in any order"
-        )
-
 
 # ---------------------------------------------------------------------
 # Library search (tutors)

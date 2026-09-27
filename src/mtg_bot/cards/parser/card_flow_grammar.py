@@ -31,7 +31,6 @@ from mtg_bot.effects.generic.card_flow import (
     ExileThisSpell,
     LookAtTargetPlayersHand,
     LookAtTopCardsPutIntoHand,
-    PutCardsFromHandOnTopOfLibrary,
     ReorderTopCards,
     ReturnAllPermanentsToOwnersHands,
     ReturnTargetSpellToOwnersHand,
@@ -193,10 +192,6 @@ _SEARCH_TO_ZONE_RE = re.compile(
 _SEARCH_TO_TOP_RE = re.compile(
     r"^search your library for (?P<desc>.+? card)(?P<reveal>, reveal it)?, "
     r"then shuffle and put (?:that|the) card on top$"
-)
-_PUT_FROM_HAND_ON_TOP_RE = re.compile(
-    rf"^put (?P<n>{_AMT}) cards? from your hand on top of your library "
-    r"in any order$"
 )
 # Look at / reveal the top N, then a selection sentence (and optionally a
 # "put the rest ..." sentence), then optional trailing sentences.
@@ -597,12 +592,6 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         return SearchLibrary(
             card_filter=f, destination="top", reveal=m.group("reveal") is not None,
         )
-    m = _PUT_FROM_HAND_ON_TOP_RE.match(phrase)
-    if m is not None:
-        n = _amount(m.group("n"))
-        if not isinstance(n, int):
-            return None
-        return PutCardsFromHandOnTopOfLibrary(amount=n)
     m = _REORDER_TOP_N_RE.match(phrase)
     if m is not None:
         n = _amount(m.group("n"))

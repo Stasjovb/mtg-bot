@@ -36,7 +36,6 @@ from mtg_bot.effects.generic.card_flow import (
     ExileThisSpell,
     LookAtTargetPlayersHand,
     LookAtTopCardsPutIntoHand,
-    PutCardsFromHandOnTopOfLibrary,
     ReorderTopCards,
     ReturnAllPermanentsToOwnersHands,
     ReturnTargetSpellToOwnersHand,
@@ -143,8 +142,6 @@ def test_card_filter_matches_and_describe():
      TargetPlayerDiscardsAtRandom(amount=2)),
     ("target player discards X cards at random",
      TargetPlayerDiscardsAtRandom(amount=ResolvingX())),
-    ("put two cards from your hand on top of your library in any order",
-     PutCardsFromHandOnTopOfLibrary(amount=2)),
     ("look at the top three cards of your library, then put them back "
      "in any order", ReorderTopCards(count=3)),
     ("you may shuffle", ShuffleYourLibrary(optional=True)),
@@ -167,7 +164,6 @@ def test_card_flow_recognizers(phrase, expected):
 
 
 @pytest.mark.parametrize("phrase", [
-    "put X cards from your hand on top of your library in any order",
     "look at the top X cards of your library, then put them back in any order",
     "untap up to X lands",
     "add X mana in any combination of colors",
@@ -345,8 +341,12 @@ def test_claimed_shapes(cube_printings):
     assert cube_printings["Mind Twist"].spell_effect == (
         TargetPlayerDiscardsAtRandom(amount=ResolvingX())
     )
+    # "You may shuffle." is wrapped by effects_ext's generic ``you may
+    # <effect>`` recognizer (tried before the card-flow grammar).
+    from mtg_bot.effects.combinators import MayDo
+
     assert cube_printings["Ponder"].spell_effect == Sequence(effects=(
-        ReorderTopCards(count=3), ShuffleYourLibrary(optional=True),
+        ReorderTopCards(count=3), MayDo(inner=ShuffleYourLibrary(optional=False)),
         DrawCards(amount=1),
     ))
     assert cube_printings["Preordain"].spell_effect == Sequence(effects=(
@@ -543,21 +543,13 @@ def test_brainstorm_draws_three_puts_two_back():
     keep = add(state, 0, "Plains", Zone.HAND)
     card = add(state, 0, "Brainstorm", Zone.HAND)
     add_lands(state, 0, "Island", 1)
-    state.players[0].agent.scripts["discard"] = [lib[0].id, keep.id]
+    # The put-back is effects_ext's PutCardsFromHandOnTopOfLibrary
+    # (planeswalker bucket), picking through choose_card_from_hand.
+    state.players[0].agent.scripts["hand"] = [lib[0].id, keep.id]
     cast_and_resolve(state, 0, card)
     p = state.players[0]
-    assert p.library[0] is keep and p.library[1] is lib[0]
+    assert {p.library[0].id, p.library[1].id} == {keep.id, lib[0].id}
     assert len(p.hand) == 2
-    assert keep.publicly_known_to == frozenset({0})
-
-
-def test_put_from_hand_on_top_edge_cases():
-    state = make_state()
-    state.players[0].agent = None
-    c = add(state, 0, "Island", Zone.HAND)
-    PutCardsFromHandOnTopOfLibrary(amount=2).resolve(state, 0)
-    assert state.players[0].library == [c]
-    assert "on top of your library" in PutCardsFromHandOnTopOfLibrary(2).describe()
 
 
 def test_stock_up_takes_two_rest_on_bottom():

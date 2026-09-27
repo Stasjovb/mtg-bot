@@ -6928,21 +6928,21 @@ def _parse_effect(phrase: str) -> Effect | None:
         # activated-ability layer (``sorcery_speed=True``), not in the
         # effect body.
         return LockOrUnlockDoorOfTargetRoomYouControl()
-    # Card-flow grammar (targeted draw, tutors, hand disruption,
-    # look-at-top selection, wheels, mass zone moves) and then the
-    # planeswalker-bucket extension recognizers — both tried after every
+    # Planeswalker-bucket extension recognizers, then the card-flow
+    # grammar (targeted draw, tutors, hand disruption, look-at-top
+    # selection, wheels, mass zone moves) — both tried after every
     # recognizer above, so no phrase an older recognizer claims changes
-    # meaning. Card-flow first: its shapes are the more specific ones
-    # (effects_ext carries broad ``you may <effect>`` / ``if <cond>,
-    # <effect>`` wrappers).
-    from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
-
-    card_flow = parse_card_flow_effect(phrase)
-    if card_flow is not None:
-        return card_flow
+    # meaning. Where the two overlap (Brainstorm's put-back, "untap up to
+    # N lands", tuck-into-library, look-at-top-may-reveal) the extension
+    # recognizer, which landed first, keeps the phrase.
     from mtg_bot.cards.parser.effects_ext import parse_ext_effect
 
-    return parse_ext_effect(phrase)
+    ext = parse_ext_effect(phrase)
+    if ext is not None:
+        return ext
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
+
+    return parse_card_flow_effect(phrase)
 
 
 def _normalize_creature_effect_phrase(phrase: str) -> str:
