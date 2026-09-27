@@ -304,3 +304,80 @@ def test_delighted_halfling_mana_makes_legendary_spell_uncounterable():
     apply_action(state, 0, CastSpell(elves.id))
     assert not elves.cast_uncounterable
     assert not CounterTargetSpell._is_uncounterable(state, state.stack[-1])
+
+
+# ---------------------------------------------------------------------
+# Anointed Peacekeeper
+# ---------------------------------------------------------------------
+
+
+def test_anointed_peacekeeper_names_a_card_and_taxes_it():
+    from mtg_bot.creature_statics_wg import ability_cost_increase
+
+    pr = cube()["Anointed Peacekeeper"]
+    assert pr.chooses_card_name_as_enters
+    assert (pr.named_spell_cost_increase, pr.named_ability_cost_increase) == (2, 2)
+    state = make_state()
+    pk = put(state, 0, pr, Zone.HAND)
+    add_lands(state, 0, "Plains", 3)
+    bolt = put(state, 1, "Lightning Bolt", Zone.HAND)
+    put(state, 1, "Brainstorm", Zone.HAND)
+    # Names are offered sorted: Brainstorm, Lightning Bolt.
+    state.players[0].agent.scripts["mode"] = [1]
+    cast_and_resolve(state, 0, pk)
+    assert pk.chosen_card_name == "Lightning Bolt"
+    assert bolt.publicly_known_to  # the hand was looked at
+    # Opponent's Bolt costs {2} more; the controller's own doesn't.
+    assert apply_cost_reductions(bolt.printing, state, 1, bolt.printing.mana_cost).total == 3
+    assert apply_cost_reductions(bolt.printing, state, 0, bolt.printing.mana_cost).total == 1
+    state.active_player_idx = 1
+    state.priority_player_idx = 1
+    add_lands(state, 1, "Mountain", 2)
+    assert CastSpell(bolt.id) not in legal_actions(state, 1)
+    add_lands(state, 1, "Mountain", 1)
+    assert CastSpell(bolt.id) in legal_actions(state, 1)
+
+
+def test_peacekeeper_taxes_named_activated_abilities_not_mana_abilities():
+    from mtg_bot.creature_statics_wg import ability_cost_increase
+
+    state = make_state()
+    pk = put(state, 0, "Anointed Peacekeeper")
+    jace = put(state, 1, "Jace, the Mind Sculptor")
+    jace.loyalty_counters = 3
+    elves = put(state, 1, "Llanowar Elves")
+    pk.chosen_card_name = "Jace, the Mind Sculptor"
+    jace_ab = jace.printing.activated_abilities[0]
+    assert ability_cost_increase(state, jace, jace_ab) == 2
+    pk.chosen_card_name = "Llanowar Elves"
+    assert ability_cost_increase(state, elves, elves.printing.activated_abilities[0]) == 0
+    # A taxed loyalty ability needs {2}: not offered without mana.
+    pk.chosen_card_name = "Jace, the Mind Sculptor"
+    state.active_player_idx = 1
+    state.priority_player_idx = 1
+    acts = legal_actions(state, 1)
+    assert not any(
+        isinstance(a, ActivateAbility) and a.source_id == jace.id for a in acts
+    )
+    add_lands(state, 1, "Island", 2)
+    acts = legal_actions(state, 1)
+    act = next(
+        a for a in acts if isinstance(a, ActivateAbility) and a.source_id == jace.id
+    )
+    apply_action(state, 1, act)
+    assert all(
+        o.tapped for o in state.battlefield
+        if o.printing.name == "Island"
+    )
+
+
+def test_peacekeeper_with_empty_opponent_zones_names_nothing():
+    from mtg_bot.creature_statics_wg import choose_card_name_as_enters
+
+    state = make_state()
+    pk = put(state, 0, "Anointed Peacekeeper")
+    choose_card_name_as_enters(state, pk, 0)
+    assert pk.chosen_card_name is None
+    put(state, 1, "Brainstorm", Zone.GRAVEYARD)
+    choose_card_name_as_enters(state, pk, 0)
+    assert pk.chosen_card_name == "Brainstorm"

@@ -106,6 +106,17 @@ def _instant_speed_loyalty_activations(
                 and obj.loyalty_counters < ability.cost.loyalty
             ):
                 continue
+            # A named-card activation tax (Anointed Peacekeeper) adds mana.
+            from mtg_bot.creature_statics_wg import ability_cost_increase
+
+            if ability_cost_increase(state, obj, ability):
+                from mtg_bot.actions import _effective_ability_mana_cost
+
+                if not can_pay_cost(
+                    state, player_id,
+                    _effective_ability_mana_cost(state, obj, ability),
+                ):
+                    continue
             if ability.effect.requires_target():
                 state.resolving_source = obj
                 try:
@@ -626,7 +637,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                 and not ability.activate_only_if.matches(state, player_id)
             ):
                 continue
-            if ability.cost.mana is not None:
+            from mtg_bot.creature_statics_wg import ability_cost_increase
+
+            if ability.cost.mana is not None or ability_cost_increase(
+                state, card, ability,
+            ):
                 from mtg_bot.actions import _effective_ability_mana_cost
                 if not can_pay_cost(
                     state, player_id,
@@ -1275,7 +1290,11 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             # Cost payability checks. Apply ability-level mana
             # reductions (Dominion Bracelet: {X} less where X is
             # equipped creature's power) before checking.
-            if ability.cost.mana is not None:
+            from mtg_bot.creature_statics_wg import ability_cost_increase
+
+            if ability.cost.mana is not None or ability_cost_increase(
+                state, obj, ability,
+            ):
                 from mtg_bot.actions import _effective_ability_mana_cost
                 effective_mana = _effective_ability_mana_cost(state, obj, ability)
                 # Activation spend-restriction context: combine all the

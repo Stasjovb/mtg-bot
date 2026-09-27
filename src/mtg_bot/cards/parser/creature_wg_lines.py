@@ -439,6 +439,34 @@ def _parse_once_per_turn_graveyard_play(line: str, card: dict) -> WGLine | None:
     })
 
 
+_CHOOSE_NAME_AS_ENTERS_LINE = (
+    "As this creature enters, look at an opponent's hand, then choose any "
+    "card name."
+)
+_NAMED_SPELLS_COST_MORE_RE = re.compile(
+    r"^Spells your opponents cast with the chosen name cost \{(?P<n>\d+)\} "
+    r"more to cast\.$"
+)
+_NAMED_ABILITIES_COST_MORE_RE = re.compile(
+    r"^Activated abilities of sources with the chosen name cost "
+    r"\{(?P<n>\d+)\} more to activate unless they're mana abilities\.$"
+)
+
+
+def _parse_named_card_lines(line: str, card: dict) -> WGLine | None:
+    """Anointed Peacekeeper's three lines: the as-enters name choice and
+    the two named-card taxes (``creature_statics_wg``)."""
+    if line == _CHOOSE_NAME_AS_ENTERS_LINE:
+        return WGLine(fields={"chooses_card_name_as_enters": True})
+    m = _NAMED_SPELLS_COST_MORE_RE.match(line)
+    if m is not None:
+        return WGLine(fields={"named_spell_cost_increase": int(m.group("n"))})
+    m = _NAMED_ABILITIES_COST_MORE_RE.match(line)
+    if m is not None:
+        return WGLine(fields={"named_ability_cost_increase": int(m.group("n"))})
+    return None
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -455,6 +483,7 @@ _RECOGNIZERS = (
     _parse_activation_lock_line,
     _parse_backup_line,
     _parse_once_per_turn_graveyard_play,
+    _parse_named_card_lines,
 )
 
 

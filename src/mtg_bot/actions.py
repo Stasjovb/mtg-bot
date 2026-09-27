@@ -608,7 +608,7 @@ def apply_cost_reductions(
     # bucket): increases apply before reductions (CR 601.2f).
     from mtg_bot.creature_statics_wg import spell_cost_increase
 
-    increase = spell_cost_increase(state, printing)
+    increase = spell_cost_increase(state, printing, caster_id)
     if increase:
         cost = ManaCost(
             generic=cost.generic + increase, colored=cost.colored,
@@ -2969,8 +2969,17 @@ def _effective_ability_mana_cost(
     Clamps the generic portion at zero.
     """
     from mtg_bot.game import effective_power
+    from mtg_bot.creature_statics_wg import ability_cost_increase
 
     cost = ability.cost.mana
+    # Named-card activation tax (Anointed Peacekeeper).
+    increase = ability_cost_increase(state, source, ability)
+    if increase:
+        base = cost if cost is not None else ManaCost()
+        cost = ManaCost(
+            generic=base.generic + increase, colored=base.colored,
+            x_pips=base.x_pips, hybrid=base.hybrid, phyrexian=base.phyrexian,
+        )
     if cost is None:
         return cost
     if ability.cost.mana_reduced_by_source_power:
@@ -3061,7 +3070,9 @@ def _activate_hand_ability(
     ):
         return
     p = state.player_by_id(player_id)
-    if ability.cost.mana is not None:
+    from mtg_bot.creature_statics_wg import ability_cost_increase
+
+    if ability.cost.mana is not None or ability_cost_increase(state, card, ability):
         mana = _effective_ability_mana_cost(state, card, ability)
         if not can_pay_cost(state, player_id, mana):
             return
@@ -3247,7 +3258,9 @@ def _activate_ability(
     # X on the StackItem so the resolving effect can read it via
     # state.resolving_x_value.
     ability_x_value = 0
-    if ability.cost.mana is not None:
+    from mtg_bot.creature_statics_wg import ability_cost_increase
+
+    if ability.cost.mana is not None or ability_cost_increase(state, source, ability):
         mana = _effective_ability_mana_cost(state, source, ability)
         if mana.x_pips > 0:
             ability_x_value = _choose_and_apply_x(
@@ -4971,6 +4984,11 @@ def put_into_battlefield(
                 f"{obj.printing.name} enters; chose color {chosen}"
             )
     # "As this creature enters, choose a player." (True-Name Nemesis).
+    if obj.printing.chooses_card_name_as_enters:
+        # Anointed Peacekeeper (cube W/G bucket).
+        from mtg_bot.creature_statics_wg import choose_card_name_as_enters
+
+        choose_card_name_as_enters(state, obj, controller_id)
     if obj.printing.chooses_player_as_enters:
         options = [("player", pl.id) for pl in state.players if not pl.has_lost]
         agent = state.player_by_id(controller_id).agent

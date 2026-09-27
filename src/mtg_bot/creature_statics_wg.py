@@ -78,16 +78,81 @@ def forced_to_enter_tapped(
 # ---------------------------------------------------------------------
 
 
-def spell_cost_increase(state: "GameState", printing) -> int:
-    """Total generic increase "<Filter> spells cost {N} more to cast."
-    statics on the battlefield impose on casting ``printing`` (every
-    player's spells, CR 601.2f)."""
+def spell_cost_increase(
+    state: "GameState", printing, caster_id: "int | None" = None,
+) -> int:
+    """Total generic increase statics on the battlefield impose on
+    ``caster_id`` casting ``printing`` (CR 601.2f): "<Filter> spells cost
+    {N} more to cast." (every player's spells) and "Spells your
+    opponents cast with the chosen name cost {N} more to cast."."""
     total = 0
     for o in state.battlefield:
         for card_filter, amount in o.printing.spell_cost_increases:
             if card_filter.matches(printing):
                 total += amount
+        if (
+            o.printing.named_spell_cost_increase
+            and o.chosen_card_name == printing.name
+            and caster_id is not None
+            and caster_id != o.controller_id
+        ):
+            total += o.printing.named_spell_cost_increase
     return total
+
+
+def ability_cost_increase(state: "GameState", source, ability) -> int:
+    """"Activated abilities of sources with the chosen name cost {N} more
+    to activate unless they're mana abilities." (Anointed Peacekeeper)."""
+    if ability.is_mana_ability:
+        return 0
+    total = 0
+    for o in state.battlefield:
+        if (
+            o.printing.named_ability_cost_increase
+            and o.chosen_card_name is not None
+            and o.chosen_card_name == source.printing.name
+        ):
+            total += o.printing.named_ability_cost_increase
+    return total
+
+
+def choose_card_name_as_enters(
+    state: "GameState", obj: "GameObject", controller_id: int,
+) -> None:
+    """"As this creature enters, look at an opponent's hand, then choose
+    any card name." The opponent's hand is revealed to the controller;
+    the name is picked (``choose_mode``) among the names of the
+    opponent's cards the controller can see -- hand, graveyard and
+    battlefield (the offered set is narrowed from "any card name"; see
+    ``docs/SEARCH_LIMITATIONS.md``)."""
+    from mtg_bot.game import reveal_to
+
+    opponents = [
+        p for p in state.players if p.id != controller_id and not p.has_lost
+    ]
+    names: list[str] = []
+    for opp in opponents[:1]:
+        for c in opp.hand:
+            reveal_to(c, controller_id)
+        seen = list(opp.hand) + list(opp.graveyard) + [
+            o for o in state.battlefield
+            if o.controller_id == opp.id and not o.printing.is_token
+        ]
+        for c in seen:
+            if c.printing.name not in names:
+                names.append(c.printing.name)
+    names.sort()
+    obj.chosen_card_name = None
+    if not names:
+        return
+    idx = 0
+    agent = state.player_by_id(controller_id).agent
+    if agent is not None and len(names) > 1:
+        pick = agent.choose_mode(state, controller_id, names)
+        if isinstance(pick, int) and 0 <= pick < len(names):
+            idx = pick
+    obj.chosen_card_name = names[idx]
+    state.log.append(f"{obj.printing.name}: P{controller_id} names {names[idx]}")
 
 
 # ---------------------------------------------------------------------

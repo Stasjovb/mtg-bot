@@ -1361,6 +1361,14 @@ class CardPrinting:
     # spell (mana value <= N) from your graveyard.
     grants_retrace_to_nonland_permanents_during_your_turn: bool = False
     grants_once_per_turn_graveyard_play_mv: int = 0
+    # Anointed Peacekeeper: "As this creature enters, look at an
+    # opponent's hand, then choose any card name." plus the named-card
+    # taxes -- opponents' spells with the chosen name cost {N} more;
+    # activated abilities (not mana abilities) of sources with the
+    # chosen name cost {M} more (``creature_statics_wg``).
+    chooses_card_name_as_enters: bool = False
+    named_spell_cost_increase: int = 0
+    named_ability_cost_increase: int = 0
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

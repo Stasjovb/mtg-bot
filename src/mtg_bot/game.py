@@ -916,6 +916,9 @@ class GameObject:
     # it and you gain 2 life"), 0 when it has no such rider.
     graveyard_permission_used_turn: int = -1
     leaves_to_graveyard_exile_gain_life: int = 0
+    # The card name chosen as this permanent entered (Anointed
+    # Peacekeeper); ``None`` when none was chosen.
+    chosen_card_name: Optional[str] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
