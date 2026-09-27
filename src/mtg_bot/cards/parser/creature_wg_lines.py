@@ -192,7 +192,7 @@ def _parse_spells_cost_more_line(line: str, card: dict) -> WGLine | None:
 
 
 _CANT_BE_BLOCKED_BY_RE = re.compile(
-    r"^this creature can't be blocked by (?P<noun>creatures with .+)\.$"
+    r"^[Tt]his creature can't be blocked by (?P<noun>creatures with .+)\.$"
 )
 
 
@@ -256,7 +256,8 @@ def _parse_graveyard_arrival_line(line: str, card: dict) -> WGLine | None:
 # ---------------------------------------------------------------------
 
 _ENTERS_WITH_COUNTERS_RE = re.compile(
-    r"^this creature enters with (?P<counters>.+?) on (?:it|her|him)\.$"
+    r"^[Tt]his creature enters (?P<tapped>tapped )?with (?P<counters>.+?) on "
+    r"(?:it|her|him)\.$"
 )
 
 
@@ -271,7 +272,10 @@ def _parse_enters_with_counters_line(line: str, card: dict) -> WGLine | None:
     counters = parse_counter_list(m.group("counters"))
     if counters is None:
         return None
-    return WGLine(fields={"enters_with_named_counters": counters})
+    fields: dict = {"enters_with_named_counters": counters}
+    if m.group("tapped"):
+        fields["enters_tapped"] = True
+    return WGLine(fields=fields)
 
 
 _RECOGNIZERS = (

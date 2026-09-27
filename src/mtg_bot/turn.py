@@ -753,8 +753,11 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
     """
     was_creature = obj.printing.is_creature
     was_artifact = obj.printing.is_artifact
+    # Lands too: "Whenever you sacrifice a land" (Baloth Prime; cube W/G
+    # bucket). Every IS_SACRIFICED observer's predicate is typed.
+    was_land = obj.printing.is_land
     move_off_battlefield(state, obj, destination="graveyard")
-    if not (was_creature or was_artifact):
+    if not (was_creature or was_artifact or was_land):
         return
     # Phase-8 predicate-style dispatch: fire IS_SACRIFICED with the
     # sacrificed permanent as subject. The legacy per-key walks for

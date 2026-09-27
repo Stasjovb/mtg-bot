@@ -74,6 +74,14 @@ class UntapSelf(Effect):
             return
         if not source.tapped:
             return
+        if source.stun_counters > 0:
+            # CR 122.1d: a stunned permanent that would untap loses a
+            # stun counter instead (Baloth Prime's "untap this creature").
+            source.stun_counters -= 1
+            state.log.append(
+                f"{source.printing.name} stays tapped (stun counter removed)"
+            )
+            return
         source.tapped = False
         state.log.append(f"{source.printing.name} untaps")
 

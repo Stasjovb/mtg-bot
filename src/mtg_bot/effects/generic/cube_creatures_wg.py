@@ -1000,3 +1000,36 @@ class PutCountersOnTargetAndAddSubtype(Effect):
 
     def describe(self) -> str:
         return f"put counters on target creature; it becomes a {self.subtype}"
+
+
+@dataclass(frozen=True)
+class GrantKeywordsUEOTThenExplores(Effect):
+    """"Target <creature> gains <keywords> until end of turn. It
+    explores." (Seasoned Dungeoneer.)"""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.grant_keywords import GrantKeywords
+        from mtg_bot.effects.generic.keyword_actions import explore
+
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            obj = _target_object(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if obj is None:
+            return
+        ApplyEffect(
+            inner=GrantKeywords(keywords=self.keywords), ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", obj.id),))
+        explore(state, controller_id, obj)
+
+    def describe(self) -> str:
+        return "target creature gains keywords until end of turn; it explores"
