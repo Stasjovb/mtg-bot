@@ -12,7 +12,11 @@ every name in that tuple.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from mtg_bot.cards.base import CardPrinting
+from mtg_bot.cards.parser.printing_keywords import _parse_cycling_line
+from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.pools import load_pool_cards, resolve_pool_name, active_pool_name
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.creature_builder import _build_creature_printing
@@ -34,6 +38,74 @@ def _load_scryfall_data(pool: str | None = None) -> list[dict]:
     return load_pool_cards(pool)
 
 
+_BASIC_LAND_TYPES = frozenset({"Plains", "Island", "Swamp", "Mountain", "Forest"})
+
+
+def _split_hand_abilities(card: dict) -> tuple[dict, tuple]:
+    """Peel the hand-activated keyword lines (cycling family) off a
+    single-faced card's oracle text. Returns the card with those lines
+    removed (so every per-type builder sees only its own grammar) and
+    the parsed ``ActivatedAbility`` tuple for
+    ``CardPrinting.hand_activated_abilities``."""
+    text = card.get("oracle_text")
+    if not text or card.get("card_faces"):
+        return card, ()
+    if "Land" in card.get("type_line", ""):
+        # Land lines own their Cycling grammar (``parser.land_lines``).
+        return card, ()
+    kept: list[str] = []
+    abilities = []
+    for raw in text.split("\n"):
+        ability = _parse_cycling_line(_strip_reminder_text(raw))
+        if ability is None:
+            kept.append(raw)
+        else:
+            abilities.append(ability)
+    if not abilities:
+        return card, ()
+    stripped = dict(card)
+    stripped["oracle_text"] = "\n".join(kept)
+    return stripped, tuple(abilities)
+
+
+def _with_hand_abilities(printing: CardPrinting, abilities: tuple) -> CardPrinting:
+    if not abilities:
+        return printing
+    landcycling = printing.landcycling
+    if landcycling is None:
+        for ab in abilities:
+            subs = getattr(ab.effect, "subtypes", ())
+            if len(subs) == 1 and subs[0] in _BASIC_LAND_TYPES:
+                landcycling = (subs[0], ab.cost.mana_str)
+                break
+    return replace(
+        printing,
+        hand_activated_abilities=(
+            tuple(printing.hand_activated_abilities) + tuple(abilities)
+        ),
+        landcycling=landcycling,
+    )
+
+
+def _build_printing(card: dict) -> CardPrinting | None:
+    """Run the per-card-type builders in claim order."""
+    for builder in (
+        _build_room_printing,
+        _build_enchantment_printing,
+        _build_planeswalker_printing,
+        _build_creature_printing,
+        _build_spell_printing,
+        _build_land_printing,
+        _build_equipment_printing,
+        _build_spacecraft_printing,
+        _build_artifact_printing,
+    ):
+        built = builder(card)
+        if built is not None:
+            return built
+    return None
+
+
 class OracleParserCardSource:
     def __init__(self, pool: str | None = None) -> None:
         self._pool_name = (
@@ -41,25 +113,12 @@ class OracleParserCardSource:
         )
         printings: dict[str, CardPrinting] = {}
         for card in _load_scryfall_data(self._pool_name):
-            built = _build_room_printing(card)
-            if built is None:
-                built = _build_enchantment_printing(card)
-            if built is None:
-                built = _build_planeswalker_printing(card)
-            if built is None:
-                built = _build_creature_printing(card)
-            if built is None:
-                built = _build_spell_printing(card)
-            if built is None:
-                built = _build_land_printing(card)
-            if built is None:
-                built = _build_equipment_printing(card)
-            if built is None:
-                built = _build_spacecraft_printing(card)
-            if built is None:
-                built = _build_artifact_printing(card)
+            body, hand_abilities = _split_hand_abilities(card)
+            built = _build_printing(body)
             if built is not None:
-                printings[card["name"]] = built
+                printings[card["name"]] = _with_hand_abilities(
+                    built, hand_abilities,
+                )
         self._printings = printings
 
     @property

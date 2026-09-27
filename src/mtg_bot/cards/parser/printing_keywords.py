@@ -1071,3 +1071,62 @@ def _parse_hand_warp_grant_line(line: str):
         granted_warp_cost=parse_mana_cost(cost_str),
         granted_warp_cost_str=cost_str,
     )
+
+
+# ── Cycling family (CR 702.29) ────────────────────────────────────────
+#
+# ``Cycling {cost}``                 → discard this card: draw a card.
+# ``<Subtype>cycling {cost}``        → discard this card: search your
+#                                      library for a <Subtype> card,
+#                                      reveal it, put it into your
+#                                      hand, then shuffle (landcycling
+#                                      ``Plainscycling`` / typecycling
+#                                      ``Wizardcycling``).
+# ``Basic landcycling {cost}``       → ... for a basic land card.
+#
+# All three are hand-activated abilities with the cost "{cost},
+# Discard this card", instant speed. They land on
+# ``CardPrinting.hand_activated_abilities`` (see ``parser.source`` — the hand-
+# ability lines are peeled off once for every card type before the
+# per-type builder runs).
+_CYCLING_LINE = re.compile(
+    r"^(?:(?P<basic>Basic land)|(?P<sub>[A-Z][a-z]+))?cycling "
+    r"(?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+_CYCLING_BARE_LINE = re.compile(
+    r"^Cycling (?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_cycling_line(line: str) -> "ActivatedAbility | None":
+    """Return the hand-activated ``ActivatedAbility`` for a cycling-
+    family keyword line, else ``None``."""
+    from mtg_bot.cards.base import (
+        ActivatedAbility, ActivationCost, DrawCards, parse_mana_cost,
+    )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+
+    stripped = line.strip()
+    bare = _CYCLING_BARE_LINE.match(stripped)
+    if bare is not None:
+        cost_str = bare.group("cost")
+        effect = DrawCards(amount=1)
+    else:
+        m = _CYCLING_LINE.match(stripped)
+        if m is None or not (m.group("basic") or m.group("sub")):
+            return None
+        cost_str = m.group("cost")
+        if m.group("basic"):
+            effect = SearchLibraryForCard(filter_name="basic_land")
+        else:
+            effect = SearchLibraryForCard(
+                filter_name="subtype", subtypes=(m.group("sub"),),
+            )
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost(cost_str),
+            mana_str=cost_str,
+            discard_self=True,
+        ),
+        effect=effect,
+    )

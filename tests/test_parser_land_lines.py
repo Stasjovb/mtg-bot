@@ -335,13 +335,16 @@ def test_cycling_dedups_same_name_copies(cube):
     assert b.id not in {x.source_id for x in acts}
 
 
-def test_cycling_not_offered_outside_sorcery_window(cube):
+def test_cycling_offered_at_instant_speed(cube):
+    # CR 702.29a: cycling has no timing restriction — hand-activated
+    # abilities are enumerated before the sorcery-window early return
+    # (feature/cube-keywords).
     state = _state()
     triome = _in_hand(state, cube["Ketria Triome"])
     for _ in range(3):
         _put(state, ISLAND)
     state.step = Step.UPKEEP
-    assert ActivateAbility(triome.id, 0) not in legal_actions(state, 0)
+    assert ActivateAbility(triome.id, 0) in legal_actions(state, 0)
 
 
 def test_cycling_pays_discards_and_draws(cube):

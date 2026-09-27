@@ -46,6 +46,10 @@ class SearchLibraryForCard(Effect):
     filter_name: str
     max_mv: int = 0
     may_fail: bool = True
+    # ``filter_name="subtype"``: any card with one of these subtypes
+    # (landcycling "Search your library for a Plains card", typecycling
+    # "... for a Wizard card").
+    subtypes: tuple[str, ...] = ()
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name
@@ -88,6 +92,8 @@ class SearchLibraryForCard(Effect):
         # convention.
         if fn == "demon":
             return "Demon" in printing.subtypes
+        if fn == "subtype":
+            return any(s in printing.subtypes for s in self.subtypes)
         return False
 
     def resolve(
@@ -129,8 +135,12 @@ class SearchLibraryForCard(Effect):
         shuffle_library(state, controller_id)
 
     def describe(self) -> str:
+        what = (
+            " or ".join(self.subtypes) if self.filter_name == "subtype"
+            else self.filter_name
+        )
         return (
-            f"search your library for a {self.filter_name} card, reveal "
+            f"search your library for a {what} card, reveal "
             f"it, put it into your hand, then shuffle"
         )
 

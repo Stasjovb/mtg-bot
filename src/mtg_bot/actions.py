@@ -2184,6 +2184,8 @@ def _activate_hand_ability(
     p = state.player_by_id(player_id)
     if ability.cost.mana is not None:
         mana = _effective_ability_mana_cost(state, card, ability)
+        if not can_pay_cost(state, player_id, mana):
+            return
         auto_tap_for_cost(state, player_id, mana, spell_kind="spell")
     targets = _choose_ability_targets(state, player_id, card, ability.effect)
     cost_paid_objects: list[GameObject] = []
@@ -2197,6 +2199,24 @@ def _activate_hand_ability(
         )
         fire_opponent_discards_triggers(state, player_id)
         cost_paid_objects.append(card)
+    elif ability.cost.exile_self:
+        # "Exile this card from your hand" (Simian Spirit Guide shape).
+        p.hand.remove(card)
+        card.zone = Zone.EXILE
+        p.exile.append(card)
+        state.log.append(
+            f"P{player_id} exiles {card.printing.name} from hand "
+            f"(cost for its ability)"
+        )
+        cost_paid_objects.append(card)
+    if ability.is_mana_ability:
+        # CR 605.3a: mana abilities resolve immediately.
+        state.resolving_source = card
+        try:
+            ability.effect.resolve(state, player_id, targets)
+        finally:
+            state.resolving_source = None
+        return
     state.stack.append(
         StackItem(
             source=card,

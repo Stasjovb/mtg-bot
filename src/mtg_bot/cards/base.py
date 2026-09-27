@@ -1107,19 +1107,10 @@ class CardPrinting:
     # Islandcycling {2} as ``("Island", "{2}")``, etc. ``None`` when
     # the card has no landcycling.
     #
-    # Today this field is **purely declarative**: the parser populates
-    # it from the printed ``Plainscycling/Islandcycling/...`` line so
-    # the printing accurately reflects oracle text, but the engine
-    # does NOT yet enumerate hand-activated abilities, so the
-    # cycling cost cannot actually be paid in simulation. Activation
-    # support requires (1) ``legal_actions`` to enumerate from-hand
-    # ability activations against this field and (2) an
-    # ``ActivationCost.discard_self`` cost atom. Both lifts are
-    # follow-up work that this batch deliberately scopes out — keeping
-    # the printing-level field distinct from the activation pipeline
-    # mirrors the precedent set by ``warp_castable_from_graveyard``
-    # and ``warp_additional_life_cost`` (declarative metadata stored
-    # on the printing; activation logic plumbs separately).
+    # This field is descriptive metadata; the ACTIVATABLE ability lives
+    # on ``hand_activated_abilities`` (the oracle parser's source layer peels every
+    # cycling-family line into a hand-activated ``ActivatedAbility``
+    # with a ``discard_self`` cost and fills this tuple from it too).
     landcycling: tuple[str, str] | None = None
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
@@ -1265,6 +1256,7 @@ def make_creature(
     enters_tapped: bool = False,
     must_be_blocked_if_able: bool = False,
     landcycling: tuple[str, str] | None = None,
+    hand_activated_abilities: tuple["ActivatedAbility", ...] = (),
     enters_with_plus_one_counter_if_creature_died_this_turn: bool = False,
     enters_with_minus_one_counters_from_hand_cast: int = 0,
     spell_is_uncounterable: bool = False,
@@ -1332,6 +1324,7 @@ def make_creature(
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
         landcycling=landcycling,
+        hand_activated_abilities=tuple(hand_activated_abilities),
         enters_with_plus_one_counter_if_creature_died_this_turn=(
             enters_with_plus_one_counter_if_creature_died_this_turn
         ),
