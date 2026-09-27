@@ -18821,3 +18821,34 @@ incomplete CR conformance), add a section here with:
 **Impact estimate.** Strength cost only for cube decks running these lands; no EoE printing sets any of the new fields, so EoE behavior and Rust parity are unchanged.
 
 **Pinned by:** `tests/test_parser_land_lines.py`, `tests/test_cube_land_mechanics.py`, `tests/test_cube_land_mechanics_batch2.py`, `tests/test_cube_land_mechanics_batch3.py`.
+
+## Cube planeswalker bucket — engine shortcuts behind the claimed walkers (2026-09-27, `feature/cube-planeswalkers`)
+
+Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of Mysteries, Narset Parter of Veils, Teferi Time Raveler, Minsc & Boo, Jace the Mind Sculptor, Teferi Hero of Dominaria, Dack Fayden (plus Tezzeret, Cruel Captain, unchanged). Each shortcut below is deliberate; none drops a printed clause.
+
+**1. Search auto-pass doesn't know the new instant-speed permissions.**
+*Where:* `src/mtg_bot/search/_player_capabilities.py` (`_instant_speed_castable_in_hand`, `_has_instant_speed_activatable`) vs `src/mtg_bot/legal.py` (`_instant_speed_loyalty_activations`, `_may_cast_sorceries_as_flash`). *What:* `legal_actions` now offers The Wandering Emperor's loyalty abilities outside sorcery timing the turn she entered, and sorcery spells at instant speed under Teferi, Time Raveler's +1. The search-side capability short-circuit still believes no activated ability and no sorcery is ever usable off sorcery timing, so an MCTS/PIMC seat auto-passes those priority windows. Non-search agents (random / heuristic / UI) see the full legal set. Search code was out of scope for this bucket. *Failure mode:* under search, Emperor's flash-in-then-activate line and Teferi's +1 are never used off sorcery timing (Emperor still gets her sorcery-speed activations). *Fix scope:* two structural checks in the capability module (+ the hash already covers `continuous_effects` length and permanent shape) — under an hour. *Impact:* strength-only (missed lines for the two cards); zero perf cost.
+
+**2. Minsc & Boo's reflexive "When you do" target is chosen at activation.**
+*Where:* `effects/generic/cube_walkers.py::SacrificeCreatureThenDamageEqualToItsPower`. Same precedent as Boilerbilges Ripper / Selfcraft Mechan: the any-target for "deals X damage" is picked when the -2 is activated (before the sacrifice and before X is known) and the damage + Hamster draw resolve inline, not as a separate reflexive trigger opponents can respond to. *Failure mode:* the controller can't retarget after seeing which creature was sacrificed; opponents get no priority window between the sacrifice and the damage. *Fix scope:* a reflexive-trigger substrate (push a synthetic TriggeredAbility mid-resolution with its own target selection), ~1 cycle, shared with the precedents. *Impact:* small strength distortion only.
+
+**3. "At the beginning of the next end step" rides the controller's own end step.**
+*Where:* `cube_walkers.py::AtBeginningOfNextEndStep` on `state.delayed_triggers` (`turn.run_delayed_end_step_triggers` fires entries on the scheduling controller's turn). Correct for every producer in the pool (Teferi, Hero of Dominaria's +1 is sorcery-speed, so the next end step is this turn's). An instant-speed producer during an opponent's turn would fire at its controller's next end step instead of the opponent's. The recognizer only claims untargeted delayed effects (a delayed trigger's targets would be chosen when it triggers). *Fix scope:* key queue entries on the upcoming end step instead of the controller's turn, ~half a cycle.
+
+**4. Planeswalkers take burn but not combat damage.**
+*Where:* `effects/base.py::_apply_damage` now removes loyalty for a `("planeswalker", id)` damage target (CR 120.3c), so "any target" burn aimed at a walker works. Attacking a planeswalker (CR 506.3 / 508.1b) is still unmodeled — `combat.py` has no walker defenders, and changing attack declarations touches the action encoding / training code. *Failure mode:* planeswalkers are only answerable by spells/abilities, never by combat; walkers are stronger than printed. *Fix scope:* a combat-defender substrate + action-encoding extension, multi-cycle.
+
+**5. "<name> can be your commander." has no in-game effect.**
+*Where:* `cards/parser/planeswalker_builder.py::_CAN_BE_YOUR_COMMANDER_LINE`. A deck-construction permission (CR 903.3d) that only matters in the Commander variant; the engine plays no format with a command-zone commander, so there is nothing observable to model.
+
+**6. Synthesized tokens are colorless.**
+*Where:* `cards/parser/effects_ext.py` (`_CREATE_STAT_TOKEN`, `_CREATE_NAMED_TOKEN`) → `make_token_creature`. Printed P/T, subtypes, keywords, legendary and artifact are carried; color is not, because a printing's color comes from its mana cost and tokens have none (same gap as every registered `TOKEN_PRINTINGS` entry). *Failure mode:* "permanent that's one or more colors", protection-from-color, color-matters counts misjudge tokens. *Fix scope:* a `color_indicator` on `CardPrinting` read by `effective_colors`, ~half a cycle.
+
+**7. Winning the game preempts a same-resolution empty-library draw.**
+*Where:* `turn.py::win_the_game`. The engine records "drew from an empty library" as an immediate loss in `draw_card`; the rules make it a state-based action (CR 704.5b). `win_the_game` therefore clears that pending flag for the winner (only that reason) — matching Jace, Wielder of Mysteries' -8 ("Draw seven cards. Then if your library has no cards in it, you win the game."), where the win happens before any SBA check.
+
+**8. Indefinite control changes set `controller_id` directly; the tuck bypasses `move_off_battlefield`.**
+*Where:* `cube_walkers.py::GainControlOfTargetPermanently` / `GainControlOfTriggeringSpellTargets` (Dack Fayden) follow `GainControlOfTargetSliverPermanently`'s precedent (no layer-2 registry entry; a later UEOT steal's cleanup revert can snap control back to its captured baseline). `PutTargetIntoOwnersLibraryNthFromTop` (Teferi, Hero of Dominaria's -3) leaves the battlefield the way `_bounce_to_hand` does — no leaves-the-battlefield triggers fire for the tucked permanent. *Fix scope:* route both through the registry / `move_off_battlefield` with a library destination, ~half a cycle.
+
+**9. New per-turn / per-object state isn't in the search fingerprint.**
+*Where:* `Player.cards_drawn_this_turn` (Narset's cap) and `GameObject.entered_battlefield_turn` (Emperor's static) are not hashed by `search/canonical_state.py` / `search/info_set.py` (search code out of scope). *Failure mode:* two states differing only in those fields share a transposition entry — e.g. an opponent's second draw under Narset. Rare and bounded.
