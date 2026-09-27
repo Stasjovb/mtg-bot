@@ -68,7 +68,8 @@ printings whose claimed shape EoE parity probes pin.
 The compositional target noun-phrase parser
 (:func:`parse_target_noun_phrase`) covers
 ``[<adjectives> ]<type>[, <type>][, or|or <type>][ an opponent
-controls| you control][ with <qualifier>]``.
+controls| you control][ with <qualifier>]``, where a capitalized
+``<type>`` is a subtype (``target Wolf you control``).
 """
 
 from __future__ import annotations
@@ -105,6 +106,7 @@ from mtg_bot.effects.object_predicates import (
     ControlledByOpponent,
     ControlledByYou,
     HasKeyword,
+    HasSubtype,
     IsArtifact,
     IsAttacking,
     IsBattle,
@@ -155,6 +157,9 @@ _CONTROLLER_SUFFIXES: tuple[tuple[str, ObjectPredicate], ...] = (
 )
 
 _WITH_MANA_VALUE = re.compile(r"^mana value (\d+) or (greater|less)$")
+# A permanent subtype used as a target noun (cube W/G creature bucket:
+# Bejeweled Warg's "target Wolf you control").
+_SUBTYPE_NOUN = re.compile(r"^[A-Z][a-z]+$")
 
 
 def _keyword_names() -> frozenset[str]:
@@ -218,14 +223,20 @@ def parse_target_noun_phrase(phrase: str) -> ObjectPredicate | None:
     while words and words[0].rstrip(",") in _ADJECTIVES and len(words) > 1:
         adjectives.append(_ADJECTIVES[words.pop(0).rstrip(",")])
     types = _split_type_list(" ".join(words))
-    if types is None or not all(t in _TYPE_NOUNS for t in types):
+    if types is None or not all(
+        t in _TYPE_NOUNS or _SUBTYPE_NOUN.match(t) for t in types
+    ):
         return None
     if qualifier is not None and len(types) > 1:
         # "artifact, enchantment, or creature with flying" binds the
         # qualifier to the LAST noun only; per-noun qualifier scoping
         # isn't modeled, so decline rather than over-apply it.
         return None
-    type_preds = [_TYPE_NOUNS[t] for t in types]
+    # A capitalized noun is a subtype ("target Wolf you control",
+    # "target Equipment"): any permanent with that effective subtype.
+    type_preds = [
+        _TYPE_NOUNS[t] if t in _TYPE_NOUNS else HasSubtype(t) for t in types
+    ]
     result: ObjectPredicate
     if any(p is None for p in type_preds):
         # "permanent" anywhere in the union admits every permanent --

@@ -21,6 +21,16 @@ Shapes:
 * ``create a number of <P>/<T> <color> <Subtypes> creature tokens equal
   to this creature's power`` -> :class:`CreateTokensEqualToSourcePower`
   (Jacked Rabbit)
+* ``you and target opponent each draw N card(s)`` ->
+  :class:`YouAndTargetOpponentEachDraw` (Loran of the Third Path)
+* ``return target <artifact|creature|land> card with mana value N or less
+  from your graveyard to your hand`` -> ``ReturnFromGraveyard`` (Auriok
+  Salvagers)
+* ``you may discard a card. If you do, <effect>`` ->
+  ``IfYouDo(MayDo(DiscardSelf(1)), <effect>)`` (Formidable Speaker)
+* ``put <a filter> card from your hand onto the battlefield[ tapped]`` ->
+  :class:`PutCardFromHandOntoBattlefield` (Stoneforge Mystic; "you may"
+  composes through the extension grammar's ``MayDo``)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -56,6 +66,20 @@ _TOKENS_EQUAL_TO_POWER_RE = re.compile(
     r"(?P<color>white|blue|black|red|green|colorless) "
     r"(?P<sub>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature tokens equal to this "
     r"creature's power$"
+)
+_YOU_AND_TARGET_OPPONENT_DRAW_RE = re.compile(
+    r"^you and target opponent each draw (?P<n>a|two|three|\d+) cards?$"
+)
+_RETURN_TYPED_CARD_WITH_MV_TO_HAND_RE = re.compile(
+    r"^return target (?P<type>artifact|creature|land) card with mana value "
+    r"(?P<mv>\d+) or less from your graveyard to your hand$"
+)
+_MAY_DISCARD_IF_YOU_DO_RE = re.compile(
+    r"^you may discard a card\. If you do, (?P<rest>.+)$"
+)
+_PUT_CARD_FROM_HAND_ONTO_BATTLEFIELD_RE = re.compile(
+    r"^put (?P<desc>an? .+? card) from your hand onto the battlefield"
+    r"(?P<tapped> tapped)?$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -113,6 +137,41 @@ def parse_wg_effect(phrase: str) -> Effect | None:
                 colors=(color,) if color else (),
             ),
         )
+    m = _YOU_AND_TARGET_OPPONENT_DRAW_RE.match(phrase)
+    if m is not None:
+        n = m.group("n")
+        return wg.YouAndTargetOpponentEachDraw(
+            amount={"a": 1, "two": 2, "three": 3}.get(n) or int(n),
+        )
+    m = _RETURN_TYPED_CARD_WITH_MV_TO_HAND_RE.match(phrase)
+    if m is not None and int(m.group("mv")) > 0:
+        from mtg_bot.effects.generic.graveyard import ReturnFromGraveyard
+
+        kind = m.group("type")
+        return ReturnFromGraveyard(**{
+            kind: True, "max_mv": int(m.group("mv")),
+            "destination": "hand", "target_kind": f"graveyard_{kind}",
+        })
+    m = _MAY_DISCARD_IF_YOU_DO_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.combinators import IfYouDo, MayDo
+        from mtg_bot.effects.generic.discard import DiscardSelf
+
+        rest = _parse_effect(m.group("rest"))
+        if rest is not None:
+            return IfYouDo(
+                do_action=MayDo(inner=DiscardSelf(amount=1)), then_action=rest,
+            )
+    m = _PUT_CARD_FROM_HAND_ONTO_BATTLEFIELD_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        f = parse_card_descriptor(m.group("desc"))
+        if f is not None:
+            return wg.PutCardFromHandOntoBattlefield(
+                card_filter=f, optional=False, tapped=bool(m.group("tapped")),
+            )
     m = _EXILE_UNTIL_OPPONENT_MONARCH_RE.match(phrase)
     if m is not None:
         spec = _target_spec(m.group("noun"), bool(m.group("upto")))

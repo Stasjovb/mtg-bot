@@ -440,3 +440,85 @@ class CreateTokensEqualToSourcePower(Effect):
             f"create a number of {self.token_printing.name} tokens equal to "
             f"this creature's power"
         )
+
+
+# ---------------------------------------------------------------------
+# Card flow (Loran, Stoneforge Mystic)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class YouAndTargetOpponentEachDraw(Effect):
+    """"You and target opponent each draw N cards." (Loran of the Third
+    Path.)"""
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import draw_n_cards
+
+        draw_n_cards(state, controller_id, self.amount)
+        opp = _chosen_player(state, targets)
+        if opp is not None:
+            draw_n_cards(state, opp.id, self.amount)
+
+    def describe(self) -> str:
+        return f"you and target opponent each draw {self.amount} card(s)"
+
+
+@dataclass(frozen=True)
+class PutCardFromHandOntoBattlefield(Effect):
+    """"[You may ]put <a filter> card from your hand onto the battlefield."
+    (Stoneforge Mystic's Equipment.) The card is picked with
+    ``choose_card_from_library`` (the zone-agnostic pick hook the other
+    put-from-hand effects use); with ``optional`` the pick may be
+    declined (``None``)."""
+
+    card_filter: "object" = None
+    optional: bool = True
+    tapped: bool = False
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        if not options:
+            return False
+        picked = None
+        if p.agent is not None:
+            picked = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == picked), None)
+        if card is None:
+            if self.optional:
+                state.log.append(
+                    f"P{controller_id} puts nothing onto the battlefield"
+                )
+                return False
+            card = options[0]
+        p.hand.remove(card)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the battlefield"
+        )
+        put_into_battlefield(state, card, controller_id)
+        if self.tapped:
+            card.tapped = True
+        return True
+
+    def describe(self) -> str:
+        may = "you may " if self.optional else ""
+        return (
+            f"{may}put {self.card_filter.describe()} from your hand onto the "
+            f"battlefield"
+        )

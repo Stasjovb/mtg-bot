@@ -83,6 +83,7 @@ _DESCRIPTOR_RE = re.compile(
     r"(?: with mana value (?P<mv>\d+) or less)?$"
 )
 _PERMANENT_DESCRIPTOR_RE = re.compile(r"^(?:a|an) (?P<body>.+)$")
+_SUBTYPE_WORD_RE = re.compile(r"^[A-Z][a-z]+$")
 
 
 def _parse_descriptor_body(body: str) -> CardFilter | None:
@@ -98,6 +99,7 @@ def _parse_descriptor_body(body: str) -> CardFilter | None:
     excluded: list[str] = []
     color = None
     supertype = None
+    subtype = None
     for part in body.split(", "):
         alternatives = part.split(" or ")
         if len(alternatives) > 1:
@@ -116,6 +118,9 @@ def _parse_descriptor_body(body: str) -> CardFilter | None:
                 supertype = _SUPERTYPE_WORDS[word]
             elif word in _TYPE_WORDS and not any_types:
                 any_types.append(_TYPE_WORDS[word])
+            elif _SUBTYPE_WORD_RE.match(word) and subtype is None:
+                # "an Equipment card", "a Wolf" (cube W/G creatures).
+                subtype = word
             else:
                 return None
     return CardFilter(
@@ -123,6 +128,7 @@ def _parse_descriptor_body(body: str) -> CardFilter | None:
         excluded_types=tuple(excluded),
         color=color,
         supertype=supertype,
+        subtype=subtype,
     )
 
 
@@ -140,6 +146,7 @@ def parse_card_descriptor(text: str) -> CardFilter | None:
         f = CardFilter(
             any_types=f.any_types, excluded_types=f.excluded_types,
             max_mv=int(m.group("mv")), color=f.color, supertype=f.supertype,
+            subtype=f.subtype,
         )
     return f
 

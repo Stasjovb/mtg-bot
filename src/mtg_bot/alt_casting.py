@@ -69,6 +69,11 @@ def permanent_matches_filter(state: "GameState", obj: "GameObject", card_filter)
         return False
     if card_filter.supertype is not None and card_filter.supertype not in pr.supertypes:
         return False
+    if card_filter.subtype is not None:
+        from mtg_bot.game import effective_subtypes
+
+        if card_filter.subtype not in effective_subtypes(state, obj):
+            return False
     return True
 
 
