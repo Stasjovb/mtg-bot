@@ -14,6 +14,8 @@
 #   S2_CONFIG           launch TOML (default configs/launch/s2_corpus.toml)
 #   S2_GAMES_PER_BATCH  games per batch (default 1500)
 #   S2_SEED             (default 1)
+#   S2_NODES / S2_SAMPLES  search depth override (default: the TOML's, 400 / 2)
+#   S2_TIMEOUT          per-game timeout seconds (default 900; raise for deep search)
 set -euo pipefail
 WT="$(cd "$(dirname "$0")/../.." && pwd)"
 MAIN="/c/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot"
@@ -60,6 +62,7 @@ for _ in $(seq 1 "$N"); do
     --data-dir "$DATA_DIR" --scalar-schema-version 2 \
     --self-play-evaluator heuristic --corpus-only \
     --corpus-batch "$target" \
-    --per-game-timeout-sec 900 --seed "$SEED"
+    ${S2_NODES:+--iter.nodes "$S2_NODES"} ${S2_SAMPLES:+--iter.samples "$S2_SAMPLES"} \
+    --per-game-timeout-sec "${S2_TIMEOUT:-900}" --seed "$SEED"
 done
 echo "[s2-wt] $(date -u +%FT%TZ) done"
