@@ -649,11 +649,26 @@ _PITCH_ALT_COST_LINE_RE = re.compile(
 )
 
 
+# "Splice onto <subtype> {cost}" (CR 702.47) -> ``splice_onto`` /
+# ``splice_cost``.
+_SPLICE_LINE_RE = re.compile(
+    r"^Splice onto (?P<sub>[A-Z][a-z]+) (?P<cost>(?:\{[^}]+\})+)$"
+)
+
+
 def _casting_keyword_fields(clause: str) -> dict | None:
     """``CardPrinting`` fields for a casting-keyword line, or ``None``
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
+    m = _SPLICE_LINE_RE.match(clause.strip())
+    if m is not None:
+        cost = m.group("cost")
+        return {
+            "splice_onto": m.group("sub"),
+            "splice_cost": parse_mana_cost(cost),
+            "splice_cost_str": cost,
+        }
     m = _PITCH_ALT_COST_LINE_RE.match(clause.strip())
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
@@ -1536,6 +1551,14 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         **kwargs,
     )
     substrate = _detect_casting_substrate_fields(text)
+    if subtypes or supertypes:
+        # "Instant — Arcane": the factories print a bare type line; keep
+        # the printed subtypes / supertypes (splice keys off Arcane).
+        substrate.update(
+            type_line=card.get("type_line", printing.type_line),
+            supertypes=tuple(supertypes),
+            subtypes=tuple(subtypes),
+        )
     if substrate:
         import dataclasses
 

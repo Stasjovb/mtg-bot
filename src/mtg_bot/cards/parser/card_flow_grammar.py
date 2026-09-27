@@ -416,6 +416,13 @@ _FLIP_STEAL_OR_COUNTER_RE = re.compile(
     r"lose the flip, counter that spell$"
 )
 
+# Through the Breach.
+_PUT_CREATURE_HASTE_SAC_AT_END_RE = re.compile(
+    r"^you may put a creature card from your hand onto the battlefield\. "
+    r"That creature gains haste\. Sacrifice that creature at the beginning "
+    r"of the next end step$"
+)
+
 # Sunfall.
 _EXILE_ALL_CREATURES_INCUBATE_RE = re.compile(
     r"^exile all creatures\. [Ii]ncubate X, where X is the number of "
@@ -746,6 +753,12 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             amount=_amount(m.group("n")), max_targets=max_targets,
             include_planeswalkers=m.group("kinds") != "creatures",
         )
+    if _PUT_CREATURE_HASTE_SAC_AT_END_RE.match(phrase) is not None:
+        from mtg_bot.effects.generic.cheat_into_play import (
+            PutCreatureFromHandHasteSacrificeAtNextEndStep,
+        )
+
+        return PutCreatureFromHandHasteSacrificeAtNextEndStep()
     if _EXILE_ALL_CREATURES_INCUBATE_RE.match(phrase) is not None:
         from mtg_bot.effects.generic.incubate import ExileAllCreaturesThenIncubate
 

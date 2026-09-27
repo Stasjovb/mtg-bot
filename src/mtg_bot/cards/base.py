@@ -1194,6 +1194,12 @@ class CardPrinting:
     # ``CastSpell(cast_for_free=True)``; a ``CardFilter`` over the other
     # cards in hand.
     alt_cost_exile_from_hand: "object | None" = None
+    # "Splice onto <subtype> {cost}" (CR 702.47): while casting a spell
+    # with that subtype, this card may be revealed from hand and its
+    # splice cost paid to add its effects to that spell.
+    splice_onto: "str | None" = None
+    splice_cost: ManaCost | None = None
+    splice_cost_str: str = ""
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

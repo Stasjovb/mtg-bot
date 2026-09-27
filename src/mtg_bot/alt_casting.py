@@ -308,3 +308,62 @@ def pay_pitch_cost(state: "GameState", player_id: int, card: "GameObject") -> No
         f"P{player_id} exiles {chosen.printing.name} to cast "
         f"{card.printing.name} without paying its mana cost"
     )
+
+
+# ---------------------------------------------------------------------
+# Splice onto <subtype> (CR 702.47)
+# ---------------------------------------------------------------------
+
+
+def offer_splices(
+    state: "GameState", player_id: int, card: "GameObject", cost: ManaCost,
+    spell_kinds: "frozenset[str]",
+) -> tuple[ManaCost, tuple]:
+    """While casting ``card``, offer each other hand card whose
+    ``splice_onto`` matches one of the spell's subtypes (each at most
+    once). A splice is offered only if the grown total cost stays
+    payable and the spliced effect's targets (if any) exist; the caster
+    decides via ``choose_yes_no`` and picks the spliced targets with
+    ``choose_target``. Returns ``(cost including splice costs,
+    ((printing, targets), ...))``."""
+    from mtg_bot.actions import can_pay_cost
+
+    p = state.player_by_id(player_id)
+    subtypes = set(card.printing.subtypes)
+    if not subtypes or p.agent is None:
+        return cost, ()
+    spliced: list = []
+    for other in list(p.hand):
+        pr = other.printing
+        if other.id == card.id or pr.splice_onto not in subtypes:
+            continue
+        if pr.splice_cost is None or pr.spell_effect is None:
+            continue
+        grown = cost_plus(cost, pr.splice_cost)
+        if not can_pay_cost(state, player_id, grown, spell_kinds, sac_for_mana=True):
+            continue
+        eff = pr.spell_effect
+        splice_targets: tuple = ()
+        if eff.requires_target():
+            legal = eff.legal_targets(state, player_id)
+            if not legal:
+                continue
+        if not p.agent.choose_yes_no(
+            state, player_id, f"Splice {pr.name} onto {card.printing.name}?",
+        ):
+            continue
+        if eff.requires_target():
+            pick = p.agent.choose_target(state, player_id, legal)
+            if pick is None or pick not in legal:
+                pick = legal[0]
+            splice_targets = (pick,)
+        from mtg_bot.game import reveal_to_all
+
+        reveal_to_all(state, other)
+        cost = grown
+        spliced.append((pr, splice_targets))
+        state.log.append(
+            f"P{player_id} splices {pr.name} onto {card.printing.name} "
+            f"for {pr.splice_cost_str}"
+        )
+    return cost, tuple(spliced)

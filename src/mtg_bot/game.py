@@ -2498,6 +2498,9 @@ class StackItem:
     # Divided damage (CR 601.2d): the per-target split announced while
     # casting, aligned with ``targets``.
     division: tuple[int, ...] = ()
+    # Splice (CR 702.47): ``(printing, targets)`` for each card spliced
+    # onto this spell; their effects resolve after the spell's own.
+    spliced: tuple = ()
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject

@@ -1913,6 +1913,15 @@ def _cast_spell(
             f"P{player_id} pays buyback {card.printing.buyback_cost_str} "
             f"for {card.printing.name}"
         )
+    # Splice onto <subtype> (CR 702.47): reveal cards from hand and add
+    # their splice costs; their effects resolve after the spell's own.
+    spliced: tuple = ()
+    if card.printing.subtypes and not cast_for_free:
+        from mtg_bot.alt_casting import offer_splices as _offer_splices
+
+        cost, spliced = _offer_splices(
+            state, player_id, card, cost, frozenset({"spell"}),
+        )
     # X-cost spells: ask the agent how much X to pay, fold X*x_pips into
     # generic, then zero x_pips so the payment step sees a concrete cost.
     x_value = 0
@@ -2149,6 +2158,7 @@ def _cast_spell(
                 use_buyback and card.printing.buyback_cost is not None
             ),
             division=division,
+            spliced=spliced,
         )
     )
     mode = " (warp)" if use_warp else ""
@@ -3654,6 +3664,12 @@ def resolve_top_of_stack(state: GameState) -> None:
                     card.printing.spell_effect.resolve(
                         state, item.controller_id, item.targets
                     )
+                    # Spliced effects follow the spell's own (CR 702.47b).
+                    state.resolving_division = ()
+                    for spliced_printing, spliced_targets in item.spliced:
+                        spliced_printing.spell_effect.resolve(
+                            state, item.controller_id, spliced_targets,
+                        )
                 finally:
                     state.resolving_spell = None
                     state.resolving_division = ()

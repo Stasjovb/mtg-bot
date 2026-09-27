@@ -167,3 +167,48 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
             "sacrifice an artifact; search for an artifact card; it enters "
             "if its mana value is no greater or you pay the difference"
         )
+
+
+@dataclass(frozen=True)
+class PutCreatureFromHandHasteSacrificeAtNextEndStep(Effect):
+    """Through the Breach: "You may put a creature card from your hand
+    onto the battlefield. That creature gains haste. Sacrifice that
+    creature at the beginning of the next end step." (Pick with
+    ``choose_card_from_library``; ``None`` declines.)"""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.generic.delayed_actions import (
+            SacrificeSourceDelayed,
+            schedule_at_next_end_step,
+        )
+        from mtg_bot.effects.generic.reanimation import _grant_haste
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.hand if c.printing.is_creature]
+        if not options or p.agent is None:
+            return
+        picked = p.agent.choose_card_from_library(
+            state, controller_id, [c.id for c in options],
+        )
+        card = next((c for c in options if c.id == picked), None)
+        if card is None:
+            return
+        p.hand.remove(card)
+        put_into_battlefield(state, card, controller_id)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the battlefield"
+        )
+        if card not in state.battlefield:  # pragma: no cover - defensive
+            return
+        _grant_haste(state, controller_id, card, until_eot=False)
+        schedule_at_next_end_step(
+            state, controller_id, card.id, SacrificeSourceDelayed(),
+        )
+
+    def describe(self) -> str:
+        return (
+            "you may put a creature card from your hand onto the "
+            "battlefield; it gains haste; sacrifice it at the beginning of "
+            "the next end step"
+        )
