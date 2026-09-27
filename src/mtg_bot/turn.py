@@ -425,6 +425,11 @@ def move_off_battlefield(
 
     restore_mdfc_front(obj)
     obj.exile_instead_of_leaving = False
+    # Per-permanent state of the cube creatures bucket (CR 400.7: the
+    # card is a new object in its next zone).
+    obj.exhausted_abilities = frozenset()
+    obj.escaped = False
+    obj.dashed = False
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
@@ -1359,6 +1364,13 @@ def run_cleanup_step(state: GameState) -> None:
             p.exile.fork()
         for c in p.exile:
             c.playable_from_exile_this_turn = False
+    # Exile play permissions (``GameObject.exile_play_permission``) whose
+    # duration ends with this turn (cube creatures bucket).
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        expire_exile_play_permissions,
+    )
+
+    expire_exile_play_permissions(state)
     # Empty each player's mana pool. MTG's real rule empties at end of
     # each step/phase; our simplified engine holds mana across phases
     # within a turn and clears at cleanup.

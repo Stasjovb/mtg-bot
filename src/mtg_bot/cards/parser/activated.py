@@ -304,9 +304,29 @@ class _CostPiece:
     mana_str: str = ""
     amount: int = 0
     field: str = ""
+    # ``kind == "extra"``: a composable cost atom for
+    # ``ActivationCost.extra_costs`` (cube creatures bucket grammar,
+    # ``creature_rmc_grammar.parse_rmc_cost_piece``).
+    atom: object = None
 
 
 def _classify_cost_piece(piece: str) -> _CostPiece | None:
+    piece_class = _classify_builtin_cost_piece(piece)
+    if piece_class is not None:
+        return piece_class
+    # Fallback: composable cost atoms (sacrifice N filtered permanents,
+    # remove +1/+1 counters from this creature, tap untapped filtered
+    # permanents, exile this card from your graveyard). Tried only when
+    # no dedicated atom above claims the piece.
+    from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_cost_piece
+
+    atom = parse_rmc_cost_piece(piece)
+    if atom is not None:
+        return _CostPiece(kind="extra", atom=atom)
+    return None
+
+
+def _classify_builtin_cost_piece(piece: str) -> _CostPiece | None:
     """Classify a single cost piece (already stripped) into a
     ``_CostPiece``. Returns ``None`` if the piece doesn't match
     any recognized atom."""
@@ -436,7 +456,11 @@ def _build_cost_from_pieces(
     remove_counter_kind = ""
     remove_counter_amount = 0
     sacrifice_n_nonland = 0
+    extra_costs: list = []
     for p in pieces:
+        if p.kind == "extra":
+            extra_costs.append(p.atom)
+            continue
         if p.kind == "mana":
             if mana_str is not None:
                 return None
@@ -582,6 +606,8 @@ def _build_cost_from_pieces(
     if remove_counter_kind:
         kwargs["remove_counters_from_self_kind"] = remove_counter_kind
         kwargs["remove_counters_from_self_amount"] = remove_counter_amount
+    if extra_costs:
+        kwargs["extra_costs"] = tuple(extra_costs)
     return ActivationCost(**kwargs)
 
 

@@ -107,6 +107,10 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_warp_line,
     _parse_warp_with_life_cost_line,
 )
+from mtg_bot.cards.parser.creature_rmc_grammar import (
+    parse_rmc_creature_line_post,
+    parse_rmc_creature_line_pre,
+)
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import (
     _parse_predicate_trigger_phrase,
@@ -355,6 +359,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     hand_ability_grants: "tuple[HandAbilityGrant, ...]" = ()
     grants_food_to_your_artifacts = False
     grants_food_ability_to_your_artifacts = False
+    # Cube creatures (R / multicolor / colorless) bucket contributions.
+    rmc_hand_abilities: list = []
+    rmc_graveyard_abilities: list = []
+    rmc_printing_fields: dict = {}
+
+    def _absorb_rmc_line(rmc) -> None:
+        keywords.update(rmc.keywords)
+        triggers.extend(rmc.triggers)
+        activated.extend(rmc.activated)
+        statics.extend(rmc.statics)
+        rmc_hand_abilities.extend(rmc.hand_abilities)
+        rmc_graveyard_abilities.extend(rmc.graveyard_abilities)
+        rmc_printing_fields.update(rmc.printing_fields)
+
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -813,6 +831,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 return None
             activated[-1] = replace(activated[-1], sorcery_speed=True)
             continue
+        # Cube creatures (R / multicolor / colorless) bucket: abilities
+        # that function from the hand / graveyard, Exhaust, Dash, ...
+        # must be routed before the generic clause dispatcher files them
+        # as battlefield abilities.
+        rmc = parse_rmc_creature_line_pre(line, card["name"])
+        if rmc is not None:
+            _absorb_rmc_line(rmc)
+            continue
         # Pass the printing's own name to the clause dispatcher so the
         # triggered-ability layer can substitute name references
         # (``Haliya``, ``Syr Vondam``, etc.) with the canonical
@@ -820,7 +846,11 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         # Non-trigger clause types ignore the parameter today.
         parsed = _parse_clause(line, name=card["name"])
         if parsed is None:
-            return None
+            rmc = parse_rmc_creature_line_post(line, card["name"])
+            if rmc is None:
+                return None
+            _absorb_rmc_line(rmc)
+            continue
         keywords.update(parsed.keywords)
         # ``triggers`` is a tuple — one entry per condition arm. A
         # standard single-condition line yields a 1-tuple; a compound
@@ -835,7 +865,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         if parsed.statics:
             statics.extend(parsed.statics)
 
-    return make_creature(
+    printing = make_creature(
         name=card["name"],
         cost=card["mana_cost"],
         power=power,
@@ -896,3 +926,15 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             grants_food_ability_to_your_artifacts
         ),
     )
+    if rmc_hand_abilities:
+        rmc_printing_fields["hand_activated_abilities"] = (
+            tuple(printing.hand_activated_abilities)
+            + tuple(rmc_hand_abilities)
+        )
+    if rmc_graveyard_abilities:
+        rmc_printing_fields["graveyard_activated_abilities"] = tuple(
+            rmc_graveyard_abilities
+        )
+    if rmc_printing_fields:
+        printing = replace(printing, **rmc_printing_fields)
+    return printing

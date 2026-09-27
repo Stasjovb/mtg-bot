@@ -187,7 +187,7 @@ _REVEAL_HAND_YOU_CHOOSE_DISCARD_RE = re.compile(
 _SEARCH_TO_ZONE_RE = re.compile(
     r"^search your library for (?P<desc>.+? card)(?P<reveal>, reveal it)?, "
     r"put (?:that card|it) (?P<dest>into your hand|into your graveyard|"
-    r"onto the battlefield), then shuffle$"
+    r"onto the battlefield)(?P<tapped> tapped)?, then shuffle$"
 )
 _SEARCH_TO_TOP_RE = re.compile(
     r"^search your library for (?P<desc>.+? card)(?P<reveal>, reveal it)?, "
@@ -582,8 +582,11 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             "into your graveyard": "graveyard",
             "onto the battlefield": "battlefield",
         }[m.group("dest")]
+        if m.group("tapped") is not None and dest != "battlefield":
+            return None
         return SearchLibrary(
             card_filter=f, destination=dest, reveal=m.group("reveal") is not None,
+            tapped=m.group("tapped") is not None,
         )
     m = _SEARCH_TO_TOP_RE.match(phrase)
     if m is not None:

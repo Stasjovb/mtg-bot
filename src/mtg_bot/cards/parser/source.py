@@ -88,7 +88,23 @@ def _with_hand_abilities(printing: CardPrinting, abilities: tuple) -> CardPrinti
 
 
 def _build_printing(card: dict) -> CardPrinting | None:
-    """Run the per-card-type builders in claim order."""
+    """Run the per-card-type builders in claim order.
+
+    The cube-creatures grammar (``creature_rmc_grammar``) is switched off
+    for printings that exist only in the EoE-era dumps, keeping the EoE
+    claimed set (the parity evidence base) unchanged."""
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        is_eoe_only_printing,
+        rmc_grammar_disabled,
+    )
+
+    if is_eoe_only_printing(card.get("name", "")):
+        with rmc_grammar_disabled():
+            return _run_builders(card)
+    return _run_builders(card)
+
+
+def _run_builders(card: dict) -> CardPrinting | None:
     for builder in (
         _build_room_printing,
         _build_enchantment_printing,

@@ -1328,13 +1328,27 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
         card = next(
             (c for c in p.exile if c.id == card_id), None
         )
+        exile_zone = p.exile
+        if card is None or card.exile_play_permission is not None:
+            # A land granted an exile play permission (Laelia, Golos,
+            # ...) — possibly in another player's exile.
+            from mtg_bot.effects.generic.cube_creatures_rmc import (
+                find_permitted_exile_card,
+            )
+
+            permitted, perm_owner = find_permitted_exile_card(
+                state, player_id, card_id,
+            )
+            if permitted is not None:
+                card, exile_zone = permitted, perm_owner.exile
         if card is None:  # pragma: no cover - defensive; legal_actions gates
             raise ValueError(
                 f"land {card_id} not playable by P{player_id}"
             )
-        p.exile.remove(card)
+        exile_zone.remove(card)
         card.playable_from_exile_this_turn = False
         card.play_from_exile_requires_kavu = False
+        card.exile_play_permission = None
     # Track whether the land was played from Lightstall exile (enters
     # tapped regardless of printing) before clearing the flag.
     lightstall_land = card.cast_from_exile_with_lightstall_surcharge
@@ -2019,7 +2033,15 @@ def _cast_spell(
         # {1} surcharge applied below. All pay normal cost except (d).
         # (legal_actions enforces the Kavu-control gate on (c); the
         # predicate here just authorizes the cast site.)
-        card = next(
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            exile_permission_cast_cost,
+            find_permitted_exile_card,
+        )
+
+        permitted, perm_owner = find_permitted_exile_card(
+            state, player_id, card_id,
+        )
+        card = None if permitted is not None else next(
             (
                 c for c in p.exile
                 if c.id == card_id and (
@@ -2032,7 +2054,19 @@ def _cast_spell(
             ),
             None,
         )
-        if card is not None:
+        if permitted is not None:
+            # Exile play permission (Ragavan, Laelia, Golos, Thor, ...):
+            # the card may sit in any player's exile; a free permission
+            # arrives with ``cast_for_free`` (which zeroes the cost below).
+            card = permitted
+            cost = exile_permission_cast_cost(card, card.exile_play_permission)
+            cast_from_outside_hand = True
+            perm_owner.exile.remove(card)
+            card.exile_play_permission = None
+            card.playable_from_exile_this_turn = False
+            card.cast_via_warp = False
+            card.cast_via_hand = False
+        elif card is not None:
             cost = card.printing.mana_cost
             # Lightstall surcharge: "each spell cast this way costs {1}
             # more to cast" — add 1 generic on top of the printed cost.
@@ -2742,9 +2776,16 @@ def _apply_ward_check(
             continue
         # Ward—Pay N life (Sedgemoor Witch). Auto-paid like the other
         # ward costs; a caster whose life total is below N can't pay.
-        if obj.printing.ward_life_cost:
+        # Granted instances (Hexing Squelcher's 'Other creatures you
+        # control have "Ward—Pay 2 life."') add up with the printed one.
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            effective_ward_life_cost,
+        )
+
+        ward_life = effective_ward_life_cost(state, obj)
+        if ward_life:
             p = state.player_by_id(caster_id)
-            n = obj.printing.ward_life_cost
+            n = ward_life
             if p.life < n:
                 state.log.append(
                     f"Spell countered by {obj.printing.name}'s Ward "
@@ -2888,6 +2929,12 @@ def _activate_hand_ability(
         auto_tap_for_cost(state, player_id, mana, spell_kind="spell")
     targets = _choose_ability_targets(state, player_id, card, ability.effect)
     cost_paid_objects: list[GameObject] = []
+    if ability.cost.extra_costs:
+        from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
+
+        cost_paid_objects.extend(
+            pay_extra_costs(state, player_id, card, ability.cost)
+        )
     if ability.cost.discard_self:
         p.hand.remove(card)
         card.zone = Zone.GRAVEYARD
@@ -2931,6 +2978,48 @@ def _activate_hand_ability(
     )
 
 
+def _activate_graveyard_ability(
+    state: GameState, player_id: int, card: "GameObject", ability_index: int,
+) -> None:
+    """Activate ``card.printing.graveyard_activated_abilities[ability_index]``
+    from ``player_id``'s graveyard (Seasoned Pyromancer, Otharri).
+
+    Cost order: mana (auto-tap), targets, then the composable cost atoms
+    (``extra_costs`` — "Exile this card from your graveyard", "Tap an
+    untapped Rebel you control"). The ability goes on the stack with the
+    card as its source even if the cost moved it (CR 113.7a).
+    """
+    abilities = card.printing.graveyard_activated_abilities
+    if ability_index < 0 or ability_index >= len(abilities):
+        return
+    ability = abilities[ability_index]
+    if ability.cost.mana is not None:
+        if not can_pay_cost(state, player_id, ability.cost.mana):
+            return
+        auto_tap_for_cost(state, player_id, ability.cost.mana, spell_kind="spell")
+    targets = _choose_ability_targets(state, player_id, card, ability.effect)
+    cost_paid_objects: list[GameObject] = []
+    if ability.cost.extra_costs:
+        from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
+
+        cost_paid_objects.extend(
+            pay_extra_costs(state, player_id, card, ability.cost)
+        )
+    state.stack.append(
+        StackItem(
+            source=card,
+            controller_id=player_id,
+            ability=ability,
+            targets=targets,
+            cost_paid_objects=tuple(cost_paid_objects),
+        )
+    )
+    state.log.append(
+        f"P{player_id} activates {card.printing.name}'s ability from the "
+        f"graveyard" + _format_log_targets(state, targets)
+    )
+
+
 def _activate_ability(
     state: GameState, player_id: int, source_id: int, ability_index: int
 ) -> None:
@@ -2949,6 +3038,17 @@ def _activate_ability(
         if hand_card is not None:
             _activate_hand_ability(
                 state, player_id, hand_card, ability_index,
+            )
+            return
+        # Graveyard-resident source (Seasoned Pyromancer, Otharri).
+        grave_card = next(
+            (c for c in state.player_by_id(player_id).graveyard
+             if c.id == source_id),
+            None,
+        )
+        if grave_card is not None:
+            _activate_graveyard_ability(
+                state, player_id, grave_card, ability_index,
             )
         return
     if source.controller_id != player_id:
@@ -3605,6 +3705,20 @@ def _activate_ability(
                 f"(cost for {source.printing.name}'s ability)"
             )
             fire_opponent_discards_triggers(state, player_id, card=card)
+
+    # Composable cost atoms (``ActivationCost.extra_costs``): sacrifice
+    # N filtered permanents, remove counters from the source, tap
+    # filtered permanents. Paid after target selection, before
+    # exile-self / sacrifice-self.
+    if ability.cost.extra_costs:
+        from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
+
+        cost_paid_objects.extend(
+            pay_extra_costs(state, player_id, source, ability.cost)
+        )
+    # Exhaust (CR 702.177): latch this ability index on the object.
+    if ability.exhaust:
+        source.exhausted_abilities = source.exhausted_abilities | {ability_index}
 
     # Exile-self and sacrifice-self are paid LAST so the source is still
     # on the battlefield for target selection. exile_self moves the source

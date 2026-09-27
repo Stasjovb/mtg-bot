@@ -522,9 +522,24 @@ class ActivationCost:
     # dedicated land field (``sacrifice_a_land``, Dust Bowl) keeps its
     # own source-excluding semantics.
     sacrifice_a_permanent_type: str = ""
+    # Composable cost atoms beyond the dedicated boolean fields above
+    # (cube creatures R/multicolor/colorless bucket): each entry is an
+    # object exposing ``payable(state, player_id, source) -> bool``,
+    # ``pay(state, player_id, source) -> list[GameObject]`` (the objects
+    # paid, threaded onto ``StackItem.cost_paid_objects``) and
+    # ``describe() -> str``. ``legal_actions`` gates activation on every
+    # atom being payable; ``_activate_ability`` pays them after target
+    # selection and before sacrifice-self / exile-self. See
+    # ``mtg_bot.effects.generic.cube_creatures_rmc`` ("Sacrifice a
+    # Forest", "Sacrifice five Treasures", "Remove a +1/+1 counter from
+    # this creature", "Tap an untapped Rebel you control", "Exile this
+    # card from your graveyard").
+    extra_costs: tuple = ()
 
     def describe(self) -> str:
         parts: list[str] = []
+        for atom in self.extra_costs:
+            parts.append(atom.describe())
         if self.mana_str:
             parts.append(self.mana_str)
         if self.discard_self:
@@ -676,9 +691,15 @@ class ActivatedAbility:
     # ``legal_actions`` filters the ability out unless the activator is
     # the active player.
     activate_only_during_your_turn: bool = False
+    # Exhaust (CR 702.177): "Activate each exhaust ability only once."
+    # Tracked per ability index on ``GameObject.exhausted_abilities`` so
+    # a permanent with several exhaust abilities (Loot, the Pathfinder)
+    # can use each of them once; a new object (CR 400.7) starts fresh.
+    exhaust: bool = False
 
     def describe(self) -> str:
-        return f"{self.cost.describe()}: {self.effect.describe()}"
+        prefix = "Exhaust — " if self.exhaust else ""
+        return f"{prefix}{self.cost.describe()}: {self.effect.describe()}"
 
 
 
@@ -751,6 +772,15 @@ class StaticAbility:
     # stack, not permanents on the battlefield). Matches Frenzied Baloth's
     # third oracle line.
     grants_creature_spells_uncounterable: bool = False
+    # "Spells you control can't be countered." (Hexing Squelcher) — the
+    # all-spells sibling of ``grants_creature_spells_uncounterable``;
+    # read by ``CounterTargetSpell._is_uncounterable``.
+    grants_spells_uncounterable: bool = False
+    # 'Other creatures you control have "Ward—Pay N life."' (Hexing
+    # Squelcher): each creature this static ``applies_to`` gains an
+    # additional ward instance costing N life. Summed with the printed
+    # ``ward_life_cost`` by ``cube_creatures_rmc.effective_ward_life_cost``.
+    grants_ward_life_cost: int = 0
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,

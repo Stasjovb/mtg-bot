@@ -838,6 +838,22 @@ class GameObject:
     # ``sacrifice_at_cleanup_if_cast_without_sorcery_timing``; consumed
     # when the permanent enters).
     cast_without_sorcery_timing: bool = False
+    # ── Cube creatures (R / multicolor / colorless bucket) ──
+    # "You may play / cast that card <duration>" on a card in exile
+    # (``cube_creatures_rmc.ExilePlayPermission`` or None). Honored for
+    # cards in ANY player's exile (Ragavan casts the opponent's card);
+    # expired by ``run_cleanup_step``; cleared when the card is played.
+    exile_play_permission: Optional[object] = None
+    # Exhaust (CR 702.177): indexes of this permanent's exhaust
+    # abilities already activated. Reset when it leaves the battlefield.
+    exhausted_abilities: frozenset = frozenset()
+    # CR 702.138c: this permanent "escaped" (it resolved from a spell
+    # cast with escape). Read by "sacrifice it unless it escaped".
+    escaped: bool = False
+    # Dash (CR 702.109): this permanent resolved from a dashed spell;
+    # stamped at ETB (it gains haste and returns to hand at the next
+    # end step). Cleared when it leaves the battlefield.
+    dashed: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

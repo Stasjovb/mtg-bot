@@ -1277,6 +1277,19 @@ class CardPrinting:
     # cast, the controller of the permanent it becomes sacrifices it at
     # the beginning of the next cleanup step."
     sacrifice_at_cleanup_if_cast_without_sorcery_timing: bool = False
+    # ── Cube creatures (R / multicolor / colorless bucket) ──
+    # Activated abilities that function from the owner's graveyard
+    # (CR 113.6k): Seasoned Pyromancer's "{3}{R}{R}, Exile this card
+    # from your graveyard: ...", Otharri's "Return this card from your
+    # graveyard to the battlefield tapped". Offered by ``legal_actions``
+    # as ``ActivateAbility(source_id=<graveyard card>, ability_index)``.
+    graveyard_activated_abilities: tuple["ActivatedAbility", ...] = ()
+    # "Dash {cost}" (CR 702.109): cast from hand for ``dash_cost``; the
+    # permanent gains haste and returns to its owner's hand at the
+    # beginning of the next end step. Offered as
+    # ``CastSpell(id, use_dash=True)``.
+    dash_cost: ManaCost | None = None
+    dash_cost_str: str = ""
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

@@ -119,10 +119,10 @@ def test_inline_rider_with_unsupported_effect_returns_none():
 
 def test_inline_rider_with_unsupported_cost_returns_none():
     """Cost-side failures still bail out even when the rider is
-    present — "Sacrifice another creature" isn't a supported activation
-    cost atom, so the line returns ``None`` regardless of the rider."""
+    present — an unrecognized cost atom rejects the line regardless of
+    the rider."""
     ab = _parse_activated_ability_line(
-        "Sacrifice another creature: Draw a card. Activate only as a sorcery."
+        "Sacrifice a blue thing: Draw a card. Activate only as a sorcery."
     )
     assert ab is None
 

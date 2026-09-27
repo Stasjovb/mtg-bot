@@ -381,6 +381,9 @@ class SearchLibrary(Effect):
     card_filter: CardFilter = ANY_CARD
     destination: str = "hand"
     reveal: bool = False
+    # "put that card onto the battlefield tapped" (Golos, Tireless
+    # Pilgrim). Only meaningful for the battlefield destination.
+    tapped: bool = False
 
     def __post_init__(self) -> None:
         if self.destination not in SEARCH_DESTINATIONS:
@@ -448,6 +451,8 @@ class SearchLibrary(Effect):
                 f"battlefield"
             )
             put_into_battlefield(state, chosen, controller_id)
+            if self.tapped:
+                chosen.tapped = True
         shuffle_library(state, controller_id)
 
     def describe(self) -> str:

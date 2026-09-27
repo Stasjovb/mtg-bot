@@ -306,6 +306,102 @@ def _additional_costs_payable(
     return True
 
 
+# ---------------------------------------------------------------------------
+# Cube creatures (R / multicolor / colorless bucket) legality helpers
+# ---------------------------------------------------------------------------
+
+
+def _extra_costs_payable(state: GameState, player_id: int, source, cost) -> bool:
+    """Every ``ActivationCost.extra_costs`` atom can be paid."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import extra_costs_payable
+
+    return extra_costs_payable(state, player_id, source, cost)
+
+
+def _graveyard_ability_activations(
+    state: GameState, player_id: int,
+) -> list[Action]:
+    """``ActivateAbility`` for each payable graveyard-activated ability
+    of a card in ``player_id``'s graveyard (instant speed unless the
+    ability is ``sorcery_speed``)."""
+    out: list[Action] = []
+    p = state.player_by_id(player_id)
+    seen: set[tuple[str, int]] = set()
+    for card in p.graveyard:
+        for idx, ability in enumerate(card.printing.graveyard_activated_abilities):
+            key = (card.printing.name, idx)
+            if key in seen:
+                continue
+            if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
+                continue
+            if ability.cost.mana is not None and not can_pay_cost(
+                state, player_id, ability.cost.mana,
+            ):
+                continue
+            if ability.cost.extra_costs and not _extra_costs_payable(
+                state, player_id, card, ability.cost,
+            ):
+                continue
+            if ability.effect.requires_target():
+                state.resolving_source = card
+                try:
+                    has_legal = bool(ability.effect.legal_targets(state, player_id))
+                finally:
+                    state.resolving_source = None
+                if not has_legal:
+                    continue
+            seen.add(key)
+            out.append(ActivateAbility(source_id=card.id, ability_index=idx))
+    return out
+
+
+def _exile_permission_plays(
+    state: GameState, player_id: int, *, sorcery_window: bool,
+) -> list[Action]:
+    """Casts / land plays granted by ``GameObject.exile_play_permission``.
+
+    ``sorcery_window=False`` emits only instant-speed casts (instants and
+    flash cards); ``True`` emits the sorcery-timing ones plus land plays.
+    Free permissions are offered as ``cast_for_free`` casts.
+    """
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        exile_cards_playable_by,
+        exile_permission_cast_cost,
+    )
+
+    out: list[Action] = []
+    p = state.player_by_id(player_id)
+    for card in exile_cards_playable_by(state, player_id):
+        perm = card.exile_play_permission
+        pr = card.printing
+        if pr.is_land:
+            if not sorcery_window or perm.cast_only:
+                continue
+            max_lands = 1 + sum(
+                o.printing.grants_additional_land_per_turn
+                for o in state.battlefield
+                if o.controller_id == player_id
+            )
+            if p.lands_played_this_turn < max_lands:
+                out.append(PlayLand(card.id))
+            continue
+        fast = pr.is_instant or "flash" in pr.keywords
+        if fast == sorcery_window:
+            continue
+        cost = apply_cost_reductions(
+            pr, state, player_id, exile_permission_cast_cost(card, perm),
+        )
+        if not (
+            (perm.free or _can_cast(state, player_id, card, cost))
+            and _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            continue
+        out.append(CastSpell(card.id, cast_for_free=perm.free))
+    return out
+
+
 def legal_actions(state: GameState, player_id: int) -> list[Action]:
     """Return all legal actions for ``player_id`` right now.
 
@@ -532,6 +628,10 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
                     _effective_ability_mana_cost(state, card, ability),
                 ):
                     continue
+            if ability.cost.extra_costs and not _extra_costs_payable(
+                state, player_id, card, ability.cost,
+            ):
+                continue
             if ability.effect.requires_target():
                 state.resolving_source = card
                 try:
@@ -546,6 +646,14 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             actions.append(
                 ActivateAbility(source_id=card.id, ability_index=idx)
             )
+
+    # Graveyard-activated abilities (Seasoned Pyromancer's "{3}{R}{R},
+    # Exile this card from your graveyard: ...", Otharri's "Return this
+    # card from your graveyard to the battlefield"): the source is a
+    # card in the activator's graveyard; ``ability_index`` indexes
+    # ``printing.graveyard_activated_abilities``. Instant speed like the
+    # hand abilities above (no timing restriction is printed).
+    actions.extend(_graveyard_ability_activations(state, player_id))
 
     # Flashback (CR 702.34) from the graveyard. Instants are castable
     # at any priority; everything else waits for sorcery timing (the
@@ -622,6 +730,8 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
     ):
         if _can_cast_paying_life(state, player_id, citadel_top):
             actions.append(CastSpell(citadel_top.id))
+    # Exile play permissions — instants / flash cards at any priority.
+    actions.extend(_exile_permission_plays(state, player_id, sorcery_window=False))
 
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
@@ -867,6 +977,12 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         ) and _targets_are_satisfiable(state, player_id, card) and _additional_costs_payable(state, player_id, card):
             actions.append(CastSpell(card.id))
 
+    # Exile play permissions (``GameObject.exile_play_permission``):
+    # cards in ANY player's exile the player may play (Ragavan, Laelia,
+    # Golos, Thor, ...). Sorcery-speed cards here; instants and flash
+    # cards were offered by the instant-speed block.
+    actions.extend(_exile_permission_plays(state, player_id, sorcery_window=True))
+
     # Impulse-cast: cards in exile marked playable_from_exile_this_turn
     # (Territorial Bruntar landfall, Memorial Vault activated) — or
     # marked play_from_exile_requires_kavu (Possibility Technician),
@@ -1046,6 +1162,13 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
             # attempt within the same priority window before the
             # first activation has resolved.
             if ability.activate_only_once and obj.has_activated_once_only_ability:
+                continue
+            # Exhaust (CR 702.177): each exhaust ability once per object.
+            if ability.exhaust and idx in obj.exhausted_abilities:
+                continue
+            if ability.cost.extra_costs and not _extra_costs_payable(
+                state, player_id, obj, ability.cost,
+            ):
                 continue
             # "Activate only if <condition>." (Library of Alexandria).
             if (

@@ -2076,12 +2076,14 @@ def test_parse_activated_ability_line_accepts_tap_plus_pay_life():
     assert ab.cost.mana is None
 
 
-def test_parse_activated_ability_line_rejects_tap_plus_remove_counter():
-    """``{T}, Remove a +1/+1 counter from this creature: ...`` —
-    tap plus a counter-removal cost. Out of scope; must not match."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_tap_plus_remove_counter_from_self():
+    """``{T}, Remove a +1/+1 counter from this creature: ...`` — tap
+    plus the composable remove-counters-from-self atom (cube creatures
+    bucket)."""
+    ab = _parse_activated_ability_line(
         "{T}, Remove a +1/+1 counter from this creature: Draw a card."
-    ) is None
+    )
+    assert ab.cost.tap_self and len(ab.cost.extra_costs) == 1
 
 
 def test_parse_activated_ability_line_tap_only_strips_whitespace():
