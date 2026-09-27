@@ -248,6 +248,7 @@ def _reset_left_battlefield_object(obj: "GameObject") -> None:
     obj.loyalty_counters = 0
     obj.lore_counters = 0
     obj.flying_counters = 0
+    obj.named_counters = ()
     obj.temp_power_bonus = 0
     obj.temp_toughness_bonus = 0
     obj.regeneration_shield = False
@@ -376,7 +377,6 @@ def move_off_battlefield(
     from mtg_bot.game import restore_mdfc_front
 
     restore_mdfc_front(obj)
-    obj.named_counters = ()
     obj.exile_instead_of_leaving = False
     obj.damage = 0
     obj.marked_lethal = False
@@ -1331,13 +1331,6 @@ def state_based_actions(state: GameState) -> bool:
     if apply_graveyard_exile_replacement(state):
         any_changed = True
     return any_changed
-
-
-def graveyard_exile_replacement_active(state: GameState, owner_id: int) -> bool:
-    """Yawgmoth's Will's "If a card would be put into your graveyard from
-    anywhere this turn, exile that card instead" is active for
-    ``owner_id``."""
-    return state.player_by_id(owner_id).graveyard_exile_replacement_this_turn
 
 
 def apply_graveyard_exile_replacement(state: GameState) -> bool:

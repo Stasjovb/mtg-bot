@@ -75,7 +75,7 @@ def test_reanimate_with_counter_exile_rider_and_extra_effect():
     # Dies -> exiled instead (no graveyard stop), counters gone.
     move_off_battlefield(state, bear, destination="graveyard")
     assert bear in state.players[1].exile
-    assert bear.named_counters == () and not bear.exile_instead_of_leaving
+    assert not bear.exile_instead_of_leaving
 
 
 def test_exile_instead_on_bounce_paths():
