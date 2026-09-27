@@ -308,6 +308,7 @@ from mtg_bot.effects.generic.text_change import (
 
 from mtg_bot.effects.generic.misc import (
     CytoshapeBecomeCopyUEOT,
+    SourceBecomesCopyOfTargetGraveyardCardUEOT,
     LockOrUnlockDoorOfTargetRoomYouControl,
     ScuttlemuttColorChangeUEOT,
 )
@@ -555,6 +556,7 @@ __all__ = [
     "SleightOfMindTextChangeEffect",
     # misc
     "CytoshapeBecomeCopyUEOT",
+    "SourceBecomesCopyOfTargetGraveyardCardUEOT",
     "LockOrUnlockDoorOfTargetRoomYouControl",
     "ScuttlemuttColorChangeUEOT",
 ]

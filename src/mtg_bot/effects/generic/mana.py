@@ -47,6 +47,10 @@ class AddManaToPool(Effect):
 
     produces: tuple[tuple[str, int], ...]
     spend_restriction: "str | None" = None
+    # "If any of that mana is spent on a creature spell, it gains haste
+    # until end of turn." — tags each minted coin
+    # (``ManaCoin.grants_haste_to_creature_spell``).
+    grants_haste_to_creature_spell: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -59,7 +63,13 @@ class AddManaToPool(Effect):
         for color, count in self.produces:
             for _ in range(count):
                 p.mana_pool.append(
-                    ManaCoin(color=color, spend_restriction=self.spend_restriction)
+                    ManaCoin(
+                        color=color,
+                        spend_restriction=self.spend_restriction,
+                        grants_haste_to_creature_spell=(
+                            self.grants_haste_to_creature_spell
+                        ),
+                    )
                 )
                 minted.append(color)
         restriction = (

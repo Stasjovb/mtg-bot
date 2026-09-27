@@ -450,6 +450,10 @@ class ActivationCost:
     # ``legal_actions`` requires at least one such counter on the
     # source; ``_activate_ability`` removes one. "" = no such cost.
     remove_named_counter_from_self: str = ""
+    # "Exert this <permanent>" (CR 701.39) — sets
+    # ``GameObject.exerted`` so the source skips its controller's next
+    # untap step (Arena of Glory).
+    exert_self: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -457,6 +461,8 @@ class ActivationCost:
             parts.append(self.mana_str)
         if self.discard_self:
             parts.append("Discard this card")
+        if self.exert_self:
+            parts.append("Exert ~")
         if self.remove_named_counter_from_self:
             parts.append(
                 f"Remove a {self.remove_named_counter_from_self} counter "

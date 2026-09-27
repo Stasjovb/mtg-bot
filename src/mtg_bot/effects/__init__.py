@@ -57,6 +57,7 @@ from mtg_bot.effects.generic import (
     CreateTokenPerMulticoloredPermanent,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     CytoshapeBecomeCopyUEOT,
+    SourceBecomesCopyOfTargetGraveyardCardUEOT,
     DealDamage,
     DealDamageAnyTarget,
     DealDamageEachOpponent,

@@ -1776,9 +1776,29 @@ def _cast_spell(
     # there.
     if card.printing.has_convoke:
         cost = _apply_convoke(state, player_id, cost)
+    haste_coins_before = sum(
+        1 for c in p.mana_pool if c.grants_haste_to_creature_spell
+    )
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
     )
+    # Arena of Glory: "If any of that mana is spent on a creature spell,
+    # it gains haste until end of turn." A UEOT grant on the spell's
+    # object carries onto the permanent it becomes (same id).
+    if haste_coins_before and card.printing.is_creature:
+        haste_coins_after = sum(
+            1 for c in p.mana_pool if c.grants_haste_to_creature_spell
+        )
+        if haste_coins_after < haste_coins_before:
+            state.add_continuous_effect(
+                source_id=card.id, layer=6, kind="grant_keyword",
+                target_id=card.id, params=("haste",),
+                expires_at="cleanup",
+                description=f"{card.printing.name} gains haste UEOT (mana)",
+            )
+            state.log.append(
+                f"{card.printing.name} gains haste until end of turn"
+            )
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -2229,6 +2249,9 @@ def _activate_ability(
     if ability.cost.tap_self:
         from mtg_bot.turn import tap_permanent
         tap_permanent(state, source)
+    if ability.cost.exert_self:
+        source.exerted = True
+        state.log.append(f"P{player_id} exerts {source.printing.name}")
 
     # "Tap X untapped artifacts you control" cost (Secluded Starforge).
     # X = how many untapped artifacts the activator chooses to tap. The

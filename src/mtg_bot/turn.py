@@ -101,6 +101,13 @@ def run_untap_step(state: GameState) -> None:
                     f"prevents-untap effect)"
                 )
                 continue
+            if obj.exerted:
+                # Exert (CR 701.39): skip this one untap step.
+                obj.exerted = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (exerted)"
+                )
+                continue
             obj.tapped = False
             obj.summoning_sick = False
 

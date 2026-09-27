@@ -27,6 +27,85 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class SourceBecomesCopyOfTargetGraveyardCardUEOT(Effect):
+    """"This <permanent> becomes a copy of target permanent card in your
+    graveyard until end of turn." (Shifting Woodland). Layer-1 copy of
+    the target card's printed (copiable) characteristics onto the
+    resolving source, with ``expires_at="cleanup"`` — the same
+    ``original_printing`` + ``is_copy`` registry machinery as
+    ``CytoshapeBecomeCopyUEOT``, so ``run_cleanup_step`` (and leaving
+    the battlefield) reverts it via
+    ``revert_printing_if_no_layer1_copies``.
+
+    Targets: ``("graveyard_card", id)`` for each permanent card in the
+    controller's graveyard. Fizzles if the target left the graveyard or
+    the source left the battlefield before resolution.
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (1, 1)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("graveyard_card", c.id)
+            for c in state.player_by_id(controller_id).graveyard
+            if c.printing.is_permanent
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None or source not in state.battlefield or not targets:
+            return
+        _, target_id = targets[0]
+        target = next(
+            (
+                c for c in state.player_by_id(controller_id).graveyard
+                if c.id == target_id and c.printing.is_permanent
+            ),
+            None,
+        )
+        if target is None:
+            state.log.append(
+                f"{source.printing.name}'s copy ability fizzles"
+            )
+            return
+        if source.original_printing is None:
+            source.original_printing = source.printing
+        copied = target.printing
+        source.printing = copied
+        state.add_continuous_effect(
+            source_id=source.id,
+            layer=1,
+            kind="is_copy",
+            target_id=source.id,
+            params=(copied,),
+            expires_at="cleanup",
+            description=(
+                f"{source.original_printing.name} becomes a copy of "
+                f"{copied.name} UEOT"
+            ),
+        )
+        state.log.append(
+            f"{source.original_printing.name} becomes a copy of "
+            f"{copied.name} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "this permanent becomes a copy of target permanent card in "
+            "your graveyard until end of turn"
+        )
+
+
+@dataclass(frozen=True)
 class CytoshapeBecomeCopyUEOT(Effect):
     """Cytoshape (Saviors of Kamigawa, simplified): "Until end of
     turn, target creature becomes a copy of another target

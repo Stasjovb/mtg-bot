@@ -670,6 +670,10 @@ class GameObject:
     # ``is_chosen_basic_land_type`` while the object is on the
     # battlefield.
     chosen_basic_land_type: Optional[str] = None
+    # Exerted (CR 701.39): this permanent won't untap during its
+    # controller's next untap step. Set by the ``exert_self`` activation
+    # cost; ``run_untap_step`` consumes it.
+    exerted: bool = False
     # Counters of kinds without a dedicated field ("mining" — Gemstone
     # Mine), as an immutable ``((kind, count), ...)`` tuple so the fast
     # slot-cloner can share it safely. Read / written through
@@ -2572,6 +2576,10 @@ class ManaCoin:
 
     color: str
     spend_restriction: Optional[str] = None
+    # "If any of that mana is spent on a creature spell, it gains haste
+    # until end of turn." (Arena of Glory) — ``_cast_spell`` grants the
+    # creature spell haste UEOT when a coin with this flag pays for it.
+    grants_haste_to_creature_spell: bool = False
 
 
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)

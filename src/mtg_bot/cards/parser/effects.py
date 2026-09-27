@@ -1458,6 +1458,15 @@ _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
 # City of Traitors' "When you play another land, sacrifice this land."
 # Maps to ``SacrificeSelf()`` (reads ``state.resolving_source``; no-op
 # if the source already left the battlefield).
+# "this land becomes a copy of target permanent card in your graveyard
+# until end of turn" — Shifting Woodland's delirium ability. Only card in
+# the pool with a self-copy-of-graveyard-card shape; broader grammar
+# (other self nouns / durations) deferred until a second example exists.
+# Maps to ``SourceBecomesCopyOfTargetGraveyardCardUEOT()``.
+_SELF_BECOMES_COPY_OF_GRAVEYARD_PERMANENT_UEOT = re.compile(
+    r"^this land becomes a copy of target permanent card in your "
+    r"graveyard until end of turn$"
+)
 _SACRIFICE_THIS_PERMANENT = re.compile(
     r"^sacrifice this (?:land|creature|artifact|enchantment|permanent)$"
 )
@@ -1655,6 +1664,14 @@ _ADD_MANA_PER_CONTROLLED_NOUNS: dict[str, object] = {
     "creature": _IsCreature(),
     "artifact": IsArtifact(),
 }
+# "Add {R}{R}. If any of that mana is spent on a creature spell, it gains
+# haste until end of turn." — mana tagged with a haste rider (Arena of
+# Glory). Parameterized over the brace run; maps to ``AddManaToPool(...,
+# grants_haste_to_creature_spell=True)``.
+_ADD_MANA_WITH_CREATURE_HASTE_RIDER = re.compile(
+    r"^add ((?:\{[WUBRGC]\})+)\. If any of that mana is spent on a "
+    r"creature spell, it gains haste until end of turn$"
+)
 _ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
     r"^add ((?:\{[WUBRGC]\})+)\. "
     r"Spend this mana only to (.+)$"
@@ -5698,6 +5715,12 @@ def _parse_effect(phrase: str) -> Effect | None:
         # more-specific shape only claims phrases that carry the
         # ``, enchantment, or creature with flying`` tail.
         return DestroyTargetArtifactEnchantmentOrFlyingCreature()
+    if _SELF_BECOMES_COPY_OF_GRAVEYARD_PERMANENT_UEOT.match(phrase):
+        from mtg_bot.effects.generic import (
+            SourceBecomesCopyOfTargetGraveyardCardUEOT,
+        )
+
+        return SourceBecomesCopyOfTargetGraveyardCardUEOT()
     if _SACRIFICE_THIS_PERMANENT.match(phrase) is not None:
         return SacrificeSelf()
     m = _DESTROY_TARGET_LAND.match(phrase)
@@ -5867,6 +5890,15 @@ def _parse_effect(phrase: str) -> Effect | None:
         return AddManaOfColorPerCount(
             color=m.group("color"),
             amount=CountControlledMatching(pred),
+        )
+    m = _ADD_MANA_WITH_CREATURE_HASTE_RIDER.match(phrase)
+    if m is not None:
+        counts: dict[str, int] = {}
+        for c in re.findall(r"\{([WUBRGC])\}", m.group(1)):
+            counts[c] = counts.get(c, 0) + 1
+        return AddManaToPool(
+            produces=tuple(counts.items()),
+            grants_haste_to_creature_spell=True,
         )
     m = _ADD_MANA_WITH_SPEND_RESTRICTION.match(phrase)
     if m is not None:

@@ -98,6 +98,7 @@ from mtg_bot.effects.conditions import (
     AttackedWithThisTurn,
     Condition,
     ControlPermanent,
+    DeliriumActive,
     HandSizeExactly,
     PerControlled,
     PerDifferentlyNamedLand,
@@ -214,6 +215,12 @@ _TAP_X_UNTAPPED_ARTIFACTS_PIECE = "Tap X untapped artifacts you control"
 # ``activated_abilities`` (whose activation path doesn't pay it).
 _DISCARD_THIS_CARD_PIECE = "Discard this card"
 
+# "Exert this land" / "Exert this creature" (CR 701.39) —
+# ``ActivationCost.exert_self`` (Arena of Glory).
+_EXERT_SELF_PIECES = frozenset({
+    "Exert this land", "Exert this creature", "Exert this artifact",
+})
+
 # "Remove a <kind> counter from this land" — a counter kind without a
 # dedicated engine field (``GameObject.named_counters``; Gemstone Mine's
 # "mining"). Kinds that DO have dedicated fields are rejected so they
@@ -276,6 +283,8 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         return _CostPiece(kind="tap_x_untapped_artifacts")
     if piece == _DISCARD_THIS_CARD_PIECE:
         return _CostPiece(kind="discard_self")
+    if piece in _EXERT_SELF_PIECES:
+        return _CostPiece(kind="exert_self")
     named = _REMOVE_NAMED_COUNTER_FROM_SELF_PIECE.match(piece)
     if named is not None:
         if named.group("kind") in _DEDICATED_COUNTER_KINDS:
@@ -328,6 +337,7 @@ def _build_cost_from_pieces(
     tap_x_untapped_artifacts = False
     discard_self = False
     remove_named_counter = ""
+    exert_self = False
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -376,6 +386,10 @@ def _build_cost_from_pieces(
             if discard_self:
                 return None
             discard_self = True
+        elif p.kind == "exert_self":
+            if exert_self:
+                return None
+            exert_self = True
         elif p.kind == "remove_named_counter":
             if remove_named_counter:
                 return None
@@ -406,8 +420,10 @@ def _build_cost_from_pieces(
         kwargs["tap_x_untapped_artifacts_you_control"] = True
     if remove_named_counter:
         kwargs["remove_named_counter_from_self"] = remove_named_counter
+    if exert_self:
+        kwargs["exert_self"] = True
     if discard_self:
-        if tap_self or sacrifice_seen or remove_named_counter:
+        if tap_self or sacrifice_seen or remove_named_counter or exert_self:
             # A card in hand can't also be tapped / sacrificed.
             return None
         kwargs["discard_self"] = True
@@ -542,6 +558,11 @@ def _parse_activate_only_if_condition(phrase: str) -> "Condition | None":
         if n is None:
             return None
         return HandSizeExactly(n)
+    if phrase == (
+        "there are four or more card types among cards in your graveyard"
+    ):
+        # Delirium (Shifting Woodland's copy ability).
+        return DeliriumActive()
     return None
 
 
