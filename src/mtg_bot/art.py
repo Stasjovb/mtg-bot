@@ -22,6 +22,8 @@ SIZES: tuple[str, ...] = ("small", "normal", "large", "art_crop", "border_crop")
 DEFAULT_SIZES: tuple[str, ...] = ("small", "normal")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Kept for callers that want a single file; ``CardIndex.load()`` with no
+# argument indexes every dump in the active card pool instead.
 DEFAULT_CARD_DATA = _PROJECT_ROOT / "data" / "edge_of_eternities.json"
 DEFAULT_CACHE_ROOT = _PROJECT_ROOT / "data" / "card_images"
 
@@ -47,19 +49,32 @@ def _validate_size(size: str) -> None:
 
 @dataclass(frozen=True)
 class CardIndex:
-    """Lookup over the EoE Scryfall dump."""
+    """Lookup over one or more Scryfall dumps."""
 
     by_name: dict[str, dict[str, Any]]
     by_id: dict[str, dict[str, Any]]
 
     @classmethod
-    def load(cls, path: Path = DEFAULT_CARD_DATA) -> "CardIndex":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    def load(
+        cls, path: Path | Iterable[Path] | None = None,
+    ) -> "CardIndex":
+        """Index ``path`` (one dump), each of an iterable of dumps, or,
+        when ``None``, every dump in the active card pool (see
+        ``mtg_bot.cards.pools``). First occurrence of a name wins."""
+        if path is None:
+            from mtg_bot.cards.pools import pool_data_paths
+            paths: list[Path] = list(pool_data_paths())
+        elif isinstance(path, (str, Path)):
+            paths = [Path(path)]
+        else:
+            paths = [Path(p) for p in path]
         by_name: dict[str, dict[str, Any]] = {}
         by_id: dict[str, dict[str, Any]] = {}
-        for card in data:
-            by_name[card["name"]] = card
-            by_id[card["id"]] = card
+        for p in paths:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            for card in data:
+                by_name.setdefault(card["name"], card)
+                by_id.setdefault(card["id"], card)
         return cls(by_name=by_name, by_id=by_id)
 
     def resolve(self, name: str) -> dict[str, Any] | None:

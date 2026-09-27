@@ -249,3 +249,26 @@ def test_http_fetcher_sets_user_agent(monkeypatch):
     assert any(k.lower() == "user-agent" for k in seen["headers"])
     ua = next(v for k, v in seen["headers"].items() if k.lower() == "user-agent")
     assert "mtg-bot" in ua
+
+
+# ------------------------------------------------------------------------
+# CardIndex.load over multiple dumps / the active pool
+# ------------------------------------------------------------------------
+
+
+def test_card_index_load_many_paths_first_wins(tmp_path):
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    a.write_text(json.dumps([{"id": "id-1", "name": "Alpha", "v": "a"}]), encoding="utf-8")
+    b.write_text(json.dumps([{"id": "id-1", "name": "Alpha", "v": "b"},
+                             {"id": "id-2", "name": "Beta"}]), encoding="utf-8")
+    idx = art.CardIndex.load([a, b])
+    assert idx.by_name["Alpha"]["v"] == "a"
+    assert set(idx.by_id) == {"id-1", "id-2"}
+
+
+def test_card_index_load_default_indexes_active_pool(monkeypatch):
+    monkeypatch.setenv("MTG_BOT_CARD_POOL", "cube")
+    idx = art.CardIndex.load()
+    assert idx.resolve("Mox Sapphire") is not None
+    assert idx.resolve("Anticausal Vestige") is None

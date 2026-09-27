@@ -44,6 +44,8 @@ def test_default_paths_are_relative_to_repo_root():
     assert isinstance(_common.DEFAULT_PROGRESS_DIR, Path)
     assert isinstance(_common.DEFAULT_SHARDS_CONFIG, Path)
     assert _common.DEFAULT_DECK_POOL.parts[-1] == "eoe_decks.json.gz"
+    assert isinstance(_common.CUBE_DECK_POOL, Path)
+    assert _common.CUBE_DECK_POOL.parts[-2:] == ("cube", "power_lsv_decks.json.gz")
     assert _common.DEFAULT_PROGRESS_DIR.parts[-1] == "training_progress"
     assert _common.DEFAULT_SHARDS_CONFIG.parts[-1] == "shards_config.json"
 

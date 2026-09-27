@@ -31,6 +31,15 @@ DEFAULT_BUNDLE_URL = f"{DEFAULT_QUEUE_URL}/repo.bundle"
 DEFAULT_NODES = 200
 DEFAULT_SAMPLES = 4
 
+# Deck pools. The TARGET pool is the PowerLSV cube (see
+# ``mtg_bot.cards.pools``): ``CUBE_DECK_POOL`` is written by
+# ``scripts/build_cube_deck_pool.py`` once the parser claims enough cube
+# cards per color pair (it fails loudly until then -- see
+# ``docs/CUBE_POOL_COVERAGE.md``). ``DEFAULT_DECK_POOL`` stays on the
+# 17lands EoE corpus until that file exists so in-flight EoE runs and
+# ad-hoc ``mtg_bot eval/ladder`` invocations keep working; flip it to
+# ``CUBE_DECK_POOL`` when the cube pool is generated.
+CUBE_DECK_POOL = Path("data/cube/power_lsv_decks.json.gz")
 DEFAULT_DECK_POOL = Path("data/17lands/eoe_decks.json.gz")
 DEFAULT_PROGRESS_DIR = Path("training_progress")
 DEFAULT_SHARDS_CONFIG = Path("shards_config.json")

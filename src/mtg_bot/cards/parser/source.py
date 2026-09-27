@@ -1,9 +1,10 @@
 """``OracleParserCardSource`` — top-level card source backed by the
 oracle-text parser.
 
-Walks ``data/edge_of_eternities.json`` once at construction, asks each
-of the per-card-type builders to attempt a printing, and stores every
-success in a name-keyed dict. The parser's "claimed_names" property
+Walks the active card pool (see ``mtg_bot.cards.pools`` — the
+``MTG_BOT_CARD_POOL`` env var picks ``all`` / ``cube`` / ``eoe``) once
+at construction, asks each of the per-card-type builders to attempt a
+printing, and stores every success in a name-keyed dict. The parser's "claimed_names" property
 lists exactly which cards the parser handles end-to-end today; the
 structural-parity gate in ``tests/test_parser_parity.py`` runs against
 every name in that tuple.
@@ -11,10 +12,8 @@ every name in that tuple.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from mtg_bot.cards.base import CardPrinting
+from mtg_bot.cards.pools import load_pool_cards, resolve_pool_name, active_pool_name
 from mtg_bot.cards.parser.artifact_builder import _build_artifact_printing
 from mtg_bot.cards.parser.creature_builder import _build_creature_printing
 from mtg_bot.cards.parser.equipment_builder import _build_equipment_printing
@@ -30,27 +29,18 @@ from mtg_bot.cards.parser.planeswalker_builder import (
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
 
 
-_DATA_DIR = Path(__file__).resolve().parents[4] / "data"
-_DATA_PATHS: tuple[Path, ...] = (
-    _DATA_DIR / "edge_of_eternities.json",
-    _DATA_DIR / "stellar_sights.json",
-    _DATA_DIR / "special_guests_eoe.json",
-    _DATA_DIR / "duskmourn.json",
-)
-
-
-def _load_scryfall_data() -> list[dict]:
-    cards: list[dict] = []
-    for path in _DATA_PATHS:
-        with path.open("r", encoding="utf-8") as f:
-            cards.extend(json.load(f))
-    return cards
+def _load_scryfall_data(pool: str | None = None) -> list[dict]:
+    """Raw Scryfall records for ``pool`` (``None`` -> env-selected)."""
+    return load_pool_cards(pool)
 
 
 class OracleParserCardSource:
-    def __init__(self) -> None:
+    def __init__(self, pool: str | None = None) -> None:
+        self._pool_name = (
+            resolve_pool_name(pool) if pool is not None else active_pool_name()
+        )
         printings: dict[str, CardPrinting] = {}
-        for card in _load_scryfall_data():
+        for card in _load_scryfall_data(self._pool_name):
             built = _build_room_printing(card)
             if built is None:
                 built = _build_enchantment_printing(card)
@@ -71,6 +61,11 @@ class OracleParserCardSource:
             if built is not None:
                 printings[card["name"]] = built
         self._printings = printings
+
+    @property
+    def pool_name(self) -> str:
+        """Which registered pool this source was built from."""
+        return self._pool_name
 
     @property
     def claimed_names(self) -> tuple[str, ...]:
