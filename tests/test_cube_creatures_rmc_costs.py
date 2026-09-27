@@ -77,11 +77,15 @@ def test_cost_atom_grammar():
     assert parse_rmc_cost_piece("Sacrifice a blue thing") is None
     assert parse_rmc_cost_piece("Tap two untapped green things you control") is None
     assert parse_rmc_cost_piece("Discard two cards") is None
-    cost = _parse_activation_cost("{T}, Sacrifice an artifact")
+    # "Sacrifice a/an <card type>" is the base grammar's
+    # ``sacrifice_a_permanent_type`` field (tried first); counted
+    # sacrifices fall through to the composable atom.
+    assert _parse_activation_cost("{T}, Sacrifice an artifact").extra_costs == ()
+    cost = _parse_activation_cost("{T}, Sacrifice two artifacts")
     assert cost.tap_self and cost.extra_costs == (
-        SacrificePermanentsCost(permanent_filter=IsArtifact(), label="an artifact"),
+        SacrificePermanentsCost(permanent_filter=IsArtifact(), count=2, label="two artifacts"),
     )
-    assert "Sacrifice an artifact" in cost.describe()
+    assert "Sacrifice two artifacts" in cost.describe()
 
 
 def test_grammar_disabled_and_eoe_guard():
