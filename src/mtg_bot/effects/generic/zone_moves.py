@@ -137,6 +137,9 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
             f"{obj.printing.name} put on the {destination} of "
             f"P{owner.id}'s library"
         )
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
 
     def describe(self) -> str:
         scope = (
@@ -218,6 +221,9 @@ class OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(Effect):
             f"{obj.printing.name} put on the bottom of P{owner.id}'s "
             f"library (was warped in exile)"
         )
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
 
     def describe(self) -> str:
         return (
@@ -452,6 +458,10 @@ class ShuffleZonesIntoLibrary(Effect):
                 moved += 1
             p.graveyard.clear()
         shuffle_library(state, controller_id)
+        if moved:
+            from mtg_bot.turn import note_cards_put_into_library
+
+            note_cards_put_into_library(state, controller_id)
         zone_phrase = " and ".join(self.zones) if self.zones else "(none)"
         state.log.append(
             f"P{controller_id} shuffles {moved} cards from "

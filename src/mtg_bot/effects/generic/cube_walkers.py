@@ -647,6 +647,10 @@ class PutCardsFromHandOnTopOfLibrary(Effect):
             f"P{controller_id} puts {n} card(s) from hand on top of "
             f"their library"
         )
+        if n:
+            from mtg_bot.turn import note_cards_put_into_library
+
+            note_cards_put_into_library(state, controller_id)
 
     def describe(self) -> str:
         return (
@@ -693,6 +697,10 @@ class ExileTargetPlayersLibraryThenShuffleHandIn(Effect):
             f"P{target.id} exiles {len(exiled)} library card(s) and "
             f"shuffles {len(hand)} hand card(s) into their library"
         )
+        if hand:
+            from mtg_bot.turn import note_cards_put_into_library
+
+            note_cards_put_into_library(state, target.id)
 
     def describe(self) -> str:
         return (
@@ -943,6 +951,9 @@ class PutTargetIntoOwnersLibraryNthFromTop(Effect):
             f"{obj.printing.name} is put into P{owner.id}'s library "
             f"(position {idx + 1} from the top)"
         )
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
 
     def describe(self) -> str:
         return (

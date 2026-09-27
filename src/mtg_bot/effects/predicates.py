@@ -263,6 +263,11 @@ class Event(str, Enum):
     # or sorcery spell" (Magecraft) -- a copy is not cast, so IS_CAST
     # doesn't see it.
     SPELL_COPIED = "spell_copied"
+    # One or more cards were just put into a library from another zone
+    # (CR 400.2; Wan Shi Tong's "Whenever one or more cards are put into
+    # a library from anywhere"). Subject ``"player"`` is the library's
+    # owner. Library-internal moves (look / reorder / bottom) don't fire.
+    CARDS_PUT_INTO_LIBRARY = "cards_put_into_library"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -307,6 +312,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DRAWS_CARD: ("player",),
     Event.WOULD_DRAW_A_CARD: ("player",),
     Event.SPELL_COPIED: ("spell", "controller"),
+    Event.CARDS_PUT_INTO_LIBRARY: ("player",),
 }
 
 

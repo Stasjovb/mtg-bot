@@ -975,6 +975,45 @@ class GainControlOfTargetThenAttachIfEquipment(Effect):
         )
 
 
+@dataclass(frozen=True)
+class OwnerPutsTargetSecondFromTopOrBottom(Effect):
+    """"target nonland permanent's owner puts it into their library
+    second from the top or on the bottom." (Wan Shi Tong) -- the owner
+    chooses (``choose_yes_no``: yes = second from the top)."""
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.generic.cube_walkers import IsPermanent
+        from mtg_bot.effects.object_predicates import IsLand
+        from mtg_bot.effects.targets import TargetSpec
+
+        object.__setattr__(self, "targets", (TargetSpec(IsPermanent() & ~IsLand()),))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if obj is None or obj.printing.is_land:
+            return
+        owner = state.player_by_id(obj.owner_id)
+        second = owner.agent is None or owner.agent.choose_yes_no(
+            state, owner.id,
+            f"Put {obj.printing.name} second from the top (no = bottom)?",
+        )
+        index = 1 if second else len(owner.library) + 1
+        move_off_battlefield(state, obj, "library", library_index=index)
+
+    def describe(self) -> str:
+        return (
+            "target nonland permanent's owner puts it into their library "
+            "second from the top or on the bottom"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Library-top reveals
 # ---------------------------------------------------------------------------
@@ -1457,6 +1496,7 @@ class ChooseNoMode(Effect):
 
 
 __all__ = [
+    "OwnerPutsTargetSecondFromTopOrBottom",
     "GainControlOfTargetThenAttachIfEquipment",
     "Adapt",
     "ExileUpToOneTargetGraveyardCardWithSource",

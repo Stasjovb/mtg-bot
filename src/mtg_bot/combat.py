@@ -86,6 +86,14 @@ def can_block(
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
             return False
+    # "can't block or be blocked by non-<Subtype> creatures"
+    for restricted, other in ((blocker, attacker), (attacker, blocker)):
+        sub = restricted.printing.blocks_only_with_subtype
+        if sub:
+            from mtg_bot.game import effective_subtypes
+
+            if sub not in effective_subtypes(state, other):
+                return False
     # Shadow (CR 702.28b): creatures with shadow can block or be blocked
     # only by creatures with shadow.
     if ("shadow" in attacker_kws) != ("shadow" in blocker_kws):

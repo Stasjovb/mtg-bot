@@ -114,6 +114,8 @@ def parse_ub_trigger_phrase(phrase: str):
         )
     if phrase == "one or more +1/+1 counters are put on this creature":
         return (Event.COUNTERS_ADDED, IsSelf())
+    if phrase == "one or more cards are put into a library from anywhere":
+        return (Event.CARDS_PUT_INTO_LIBRARY, Always())
     m = _SELF_OR_ANOTHER_ENTERS.match(phrase)
     if m is not None:
         noun = _leaves_noun(m.group("noun"))
@@ -479,6 +481,17 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         )
 
         return GainControlOfTargetThenAttachIfEquipment()
+    if phrase == (
+        "target nonland permanent's owner puts it into their library second "
+        "from the top or on the bottom"
+    ):
+        # Literal: Wan Shi Tong is the only card in the pool with this
+        # owner's-choice tuck.
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            OwnerPutsTargetSecondFromTopOrBottom,
+        )
+
+        return OwnerPutsTargetSecondFromTopOrBottom()
     ub = _parse_ub_effect_batch8(phrase)
     if ub is not None:
         return ub
@@ -957,7 +970,21 @@ def _parse_kicker_x_line(line: str) -> UBLine | None:
     })
 
 
+def _parse_block_restriction_line(line: str) -> UBLine | None:
+    """"This creature can't block or be blocked by non-<Subtype>
+    creatures." (Wan Shi Tong's Spirit tokens, via the quoted-token
+    grammar)."""
+    m = re.match(
+        r"^This creature can't block or be blocked by non-([A-Z][a-z]+) "
+        r"creatures\.$", line,
+    )
+    if m is None:
+        return None
+    return UBLine(fields={"blocks_only_with_subtype": m.group(1)})
+
+
 _LINE_PARSERS = (
+    _parse_block_restriction_line,
     _parse_kicker_x_line,
     _parse_choose_parity_line,
     _parse_saddle_line,

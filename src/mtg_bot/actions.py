@@ -4542,6 +4542,9 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
         card.zone = Zone.LIBRARY
         owner.library.append(card)
         shuffle_library(state, owner.id)
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
         state.log.append(
             f"{card.printing.name} is shuffled into P{card.owner_id}'s "
             f"library instead of graveyard"
@@ -4648,6 +4651,9 @@ def move_spell_off_stack(
 
         card.zone = Zone.LIBRARY
         owner.library.insert(0, card)
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
         reveal_to_all(state, card)
         state.log.append(
             f"{card.printing.name} is put on top of P{card.owner_id}'s library"

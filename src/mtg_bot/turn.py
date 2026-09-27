@@ -316,6 +316,30 @@ def run_draw_step(state: GameState) -> None:
     )
 
 
+def note_cards_put_into_library(state: GameState, player_id: int | None = None) -> None:
+    """Fire "whenever one or more cards are put into a library from
+    anywhere" observers once for a batch of zone changes into a library
+    (``player_id`` = the library's owner, when known). A cheap no-op
+    unless some permanent observes the event."""
+    from mtg_bot.effects.predicates import Event
+
+    if not any(
+        t.event is Event.CARDS_PUT_INTO_LIBRARY
+        for o in state.battlefield for t in o.printing.triggered_abilities
+    ):
+        return
+    from mtg_bot.actions import dispatch_event
+
+    player = (
+        state.player_by_id(player_id) if player_id is not None
+        else state.active_player()
+    )
+    dispatch_event(
+        state, Event.CARDS_PUT_INTO_LIBRARY, label="put-into-library",
+        player=player,
+    )
+
+
 def _reset_left_battlefield_object(obj: "GameObject") -> None:
     """Clear per-permanent state on an object that left the battlefield
     for a hidden zone (hand / library): counters, temporary P/T bonuses,
@@ -551,6 +575,7 @@ def move_off_battlefield(
             obj.zone = Zone.LIBRARY
             idx = max(0, min(library_index, len(owner.library)))
             owner.library.insert(idx, obj)
+            note_cards_put_into_library(state, owner.id)
     else:
         raise ValueError(f"unknown destination: {destination!r}")
 

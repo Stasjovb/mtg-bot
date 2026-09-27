@@ -223,6 +223,18 @@ def _with_quoted_token_ability(printing, quoted: str):
         r"\b([Tt])his token\b", lambda m: m.group(1) + "his creature",
         quoted,
     ).rstrip(".")
+    from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_creature_line
+
+    ub = parse_ub_creature_line(line + ".", "")
+    if ub is not None and not (ub.hand_abilities or ub.cost_reductions):
+        return dataclasses.replace(
+            printing,
+            keywords=printing.keywords | frozenset(ub.keywords),
+            triggered_abilities=printing.triggered_abilities + ub.triggers,
+            activated_abilities=printing.activated_abilities + ub.activated,
+            static_abilities=printing.static_abilities + ub.statics,
+            **ub.fields,
+        )
     parsed = _parse_clause(line + ".")
     if parsed is None:
         return None

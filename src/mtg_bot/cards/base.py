@@ -1424,6 +1424,9 @@ class CardPrinting:
     # "X can't be 0." (Thieving Skydiver's "Kicker {X}. X can't be 0."):
     # the least X the caster may choose.
     x_min: int = 0
+    # "This creature can't block or be blocked by non-<Subtype>
+    # creatures." (Wan Shi Tong's Spirit tokens)
+    blocks_only_with_subtype: str = ""
     # Clone family beyond ``enters_as_copy_of_creature`` (U/B cube):
     # "You may have this creature enter as a copy of any <types> on the
     # battlefield" (``enters_as_copy_types``, e.g. ("Artifact",

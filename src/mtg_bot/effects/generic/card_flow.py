@@ -727,6 +727,10 @@ class EachPlayerShufflesZonesIntoLibrary(Effect):
             state.log.append(
                 f"P{p.id} shuffles {len(moved)} card(s) into their library"
             )
+            if moved:
+                from mtg_bot.turn import note_cards_put_into_library
+
+                note_cards_put_into_library(state, p.id)
 
     def describe(self) -> str:
         return (
