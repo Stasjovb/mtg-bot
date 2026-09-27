@@ -1369,6 +1369,14 @@ class CardPrinting:
     chooses_card_name_as_enters: bool = False
     named_spell_cost_increase: int = 0
     named_ability_cost_increase: int = 0
+    # Reconfigure (CR 702.151; Lion Sash): the printing also carries the
+    # attach / unattach activated abilities; while attached to a
+    # creature it isn't a creature (``game.is_creature_now``).
+    reconfigure_cost: "ManaCost | None" = None
+    reconfigure_cost_str: str = ""
+    # "Equipped creature gets +P/+T for each <kind> counter on this
+    # Equipment." -- ``(kind, P, T)`` (Lion Sash).
+    equipment_bonus_per_own_counter: tuple = ()
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

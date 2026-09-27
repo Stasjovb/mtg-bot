@@ -1067,6 +1067,10 @@ def is_creature_now(obj: GameObject) -> bool:
     # zone change implicitly via a fresh GameObject instance).
     if obj.enduring_returned_as_enchantment:
         return False
+    # Reconfigure (CR 702.151b): an Equipment creature attached to a
+    # creature isn't a creature.
+    if obj.attached_to is not None and obj.printing.reconfigure_cost is not None:
+        return False
     return (
         obj.printing.is_creature
         or is_stationed(obj)
@@ -1234,6 +1238,14 @@ def _static_bonuses(
                     if t in o.printing.card_types:
                         n += 1
                         break
+            power_bonus += n * per_p
+            toughness_bonus += n * per_t
+        per_counter = source.printing.equipment_bonus_per_own_counter
+        if per_counter and not _source_layer6_wiped(state, source):
+            # "gets +1/+1 for each +1/+1 counter on this Equipment"
+            # (Lion Sash; cube W/G bucket).
+            kind, per_p, per_t = per_counter
+            n = counter_count(source, kind)
             power_bonus += n * per_p
             toughness_bonus += n * per_t
         eb = source.printing.equipment_bonuses

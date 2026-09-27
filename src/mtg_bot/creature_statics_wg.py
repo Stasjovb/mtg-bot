@@ -244,6 +244,28 @@ def activation_locked(state: "GameState", obj: "GameObject") -> bool:
     return any(types.intersection(lock) for lock in locks)
 
 
+def filter_unusable_abilities(state: "GameState", actions: list) -> list:
+    """Drop ``ActivateAbility`` proposals for abilities whose activation
+    restriction reads the source (Reconfigure's unattach: "Activate only
+    if this permanent is attached to a creature")."""
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.effects.generic.cube_creatures_wg import ReconfigureUnattach
+    from mtg_bot.game import effective_activated_abilities
+
+    out = []
+    for a in actions:
+        if isinstance(a, ActivateAbility):
+            src = next((o for o in state.battlefield if o.id == a.source_id), None)
+            if src is not None and src.attached_to is None:
+                abilities = effective_activated_abilities(state, src)
+                if 0 <= a.ability_index < len(abilities) and isinstance(
+                    abilities[a.ability_index].effect, ReconfigureUnattach,
+                ):
+                    continue
+        out.append(a)
+    return out
+
+
 def filter_activation_locks(state: "GameState", actions: list) -> list:
     """Drop ``ActivateAbility`` / ``ActivateStation`` proposals whose
     battlefield source is locked."""

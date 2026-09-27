@@ -433,3 +433,66 @@ def test_figure_of_fable_levels_up():
     assert "Avatar" in avatar.describe()
     state.resolving_source = None
     avatar.resolve(state, 0)
+
+
+def test_lion_sash_grows_and_reconfigures():
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        ExileGraveyardCardCounterIfPermanent,
+        ReconfigureAttach,
+        ReconfigureUnattach,
+    )
+    from mtg_bot.game import effective_power, is_creature_now
+
+    pr = cube()["Lion Sash"]
+    assert pr.reconfigure_cost_str == "{2}"
+    assert pr.equipment_bonus_per_own_counter == ("+1/+1", 1, 1)
+    effects = [a.effect for a in pr.activated_abilities]
+    exile_idx = next(
+        i for i, e in enumerate(effects)
+        if isinstance(e, ExileGraveyardCardCounterIfPermanent)
+    )
+    attach_idx = next(i for i, e in enumerate(effects) if isinstance(e, ReconfigureAttach))
+    unattach_idx = next(i for i, e in enumerate(effects) if isinstance(e, ReconfigureUnattach))
+    state = make_state()
+    sash = put(state, 0, pr)
+    add_lands(state, 0, "Plains", 6)
+    perm = put(state, 1, "Llanowar Elves", Zone.GRAVEYARD)
+    spell = put(state, 1, "Lightning Bolt", Zone.GRAVEYARD)
+    agent = state.players[0].agent
+
+    def act(i):
+        apply_action(state, 0, ActivateAbility(source_id=sash.id, ability_index=i))
+        drain(state)
+
+    agent.scripts["target"] = [("card_in_graveyard", perm.id)]
+    act(exile_idx)
+    agent.scripts["target"] = [("card_in_graveyard", spell.id)]
+    act(exile_idx)
+    assert sash.plus_one_counters == 1  # only the permanent card counted
+    assert perm in state.players[1].exile and spell in state.players[1].exile
+    ally = put(state, 0, bear("Ally"))
+    acts = legal_actions(state, 0)
+    assert ActivateAbility(source_id=sash.id, ability_index=unattach_idx) not in acts
+    agent.scripts["target"] = [("creature", ally.id)]
+    act(attach_idx)
+    assert sash.attached_to == ally.id and not is_creature_now(sash)
+    assert effective_power(state, ally) == 3
+    assert ActivateAbility(source_id=sash.id, ability_index=unattach_idx) in legal_actions(state, 0)
+    act(unattach_idx)
+    assert sash.attached_to is None and is_creature_now(sash)
+    # Attached again; the host dying makes it a creature again.
+    agent.scripts["target"] = [("creature", ally.id)]
+    act(attach_idx)
+    from mtg_bot.turn import sacrifice
+
+    sacrifice(state, ally)
+    assert sash.attached_to is None and is_creature_now(sash)
+    state.resolving_source = sash
+    assert ("creature", sash.id) not in ReconfigureAttach().legal_targets(state, 0)
+    ReconfigureAttach().resolve(state, 0, (("creature", sash.id),))
+    assert sash.attached_to is None
+    ExileGraveyardCardCounterIfPermanent().resolve(state, 0, ())
+    ReconfigureUnattach().resolve(state, 0)
+    state.resolving_source = None
+    for e in (ReconfigureAttach(), ReconfigureUnattach(), ExileGraveyardCardCounterIfPermanent()):
+        assert e.describe()

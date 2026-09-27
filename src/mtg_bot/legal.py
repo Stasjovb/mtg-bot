@@ -1628,9 +1628,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
     from mtg_bot.creature_statics_wg import (
         filter_activation_locks,
         filter_cast_restrictions,
+        filter_unusable_abilities,
     )
 
     actions = filter_cast_restrictions(state, player_id, actions)
+    actions = filter_unusable_abilities(state, actions)
     return filter_activation_locks(state, actions)
 
 

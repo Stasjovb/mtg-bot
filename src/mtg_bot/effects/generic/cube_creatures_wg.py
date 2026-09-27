@@ -1535,3 +1535,109 @@ class BecomeTypesWithBasePT(Effect):
             f"{cond}becomes a {' '.join(self.subtypes)} with base P/T "
             f"{self.power}/{self.toughness}"
         )
+
+
+# ---------------------------------------------------------------------
+# Lion Sash (Reconfigure)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReconfigureAttach(Effect):
+    """Reconfigure's "Attach to target creature you control" (CR
+    702.151a): another creature you control; while attached this
+    Equipment creature isn't a creature (``game.is_creature_now``)."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source
+        return [
+            ("creature", o.id) for o in state.battlefield
+            if o.controller_id == controller_id and is_creature_now(o)
+            and (source is None or o.id != source.id)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield or not targets:
+            return
+        target = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if (
+            target is None or target.id == source.id
+            or target.controller_id != controller_id or not is_creature_now(target)
+        ):
+            return
+        source.attached_to = target.id
+        source.attacking = False
+        source.blocking = None
+        state.log.append(
+            f"{source.printing.name} is attached to {target.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return "reconfigure: attach to target creature you control"
+
+
+@dataclass(frozen=True)
+class ReconfigureUnattach(Effect):
+    """Reconfigure's "Unattach this permanent" (activate only while
+    attached -- ``creature_statics_wg.filter_unusable_abilities``)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if source.attached_to is not None:
+            source.attached_to = None
+            state.log.append(f"{source.printing.name} is unattached")
+
+    def describe(self) -> str:
+        return "reconfigure: unattach this permanent"
+
+
+@dataclass(frozen=True)
+class ExileGraveyardCardCounterIfPermanent(Effect):
+    """"Exile target card from a graveyard. If it was a permanent card,
+    put a +1/+1 counter on this permanent." (Lion Sash.)"""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("card_in_graveyard", c.id)
+            for p in state.players for c in p.graveyard
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, add_plus_one_counters
+
+        if not targets:
+            return
+        for p in state.players:
+            card = next((c for c in p.graveyard if c.id == targets[0][1]), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            state.log.append(f"{card.printing.name} is exiled from a graveyard")
+            source = state.resolving_source
+            if (
+                card.printing.is_permanent and source is not None
+                and source in state.battlefield
+            ):
+                add_plus_one_counters(state, source, 1)
+            return
+
+    def describe(self) -> str:
+        return (
+            "exile target card from a graveyard; if it was a permanent card, "
+            "put a +1/+1 counter on this permanent"
+        )

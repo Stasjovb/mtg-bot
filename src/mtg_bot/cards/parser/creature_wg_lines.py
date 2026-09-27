@@ -467,6 +467,54 @@ def _parse_named_card_lines(line: str, card: dict) -> WGLine | None:
     return None
 
 
+# ---------------------------------------------------------------------
+# Reconfigure (CR 702.151) / Equipment-creature riders (Lion Sash)
+# ---------------------------------------------------------------------
+
+_RECONFIGURE_RE = re.compile(r"^Reconfigure (?P<cost>(?:\{[^}]+\})+)$")
+_EQUIPPED_PER_OWN_COUNTER_RE = re.compile(
+    r"^Equipped creature gets \+(?P<p>\d+)/\+(?P<t>\d+) for each "
+    r"(?P<kind>\+1/\+1) counter on this Equipment\.$"
+)
+
+
+def _parse_reconfigure_line(line: str, card: dict) -> WGLine | None:
+    """``Reconfigure {cost}``: "{cost}: Attach to target creature you
+    control; or {cost}: Unattach this permanent. Reconfigure only as a
+    sorcery." Only for Equipment creatures."""
+    m = _RECONFIGURE_RE.match(line)
+    if m is None or "Equipment" not in card.get("type_line", ""):
+        return None
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.cube_creatures_wg import (
+        ReconfigureAttach,
+        ReconfigureUnattach,
+    )
+
+    cost_str = m.group("cost")
+    cost = ActivationCost(mana=parse_mana_cost(cost_str), mana_str=cost_str)
+    return WGLine(
+        fields={
+            "reconfigure_cost": parse_mana_cost(cost_str),
+            "reconfigure_cost_str": cost_str,
+        },
+        activated=(
+            ActivatedAbility(cost=cost, effect=ReconfigureAttach(), sorcery_speed=True),
+            ActivatedAbility(cost=cost, effect=ReconfigureUnattach(), sorcery_speed=True),
+        ),
+    )
+
+
+def _parse_equipped_per_own_counter_line(line: str, card: dict) -> WGLine | None:
+    m = _EQUIPPED_PER_OWN_COUNTER_RE.match(line)
+    if m is None or "Equipment" not in card.get("type_line", ""):
+        return None
+    return WGLine(fields={"equipment_bonus_per_own_counter": (
+        m.group("kind"), int(m.group("p")), int(m.group("t")),
+    )})
+
+
 _RECOGNIZERS = (
     _parse_evoke_line,
     _parse_ravenous_line,
@@ -484,6 +532,8 @@ _RECOGNIZERS = (
     _parse_backup_line,
     _parse_once_per_turn_graveyard_play,
     _parse_named_card_lines,
+    _parse_reconfigure_line,
+    _parse_equipped_per_own_counter_line,
 )
 
 

@@ -86,6 +86,9 @@ Shapes:
 * ``[if this creature is a <Subtype>, it | this creature] becomes a
   <Subtypes> with base power and toughness P/T[ and <keywords>]`` ->
   :class:`BecomeTypesWithBasePT` (Figure of Fable)
+* ``exile target card from a graveyard. If it was a permanent card, put a
+  +1/+1 counter on this permanent`` ->
+  :class:`ExileGraveyardCardCounterIfPermanent` (Lion Sash)
 * ``exile [up to one ]target <noun> until an opponent becomes the
   monarch`` -> :class:`ExileUntilOpponentBecomesMonarch` (Palace Jailer)
 * ``exile [up to one ][another|other ]target <noun>. Return that card to
@@ -226,6 +229,10 @@ _BECOMES_TYPES_WITH_BASE_PT_RE = re.compile(
     r"^(?:if this creature is an? (?P<cond>[A-Z][a-z]+), it|this creature) "
     r"becomes an? (?P<types>[A-Z][a-z]+(?: [A-Z][a-z]+)*) with base power "
     r"and toughness (?P<p>\d+)/(?P<t>\d+)(?: and (?P<kw>.+))?$"
+)
+_EXILE_GRAVEYARD_CARD_COUNTER_IF_PERMANENT_RE = re.compile(
+    r"^exile target card from a graveyard\. If it was a permanent card, put "
+    r"a \+1/\+1 counter on this (?:permanent|creature)$"
 )
 _EXILE_UNTIL_OPPONENT_MONARCH_RE = re.compile(
     r"^exile (?P<upto>up to one )?target (?P<noun>.+?) until an opponent "
@@ -483,6 +490,8 @@ def parse_wg_effect(phrase: str) -> Effect | None:
             return wg.PutCountersOnTargetAndAddSubtype(
                 targets=(spec,), counters=counters, subtype=m.group("sub"),
             )
+    if _EXILE_GRAVEYARD_CARD_COUNTER_IF_PERMANENT_RE.match(phrase):
+        return wg.ExileGraveyardCardCounterIfPermanent()
     m = _BECOMES_TYPES_WITH_BASE_PT_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects_ext import _keywords
