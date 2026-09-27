@@ -82,15 +82,19 @@ def test_lingering_souls_creates_spirits_and_flashes_back():
     assert souls in state.players[0].exile
 
 
-def test_token_stats_must_match_registry():
-    # The registry's Spirit is a 1/1 — a printed 3/1 Spirit is a
-    # different token and doesn't claim.
-    assert _parse_create_token_effect(
-        "create a 3/1 white Spirit creature token with flying"
-    ) is None
-    assert _parse_create_token_effect(
+def test_token_stats_mismatching_registry_are_synthesized():
+    # A registry token keyed by the same subtype but with other stats
+    # is a different token: it's built from its printed characteristics
+    # (keyword substrate's token synthesis), not the registered one.
+    eff = _parse_create_token_effect(
+        "create a 2/2 colorless Eldrazi Spawn creature token"
+    )
+    assert eff.token_printing.power == 2 and eff.token_printing.toughness == 2
+    spirit = _parse_create_token_effect(
         "create a 1/1 white Spirit creature token with flying"
-    ) is not None
+    )
+    assert spirit.token_printing.name == "Spirit"
+    assert "flying" in spirit.token_printing.keywords
 
 
 def test_malevolent_rumble_takes_permanent_rest_to_graveyard_and_spawn():

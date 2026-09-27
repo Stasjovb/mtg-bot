@@ -120,7 +120,10 @@ def _parse_keyword_action_effect(phrase: str) -> Effect | None:
     if m is not None:
         from mtg_bot.effects.generic.library_lookat import Scry
 
-        return Scry(amount=_amount(m.group(1)))
+        # Real CR 701.18 decision (keep / bottom per card) — the parsed
+        # surface never used the keep-all-on-top first-slice shortcut
+        # the Rust ``ScryN`` arm mirrors for the EoE bridge.
+        return Scry(amount=_amount(m.group(1)), bottom_choice=True)
     m = _EACH_OPPONENT_MILLS.match(phrase)
     if m is not None:
         from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards

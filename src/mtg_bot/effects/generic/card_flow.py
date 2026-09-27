@@ -74,7 +74,6 @@ class CardFilter:
     * ``max_mv`` — mana value at most N ("with mana value 3 or less").
     * ``color`` — the card must be this color ("a green creature card").
     * ``supertype`` — e.g. ``"Legendary"``.
-    * ``subtype`` — e.g. ``"Island"`` (Islandcycling's "an Island card").
     """
 
     any_types: tuple[str, ...] = ()
@@ -82,7 +81,6 @@ class CardFilter:
     max_mv: "int | None" = None
     color: "str | None" = None
     supertype: "str | None" = None
-    subtype: "str | None" = None
 
     @property
     def has_quality(self) -> bool:
@@ -92,7 +90,7 @@ class CardFilter:
         return bool(
             self.any_types or self.excluded_types
             or self.max_mv is not None or self.color is not None
-            or self.supertype is not None or self.subtype is not None
+            or self.supertype is not None
         )
 
     def matches(self, printing: "CardPrinting") -> bool:
@@ -117,8 +115,6 @@ class CardFilter:
             return False
         if self.supertype is not None and self.supertype not in printing.supertypes:
             return False
-        if self.subtype is not None and self.subtype not in printing.subtypes:
-            return False
         return True
 
     def describe(self) -> str:
@@ -132,8 +128,6 @@ class CardFilter:
             }.get(self.color, self.color))
         for t in self.excluded_types:
             words.append(f"non{t.lower()}")
-        if self.subtype:
-            words.append(self.subtype)
         if self.any_types:
             words.append(" or ".join(t.lower() for t in self.any_types))
         words.append("card")

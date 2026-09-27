@@ -41,7 +41,7 @@ from mtg_bot.cards.parser.spell_builder import (
     _substrate_additional_cost_fields,
 )
 from mtg_bot.effects.combinators import IfConditionElse
-from mtg_bot.effects.conditions import CardsInYourGraveyardAtLeast
+from mtg_bot.effects.state_predicates import CardsInGraveyardAtLeast
 from mtg_bot.effects.generic.card_flow import CardFilter
 from mtg_bot.game import StackItem, Zone
 from mtg_bot.legal import legal_actions
@@ -121,7 +121,7 @@ def test_instead_if_rider():
         "cards in your graveyard.", base, "Cabal Ritual",
     )
     assert rider == IfConditionElse(
-        condition=CardsInYourGraveyardAtLeast(n=7),
+        condition=CardsInGraveyardAtLeast(n=7),
         then_effect=AddManaToPool(produces=(("B", 5),)),
         else_effect=base,
     )
@@ -135,7 +135,7 @@ def test_instead_if_rider():
     ) is None
     assert _parse_instead_if_condition(
         "there are 4 or more cards in your graveyard"
-    ) == CardsInYourGraveyardAtLeast(n=4)
+    ) == CardsInGraveyardAtLeast(n=4)
     assert _parse_instead_if_condition(
         "there are many or more cards in your graveyard"
     ) is None
@@ -441,7 +441,7 @@ def test_if_condition_else_targeting_and_describe():
     from mtg_bot.effects.generic.card_flow import TargetPlayerDraws
 
     eff = IfConditionElse(
-        condition=CardsInYourGraveyardAtLeast(n=1),
+        condition=CardsInGraveyardAtLeast(n=1),
         then_effect=TargetPlayerDraws(1),
         else_effect=None,
     )
@@ -452,7 +452,7 @@ def test_if_condition_else_targeting_and_describe():
     assert eff.resolve(state, 0, (("player", 0),)) is None
     assert "if" in eff.describe()
     plain = IfConditionElse(
-        condition=CardsInYourGraveyardAtLeast(n=1),
+        condition=CardsInGraveyardAtLeast(n=1),
         then_effect=AddManaToPool(produces=(("B", 1),)),
         else_effect=AddManaToPool(produces=(("B", 2),)),
     )
@@ -460,7 +460,14 @@ def test_if_condition_else_targeting_and_describe():
     assert plain.legal_targets(state, 0) == []
     assert plain.target_count_range() == (0, 0)
     assert "otherwise" in plain.describe()
-    assert CardsInYourGraveyardAtLeast(n=0).matches(state, 99) is False
+    from mtg_bot.effects.conditions import AnotherSpellCastThisTurn
+
+    via_condition = IfConditionElse(
+        condition=AnotherSpellCastThisTurn(),
+        then_effect=AddManaToPool(produces=(("B", 1),)),
+    )
+    via_condition.resolve(state, 0)
+    assert state.players[0].mana_pool == []
 
 
 # ---------------------------------------------------------------------
@@ -559,6 +566,8 @@ def test_lorien_revealed_islandcycling_from_hand(cube):
 
     lorien = next(p for n, p in cube.items() if n.startswith("L") and n.endswith("Revealed"))
     assert lorien.landcycling == ("Island", "{1}")
+    # The cycling family is peeled off at the source level (keyword
+    # substrate); the spell builder only sees "Draw three cards."
     (ability,) = lorien.hand_activated_abilities
     assert ability.cost.discard_self
     state = make_state()
@@ -573,4 +582,3 @@ def test_lorien_revealed_islandcycling_from_hand(cube):
     resolve_top_of_stack(state)
     assert card in state.players[0].graveyard
     assert island in state.players[0].hand
-    assert CardFilter(subtype="Island").describe() == "Island card"

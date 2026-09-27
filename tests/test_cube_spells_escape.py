@@ -48,8 +48,41 @@ def test_escape_line_and_catacombs_blocker():
     assert _casting_keyword_fields(
         "Escape—{1}, Exile many other cards from your graveyard."
     ) is None
-    # Everything but "You take the initiative." parses here.
-    assert "From the Catacombs" not in OracleParserCardSource(pool="cube").get_printings()
+
+
+
+def test_from_the_catacombs_cast_and_escape():
+    from mtg_bot.effects.generic.keyword_actions import TakeInitiative
+
+    catacombs = OracleParserCardSource(pool="cube").get_printings()["From the Catacombs"]
+    assert catacombs.spell_effect == Sequence(effects=(
+        ReturnCardFromGraveyardToBattlefield(
+            card_filter=CREATURE, with_counter="corpse",
+            exile_if_it_would_leave=True,
+        ),
+        TakeInitiative(),
+    ))
+    assert catacombs.escape_cost_str == "{3}{B}{B}"
+    assert catacombs.escape_exile_count == 5
+    state = make_state()
+    for _ in range(10):
+        add(state, 0, "Island", Zone.LIBRARY)
+    bear = _creature(state, 1, "Wild Bear", Zone.GRAVEYARD)
+    card = state.new_object(catacombs, 0, Zone.GRAVEYARD)
+    state.players[0].graveyard.append(card)
+    for _ in range(5):
+        add(state, 0, "Forest", Zone.GRAVEYARD)
+    add_lands(state, 0, "Swamp", 5)
+    state.players[0].agent.scripts["target"] = [("graveyard_card", bear.id)]
+    act = CastSpell(card.id, use_escape=True)
+    assert act in legal_actions(state, 0)
+    apply_action(state, 0, act)
+    while state.stack:
+        resolve_top_of_stack(state)
+    assert bear in state.battlefield and bear.controller_id == 0
+    assert bear.named_counters == (("corpse", 1),)
+    assert state.players[0].has_initiative
+    assert card in state.players[0].graveyard
 
 
 def test_reanimate_with_counter_exile_rider_and_extra_effect():

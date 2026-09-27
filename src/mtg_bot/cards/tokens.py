@@ -180,13 +180,6 @@ TOKEN_PRINTINGS: dict[str, CardPrinting] = {
             ),
         ),
     ),
-    # 1/1 white Spirit creature token with flying — Lingering Souls,
-    # Occult Epiphany (cube). Color is not tracked on tokens (see the
-    # Insect note below).
-    "Spirit": make_token_creature(
-        "Spirit", 1, 1, subtypes=("Spirit",),
-        keywords=frozenset({"flying"}),
-    ),
     # 0/1 colorless Eldrazi Spawn creature token with "Sacrifice this
     # token: Add {C}." — Malevolent Rumble (cube). Same mana ability
     # shape as the Eldrazi Scion token above.

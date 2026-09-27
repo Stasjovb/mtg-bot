@@ -658,36 +658,6 @@ _ESCAPE_LINE_RE = re.compile(
 )
 
 
-# "<Basic land type>cycling {cost}" (CR 702.29): a hand-activated
-# "<cost>, Discard this card: Search your library for a <type> card,
-# reveal it, put it into your hand, then shuffle." (Lorien Revealed's
-# Islandcycling) -> ``hand_activated_abilities`` + ``landcycling``.
-_BASIC_LANDCYCLING_LINE_RE = re.compile(
-    r"^(?P<sub>Plains|Island|Swamp|Mountain|Forest)cycling "
-    r"(?P<cost>(?:\{[^}]+\})+)$"
-)
-
-
-def _basic_landcycling_fields(subtype: str, cost_str: str) -> dict:
-    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
-    from mtg_bot.effects.generic.card_flow import CardFilter, SearchLibrary
-
-    ability = ActivatedAbility(
-        cost=ActivationCost(
-            mana=parse_mana_cost(cost_str), mana_str=cost_str,
-            discard_self=True,
-        ),
-        effect=SearchLibrary(
-            card_filter=CardFilter(subtype=subtype), destination="hand",
-            reveal=True,
-        ),
-    )
-    return {
-        "hand_activated_abilities": (ability,),
-        "landcycling": (subtype, cost_str),
-    }
-
-
 # "Plot {cost}" (CR 702.170) -> ``plot_cost``.
 _PLOT_LINE_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
 
@@ -704,9 +674,6 @@ def _casting_keyword_fields(clause: str) -> dict | None:
     when ``clause`` (reminder text already stripped) isn't one."""
     from mtg_bot.cards.base import parse_mana_cost
 
-    m = _BASIC_LANDCYCLING_LINE_RE.match(clause.strip())
-    if m is not None:
-        return _basic_landcycling_fields(m.group("sub"), m.group("cost"))
     m = _ESCAPE_LINE_RE.match(clause.strip())
     if m is not None:
         from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
@@ -801,14 +768,14 @@ _CARDS_IN_YOUR_GRAVEYARD_COND_RE = re.compile(
 
 def _parse_instead_if_condition(cond: str):
     from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
-    from mtg_bot.effects.conditions import CardsInYourGraveyardAtLeast
+    from mtg_bot.effects.state_predicates import CardsInGraveyardAtLeast
 
     m = _CARDS_IN_YOUR_GRAVEYARD_COND_RE.match(cond)
     if m is not None:
         tok = m.group("n")
         n = int(tok) if tok.isdigit() else _SMALL_CARDINAL_WORDS.get(tok)
         if n is not None:
-            return CardsInYourGraveyardAtLeast(n=n)
+            return CardsInGraveyardAtLeast(n=n)
     return None
 
 
@@ -817,7 +784,7 @@ def _parse_instead_if_rider(
 ) -> Effect | None:
     """``Threshold — Add {B}{B}{B}{B}{B} instead if there are seven or
     more cards in your graveyard.`` paired with base ``Add {B}{B}{B}.``
-    -> ``IfConditionElse(CardsInYourGraveyardAtLeast(7), then=Add 5,
+    -> ``IfConditionElse(CardsInGraveyardAtLeast(7), then=Add 5,
     else=Add 3)``. ``None`` if the rider or its condition doesn't
     parse."""
     from mtg_bot.effects.combinators import IfConditionElse

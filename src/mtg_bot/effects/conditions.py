@@ -619,24 +619,6 @@ class DeliriumActive(Condition):
         return False
 
 
-@dataclass(frozen=True)
-class CardsInYourGraveyardAtLeast(Condition):
-    """The viewer has at least ``n`` cards in their graveyard.
-
-    The Threshold gate (``n=7``, "if there are seven or more cards in
-    your graveyard" — Cabal Ritual) and any other printed
-    "N or more cards in your graveyard" condition.
-    """
-
-    n: int = 7
-
-    def matches(self, state, viewer_id, chosen_targets=None):
-        try:
-            player = state.player_by_id(viewer_id)
-        except (KeyError, AttributeError):
-            return False
-        return len(player.graveyard) >= self.n
-
 
 @dataclass(frozen=True)
 class FirstSpellYouCastThisGame(Condition):

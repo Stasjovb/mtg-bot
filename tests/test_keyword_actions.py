@@ -254,8 +254,9 @@ def test_scry_and_each_opponent_mills_phrases():
     from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
     from mtg_bot.effects.generic.library_lookat import Scry
 
-    assert _parse_effect("scry 2") == Scry(amount=2)
-    assert _parse_effect("scry one") == Scry(amount=1)
+    # Parsed scry makes the real keep / bottom decision (bottom_choice).
+    assert _parse_effect("scry 2") == Scry(amount=2, bottom_choice=True)
+    assert _parse_effect("scry one") == Scry(amount=1, bottom_choice=True)
     assert _parse_effect("each opponent mills three cards") == EachOpponentMillsCards(amount=3)
     assert _parse_effect("each opponent mills a card") == EachOpponentMillsCards(amount=1)
     assert "Preordain" in OracleParserCardSource(pool="cube").claimed_names

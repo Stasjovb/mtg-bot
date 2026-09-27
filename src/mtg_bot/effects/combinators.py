@@ -1650,7 +1650,10 @@ class IfConditionElse(Effect):
     "instead" rider share the base clause's targets).
     """
 
-    condition: Condition
+    # A ``Condition`` (``matches(state, viewer_id)``) or a
+    # ``StatePredicate`` (``test(state, viewer_id)`` — Threshold's
+    # ``CardsInGraveyardAtLeast``), evaluated for the controller.
+    condition: "object"
     then_effect: Effect
     else_effect: "Effect | None" = None
 
@@ -1677,7 +1680,12 @@ class IfConditionElse(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ):
-        if self.condition.matches(state, controller_id):
+        cond = self.condition
+        holds = (
+            cond.test(state, controller_id) if hasattr(cond, "test")
+            else cond.matches(state, controller_id)
+        )
+        if holds:
             return self.then_effect.resolve(state, controller_id, targets)
         if self.else_effect is not None:
             return self.else_effect.resolve(state, controller_id, targets)
