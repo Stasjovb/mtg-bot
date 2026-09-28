@@ -1129,10 +1129,6 @@ class DealDamageFromEvent(Effect):
 # Dynamic P/T formulas (lhurgoyf card-type count, domain)
 # ---------------------------------------------------------------------------
 
-_GRAVEYARD_CARD_TYPES = (
-    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
-    "Land", "Planeswalker", "Sorcery", "Tribal",
-)
 _BASIC_TYPES = ("Plains", "Island", "Swamp", "Mountain", "Forest")
 
 
@@ -1147,13 +1143,9 @@ def rmc_dynamic_base_pt(state: "GameState", obj: "GameObject", formula: str):
     """
     if formula.startswith("card_types_in_all_graveyards+"):
         k = int(formula.rsplit("+", 1)[1])
-        types: set[str] = set()
-        for pl in state.players:
-            for c in pl.graveyard:
-                types.update(
-                    t for t in c.printing.card_types if t in _GRAVEYARD_CARD_TYPES
-                )
-        n = len(types)
+        from mtg_bot.effects.card_types import count_card_types
+
+        n = count_card_types(c for pl in state.players for c in pl.graveyard)
         return n, n + k
     if formula == "domain":
         from mtg_bot.game import effective_subtypes
@@ -1490,10 +1482,6 @@ class RevealUntilCreatureOntoBattlefieldAttacking(Effect):
         )
 
 
-_TYPE_ORDER = (
-    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
-    "Land", "Planeswalker", "Sorcery",
-)
 
 
 @dataclass(frozen=True)
@@ -1518,11 +1506,13 @@ class RevealTopNOnePerCardTypeToHand(Effect):
             card = p.library.pop(0)
             reveal_to_all(state, card)
             revealed.append(card)
+        from mtg_bot.effects.card_types import CARD_TYPES, card_types_of
+
         taken: list = []
-        for card_type in _TYPE_ORDER:
+        for card_type in CARD_TYPES:
             options = [
                 c for c in revealed
-                if c not in taken and card_type in c.printing.card_types
+                if c not in taken and card_type in card_types_of(c)
             ]
             if not options:
                 continue

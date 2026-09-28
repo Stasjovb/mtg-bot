@@ -1097,12 +1097,6 @@ class LookAtTopRepeatPayLifeThenStackTop(Effect):
         )
 
 
-_CARD_TYPES_FOR_COUNTING = (
-    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
-    "Land", "Planeswalker", "Sorcery",
-)
-
-
 @dataclass(frozen=True)
 class DrawDiscardThenTokensPerDiscardedType(Effect):
     """Occult Epiphany: "Draw X cards, then discard X cards. Create a
@@ -1133,13 +1127,12 @@ class DrawDiscardThenTokensPerDiscardedType(Effect):
                 chosen = _agent_pick(p.hand, picked) or p.hand[0]
             discard_card(state, p, chosen)
             discarded.append(chosen)
-        types = {
-            t for c in discarded for t in c.printing.card_types
-            if t in _CARD_TYPES_FOR_COUNTING
-        }
-        if types and self.token_printing is not None:
+        from mtg_bot.effects.card_types import count_card_types
+
+        n_types = count_card_types(discarded)
+        if n_types and self.token_printing is not None:
             CreateToken(
-                token_printing=self.token_printing, count=len(types),
+                token_printing=self.token_printing, count=n_types,
             ).resolve(state, controller_id)
 
     def describe(self) -> str:

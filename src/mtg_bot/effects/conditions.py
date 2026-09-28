@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.card_types import DELIRIUM_THRESHOLD
 from mtg_bot.effects.object_predicates import ObjectPredicate
 
 if TYPE_CHECKING:
@@ -616,38 +617,28 @@ class UnlockedDoorsAmongRoomsAtLeast(Condition):
 
 @dataclass(frozen=True)
 class DeliriumActive(Condition):
-    """The viewer has at least four distinct card types among cards in
-    their graveyard.
+    """There are ``min_card_types`` (printed: four) or more card types
+    among cards in the viewer's graveyard -- the Delirium ability word's
+    condition at the Condition tier: statics ("Delirium -- As long as
+    ...", Dragon's Rage Channeler), "instead if" spell riders (Unholy
+    Heat, via ``IfConditionElse`` at resolution) and "Activate only if"
+    restrictions (Shifting Woodland).
 
-    Walks the viewer's graveyard once and counts distinct card-type
-    entries from the comprehensive-rules taxonomy (CR 205.2a — Creature,
-    Land, Sorcery, Instant, Enchantment, Artifact, Planeswalker,
-    Battle, Tribal); supertypes (Legendary, Snow, Basic) and subtypes
-    don't count. Short-circuits as soon as the running set hits four.
-
-    Mirrors :class:`mtg_bot.effects.state_predicates.Delirium` — the
-    StatePredicate sibling used at the trigger layer — so static and
-    trigger evaluations of "Delirium —" share the same game-state
-    semantics. Models Wildfire Wickerfolk's ``Delirium — This creature
-    gets +1/+1 and has trample as long as there are four or more
-    card types among cards in your graveyard.`` rider.
+    Delegates to :func:`mtg_bot.effects.card_types.delirium_active`, the
+    ONE shared definition the trigger-tier twin
+    :class:`mtg_bot.effects.state_predicates.Delirium` also uses, so every
+    delirium check in the engine counts card types the same way (CR
+    205.2a incl. kindred, split halves combined, DFCs by their front
+    face, tokens excluded). Evaluated on every call: statics see the
+    graveyard continuously, spells see it as they resolve.
     """
 
-    def matches(self, state, viewer_id, chosen_targets=None):
-        from mtg_bot.effects.state_predicates import _DELIRIUM_CARD_TYPES
+    min_card_types: int = DELIRIUM_THRESHOLD
 
-        try:
-            player = state.player_by_id(viewer_id)
-        except (KeyError, AttributeError):
-            return False
-        seen: set[str] = set()
-        for card in player.graveyard:
-            for t in card.printing.card_types:
-                if t in _DELIRIUM_CARD_TYPES:
-                    seen.add(t)
-                    if len(seen) >= 4:
-                        return True
-        return False
+    def matches(self, state, viewer_id, chosen_targets=None):
+        from mtg_bot.effects.card_types import delirium_active
+
+        return delirium_active(state, viewer_id, self.min_card_types)
 
 
 

@@ -958,10 +958,6 @@ class GrantKeywordsUEOTThenExplores(Effect):
 # Keen-Eyed Curator
 # ---------------------------------------------------------------------
 
-_CARD_TYPES = (
-    "Artifact", "Battle", "Creature", "Enchantment", "Instant", "Kindred",
-    "Land", "Planeswalker", "Sorcery",
-)
 
 
 
@@ -980,10 +976,9 @@ class CardTypesAmongExiledWithSourceAtLeast(Condition):
         return False  # only meaningful with a source
 
     def matches_for_source(self, state, source) -> bool:
-        seen = set()
-        for card in cards_exiled_with(state, source):
-            seen.update(t for t in card.printing.card_types if t in _CARD_TYPES)
-        return len(seen) >= self.n
+        from mtg_bot.effects.card_types import count_card_types
+
+        return count_card_types(cards_exiled_with(state, source)) >= self.n
 
 
 # ---------------------------------------------------------------------
@@ -1038,13 +1033,6 @@ class CreateAttackingTokenForEachOpponent(Effect):
 # ---------------------------------------------------------------------
 
 
-def _card_types_in_graveyard(player) -> int:
-    seen = set()
-    for card in player.graveyard:
-        seen.update(t for t in card.printing.card_types if t in _CARD_TYPES)
-    return len(seen)
-
-
 @dataclass(frozen=True)
 class MillChooseOpponentAttackPump(Effect):
     """Ursine Monstrosity's beginning-of-combat body: "Mill a card and
@@ -1080,7 +1068,9 @@ class MillChooseOpponentAttackPump(Effect):
             return
         if opponents:
             source.must_attack_turn = state.turn_number
-        n = _card_types_in_graveyard(p)
+        from mtg_bot.effects.card_types import count_card_types
+
+        n = count_card_types(p.graveyard)
         PumpSelfUntilEOT(
             power_bonus=n, toughness_bonus=n, granted_keywords=self.keywords,
         ).resolve(state, controller_id)
