@@ -4708,8 +4708,21 @@ def drain_stack(state: GameState) -> None:
 
 def resolve_top_of_stack(state: GameState) -> None:
     """Resolve the top stack item, then report any creature-token
-    creation it performed (see ``_flush_creature_token_creations``)."""
-    _resolve_top_of_stack_item(state)
+    creation it performed (see ``_flush_creature_token_creations``).
+
+    ``state.resolving_item_controller_id`` names the controller of the
+    resolving spell / ability for the duration (restored afterwards, so a
+    nested resolution unwinds correctly) -- read by "spells and abilities
+    your opponents control can't cause you to ..." protections
+    (``mtg_bot.player_protections``)."""
+    prior = state.resolving_item_controller_id
+    state.resolving_item_controller_id = (
+        state.stack[-1].controller_id if state.stack else None
+    )
+    try:
+        _resolve_top_of_stack_item(state)
+    finally:
+        state.resolving_item_controller_id = prior
     _flush_creature_token_creations(state)
 
 

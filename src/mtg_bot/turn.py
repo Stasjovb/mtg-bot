@@ -913,7 +913,15 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
 
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
+
+    A sacrifice an opponent's resolving spell / ability would cause is
+    skipped under Tamiyo, Collector of Tales
+    (``mtg_bot.player_protections``).
     """
+    from mtg_bot.player_protections import opponent_effect_blocked_for
+
+    if opponent_effect_blocked_for(state, obj.controller_id):
+        return
     was_creature = obj.printing.is_creature
     was_artifact = obj.printing.is_artifact
     # Lands too: "Whenever you sacrifice a land" (Baloth Prime; cube W/G

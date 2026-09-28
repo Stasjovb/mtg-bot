@@ -62,6 +62,39 @@ _EXILE_TOP_MAY_CAST_ELSE_RE = re.compile(
 )
 
 
+# "choose a [nonland ]card name, then reveal the top <N> cards of your
+# library. Put all cards with the chosen name from among them into your
+# hand and the rest into your graveyard" (Tamiyo, Collector of Tales).
+_CHOOSE_NAME_REVEAL_TOP_RE = re.compile(
+    r"^choose a (?P<nonland>nonland )?card name, then reveal the top "
+    r"(?P<n>\w+) cards of your library\. Put all cards with the chosen name "
+    r"from among them into your hand and the rest into your graveyard$"
+)
+
+
+# ---------------------------------------------------------------------------
+# Planeswalker lines (statics the planeswalker builder doesn't know)
+# ---------------------------------------------------------------------------
+
+# Tamiyo, Collector of Tales -- the only card in the pool with this
+# protection; a literal until a second printing varies which actions it
+# forbids (broader grammar deferred until a second example exists).
+_OPPONENTS_CANT_MAKE_YOU_DISCARD_OR_SACRIFICE = (
+    "Spells and abilities your opponents control can't cause you to "
+    "discard cards or sacrifice permanents."
+)
+
+
+def parse_glue_walker_line(line: str, name: str) -> dict | None:
+    """``CardPrinting`` field overrides for a planeswalker static line
+    the planeswalker builder declined, or ``None``."""
+    if _disabled():
+        return None
+    if line == _OPPONENTS_CANT_MAKE_YOU_DISCARD_OR_SACRIFICE:
+        return {"opponents_cant_make_you_discard_or_sacrifice": True}
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Emblems ("You get an emblem with '<body>'.")
 # ---------------------------------------------------------------------------
@@ -160,6 +193,16 @@ def parse_glue_effect(phrase: str) -> Effect | None:
 
     if _RETURN_EXILED_TO_HAND_RE.match(phrase):
         return g.ReturnCardsExiledWithSourceToOwnersHand()
+    m = _CHOOSE_NAME_REVEAL_TOP_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import _amount
+
+        n = _amount(m.group("n"))
+        if not isinstance(n, int):
+            return None
+        return g.ChooseNameRevealTopPutNamedIntoHand(
+            count=n, nonland=bool(m.group("nonland")),
+        )
     m = _EXILE_TOP_MAY_CAST_ELSE_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_effect

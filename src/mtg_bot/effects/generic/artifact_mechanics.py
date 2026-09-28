@@ -554,9 +554,13 @@ class ReturnExiledCardsAndDiscardHands(Effect):
         for p in state.players:
             if p.has_lost:
                 continue
-            discarded = list(p.hand)
-            p.hand.clear()
+            from mtg_bot.player_protections import opponent_effect_blocked_for
+
+            discarded = (
+                [] if opponent_effect_blocked_for(state, p.id) else list(p.hand)
+            )
             for card in discarded:
+                p.hand.remove(card)
                 card.zone = Zone.GRAVEYARD
                 p.graveyard.append(card)
                 fire_opponent_discards_triggers(state, p.id, card=card)

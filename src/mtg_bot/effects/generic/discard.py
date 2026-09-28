@@ -148,8 +148,12 @@ class EachOpponentDiscards(Effect):
         for p in state.players:
             if p.id == controller_id or p.has_lost:
                 continue
+            from mtg_bot.player_protections import (
+                opponent_effect_blocked_for,
+            )
+
             for _ in range(self.count):
-                if not p.hand:
+                if not p.hand or opponent_effect_blocked_for(state, p.id):
                     break
                 hand_ids = [c.id for c in p.hand]
                 chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
@@ -278,6 +282,10 @@ class TargetOpponentDiscardsCasterChoice(Effect):
             chosen = next(
                 (c for c in options if c.id == chosen_id), options[0]
             )
+        from mtg_bot.player_protections import opponent_effect_blocked_for
+
+        if opponent_effect_blocked_for(state, target.id):
+            return
         target.hand.remove(chosen)
         chosen.zone = Zone.GRAVEYARD
         target.graveyard.append(chosen)
@@ -376,6 +384,10 @@ class TargetOpponentLookHandMayDiscard(Effect):
         chosen = next(
             (c for c in options if c.id == chosen_id), options[0]
         )
+        from mtg_bot.player_protections import opponent_effect_blocked_for
+
+        if opponent_effect_blocked_for(state, target.id):
+            return
         target.hand.remove(chosen)
         chosen.zone = Zone.GRAVEYARD
         target.graveyard.append(chosen)
@@ -428,8 +440,10 @@ class TargetOpponentDiscards(Effect):
         p = state.player_by_id(target_id)
         if p.has_lost:
             return
+        from mtg_bot.player_protections import opponent_effect_blocked_for
+
         for _ in range(self.count):
-            if not p.hand:
+            if not p.hand or opponent_effect_blocked_for(state, p.id):
                 break
             hand_ids = [c.id for c in p.hand]
             chosen_id = p.agent.choose_discard(state, p.id, hand_ids)

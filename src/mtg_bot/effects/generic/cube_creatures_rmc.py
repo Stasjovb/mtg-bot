@@ -1181,10 +1181,12 @@ def _discard_chosen(state, player_id: int, n: int) -> list:
     from mtg_bot.game import Zone
     from mtg_bot.turn import fire_opponent_discards_triggers
 
+    from mtg_bot.player_protections import opponent_effect_blocked_for
+
     p = state.player_by_id(player_id)
     out = []
     for _ in range(n):
-        if not p.hand:
+        if not p.hand or opponent_effect_blocked_for(state, player_id):
             break
         ids = [c.id for c in p.hand]
         pick = p.agent.choose_discard(state, player_id, ids) if p.agent else ids[0]

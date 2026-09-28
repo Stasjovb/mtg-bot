@@ -3392,6 +3392,12 @@ class GameState:
     # threading it through every resolve() signature. 0 when no X spell
     # is resolving.
     resolving_x_value: int = 0
+    # Controller of the spell / ability currently resolving (set by
+    # ``actions.resolve_top_of_stack``), ``None`` outside a resolution.
+    # Read by ``mtg_bot.player_protections`` (Tamiyo, Collector of
+    # Tales: "Spells and abilities your opponents control can't cause
+    # you to discard cards or sacrifice permanents.").
+    resolving_item_controller_id: Optional[int] = None
     # Mirrors StackItem.kicked during resolution so effects can branch
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
@@ -4123,6 +4129,9 @@ class GameState:
             if self.resolving_spell is not None else None
         )
         new_state.resolving_controller_id = self.resolving_controller_id
+        new_state.resolving_item_controller_id = (
+            self.resolving_item_controller_id
+        )
         new_state.resolving_x_value = self.resolving_x_value
         new_state.resolving_kicked = self.resolving_kicked
         new_state.resolving_alt_cost_paid = self.resolving_alt_cost_paid

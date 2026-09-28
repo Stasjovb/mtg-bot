@@ -1413,6 +1413,10 @@ class CardPrinting:
     # (Wrenn and Six's emblem: instant and sorcery cards) -- a
     # ``CardFilter`` over the controller's graveyard cards, always on.
     grants_retrace_to: "object | None" = None
+    # "Spells and abilities your opponents control can't cause you to
+    # discard cards or sacrifice permanents." (Tamiyo, Collector of
+    # Tales) -- ``mtg_bot.player_protections``.
+    opponents_cant_make_you_discard_or_sacrifice: bool = False
     # Anointed Peacekeeper: "As this creature enters, look at an
     # opponent's hand, then choose any card name." plus the named-card
     # taxes -- opponents' spells with the chosen name cost {N} more;

@@ -289,3 +289,70 @@ class ExileTopCardMayCastOtherwise(Effect):
             "exile the top card of your library; you may cast that card"
             + tail
         )
+
+
+# ---------------------------------------------------------------------------
+# "Choose a nonland card name, then reveal the top N cards of your
+# library. Put all cards with the chosen name from among them into your
+# hand and the rest into your graveyard." (Tamiyo, Collector of Tales)
+# ---------------------------------------------------------------------------
+
+NAME_NOT_IN_LIBRARY = "(a card name not in your library)"
+
+
+@dataclass(frozen=True)
+class ChooseNameRevealTopPutNamedIntoHand(Effect):
+    """The name is chosen through ``choose_mode`` over the distinct
+    (nonland, when ``nonland``) names in the controller's library plus
+    one entry standing for any other name -- the spells-B bucket's
+    Demonic Consultation convention (naming a card that isn't in the
+    library is equivalent to naming any other absent card). The top
+    ``count`` cards are revealed; every card with the chosen name goes
+    to the hand, the rest to the graveyard."""
+
+    count: int = 4
+    nonland: bool = True
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        names = sorted({
+            c.printing.name for c in p.library
+            if not (self.nonland and c.printing.is_land)
+        })
+        options = names + [NAME_NOT_IN_LIBRARY]
+        idx = len(options) - 1
+        if p.agent is not None:
+            picked = p.agent.choose_mode(state, controller_id, options)
+            if isinstance(picked, int) and 0 <= picked < len(options):
+                idx = picked
+        chosen = options[idx]
+        state.log.append(f"P{controller_id} names {chosen}")
+        revealed = p.library[: self.count]
+        del p.library[: self.count]
+        to_hand = 0
+        for c in revealed:
+            reveal_to_all(state, c)
+            if c.printing.name == chosen:
+                c.zone = Zone.HAND
+                p.hand.append(c)
+                to_hand += 1
+            else:
+                c.zone = Zone.GRAVEYARD
+                p.graveyard.append(c)
+        state.log.append(
+            f"P{controller_id} reveals {len(revealed)} card(s); {to_hand} "
+            f"named card(s) to hand, the rest to the graveyard"
+        )
+
+    def describe(self) -> str:
+        kind = "nonland " if self.nonland else ""
+        return (
+            f"choose a {kind}card name; reveal the top {self.count} cards; "
+            f"put the named ones into your hand and the rest into your "
+            f"graveyard"
+        )

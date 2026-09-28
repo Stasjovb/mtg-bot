@@ -261,3 +261,140 @@ def test_mid_body_self_name_fallback_only_after_primary_parse():
     ) is not None
     # No mid-body name and no parse: still None.
     assert _parse_loyalty_effect("Frobnicate the widget.", _CHANDRA) is None
+
+
+# ---------------------------------------------------------------------------
+# Tamiyo, Collector of Tales
+# ---------------------------------------------------------------------------
+
+_TAMIYO = "Tamiyo, Collector of Tales"
+
+
+def _push_spell(s, controller, effect, targets=()):
+    """Put a sorcery with ``effect`` on the stack for ``controller``."""
+    from mtg_bot.game import StackItem, Zone
+
+    card = s.new_object(make_sorcery("Edict", "{B}", effect), controller, Zone.STACK)
+    s.stack.append(StackItem(source=card, controller_id=controller, targets=targets))
+    return card
+
+
+def test_tamiyo_parse_shape():
+    p = printing(_TAMIYO)
+    assert p.opponents_cant_make_you_discard_or_sacrifice
+    assert sorted(a.cost.loyalty for a in p.activated_abilities) == [-1, 3]
+
+
+def test_tamiyo_blocks_opponents_discard_and_sacrifice_effects():
+    from mtg_bot.effects.generic.discard import TargetOpponentDiscards
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+
+    s = arena()
+    put_walker(s, _TAMIYO, 0)
+    bear = put(s, make_creature("Bear", "{G}", 2, 2), 0)
+    card = to_hand(s, _BOLT, 0)
+    _push_spell(s, 1, TargetOpponentDiscards(count=1), (("player", 0),))
+    resolve_top_of_stack(s)
+    assert card in s.players[0].hand
+    _push_spell(s, 1, EachOpponentSacrificesCreature())
+    resolve_top_of_stack(s)
+    assert bear in s.battlefield
+    assert s.resolving_item_controller_id is None
+
+
+def test_without_tamiyo_the_same_effects_apply():
+    from mtg_bot.effects.generic.discard import TargetOpponentDiscards
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+
+    s = arena()
+    put_walker(s, _TAMIYO, 1)  # the caster's own Tamiyo doesn't matter
+    bear = put(s, make_creature("Bear", "{G}", 2, 2), 0)
+    card = to_hand(s, _BOLT, 0)
+    _push_spell(s, 1, TargetOpponentDiscards(count=1), (("player", 0),))
+    resolve_top_of_stack(s)
+    assert card in s.players[0].graveyard
+    _push_spell(s, 1, EachOpponentSacrificesCreature())
+    resolve_top_of_stack(s)
+    assert bear not in s.battlefield
+
+
+def test_tamiyo_doesnt_stop_your_own_effects_or_sacrifices():
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.turn import sacrifice
+
+    s = arena()
+    put_walker(s, _TAMIYO, 0)
+    card = to_hand(s, _BOLT, 0)
+    _push_spell(s, 0, DiscardSelf(amount=1))
+    resolve_top_of_stack(s)
+    assert card in s.players[0].graveyard
+    bear = put(s, make_creature("Bear", "{G}", 2, 2), 0)
+    sacrifice(s, bear)  # not during an opponent's resolution
+    assert bear not in s.battlefield
+
+
+def test_tamiyo_protection_ends_when_she_loses_her_abilities():
+    from mtg_bot.effects.generic.discard import TargetOpponentDiscards
+
+    s = arena()
+    tam = put_walker(s, _TAMIYO, 0)
+    s.add_continuous_effect(
+        source_id=tam.id, layer=6, kind="lose_all_abilities", target_id=tam.id,
+    )
+    card = to_hand(s, _BOLT, 0)
+    _push_spell(s, 1, TargetOpponentDiscards(count=1), (("player", 0),))
+    resolve_top_of_stack(s)
+    assert card in s.players[0].graveyard
+
+
+def test_tamiyo_plus_one_puts_named_cards_into_hand_rest_to_graveyard():
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    tam = put_walker(s, _TAMIYO, 0)
+    lib = [
+        to_library(s, _BOLT, 0), to_library(s, BASIC_LANDS["Forest"], 0),
+        to_library(s, _BOLT, 0), to_library(s, _DIVINATION, 0),
+        to_library(s, _BOLT, 0),
+    ]
+
+    seen = {}
+
+    def choose_mode(state, pid, options):
+        seen["options"] = list(options)
+        return options.index("Bolt")
+
+    agent(s, 0).choose_mode = choose_mode
+    activate_loyalty(s, 0, tam, +1)
+    assert "Forest" not in seen["options"]  # nonland names only
+    assert lib[0] in s.players[0].hand and lib[2] in s.players[0].hand
+    assert lib[1] in s.players[0].graveyard and lib[3] in s.players[0].graveyard
+    assert s.players[0].library == [lib[4]]
+
+
+def test_tamiyo_plus_one_naming_absent_card_mills_four():
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    tam = put_walker(s, _TAMIYO, 0)
+    for _ in range(4):
+        to_library(s, _BOLT, 0)
+    agent(s, 0).choose_mode = lambda state, pid, options: len(options) - 1
+    activate_loyalty(s, 0, tam, +1)
+    assert len(s.players[0].graveyard) == 4
+    assert "nonland card name" in (
+        tam.printing.activated_abilities[0].effect.describe()
+    )
+
+
+def test_tamiyo_minus_three_returns_any_card():
+    s = arena()
+    tam = put_walker(s, _TAMIYO, 0)
+    land = to_graveyard(s, BASIC_LANDS["Forest"], 0)
+    agent(s, 0).targets = [("graveyard_card", land.id)]
+    activate_loyalty(s, 0, tam, -3)
+    assert land in s.players[0].hand

@@ -256,6 +256,9 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
     statics: list[StaticAbility] = []
     keywords: set[str] = set()
     flags: dict[str, bool] = {}
+    # Extra ``CardPrinting`` fields from the cube glue bucket's walker
+    # lines, stamped on after ``make_planeswalker``.
+    printing_fields: dict = {}
     for raw_line in card.get("oracle_text", "").split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
@@ -325,6 +328,14 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
         if two_arm is not None:
             triggers.extend(two_arm)
             continue
+        from mtg_bot.cards.parser.cube_glue_grammar import (
+            parse_glue_walker_line,
+        )
+
+        glue_fields = parse_glue_walker_line(line, name)
+        if glue_fields is not None:
+            printing_fields.update(glue_fields)
+            continue
         parsed = _parse_triggered_ability_line(line, name=name)
         if parsed is None:
             return None
@@ -333,7 +344,7 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
         else:
             triggers.append(parsed)
 
-    return make_planeswalker(
+    printing = make_planeswalker(
         name=name,
         cost=card.get("mana_cost", ""),
         loyalty=loyalty,
@@ -345,3 +356,8 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
         keywords=frozenset(keywords),
         **flags,
     )
+    if printing_fields:
+        from dataclasses import replace
+
+        printing = replace(printing, **printing_fields)
+    return printing

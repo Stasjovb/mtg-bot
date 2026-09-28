@@ -2871,6 +2871,10 @@ class FanaticOfTheHarrowingETBEffect(Effect):
         for p in order:
             if p.has_lost or not p.hand:
                 continue
+            from mtg_bot.player_protections import opponent_effect_blocked_for
+
+            if opponent_effect_blocked_for(state, p.id):
+                continue
             hand_ids = [c.id for c in p.hand]
             chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
             card = next(c for c in p.hand if c.id == chosen_id)

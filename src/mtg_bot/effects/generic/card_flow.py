@@ -189,8 +189,11 @@ def discard_card(state: "GameState", player: "Player", card: "GameObject") -> No
     """Move ``card`` from ``player``'s hand to their graveyard as a
     discard and fire the ``DISCARDS_CARD`` observers."""
     from mtg_bot.game import Zone
+    from mtg_bot.player_protections import opponent_effect_blocked_for
     from mtg_bot.turn import fire_opponent_discards_triggers
 
+    if opponent_effect_blocked_for(state, player.id):
+        return
     player.hand.remove(card)
     card.zone = Zone.GRAVEYARD
     player.graveyard.append(card)
