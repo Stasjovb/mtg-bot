@@ -253,3 +253,33 @@ head-to-head. The gains per cycle (if real) are below what 300 games can
 resolve. v18 promoted to `current_best` on the ladder evidence; the next
 run switches to always-promote (accept 0.0) at nodes 200 / 1,000 games
 per cycle with the ladder as the yardstick.
+
+### 2026-09-28 -- v21-v25: deep-teacher warm start (v22) and blend:0.8 always-promote cycles
+
+"Do both" round (2026-09-27/28): (a) a heuristic corpus at **nodes 1600**
+(batches 21-23: 1,415 desktop+Mac games, 101 + 1,484 AWS games on 2 and
+14 c7i.4xlarge spot instances) and a warm start on the newest 3,000 of
+those shards with `--value-target root` = **v22**; (b) three
+always-promote self-play cycles from v22 with `--value-target blend:0.8`
+(nodes 200 / 1,000 games, the last two desktop-only because the Mac went
+offline). v21 is root-value cycle 15 from v20. Ladder at nodes 100 /
+samples 2, 200 games per pair.
+
+| version | how | held-out corr | ladder vs heuristic | vs random | Elo [95 % CI] |
+|---|---|---:|---|---|---:|
+| v21 | root cycle 15 from v20 | 0.403 | 88-111 (44.2 %) | 183-17 (91.5 %) | +408 [+335, +504] |
+| **v22** | deep-teacher warm start, 3,000 games @ nodes 1600, root target | 0.451 | **93-106 (46.7 %)** | 187-13 (93.5 %) | +457 [+378, +565] |
+| v23 | blend:0.8 cycle 16 from v22 | 0.446 | 80-119 (40.2 %) | 188-12 (94.0 %) | +471 [+388, +591] |
+| v24 | blend:0.8 cycle 17 from v23 | 0.462 | 86-113 (43.2 %) | 180-20 (90.0 %) | +378 [+313, +472] |
+| v25 | blend:0.8 cycle 18 from v24 | 0.479 | 71-128 (35.7 %) | 183-17 (91.5 %) | +408 [+343, +522] |
+
+Reading: the 4x deeper teacher did not move the value head (corr 0.451
+vs 0.449 for v15's nodes-400 corpus) and v22 lands where v18 did
+(46.7 vs 47.7 %). The always-promote blend cycles show the old pattern
+in a new form: held-out corr climbs every cycle (0.446 -> 0.479, the
+highest in the lineage) while ladder strength drifts down to 35.7 %.
+A better fit to the driver's own root values is not a stronger player.
+`current_best` was reverted to v22 by hand. Since v15 every version sits
+in a 36-48 % band vs heuristic; neither value-target choice nor teacher
+depth has cleared 50 %.
+

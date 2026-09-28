@@ -518,6 +518,21 @@ resolve the per-cycle gain. Next: always-promote cycles (nodes 200,
 1,000 games) with the ladder as yardstick; if that also plateaus, the
 remaining levers are deeper self-play search (nodes 400) and trunk width.
 
+**Follow-up 2 (2026-09-28): deeper teacher + blend always-promote, both
+tried (`docs/STRENGTH_LADDER.md` 2026-09-28).** A 3,000-game heuristic
+corpus at nodes 1600 (AWS spot fleet) warm-started with the root target
+gives v22: corr 0.451, 46.7 % vs heuristic -- indistinguishable from v15
+(nodes-400 corpus, 0.449) and v18 (47.7 %). Teacher depth is NOT a lever
+for the value head at this trunk. Three always-promote cycles from v22
+with `blend:0.8` (v23-v25) raised held-out corr to 0.479 while the ladder
+fell to 35.7 %: the head fits the driver's own root values better every
+cycle and the player gets weaker, i.e. self-bootstrapped targets drift
+even at 80 % root weight. Both D6 remedies are exhausted; the lineage has
+sat in a 36-48 % band since v15. What remains untested: gated (accept
+0.55) cycles from v22 at nodes 400, and trunk capacity -- with the
+caveat that D1's "no overfit" argument for width no longer applies.
+
+
 ## Synthesis — what this means for the next iterate cycle
 
 As of 2026-05-18 **three of four levers are resolved, two validated**:
