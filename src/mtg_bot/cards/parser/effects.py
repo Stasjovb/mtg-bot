@@ -79,7 +79,6 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileOpponentsNonlandPermanentUntilLeaves,
     BoilerbilgesRipperETBEffect,
-    ExorciseEffect,
     FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
@@ -174,7 +173,6 @@ from mtg_bot.cards.base import (
     CoordinatedClobberingEffect,
     ZeroPointBalladEffect,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
-    ConsultTheStarChartsEffect,
 )
 from mtg_bot.cards.parser.keywords import (
     _KEYWORD_LINES,
@@ -834,26 +832,6 @@ _EXILE_TARGET_CREATURE_OR_PLANESWALKER = re.compile(
 # before more-general is the convention here.
 _EXILE_TARGET_CREATURE_WITH_POWER_OR_TOUGHNESS_AT_MOST = re.compile(
     r"^exile target creature with power or toughness (\d+) or less$"
-)
-# "Exile target artifact, enchantment, or creature with power 4 or
-# greater." — Exorcise `{1}{W}` Sorcery (Duskmourn): a single-sentence
-# three-way disjunctive exile (target an artifact OR an enchantment OR
-# a creature whose effective power is at least 4). Maps to the
-# parameterless ``ExorciseEffect`` engine class which evaluates the
-# disjunctive filter at both target-pick and resolve time using
-# ``effective_power`` for the creature arm.
-#
-# Currently only Exorcise in the EoE/DSK pool fits this shape, so the
-# recognizer is a parameterless literal — broader generalization (e.g.
-# ``exile target <type-list> with <p/t-threshold>``) is deferred until
-# a second card with a similar three-way disjunctive permanent-type
-# exile shape exists. Sibling to the bare ``exile target creature``
-# branch above; lives in the per-clause grammar (rather than the
-# whole-spell exact-text tier) per the parser's
-# generic-templates-over-literals guidance.
-_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE = re.compile(
-    r"^exile target artifact, enchantment, or creature with power "
-    r"4 or greater$"
 )
 # "Destroy all tapped creatures." / "Destroy all untapped creatures." —
 # Split Up's modal mode lines. Two separate regexes (rather than one
@@ -4419,27 +4397,6 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
         "Sacrifice them at the beginning of the next end step"
     ):
         return CreateXTokensOfTargetPermanentWithHasteEndStepSac()
-    # Consult the Star Charts' four-sentence body (after the Kicker preamble
-    # is stripped by the per-clause grammar's preamble-drop pass) — look at
-    # the top X cards where X = lands you control, put one into hand; if
-    # kicked, put two into hand instead; put the rest on the bottom in
-    # random order. The "where X is the number of lands you control"
-    # qualifier links sentence 1 to sentence 2's "one of those cards", and
-    # the kicked-branch conditional in sentence 3 references both. None of
-    # the four sentences parse as standalone effects; the "put the rest on
-    # the bottom in a random order" rider has no per-clause primitive. The
-    # engine class reads the land count and kicked state at resolve time.
-    # Only Consult the Star Charts (EoE) has this exact kicked-library-look
-    # surface; deferred until a second kicked-library-look card ships.
-    if phrase == (
-        "look at the top X cards of your library, where X is the "
-        "number of lands you control. "
-        "Put one of those cards into your hand. "
-        "If this spell was kicked, put two of those cards "
-        "into your hand instead. "
-        "Put the rest on the bottom of your library in a random order"
-    ):
-        return ConsultTheStarChartsEffect()
     # Terminal Velocity's two-sentence body — "You may put an artifact or
     # creature card from your hand onto the battlefield. That permanent
     # gains haste, [LTB-damage-trigger], and [end-step-sac-trigger]."
@@ -5381,21 +5338,6 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
         return ExileTargetCreatureWithPowerOrToughnessAtMost(
             max_value=int(m.group(1)),
         )
-    # ``exile target artifact, enchantment, or creature with power 4 or
-    # greater`` — Exorcise's full single-sentence body. Maps to the
-    # parameterless ``ExorciseEffect`` engine class which evaluates the
-    # three-way disjunctive filter at both target-pick and resolve time.
-    # Tried BEFORE the bare ``exile target creature`` branch below
-    # because the bare regex's ``$`` anchor on ``creature`` wouldn't
-    # match this longer tail anyway, but ordering more-specific before
-    # more-general is the convention here. Sole card with this shape
-    # today; broader generalization deferred — see
-    # ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE`` regex
-    # comment.
-    if _EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE.match(
-        phrase
-    ) is not None:
-        return ExorciseEffect()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:

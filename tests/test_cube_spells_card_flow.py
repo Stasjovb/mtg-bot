@@ -811,3 +811,47 @@ def test_look_at_target_players_hand():
     eff.resolve(state, 0, ())
     assert c.publicly_known_to == frozenset({0})
     assert eff.describe() == "look at target player's hand"
+
+
+def test_look_top_x_lands_with_kicked_instead_pick_count():
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.formulas import CountControlledMatching
+    from mtg_bot.effects.generic.card_flow import LookAtTopCardsPutIntoHand
+    from mtg_bot.effects.generic.cast_conditionals import SpellWasKicked
+    from mtg_bot.effects.object_predicates import IsLand
+
+    eff = parse_card_flow_effect(
+        "look at the top X cards of your library, where X is the number of "
+        "lands you control. Put two of those cards into your hand. If this "
+        "spell was kicked, put three of those cards into your hand instead. "
+        "Put the rest on the bottom of your library in any order"
+    )
+
+    def look(take):
+        return LookAtTopCardsPutIntoHand(
+            count=CountControlledMatching(IsLand()), take=take,
+        )
+
+    assert eff == IfConditionElse(
+        condition=SpellWasKicked(), then_effect=look(3), else_effect=look(2),
+    )
+    # An unknown X definition is not claimed.
+    assert parse_card_flow_effect(
+        "look at the top X cards of your library, where X is the number of "
+        "creatures you control. Put one of those cards into your hand. If "
+        "this spell was kicked, put two of those cards into your hand "
+        "instead. Put the rest on the bottom of your library in a random order"
+    ) is None
+    assert parse_card_flow_effect(
+        "look at the top X cards of your library, where X is the number of "
+        "lands you control. Put X of those cards into your hand. If this "
+        "spell was kicked, put two of those cards into your hand instead. "
+        "Put the rest on the bottom of your library in a random order"
+    ) is None
+    assert parse_card_flow_effect(
+        "look at the top two cards of your library, where X is the number of "
+        "lands you control. Put one of those cards into your hand. If this "
+        "spell was kicked, put two of those cards into your hand instead. "
+        "Put the rest on the bottom of your library in a random order"
+    ) is None

@@ -248,7 +248,18 @@ _SEL_ANY_NUMBER_RE = re.compile(
     r"(?P<rest>on the bottom of your library in (?:any|a random) order|"
     r"into your graveyard)(?:\. (?P<tail>.+))?$"
 )
+# "..., put K of those cards into your hand. If this spell was kicked,
+# put K' of those cards into your hand instead. Put the rest on the
+# bottom ..." -- the kicker "instead" rider on the pick count (Consult
+# the Star Charts).
+_SEL_PUT_K_KICKED_INSTEAD_RE = re.compile(
+    rf"^[Pp]ut (?P<k>{_AMT}) of those cards into your hand\. If this spell "
+    rf"was kicked, put (?P<kk>{_AMT}) of those cards into your hand instead\. "
+    r"[Pp]ut the rest (?P<rest>on the bottom of your library in "
+    r"(?:any|a random) order)$"
+)
 _X_DEFINITION_TWICE_LANDS = "twice the number of lands you control"
+_X_DEFINITION_LANDS = "the number of lands you control"
 _REORDER_TOP_N_RE = re.compile(
     rf"^look at the top (?P<n>{_AMT}) cards of your library, then put them "
     r"back in any order$"
@@ -547,16 +558,40 @@ def _parse_look_top_n(m: re.Match) -> Effect | None:
     count = _amount(m.group("n"))
     xdef = m.group("xdef")
     if xdef is not None:
-        if m.group("n") != "X" or xdef != _X_DEFINITION_TWICE_LANDS:
-            return None
         from mtg_bot.effects.formulas import CountControlledMatching, Scaled
         from mtg_bot.effects.object_predicates import IsLand
 
-        count = Scaled(inner=CountControlledMatching(IsLand()), factor=2)
+        if m.group("n") != "X":
+            return None
+        if xdef == _X_DEFINITION_TWICE_LANDS:
+            count = Scaled(inner=CountControlledMatching(IsLand()), factor=2)
+        elif xdef == _X_DEFINITION_LANDS:
+            count = CountControlledMatching(IsLand())
+        else:
+            return None
     elif not isinstance(count, int):
         return None
     reveal = m.group("verb") == "reveal"
     sel = m.group("sel")
+    sm = _SEL_PUT_K_KICKED_INSTEAD_RE.match(sel)
+    if sm is not None:
+        k, kk = _amount(sm.group("k")), _amount(sm.group("kk"))
+        if not isinstance(k, int) or not isinstance(kk, int):
+            return None
+        from mtg_bot.effects.combinators import IfConditionElse
+        from mtg_bot.effects.generic.cast_conditionals import SpellWasKicked
+
+        rest_zone, rest_random = _rest_fields(sm.group("rest"))
+        base, kicked = (
+            LookAtTopCardsPutIntoHand(
+                count=count, take=take, reveal=reveal,
+                rest_zone=rest_zone, rest_random=rest_random,
+            )
+            for take in (k, kk)
+        )
+        return IfConditionElse(
+            condition=SpellWasKicked(), then_effect=kicked, else_effect=base,
+        )
     sm = _SEL_PUT_K_REST_RE.match(sel)
     if sm is not None:
         k = _amount(sm.group("k"))

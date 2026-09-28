@@ -116,3 +116,31 @@ def test_parse_target_count(phrase, expected):
 
 def test_parse_target_count_rejects_non_target_phrase():
     assert parse_target_count("each creature") is None
+
+
+# --- item-level "with power N or greater" (Exorcise) ------------------------
+
+
+def test_power_at_least_binds_to_the_creature_item_only():
+    from mtg_bot.effects.object_predicates import HasPowerAtLeast
+
+    f = parse_permanent_phrase(
+        "artifact, enchantment, or creature with power 4 or greater"
+    )
+    assert f == (IsArtifact() | IsEnchantment()) | (IsCreature() & HasPowerAtLeast(4))
+    assert parse_permanent_phrase("creature with power 3 or greater") == (
+        IsCreature() & HasPowerAtLeast(3)
+    )
+
+
+def test_power_at_least_needs_a_creature_head():
+    assert parse_permanent_phrase("planeswalker with power 4 or greater") is None
+    assert parse_permanent_phrase("artifact with power 4 or greater") is None
+
+
+def test_n_or_greater_is_not_a_list_separator():
+    from mtg_bot.effects.object_predicates import HasPowerAtLeast
+
+    assert parse_permanent_phrase("artifact or creature with power 2 or greater") == (
+        IsArtifact() | (IsCreature() & HasPowerAtLeast(2))
+    )

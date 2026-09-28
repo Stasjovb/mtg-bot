@@ -1154,6 +1154,12 @@ class ConsultTheStarChartsEffect(Effect):
 
     Reads state.resolving_kicked to choose between 1 and 2 cards to
     keep. Agent picks the kept cards via ``choose_card_from_library``.
+
+    NOT emitted by the parser any more: the card composes from the
+    generic look-at-top grammar (``IfConditionElse(SpellWasKicked(),
+    LookAtTopCardsPutIntoHand(take=2, ...), LookAtTopCardsPutIntoHand(
+    take=1, ...))`` over ``CountControlledMatching(IsLand())``). The class
+    stays only because the Rust parity bridge still round-trips it.
     """
 
     def resolve(
@@ -2277,6 +2283,13 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
 class ExorciseEffect(Effect):
     """Exorcise ``{1}{W}`` (Duskmourn): "Exile target artifact,
     enchantment, or creature with power 4 or greater."
+
+    NOT emitted by the parser any more: Exorcise composes from the
+    generic removal grammar (``RemoveTargetPermanents(action="exile",
+    target_filter=IsArtifact() | IsEnchantment() | (IsCreature() &
+    HasPowerAtLeast(4)))``). The class stays only because the Rust
+    parity bridge (``parity/cross_engine.py`` / ``parity/trajectory.py``,
+    ``Effect::ExorciseEffect``) still round-trips it.
 
     Three-way disjunctive target filter — the chosen target must be
     an artifact OR an enchantment OR a creature whose effective power

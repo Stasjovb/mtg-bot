@@ -157,6 +157,7 @@ def test_threaten_target_creature_ueot_creatures_only():
     # artifact-or-creature scope used by Systems Override is a
     # separate primitive.)
     from mtg_bot.cards.base import make_artifact, make_creature
+    from mtg_bot.game import GameState, Player, Zone
     from mtg_bot.effects import ThreatenTargetCreatureUEOT
     from mtg_bot.game import GameObject, GameState, Player, Zone
 
@@ -533,18 +534,28 @@ def test_exorcise_recheck_at_resolve_for_debuffed_creature():
 # ---------- Exorcise parser claim ----------
 
 def test_exorcise_claimed_by_parser():
-    # Exorcise ``{1}{W}`` Sorcery — claimed via the per-clause grammar
-    # (effects.py's ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE``
-    # recognizer, mapping to ``ExorciseEffect``).
+    # Exorcise ``{1}{W}`` Sorcery -- claimed by the compositional
+    # removal grammar (``removal_phrases.parse_targeted_removal`` over
+    # ``target_phrases.parse_permanent_phrase``).
     assert "Exorcise" in _claimed_names()
 
 
-def test_exorcise_engine_class():
-    from mtg_bot.effects import ExorciseEffect
+def _exorcise_filter():
+    from mtg_bot.effects.object_predicates import (
+        HasPowerAtLeast, IsArtifact, IsCreature, IsEnchantment,
+    )
+
+    return (IsArtifact() | IsEnchantment()) | (IsCreature() & HasPowerAtLeast(4))
+
+
+def test_exorcise_composes_from_the_generic_exile_grammar():
+    from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
 
     parser = OracleParserCardSource()
     p = parser.get_printings()["Exorcise"]
-    assert p.spell_effect == ExorciseEffect()
+    assert p.spell_effect == RemoveTargetPermanents(
+        action="exile", target_filter=_exorcise_filter(),
+    )
 
 
 def test_exorcise_is_sorcery():
@@ -553,15 +564,25 @@ def test_exorcise_is_sorcery():
     assert "Sorcery" in p.card_types
 
 
-def test_dispatch_exorcise_returns_engine_class():
-    # Exorcise migrated from the whole-spell exact-text tier to the
-    # per-clause grammar; whole-spell dispatch now falls through.
-    # End-to-end claim verified via the active source's printing.
+def test_exorcise_targets_and_exiles_through_the_generic_primitive():
+    from mtg_bot.cards.base import make_artifact, make_creature
+    from mtg_bot.game import GameState, Player, Zone
 
-    from mtg_bot.effects import ExorciseEffect
     parser = OracleParserCardSource()
-    p = parser.get_printings()["Exorcise"]
-    assert p.spell_effect == ExorciseEffect()
+    effect = parser.get_printings()["Exorcise"].spell_effect
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    rock = state.new_object(make_artifact("Rock", "{1}"), owner_id=1, zone=Zone.BATTLEFIELD)
+    small = state.new_object(make_creature("Small", "{1}", 3, 3), owner_id=1, zone=Zone.BATTLEFIELD)
+    big = state.new_object(make_creature("Big", "{4}", 4, 4), owner_id=1, zone=Zone.BATTLEFIELD)
+    for o in (rock, small, big):
+        state.battlefield.append(o)
+    legal = {t[1] for t in effect.legal_targets(state, 0)}
+    assert legal == {rock.id, big.id}
+    effect.resolve(state, 0, (("permanent", big.id),))
+    assert big not in state.battlefield
+    assert big in state.players[1].exile
 
 
 # ---------- CoordinatedClobberingEffect engine class ----------

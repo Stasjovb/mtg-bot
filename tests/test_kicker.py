@@ -53,11 +53,15 @@ def test_consult_printing_has_kicker_cost():
 
 
 def test_consult_body_parses_via_per_clause_grammar():
-    # Belt-and-suspenders: after the Kicker preamble is stripped by
-    # the per-clause path, the body text is claimed by the new
-    # multi-sentence literal in ``effects.py`` as
-    # ``ConsultTheStarChartsEffect()``.
+    # After the Kicker preamble is stripped by the per-clause path, the
+    # body composes from the generic look-at-top grammar: a kicked
+    # "instead" branch over two ``LookAtTopCardsPutIntoHand`` picks.
     from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.formulas import CountControlledMatching
+    from mtg_bot.effects.generic.card_flow import LookAtTopCardsPutIntoHand
+    from mtg_bot.effects.generic.cast_conditionals import SpellWasKicked
+    from mtg_bot.effects.object_predicates import IsLand
     body = (
         "Look at the top X cards of your library, where X is the "
         "number of lands you control. Put one of those cards into "
@@ -66,7 +70,16 @@ def test_consult_body_parses_via_per_clause_grammar():
         "library in a random order."
     )
     eff = _parse_spell_effect_phrase(body, "Consult the Star Charts")
-    assert eff == ConsultTheStarChartsEffect()
+
+    def look(take):
+        return LookAtTopCardsPutIntoHand(
+            count=CountControlledMatching(IsLand()), take=take,
+            rest_zone="bottom", rest_random=True,
+        )
+
+    assert eff == IfConditionElse(
+        condition=SpellWasKicked(), then_effect=look(2), else_effect=look(1),
+    )
 
 
 # -----------------------

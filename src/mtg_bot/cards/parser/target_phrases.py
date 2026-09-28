@@ -12,7 +12,7 @@ Grammar (lower-case, after the ``target`` keyword has been stripped)::
     item_list := item | item " or " item
                | item (", " item)+ ", or " item
                | item " and/or " item
-    item      := modifier* head
+    item      := modifier* head [" with power N or greater"]   (creature head only)
     modifier  := "non" <type-or-color> | <color> | "basic" | "tapped"
                | "nontoken"   (and a trailing "token": "creature token")
     head      := creature | artifact | enchantment | planeswalker
@@ -32,7 +32,10 @@ Examples::
     "nonblack creature" -> IsCreature() & ~HasColor("B")
     "creature you don't control" -> IsCreature() & ~ControlledByYou()
 
-The qualifiers bind to the whole item list ("creature or planeswalker
+The item-level power qualifier binds to its own (creature) item only
+("artifact, enchantment, or creature with power 4 or greater" ->
+``IsArtifact() | IsEnchantment() | (IsCreature() & HasPowerAtLeast(4))``,
+Exorcise). The trailing ``value`` / controller qualifiers bind to the whole item list ("creature or planeswalker
 with mana value 3 or less" restricts both arms), matching CR 115.10's
 reading of a trailing qualifier. Unknown words make the whole phrase
 fail (``None``) so a recognizer never silently widens or narrows the
@@ -49,6 +52,7 @@ import re
 from mtg_bot.effects.object_predicates import (
     ControlledByOpponent,
     ControlledByYou,
+    HasPowerAtLeast,
     HasPowerAtMost,
     HasToughnessAtMost,
     IsArtifact,
@@ -130,7 +134,20 @@ def _modifier_filter(word: str) -> ObjectPredicate | None:
     return None
 
 
+# "creature with power N or greater" -- an item-level qualifier: power
+# is a characteristic only creatures have, so in a list ("artifact,
+# enchantment, or creature with power 4 or greater" -- Exorcise) it binds
+# to the creature item alone, and any artifact or enchantment stays
+# targetable whatever its power. Accepted only on a ``creature`` head.
+_ITEM_POWER_AT_LEAST_SUFFIX = re.compile(r" with power (\d+) or greater$")
+
+
 def _parse_item(item: str, *, plural: bool) -> ObjectPredicate | None:
+    power_min: int | None = None
+    m = _ITEM_POWER_AT_LEAST_SUFFIX.search(item)
+    if m is not None:
+        power_min = int(m.group(1))
+        item = item[: m.start()]
     words = item.split()
     token_only = False
     if words and words[-1] in ("token", "tokens"):
@@ -155,13 +172,30 @@ def _parse_item(item: str, *, plural: bool) -> ObjectPredicate | None:
         f = f & mod
     if token_only:
         f = f & ~IsNontoken()
+    if power_min is not None:
+        if head is not _HEADS["creature"]:
+            return None
+        f = f & HasPowerAtLeast(power_min)
     # A bare type head ("creature") never matches players, but a
     # negated head alone ("nonland permanent" is fine; the head
     # carries IsPermanent). Nothing extra needed.
     return f
 
 
+_N_OR_MORE_RE = re.compile(r"(\d+) or (greater|less)\b")
+_N_OR_MORE_MARK = " n_or_more_"
+
+
 def _split_items(body: str) -> list[str] | None:
+    # "N or greater" inside an item qualifier is not a list separator.
+    body = _N_OR_MORE_RE.sub(lambda m: f"{m.group(1)}{_N_OR_MORE_MARK}{m.group(2)}", body)
+    parts = _split_list(body)
+    if parts is None:
+        return None
+    return [p.replace(_N_OR_MORE_MARK, " or ") for p in parts]
+
+
+def _split_list(body: str) -> list[str] | None:
     if " and/or " in body:
         parts = body.split(" and/or ")
     elif ", or " in body:
