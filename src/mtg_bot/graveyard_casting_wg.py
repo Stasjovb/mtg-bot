@@ -44,6 +44,31 @@ def retrace_active(state: "GameState", player_id: int) -> bool:
     )
 
 
+def retrace_grant_filters(state: "GameState", player_id: int) -> list:
+    """``CardFilter``s of the "<cards> in your graveyard have retrace"
+    grants ``player_id`` benefits from: ``grants_retrace_to`` on
+    permanents they control and on emblems they own (Wrenn and Six)."""
+    out = []
+    for o in state.battlefield:
+        f = o.printing.grants_retrace_to
+        if f is not None and o.controller_id == player_id:
+            out.append(f)
+    for e in state.emblems:
+        f = e.printing.grants_retrace_to
+        if f is not None and e.owner_id == player_id:
+            out.append(f)
+    return out
+
+
+def _retrace_card(card: "GameObject", six: bool, filters: list) -> bool:
+    pr = card.printing
+    if pr.is_land:
+        return False  # retrace casts the card; lands can't be cast
+    if six and pr.is_permanent:
+        return True
+    return any(f.matches(pr) for f in filters)
+
+
 def paragon_source(state: "GameState", player_id: int) -> "GameObject | None":
     """An unused "once during each of your turns" graveyard-play source
     ``player_id`` controls, or ``None``."""
@@ -72,12 +97,12 @@ def graveyard_cast_options(
     graveyard right now (costs / timing / targets are the caller's)."""
     p = state.player_by_id(player_id)
     out: list[tuple["GameObject", str]] = []
-    if retrace_active(state, player_id) and any(
-        c.printing.is_land for c in p.hand
-    ):
+    six = retrace_active(state, player_id)
+    filters = retrace_grant_filters(state, player_id)
+    if (six or filters) and any(c.printing.is_land for c in p.hand):
         out += [
             (c, RETRACE) for c in p.graveyard
-            if c.printing.is_permanent and not c.printing.is_land
+            if _retrace_card(c, six, filters)
         ]
     source = paragon_source(state, player_id)
     if source is not None:

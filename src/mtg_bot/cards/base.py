@@ -1409,6 +1409,10 @@ class CardPrinting:
     # spell (mana value <= N) from your graveyard.
     grants_retrace_to_nonland_permanents_during_your_turn: bool = False
     grants_once_per_turn_graveyard_play_mv: int = 0
+    # "<Cards> in your graveyard have retrace." on a permanent or emblem
+    # (Wrenn and Six's emblem: instant and sorcery cards) -- a
+    # ``CardFilter`` over the controller's graveyard cards, always on.
+    grants_retrace_to: "object | None" = None
     # Anointed Peacekeeper: "As this creature enters, look at an
     # opponent's hand, then choose any card name." plus the named-card
     # taxes -- opponents' spells with the chosen name cost {N} more;

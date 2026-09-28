@@ -176,3 +176,116 @@ class RevealHandMayExileCardOrChosenCreatureUntilSourceLeaves(Effect):
             "control; they reveal their hand; you may exile a card from it "
             "or the chosen creature until this leaves the battlefield"
         )
+
+
+# ---------------------------------------------------------------------------
+# Graveyard -> hand for any card descriptor
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReturnTargetGraveyardCardToHand(Effect):
+    """"Return [up to one ]target <descriptor> card from your graveyard
+    to your hand." for any ``CardFilter`` descriptor (Wrenn and Six's
+    "up to one target land card", Tamiyo, Collector of Tales' "target
+    card"). Targets are ``("graveyard_card", id)``; a target that left
+    the graveyard before resolution does nothing."""
+
+    card_filter: object = None
+    optional: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (0 if self.optional else 1, 1)
+
+    def legal_targets(self, state, controller_id):
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_card", c.id) for c in p.graveyard
+            if self.card_filter is None or self.card_filter.matches(c.printing)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        for kind, tid in targets:
+            if kind != "graveyard_card":
+                continue
+            card = next((c for c in p.graveyard if c.id == tid), None)
+            if card is None:
+                continue
+            p.graveyard.remove(card)
+            card.zone = Zone.HAND
+            p.hand.append(card)
+            reveal_to_all(state, card)
+            state.log.append(
+                f"{card.printing.name} returns from P{controller_id}'s "
+                f"graveyard to hand"
+            )
+
+    def describe(self) -> str:
+        upto = "up to one " if self.optional else ""
+        return f"return {upto}target card from your graveyard to your hand"
+
+
+# ---------------------------------------------------------------------------
+# "Exile the top card of your library. You may cast that card. If you
+# don't, <effect>." (Chandra, Torch of Defiance)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExileTopCardMayCastOtherwise(Effect):
+    """Exile the top card of the controller's library; the controller may
+    cast it right now (paying its costs -- the U/B bucket's
+    ``creature_casting_ub.cast_now``: the spell goes on the stack above
+    this ability, timing restrictions don't apply). If they don't
+    (declined, a land, uncastable, or nothing was exiled), ``otherwise``
+    resolves. An uncast card stays in exile with no permission."""
+
+    otherwise: Effect | None = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.effects.generic.cube_creatures_rmc import exile_card
+
+        p = state.player_by_id(controller_id)
+        cast = False
+        if p.library:
+            card = p.library.pop(0)
+            exile_card(state, card)
+            state.log.append(
+                f"P{controller_id} exiles {card.printing.name} from the top "
+                f"of their library"
+            )
+            if (
+                can_cast_now(state, controller_id, card, free=False)
+                and (
+                    p.agent is None
+                    or p.agent.choose_yes_no(
+                        state, controller_id, f"cast {card.printing.name}?",
+                    )
+                )
+            ):
+                cast = cast_now(state, controller_id, card, free=False)
+        if not cast and self.otherwise is not None:
+            self.otherwise.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        tail = (
+            f"; if you don't, {self.otherwise.describe()}"
+            if self.otherwise is not None else ""
+        )
+        return (
+            "exile the top card of your library; you may cast that card"
+            + tail
+        )

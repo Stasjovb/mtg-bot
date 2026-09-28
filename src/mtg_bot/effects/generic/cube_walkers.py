@@ -978,21 +978,36 @@ class CreateEmblemWithAbilities(Effect):
     and stamped onto a ``make_emblem`` printing at resolution, so any
     parseable quoted trigger claims without a per-card emblem kind. The
     emblem joins ``state.emblems`` (command zone), whose triggers
-    ``dispatch_event`` already scans."""
+    ``dispatch_event`` already scans.
+
+    ``static_abilities`` (anthems -- "Ninjas you control get +1/+1",
+    "Lands you control have indestructible") are read by the layered
+    static walks, which scan emblems as static sources alongside the
+    battlefield (cube glue bucket). ``printing_fields`` stamps extra
+    printing-level grants onto the emblem (``(field, value)`` pairs,
+    e.g. ``grants_retrace_to`` for "Instant and sorcery cards in your
+    graveyard have retrace.")."""
 
     name: str = "emblem"
     triggered_abilities: tuple = ()
+    static_abilities: tuple = ()
+    printing_fields: tuple = ()
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from dataclasses import replace as _replace
+
         from mtg_bot.cards.base import make_emblem
         from mtg_bot.game import Zone
 
         printing = make_emblem(
             name=self.name, triggered_abilities=self.triggered_abilities,
+            static_abilities=self.static_abilities,
         )
+        if self.printing_fields:
+            printing = _replace(printing, **dict(self.printing_fields))
         emblem = state.new_object(
             printing, owner_id=controller_id, zone=Zone.COMMAND,
         )

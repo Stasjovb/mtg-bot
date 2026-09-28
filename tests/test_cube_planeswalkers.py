@@ -142,9 +142,7 @@ def test_bucket_planeswalker_is_claimed(name):
 
 
 @pytest.mark.parametrize("name", [
-    "Wrenn and Six",
     "Oko, Thief of Crowns",
-    "Chandra, Torch of Defiance",
 ])
 def test_unparseable_loyalty_body_leaves_walker_unclaimed(name):
     """No partial claims: a walker whose loyalty bodies the grammar can't

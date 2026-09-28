@@ -145,7 +145,22 @@ def _parse_loyalty_effect(body: str, name: str):
         body = re.sub(
             r"\b" + re.escape(short) + r"\b(?!,)", name, body,
         )
-    return _parse_spell_effect_phrase(body, name)
+    effect = _parse_spell_effect_phrase(body, name)
+    if effect is not None:
+        return effect
+    # Fallback (cube glue bucket): the walker named as a subject or
+    # object MID-body ("If you don't, Chandra deals 2 damage ...", "the
+    # number of loyalty counters on Comet") -- only the leading subject
+    # is stripped by the spell normalizer, so rewrite the remaining
+    # occurrences to "this planeswalker" and retry. Tried only after
+    # the established path declined, so no claimed body changes.
+    rest = body[len(name):] if body.startswith(name) else body
+    if name not in rest:
+        return None
+    head = body[: len(body) - len(rest)]
+    return _parse_spell_effect_phrase(
+        head + rest.replace(name, "this planeswalker"), name,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1256,7 +1256,12 @@ def _static_bonuses(
     power_bonus = 0
     toughness_bonus = 0
     granted: set[str] = set()
-    for source in state.battlefield:
+    # Command-zone emblems are static sources too ("Ninjas you control
+    # get +1/+1."); almost every state has none, so the concat is rare.
+    static_sources = state.battlefield
+    if state.emblems:
+        static_sources = static_sources + state.emblems
+    for source in static_sources:
         wiped = _source_layer6_wiped(state, source)
         for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
@@ -1407,8 +1412,12 @@ def _layer6_entries_for(
         ce for ce in state.continuous_effects
         if ce.layer == 6 and ce.target_id == obj.id
     ]
-    # Static-anthem keyword grants from sources on the battlefield.
-    for source in state.battlefield:
+    # Static-anthem keyword grants from sources on the battlefield (and
+    # command-zone emblems: "Lands you control have indestructible.").
+    static_sources = state.battlefield
+    if state.emblems:
+        static_sources = static_sources + state.emblems
+    for source in static_sources:
         for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
                 continue

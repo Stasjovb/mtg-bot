@@ -732,6 +732,11 @@ def parse_ext_effect(phrase: str) -> Effect | None:
             return CreateEmblemWithAbilities(
                 name=f'emblem: "{body}"', triggered_abilities=arms,
             )
+        # Cube glue bucket: emblem statics / printing-level grants and
+        # triggers naming "this emblem" as their source.
+        from mtg_bot.cards.parser.cube_glue_grammar import parse_glue_emblem
+
+        return parse_glue_emblem(body)
     return None
 
 

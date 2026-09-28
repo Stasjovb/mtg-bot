@@ -123,9 +123,10 @@ def test_emblem_with_parseable_trigger_and_unparseable_body():
     )
     assert isinstance(eff, CreateEmblemWithAbilities)
     assert eff.triggered_abilities[0].event == Event.DRAWS_CARD
+    # (Wrenn and Six's retrace emblem now parses -- cube glue bucket.)
     assert parse_ext_effect(
         'you get an emblem with "Instant and sorcery cards in your '
-        'graveyard have retrace."'
+        'graveyard have frobnication."'
     ) is None
 
 

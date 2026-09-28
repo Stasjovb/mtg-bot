@@ -779,6 +779,16 @@ class StaticScope:
     # "[Other ]<Subtype>s you control" — ``subtype_you_control(...)``
     # builds ``"subtype_you_control:<other|all>:<Subtype>"``.
     SUBTYPE_PREFIX = "subtype_you_control:"
+    # "<Card type>s you control have <keyword>." for a NONcreature card
+    # type ("Lands you control have indestructible." -- Nissa, Who
+    # Shakes the World's emblem): the only scope family that reaches
+    # noncreature permanents. ``card_type_you_control(...)`` builds
+    # ``"card_type_you_control:<Type>"``.
+    CARD_TYPE_PREFIX = "card_type_you_control:"
+
+    @staticmethod
+    def card_type_you_control(card_type: str) -> str:
+        return f"card_type_you_control:{card_type}"
 
     @staticmethod
     def subtype_you_control(subtype: str, *, other: bool) -> str:
@@ -908,9 +918,11 @@ class StaticAbility:
         """True if this ability, on ``source``, currently buffs ``target``."""
         from mtg_bot.game import is_creature_now
 
-        # Creatures only, under the source's controller.
+        # Creatures only (except the card-type scope, which can name a
+        # noncreature type), under the source's controller.
         if not is_creature_now(target):
-            return False
+            if not self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
+                return False
         if target.controller_id != source.controller_id:
             return False
         # Spacecraft tier gate — source needs enough charge counters.
@@ -957,6 +969,11 @@ class StaticAbility:
                 from mtg_bot.game import effective_subtypes
                 return subtype in effective_subtypes(state, target)
             return subtype in target.printing.subtypes
+        if self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
+            card_type = self.scope[len(StaticScope.CARD_TYPE_PREFIX):]
+            if card_type == "Creature":
+                return is_creature_now(target)
+            return card_type in target.printing.card_types
         if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
             # Read effective_subtypes so a creature granted "Sliver"
             # by a layer-4 add_subtype effect (Conspiracy-style) is
