@@ -5747,7 +5747,7 @@ Documented shortcuts:
 
 - *1. Mutinous Massacre — control-change-UEOT subsystem missing on Rust*: - **Vengeful Possession Cycle 1 — LANDED (2026-05-22, `feature/vengeful-possession-cycle-1-p1`).** Vengeful Possession (DSK; `{2}{R}` Sorcery — "Gain control of target creature until end of turn. Untap it. It gains haste until end of tur...
 
-Tests: 9 files, 50 mentions - `tests/test_exorcise_parity.py` (31), `tests/test_parser_dsk_spells_batch5.py` (6), `tests/test_cross_engine_etb_triggers.py` (4), `tests/test_probe_spell_card_bridge_admitted.py` (4), `tests/test_close_encounter_parity.py` (1), `tests/test_darkness_parity.py` (1), `tests/test_gravkill_parity.py` (1), `tests/test_scour_for_scrap_parity.py` (1), `tests/test_target_phrases.py` (1)
+Tests: 9 files, 48 mentions - `tests/test_exorcise_parity.py` (29), `tests/test_parser_dsk_spells_batch5.py` (6), `tests/test_cross_engine_etb_triggers.py` (4), `tests/test_probe_spell_card_bridge_admitted.py` (4), `tests/test_close_encounter_parity.py` (1), `tests/test_darkness_parity.py` (1), `tests/test_gravkill_parity.py` (1), `tests/test_scour_for_scrap_parity.py` (1), `tests/test_target_phrases.py` (1)
 
 ## Expedition Map
 
@@ -7246,7 +7246,7 @@ Documented shortcuts:
 - *Reflecting Pool Phase 4 Cycle 2 LANDED — Python admit-set widen (`_carrier_aa_phase_1_effect_classes` 17 → 18) + invariant pin inversion + per-card real-EoE byte-equal MINT + MINT+PAY probe; Reflecting Pool BLOCKED-SG → covered_by_construction → PROBED (the FLIP)*: **Impact estimate:** Reflecting Pool FLIPS covered_by_construction → PROBED at C2 (PROBED 415 → 416 / covered_by_construction 29 → 28; BLOCKED-SG unchanged at 31 — Reflecting Pool was already in covered_by_construction tier after the C1 ...
 - *Opening-hand actions are setup-agent decisions (2026-09-28, `feature/cube-fixes-1`)*: **Where:** `mtg_bot/opening_hand.py` (`apply_opening_hand_actions`), called from `simulate.setup_game` after the final keep; `CardPrinting.opening_hand_action` (parsed by `cards/parser/opening_hand_lines.py`). **What:** CR 103.6 opening-...
 
-Tests: 20 files, 93 mentions - `tests/test_gemstone_caverns_parity.py` (40), `tests/test_parser_complex_lands_batch23.py` (8), `tests/test_carrier_aa_phase_3c_close_decline_walk.py` (7), `tests/test_all_fates_scroll_parity.py` (5), `tests/test_stellar_sights_blast_zone.py` (5), `tests/test_carrier_aa_phase_4a_substrate_cycle_1.py` (4), `tests/test_gene_pollinator_parity.py` (4), `tests/test_opening_hand.py` (4), `tests/test_eldrazi_temple_parity.py` (3), `tests/test_forest_parity.py` (2), and 10 more
+Tests: 20 files, 87 mentions - `tests/test_gemstone_caverns_parity.py` (35), `tests/test_parser_complex_lands_batch23.py` (8), `tests/test_carrier_aa_phase_3c_close_decline_walk.py` (7), `tests/test_all_fates_scroll_parity.py` (5), `tests/test_stellar_sights_blast_zone.py` (5), `tests/test_gene_pollinator_parity.py` (4), `tests/test_opening_hand.py` (4), `tests/test_carrier_aa_phase_4a_substrate_cycle_1.py` (3), `tests/test_eldrazi_temple_parity.py` (3), `tests/test_forest_parity.py` (2), and 10 more
 
 ## Gemstone Mine
 
@@ -10977,7 +10977,7 @@ Activated abilities:
     effect: Add mana to pool (produces: (any, 1))
 ```
 
-Tests: 20 files, 95 mentions - `tests/test_mana_confluence_parity.py` (33), `tests/test_gemstone_caverns_parity.py` (15), `tests/test_cascading_cataracts_parity.py` (11), `tests/test_plaza_of_heroes_parity.py` (6), `tests/test_stellar_sights_utility.py` (4), `tests/test_sunken_citadel_parity.py` (4), `tests/test_all_fates_scroll_parity.py` (3), `tests/test_eldrazi_temple_parity.py` (3), `tests/test_gene_pollinator_parity.py` (3), `tests/test_parser_fancy_mana_lands.py` (3), and 10 more
+Tests: 20 files, 91 mentions - `tests/test_mana_confluence_parity.py` (33), `tests/test_cascading_cataracts_parity.py` (11), `tests/test_gemstone_caverns_parity.py` (11), `tests/test_plaza_of_heroes_parity.py` (6), `tests/test_stellar_sights_utility.py` (4), `tests/test_sunken_citadel_parity.py` (4), `tests/test_all_fates_scroll_parity.py` (3), `tests/test_eldrazi_temple_parity.py` (3), `tests/test_gene_pollinator_parity.py` (3), `tests/test_parser_fancy_mana_lands.py` (3), and 10 more
 
 ## Mana Crypt
 
