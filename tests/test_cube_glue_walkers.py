@@ -538,3 +538,93 @@ def test_elked_creature_has_no_dies_trigger_last_known_information():
     assert s.stack == [] and c.left_without_abilities
     destroy(s, plain)
     assert len(s.stack) == 1 and not plain.left_without_abilities
+
+
+# ---------------------------------------------------------------------------
+# Ugin, Eye of the Storms
+# ---------------------------------------------------------------------------
+
+_UGIN = "Ugin, Eye of the Storms"
+
+
+def _rock(name="Rock"):
+    from mtg_bot.cards.base import make_artifact
+
+    return make_artifact(name, "{1}")
+
+
+def test_ugin_cast_trigger_exiles_a_colored_permanent_only():
+    s = arena()
+    for _ in range(7):
+        put(s, BASIC_LANDS["Wastes"] if "Wastes" in BASIC_LANDS else BASIC_LANDS["Island"], 0)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 1)
+    rock = put(s, _rock(), 1)
+    ugin = to_hand(s, printing(_UGIN), 0)
+    cast = next(
+        a for a in legal_actions(s, 0)
+        if isinstance(a, CastSpell) and a.card_id == ugin.id
+    )
+    agent(s, 0).targets = [("creature", bear.id)]
+    apply_action(s, 0, cast)
+    trig = s.stack[-1]
+    assert trig.ability is not None
+    legal = trig.ability.effect.legal_targets(s, 0)
+    assert ("creature", bear.id) in legal
+    assert all(t[1] != rock.id for t in legal)
+    resolve_top_of_stack(s)
+    assert bear in s.players[1].exile
+    resolve_top_of_stack(s)
+    assert any(o.id == ugin.id for o in s.battlefield)
+
+
+def test_ugin_colorless_spell_trigger():
+    s = arena()
+    put_walker(s, _UGIN, 0)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 1)
+    put(s, BASIC_LANDS["Island"], 0)
+    rock = to_hand(s, _rock(), 0)
+    agent(s, 0).targets = [("creature", bear.id)]
+    cast = next(
+        a for a in legal_actions(s, 0)
+        if isinstance(a, CastSpell) and a.card_id == rock.id
+    )
+    apply_action(s, 0, cast)
+    resolve_top_of_stack(s)
+    assert bear in s.players[1].exile
+
+
+def test_ugin_minus_eleven_exiles_colorless_nonland_cards_castable_free():
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    ugin = put_walker(s, _UGIN, 0)
+    ugin.loyalty_counters = 11
+    rocks = [to_library(s, _rock("Rock A"), 0), to_library(s, _rock("Rock B"), 0)]
+    bolt = to_library(s, _BOLT, 0)
+    land = to_library(s, BASIC_LANDS["Island"], 0)
+    activate_loyalty(s, 0, ugin, -11)
+    assert all(r in s.players[0].exile for r in rocks)
+    assert bolt in s.players[0].library and land in s.players[0].library
+    casts = [
+        a for a in legal_actions(s, 0)
+        if isinstance(a, CastSpell) and a.card_id in {r.id for r in rocks}
+    ]
+    assert len(casts) == 2  # free: no mana on the board
+    apply_action(s, 0, casts[0])
+    resolve_top_of_stack(s)
+    assert sum(1 for o in s.battlefield if o.printing.name.startswith("Rock")) == 1
+
+
+def test_ugin_minus_eleven_may_stop_early():
+    from mtg_bot.effects.generic.cube_glue import (
+        SearchAnyNumberExileCastFreeThisTurn,
+    )
+
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    to_library(s, _rock(), 0)
+    agent(s, 0).library_pick = None
+    SearchAnyNumberExileCastFreeThisTurn(colorless=True).resolve(s, 0)
+    assert s.players[0].exile == []
+    assert "any number" in SearchAnyNumberExileCastFreeThisTurn().describe()

@@ -761,3 +761,75 @@ class ExchangeControlOfTargets(Effect):
 
     def describe(self) -> str:
         return "exchange control of two target permanents"
+
+
+# ---------------------------------------------------------------------------
+# "Search your library for any number of <desc> cards, exile them, then
+# shuffle. Until end of turn, you may cast those cards without paying
+# their mana costs." (Ugin, Eye of the Storms' -11)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SearchAnyNumberExileCastFreeThisTurn(Effect):
+    """Each pick goes through ``choose_card_from_library`` over the
+    remaining matching cards; ``None`` stops the search ("any number",
+    CR 701.19b lets it find none). Every exiled card gets the R/multi
+    bucket's ``ExilePlayPermission`` (free, cast only, this turn)."""
+
+    card_filter: object = None
+    colorless: bool = False
+
+    def _matches(self, state, card) -> bool:
+        from mtg_bot.game import effective_colors
+
+        if self.card_filter is not None and not self.card_filter.matches(
+            card.printing,
+        ):
+            return False
+        return not self.colorless or not effective_colors(state, card)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            THIS_TURN,
+            exile_card,
+            grant_exile_play,
+        )
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+        found = 0
+        while True:
+            options = [c for c in p.library if self._matches(state, c)]
+            if not options:
+                break
+            pick = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in options],
+                )
+            card = next((c for c in options if c.id == pick), None)
+            if card is None:
+                break
+            p.library.remove(card)
+            exile_card(state, card)
+            grant_exile_play(
+                state, card, controller_id, duration=THIS_TURN, free=True,
+                cast_only=True,
+            )
+            found += 1
+        shuffle_library(state, controller_id)
+        state.log.append(
+            f"P{controller_id} exiles {found} card(s); may cast them free "
+            f"this turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "search your library for any number of cards, exile them, then "
+            "shuffle; until end of turn you may cast them without paying "
+            "their mana costs"
+        )

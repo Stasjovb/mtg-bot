@@ -259,6 +259,16 @@ _EXCHANGE_CONTROL_RE = re.compile(
 )
 
 
+# "search your library for any number of <desc> cards, exile them, then
+# shuffle. Until end of turn, you may cast those cards without paying
+# their mana costs" (Ugin, Eye of the Storms' -11).
+_SEARCH_ANY_NUMBER_EXILE_CAST_FREE_RE = re.compile(
+    r"^search your library for any number of (?P<desc>[a-z ,]+?) cards, "
+    r"exile them, then shuffle\. Until end of turn, you may cast those "
+    r"cards without paying their mana costs$"
+)
+
+
 def parse_glue_effect(phrase: str) -> Effect | None:
     """Last-resort effect recognizers for the glue bucket."""
     if _disabled():
@@ -303,6 +313,21 @@ def parse_glue_effect(phrase: str) -> Effect | None:
         if a is None or b is None:
             return None
         return g.ExchangeControlOfTargets(targets=(a, b))
+    m = _SEARCH_ANY_NUMBER_EXILE_CAST_FREE_RE.match(phrase)
+    if m is not None:
+        desc = m.group("desc")
+        colorless = desc == "colorless" or desc.startswith("colorless ")
+        if colorless:
+            desc = desc[len("colorless"):].strip()
+        f = (
+            parse_card_descriptor(f"a {desc} card") if desc
+            else parse_card_descriptor("a card")
+        )
+        if f is None:
+            return None
+        return g.SearchAnyNumberExileCastFreeThisTurn(
+            card_filter=f, colorless=colorless,
+        )
     m = _PLAY_EXILED_FREE_IF_LIBRARY_RE.match(phrase)
     if m is not None:
         n = _number(m.group("n"))

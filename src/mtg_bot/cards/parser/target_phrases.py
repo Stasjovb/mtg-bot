@@ -177,6 +177,9 @@ def _split_items(body: str) -> list[str] | None:
     return parts
 
 
+_COLORED_SUFFIX = " that's one or more colors"
+
+
 def parse_permanent_phrase(
     np: str, *, plural: bool = False,
 ) -> ObjectPredicate | None:
@@ -186,6 +189,13 @@ def parse_permanent_phrase(
     word is outside the grammar."""
     body = np.strip()
     quals: list[ObjectPredicate] = []
+    # "<np> that's one or more colors" (Ugin, Eye of the Storms): a
+    # colored permanent, read through ``effective_colors``.
+    if body.endswith(_COLORED_SUFFIX):
+        from mtg_bot.effects.generic.cube_walkers import IsColorless
+
+        quals.append(~IsColorless())
+        body = body[: -len(_COLORED_SUFFIX)]
     for pat, cls in _VALUE_SUFFIXES:
         m = pat.search(body)
         if m is not None:
