@@ -360,10 +360,12 @@ def run_step(
         # "At the beginning of your first main phase" (Coalition Relic)
         # and delayed "your next main phase" triggers (Mana Drain);
         # mirrored in the search adapter's ``_enter_step``.
-        run_beginning_of_precombat_main_triggers(state)
-        state_based_actions(state)
-        if state.is_over():
-            return
+        # SBAs only when the hook did something (the pre-hook engine ran
+        # none here; the Rust engine's cadence is pinned against that).
+        if run_beginning_of_precombat_main_triggers(state):
+            state_based_actions(state)
+            if state.is_over():
+                return
 
     elif step == Step.POSTCOMBAT_MAIN:
         # Fire "At the beginning of your second main phase" triggers

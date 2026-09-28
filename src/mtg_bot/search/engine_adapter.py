@@ -1281,8 +1281,8 @@ class MtgGameStateAdapter:
         elif step == Step.PRECOMBAT_MAIN:
             # Mirror simulate.run_step: first-main-phase triggers and
             # delayed "your next main phase" triggers (cube glue bucket).
-            run_beginning_of_precombat_main_triggers(self._state)
-            state_based_actions(self._state)
+            if run_beginning_of_precombat_main_triggers(self._state):
+                state_based_actions(self._state)
 
         elif step == Step.POSTCOMBAT_MAIN:
             # Mirror the simulate.run_step wiring for the DSK Survival

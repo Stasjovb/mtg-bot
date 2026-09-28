@@ -302,3 +302,12 @@ def test_search_adapter_takes_the_additional_combat():
     state.step = Step.END_OF_COMBAT
     adapter._advance_to_next_step()
     assert state.step == Step.POSTCOMBAT_MAIN
+
+
+def test_precombat_hook_reports_whether_anything_happened():
+    from mtg_bot.turn import run_beginning_of_precombat_main_triggers
+
+    s = _passing_arena()
+    assert run_beginning_of_precombat_main_triggers(s) is False
+    _relic(s)
+    assert run_beginning_of_precombat_main_triggers(s) is True

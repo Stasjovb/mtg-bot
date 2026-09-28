@@ -1409,7 +1409,7 @@ def run_beginning_of_postcombat_main_triggers(state: GameState) -> None:
     run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_POSTCOMBAT_MAIN)
 
 
-def run_beginning_of_precombat_main_triggers(state: GameState) -> None:
+def run_beginning_of_precombat_main_triggers(state: GameState) -> bool:
     """Push "At the beginning of your first main phase" triggered
     abilities (Coalition Relic) and any delayed "at the beginning of
     your next main phase" triggers of the active player (Mana Drain).
@@ -1425,6 +1425,8 @@ def run_beginning_of_precombat_main_triggers(state: GameState) -> None:
     from mtg_bot.effects.predicates import Event
     from mtg_bot.layouts import run_saga_lore_counters
 
+    stack_before = len(state.stack)
+    lore_before = sum(o.lore_counters for o in state.battlefield)
     run_saga_lore_counters(state)
     dispatch_event(
         state, Event.BEGINNING_OF_PRECOMBAT_MAIN,
@@ -1432,6 +1434,12 @@ def run_beginning_of_precombat_main_triggers(state: GameState) -> None:
         player=state.active_player(),
     )
     run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_PRECOMBAT_MAIN)
+    # Report whether anything happened, so both turn loops run the
+    # follow-up state-based-action check only then.
+    return (
+        len(state.stack) != stack_before
+        or sum(o.lore_counters for o in state.battlefield) != lore_before
+    )
 
 
 def run_delayed_main_phase_triggers(state: GameState, event) -> None:
