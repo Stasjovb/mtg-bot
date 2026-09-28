@@ -632,3 +632,30 @@ class Airbend(Effect):
 
     def describe(self) -> str:
         return "airbend up to one other target creature or spell"
+
+
+@dataclass(frozen=True)
+class SourceConnives(Effect):
+    """"<this creature> connives" (CR 701.50): its controller draws a
+    card, then discards a card; if a nonland card was discarded, put a
+    +1/+1 counter on it (if it's still on the battlefield)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.cube_creatures_rmc import _discard_chosen
+        from mtg_bot.game import add_plus_one_counters
+        from mtg_bot.turn import draw_n_cards
+
+        source = state.resolving_source
+        who = source.controller_id if source is not None else controller_id
+        draw_n_cards(state, who, 1)
+        discarded = _discard_chosen(state, who, 1)
+        nonland = sum(1 for c in discarded if not c.printing.is_land)
+        if nonland and source is not None and source in state.battlefield:
+            add_plus_one_counters(state, source, nonland)
+        state.log.append(
+            f"{source.printing.name if source else 'it'} connives "
+            f"({nonland} counter(s))"
+        )
+
+    def describe(self) -> str:
+        return "this creature connives"

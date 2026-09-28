@@ -413,17 +413,25 @@ import contextvars as _contextvars
 CASTING_FROM_OUTSIDE_HAND: "_contextvars.ContextVar[bool]" = (
     _contextvars.ContextVar("casting_from_outside_hand", default=False)
 )
+# Cube layouts bucket (Green Goblin: "Spells you cast from your graveyard
+# cost {2} less to cast."): the spell is being cast from a graveyard.
+CASTING_FROM_GRAVEYARD: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_graveyard", default=False)
+)
 
 
 @_contextlib.contextmanager
-def casting_origin(outside_hand: bool):
+def casting_origin(outside_hand: bool, from_graveyard: bool = False):
     """Mark the spell whose cost is being determined as cast from
-    outside its caster's hand (graveyard, exile, library) for the
-    duration of the block (read by ``SpellCastFromOutsideHand``)."""
+    outside its caster's hand (graveyard, exile, library) -- and whether
+    from a graveyard -- for the duration of the block (read by
+    ``SpellCastFromOutsideHand`` / ``SpellCastFromGraveyard``)."""
     token = CASTING_FROM_OUTSIDE_HAND.set(outside_hand)
+    gy_token = CASTING_FROM_GRAVEYARD.set(from_graveyard)
     try:
         yield
     finally:
+        CASTING_FROM_GRAVEYARD.reset(gy_token)
         CASTING_FROM_OUTSIDE_HAND.reset(token)
 
 
@@ -453,7 +461,9 @@ def can_cast_now(
         return False
     if free:
         return True
-    with casting_origin(card.zone != Zone.HAND):
+    with casting_origin(
+        card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+    ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, card.printing.mana_cost,
         )

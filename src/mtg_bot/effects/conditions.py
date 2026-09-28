@@ -676,3 +676,16 @@ class SpellCastFromOutsideHand(Condition):
         from mtg_bot.creature_casting_ub import CASTING_FROM_OUTSIDE_HAND
 
         return CASTING_FROM_OUTSIDE_HAND.get()
+
+
+@dataclass(frozen=True)
+class SpellCastFromGraveyard(Condition):
+    """The spell whose cost is being determined is being cast from a
+    graveyard (Green Goblin: "Spells you cast from your graveyard cost
+    {2} less to cast."). Reads the cast-origin context
+    (``creature_casting_ub.casting_origin``)."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        from mtg_bot.creature_casting_ub import CASTING_FROM_GRAVEYARD
+
+        return CASTING_FROM_GRAVEYARD.get()

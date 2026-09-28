@@ -50,6 +50,7 @@ import re
 
 from mtg_bot.cards.base import CostReduction, ExternalCostReduction
 from mtg_bot.effects.conditions import (
+    SpellCastFromGraveyard,
     SpellCastFromOutsideHand,
     AnotherSpellCastThisTurn,
     Condition,
@@ -192,6 +193,10 @@ _EXTERNAL_COST_REDUCTION_LINES: dict[str, Condition] = {
     # Bilbo, Thief in the Night.
     "Spells you cast from anywhere other than your hand cost {N} less to "
     "cast.": SpellCastFromOutsideHand(),
+    # Green Goblin.
+    "Spells you cast from your graveyard cost {N} less to cast.": (
+        SpellCastFromGraveyard()
+    ),
 }
 
 

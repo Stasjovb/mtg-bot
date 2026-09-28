@@ -2184,13 +2184,23 @@ def _cast_spell(
         and (
             p.may_play_from_graveyard_this_turn
             or yw_card.castable_from_graveyard_this_turn
+            or _mayhem_permission(state, player_id, yw_card)
             or _lurrus_permission_for(state, player_id, yw_card) is not None
         )
     ):
         # Yawgmoth's Will / a per-card "you may cast that card this turn"
         # permission (Emry): cast from the graveyard for the normal cost.
         # Otherwise a Lurrus-style once-per-turn permission (spent now).
-        if not (
+        if _mayhem_permission(state, player_id, yw_card) and not (
+            p.may_play_from_graveyard_this_turn
+            or yw_card.castable_from_graveyard_this_turn
+        ):
+            # Mayhem: cast for its mayhem cost (its mana cost).
+            state.log.append(
+                f"P{player_id} casts {yw_card.printing.name} for its mayhem "
+                "cost"
+            )
+        elif not (
             p.may_play_from_graveyard_this_turn
             or yw_card.castable_from_graveyard_this_turn
         ):
@@ -2435,7 +2445,9 @@ def _cast_spell(
     # special-case this.
     from mtg_bot.creature_casting_ub import casting_origin as _casting_origin
 
-    with _casting_origin(cast_from_outside_hand):
+    with _casting_origin(
+        cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
+    ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
         )
@@ -3331,6 +3343,12 @@ def _activate_hand_ability(
         )
 
         fire_becomes_target(state, targets, card, player_id)
+
+
+def _mayhem_permission(state: GameState, player_id: int, card) -> bool:
+    from mtg_bot.layouts import mayhem_castable
+
+    return mayhem_castable(state, player_id, card)
 
 
 def _lurrus_permission_for(state: GameState, player_id: int, card):

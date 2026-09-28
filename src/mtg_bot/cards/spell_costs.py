@@ -366,7 +366,7 @@ def pay_additional_cost_option(
             state.log.append(
                 f"additional cost: P{player_id} discards {chosen.printing.name}"
             )
-            fire_opponent_discards_triggers(state, player_id)
+            fire_opponent_discards_triggers(state, player_id, card=chosen)
         return
     if option.kind == "pay_life":
         p.life -= option.amount

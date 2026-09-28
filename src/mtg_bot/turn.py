@@ -828,6 +828,9 @@ def fire_opponent_discards_triggers(
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event as _Event
 
+    if card is not None:
+        # Mayhem ("if you discarded it this turn").
+        card.discarded_turn = state.turn_number
     discarding_player = state.player_by_id(discarding_player_id)
     dispatch_event(
         state, _Event.DISCARDS_CARD, label="discards-card",

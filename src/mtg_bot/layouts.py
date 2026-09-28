@@ -470,3 +470,23 @@ def pay_waterbend(state, player_id: int, source, mana, spell_kind):
     if k:
         state.log.append(f"P{player_id} taps {k} permanent(s) to waterbend")
     return mana.reduced(k)
+
+
+# ---------------------------------------------------------------------------
+# Mayhem granted to graveyard cards (Green Goblin)
+# ---------------------------------------------------------------------------
+
+
+def mayhem_castable(state: "GameState", player_id: int, card) -> bool:
+    """Mayhem (CR 702.xxx, Marvel's Spider-Man): ``card`` -- a nonland
+    card in ``player_id``'s graveyard -- may be cast for its mayhem cost
+    (here its mana cost) if they discarded it this turn, while they
+    control a permanent granting their graveyard cards mayhem."""
+    if card.printing.is_land or card.discarded_turn != state.turn_number:
+        return False
+    if card not in state.player_by_id(player_id).graveyard:
+        return False
+    return any(
+        o.controller_id == player_id and o.printing.grants_mayhem_to_graveyard
+        for o in state.battlefield
+    )

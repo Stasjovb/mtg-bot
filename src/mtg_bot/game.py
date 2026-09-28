@@ -639,6 +639,9 @@ class GameObject:
     # delayed triggered ability (``CreateTriggersUntilYourNextTurn``):
     # the player whose next untap step removes it (-1 = never).
     expires_at_untap_of: int = -1
+    # ``state.turn_number`` when this card was last discarded (-1 =
+    # never): mayhem's "if you discarded it this turn".
+    discarded_turn: int = -1
     # The spell was cast with its optional additional cost paid
     # (Teamwork — "if this spell was cast using teamwork").
     optional_additional_cost_paid: bool = False

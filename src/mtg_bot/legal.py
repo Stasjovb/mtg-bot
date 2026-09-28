@@ -18,6 +18,12 @@ from mtg_bot.game import GameObject, GameState, Zone
 from mtg_bot.turn import MAIN_STEPS
 
 
+def _mayhem_castable(state: GameState, player_id: int, card) -> bool:
+    from mtg_bot.layouts import mayhem_castable
+
+    return mayhem_castable(state, player_id, card)
+
+
 def _has_priority(state: GameState, player_id: int) -> bool:
     return state.players[state.priority_player_idx].id == player_id
 
@@ -475,7 +481,9 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         # affordability probe assumes the whole graveyard is available.
         from mtg_bot.creature_casting_ub import casting_origin
 
-        with casting_origin(card.zone != Zone.HAND):
+        with casting_origin(
+            card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+        ):
             reduced = apply_cost_reductions(
                 card.printing, state, player_id, base_cost,
             )
@@ -785,6 +793,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
                 yawgmoth
                 or gcard.castable_from_graveyard_this_turn
                 or (lurrus and _lurrus_castable(state, player_id, gcard) is not None)
+                or _mayhem_castable(state, player_id, gcard)
             ):
                 continue
             if (pr.is_instant or "flash" in pr.keywords) != instant_speed:

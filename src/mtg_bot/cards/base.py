@@ -1290,6 +1290,12 @@ class CardPrinting:
     # (``CastSpell(cast_face=<half name>)``), which turns the spell to
     # that half's printing until it leaves the stack.
     split_faces: tuple["CardPrinting", ...] = ()
+    # "Each nonland card in your graveyard has mayhem. The mayhem cost is
+    # equal to its mana cost." (Green Goblin's Goblin Formula): while its
+    # controller controls this permanent, they may cast a nonland card
+    # from their graveyard for its mana cost if they discarded it this
+    # turn (``layouts.mayhem_castable``).
+    grants_mayhem_to_graveyard: bool = False
     # "Plot {cost}" (CR 702.170): as a sorcery, pay the plot cost and
     # exile the card from hand; on a later turn it may be cast from
     # exile without paying its mana cost, as a sorcery. The special

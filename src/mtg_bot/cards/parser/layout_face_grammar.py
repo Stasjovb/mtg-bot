@@ -211,6 +211,11 @@ def parse_face_effect(phrase: str) -> Effect | None:
     m = _CHOOSE_ONE_OF_EACH_SACRIFICE_REST.match(phrase)
     if m is not None:
         return _choose_one_of_each(m)
+    if phrase in ("he connives", "she connives", "they connive", "connives"):
+        # "<this creature> connives" (CR 701.50) -- the source connives.
+        from mtg_bot.effects.generic.layout_face_effects import SourceConnives
+
+        return SourceConnives()
     if phrase == "airbend up to one other target creature or spell":
         # Airbend (the only airbend target shape in the pool).
         from mtg_bot.effects.generic.layout_face_effects import Airbend
@@ -452,4 +457,35 @@ def parse_face_trigger_phrase(phrase: str):
             Subject("attacker", IsCreature())
             & Controlled(OPPONENT, subject="attacker"),
         )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Creature lines (hooked after the W/G creature-line grammar)
+# ---------------------------------------------------------------------------
+
+_CANT_BE_BLOCKED_LINE = re.compile(r"^[Tt]his creature can't be blocked\.$")
+_MAYHEM_GRANT_LINE = re.compile(
+    r"^(?:[A-Z][A-Za-z ]+ — )?Each nonland card in your graveyard has "
+    r"mayhem\. The mayhem cost is equal to its mana cost\.$"
+)
+
+
+def parse_face_creature_line(line: str, card: dict):
+    """A ``WGLine``-shaped contribution for a creature line of the
+    bucket's faces, or ``None``."""
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    line = _substitute_self_name(line, card["name"])
+    if _CANT_BE_BLOCKED_LINE.match(line):
+        from mtg_bot.cards.base import StaticAbility, StaticScope
+        from mtg_bot.effects.modifiers import CantBeBlocked, ContinuousModifier
+
+        return WGLine(statics=(StaticAbility(
+            scope=StaticScope.SELF,
+            continuous_effect=ContinuousModifier(layer=6, payload=CantBeBlocked()),
+        ),))
+    if _MAYHEM_GRANT_LINE.match(line):
+        return WGLine(fields={"grants_mayhem_to_graveyard": True})
     return None

@@ -905,6 +905,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # grammar above declined, so it can't change a claim.
             wg = parse_wg_creature_line(line, card)
             if wg is None:
+                # Cube layouts bucket: lines of the bucket's faces.
+                from mtg_bot.cards.parser.layout_face_grammar import (
+                    parse_face_creature_line,
+                )
+
+                wg = parse_face_creature_line(line, card)
+            if wg is None:
                 return None
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)
