@@ -18,6 +18,16 @@ from mtg_bot.game import GameObject, GameState, Zone
 from mtg_bot.turn import MAIN_STEPS
 
 
+def loyalty_activation_available(state, player_id: int, obj) -> bool:
+    """CR 606.3's once-per-turn loyalty gate, widened by "you may
+    activate <this>'s loyalty abilities N more times this turn" (Comet,
+    Stellar Pup: ``GameObject.extra_loyalty_activations``)."""
+    if (player_id, obj.id) not in state.loyalty_activated_this_turn:
+        return True
+    extra = obj.extra_loyalty_activations
+    return bool(extra) and extra[0] == state.turn_number and extra[1] > 0
+
+
 def _mayhem_castable(state: GameState, player_id: int, card) -> bool:
     from mtg_bot.layouts import mayhem_castable
 
@@ -102,7 +112,7 @@ def _instant_speed_loyalty_activations(
             continue
         if not _loyalty_abilities_at_instant_speed(state, obj):
             continue
-        if (player_id, obj.id) in state.loyalty_activated_this_turn:
+        if not loyalty_activation_available(state, player_id, obj):
             continue
         for idx, ability in enumerate(
             effective_activated_abilities(state, obj)
@@ -1313,7 +1323,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         # the Planeswalker card type maps 1:1 to "has a loyalty ability".
         if (
             obj.printing.is_planeswalker
-            and (player_id, obj.id) in state.loyalty_activated_this_turn
+            and not loyalty_activation_available(state, player_id, obj)
         ):
             continue
         for idx, ability in enumerate(

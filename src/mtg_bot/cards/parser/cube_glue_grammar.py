@@ -531,3 +531,166 @@ def parse_glue_effect(phrase: str) -> Effect | None:
             card_filter=f,
         )
     return None
+
+
+# ---------------------------------------------------------------------------
+# Die-roll loyalty abilities (Comet, Stellar Pup)
+# ---------------------------------------------------------------------------
+
+# Loyalty body "Roll a <N>-sided die." / "Roll a d<N>."
+_ROLL_DIE_BODY_RE = re.compile(
+    r"^Roll an? (?:(?P<word>\w+)-sided die|d(?P<n>\d+))\.$"
+)
+# A result-table line: "<lo>[ or <hi>|-<hi>] — <row body>".
+_DIE_ROW_LINE_RE = re.compile(
+    r"^(?P<lo>\d+)(?:(?: or |[-–])(?P<hi>\d+))? — (?P<body>.+)$"
+)
+# "[+N]" / "[-N]" inside a row, leading ("[+2], then <eff>" /
+# "[+1], and <eff>") or trailing ("<eff>, then [-2]").
+_LOYALTY_BRACKET = r"\[(?P<sign>[+\-−])(?P<k>\d+)\]"
+_ROW_LEADING_LOYALTY_RE = re.compile(
+    r"^" + _LOYALTY_BRACKET + r"(?:, (?:then|and) (?P<rest>.+))?$"
+)
+_ROW_TRAILING_LOYALTY_RE = re.compile(
+    r"^(?P<rest>.+), then " + _LOYALTY_BRACKET + r"$"
+)
+# "<create tokens>. They gain <keywords> until end of turn"
+_CREATE_THEN_THEY_GAIN_RE = re.compile(
+    r"^(?P<create>create .+?)\. They gain (?P<kw>[a-z ,]+) until end of turn$"
+)
+# "return a <descriptor> card from your graveyard to your hand" (untargeted)
+_RETURN_A_CARD_FROM_GRAVEYARD_RE = re.compile(
+    r"^return (?P<desc>an? (?:.+? )?card(?: with mana value \d+ or less)?) "
+    r"from your graveyard to your hand$"
+)
+# "this planeswalker deals damage equal to the number of loyalty counters
+# on <pronoun> to a creature or player"
+_LOYALTY_DAMAGE_TO_CHOSEN_RE = re.compile(
+    r"^this planeswalker deals damage equal to the number of loyalty "
+    r"counters on (?:him|her|it|them|this planeswalker) to a creature or "
+    r"player$"
+)
+# "you may activate this planeswalker's loyalty abilit(y|ies) N more
+# times this turn"
+_EXTRA_LOYALTY_ACTIVATIONS_RE = re.compile(
+    r"^you may activate this planeswalker's loyalty abilit(?:y|ies) "
+    r"(?P<n>\w+) more times? this turn$"
+)
+
+
+def parse_glue_die_roll_body(body: str) -> int | None:
+    """The number of sides for a "Roll a six-sided die." loyalty body,
+    else ``None``."""
+    if _disabled():
+        return None
+    m = _ROLL_DIE_BODY_RE.match(body)
+    if m is None:
+        return None
+    if m.group("n"):
+        return int(m.group("n"))
+    return _number(m.group("word"))
+
+
+def _signed(sign: str, k: str) -> int:
+    return int(k) if sign == "+" else -int(k)
+
+
+def _self_rewrite(text: str, name: str) -> str:
+    """The walker's own name (full or short) -> "this planeswalker"."""
+    short = name.split(",", 1)[0]
+    for n in (name, short):
+        text = re.sub(r"\b" + re.escape(n) + r"\b", "this planeswalker", text)
+    return text
+
+
+def _parse_row_phrase(phrase: str):
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import cube_glue as g
+
+    if _LOYALTY_DAMAGE_TO_CHOSEN_RE.match(phrase):
+        return g.SourceDealsLoyaltyDamageToChosen()
+    m = _EXTRA_LOYALTY_ACTIVATIONS_RE.match(phrase)
+    if m is not None:
+        n = _number(m.group("n"))
+        return None if n is None else g.GrantExtraLoyaltyActivationsThisTurn(count=n)
+    m = _CREATE_THEN_THEY_GAIN_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+        create = _parse_effect(m.group("create"))
+        kws = _parse_keyword_grant_body(m.group("kw"))
+        if create is None or not kws:
+            return None
+        return g.CreateThenTheyGainKeywordsUEOT(
+            create=create, keywords=frozenset(kws),
+        )
+    m = _RETURN_A_CARD_FROM_GRAVEYARD_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        f = parse_card_descriptor(m.group("desc"))
+        return None if f is None else g.ReturnChosenGraveyardCardToHand(card_filter=f)
+    return _parse_effect(phrase)
+
+
+def parse_glue_die_row(line: str, name: str):
+    """``(lo, hi, effect)`` for one line of a die-roll result table
+    ("1 or 2 — [+2], then create ..."), else ``None``. Loyalty brackets
+    become ``AdjustSourceLoyalty`` steps in printed order; rows must be
+    untargeted (the roll happens on resolution)."""
+    if _disabled():
+        return None
+    m = _DIE_ROW_LINE_RE.match(line)
+    if m is None:
+        return None
+    body = _self_rewrite(m.group("body"), name)
+    if body.endswith("."):
+        body = body[:-1]
+    from mtg_bot.effects.generic import cube_glue as g
+
+    steps: list = []
+    lead = _ROW_LEADING_LOYALTY_RE.match(body)
+    trail = _ROW_TRAILING_LOYALTY_RE.match(body)
+    if lead is not None:
+        steps.append(g.AdjustSourceLoyalty(delta=_signed(lead["sign"], lead["k"])))
+        rest = lead.group("rest")
+        if rest:
+            eff = _parse_row_phrase(_lower_first(rest))
+            if eff is None:
+                return None
+            steps.append(eff)
+    elif trail is not None:
+        eff = _parse_row_phrase(_lower_first(trail.group("rest")))
+        if eff is None:
+            return None
+        steps.append(eff)
+        steps.append(g.AdjustSourceLoyalty(delta=_signed(trail["sign"], trail["k"])))
+    else:
+        eff = _parse_row_phrase(_lower_first(body))
+        if eff is None:
+            return None
+        steps.append(eff)
+    if any(s.target_count_range()[1] > 0 for s in steps):
+        return None
+    effect = steps[0] if len(steps) == 1 else _sequence(*steps)
+    if effect is None:
+        return None
+    lo = int(m.group("lo"))
+    hi = int(m.group("hi") or lo)
+    return (lo, hi, effect)
+
+
+def assemble_die_table(sides: int, rows: list):
+    """``RollDieTable`` for a complete result table covering 1..``sides``
+    exactly, else ``None``."""
+    rows = sorted(rows, key=lambda r: r[0])
+    expected = 1
+    for lo, hi, _eff in rows:
+        if lo != expected or hi < lo:
+            return None
+        expected = hi + 1
+    if expected != sides + 1:
+        return None
+    from mtg_bot.effects.generic.cube_creatures_rmc import RollDieTable
+
+    return RollDieTable(sides=sides, table=tuple(rows))

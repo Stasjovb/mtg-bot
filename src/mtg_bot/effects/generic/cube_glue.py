@@ -1044,3 +1044,187 @@ class TapTargetPutStunCounters(Effect):
 
     def describe(self) -> str:
         return f"tap target creature; put {self.count} stun counters on it"
+
+
+
+# ---------------------------------------------------------------------------
+# Comet, Stellar Pup: die-roll loyalty ability pieces
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdjustSourceLoyalty(Effect):
+    """"[+N]" / "[-N]" inside an effect (Comet's die table): put N
+    loyalty counters on / remove N from the resolving planeswalker. Not a
+    cost -- removal takes what's there (CR 122.8), and a walker that left
+    the battlefield is unaffected."""
+
+    delta: int = 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        src.loyalty_counters = max(0, src.loyalty_counters + self.delta)
+        state.log.append(
+            f"{src.printing.name}: {self.delta:+d} loyalty "
+            f"(now {src.loyalty_counters})"
+        )
+
+    def describe(self) -> str:
+        return f"[{self.delta:+d}]"
+
+
+@dataclass(frozen=True)
+class CreateThenTheyGainKeywordsUEOT(Effect):
+    """"<create tokens>. They gain <keywords> until end of turn." -- the
+    tokens the inner creation made (new battlefield objects under the
+    controller) get UEOT keyword grants."""
+
+    create: Effect | None = None
+    keywords: frozenset = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        before = {o.id for o in state.battlefield}
+        self.create.resolve(state, controller_id, targets)
+        for o in state.battlefield:
+            if o.id in before or o.controller_id != controller_id:
+                continue
+            for kw in sorted(self.keywords):
+                state.add_continuous_effect(
+                    source_id=o.id, layer=6, kind="grant_keyword",
+                    target_id=o.id, params=(kw,), expires_at="cleanup",
+                    description=f"{o.printing.name} gains {kw} until end of turn",
+                )
+
+    def describe(self) -> str:
+        return (
+            f"{self.create.describe()}; they gain "
+            f"{', '.join(sorted(self.keywords))} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
+class ReturnChosenGraveyardCardToHand(Effect):
+    """"Return a <descriptor> card from your graveyard to your hand." --
+    untargeted: the card is chosen on resolution
+    (``choose_card_from_library`` as the generic id picker; the
+    instruction is mandatory, so a declining agent gets the first)."""
+
+    card_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.graveyard
+            if self.card_filter is None or self.card_filter.matches(c.printing)
+        ]
+        if not options:
+            return
+        card = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            card = next((c for c in options if c.id == pick), options[0])
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        reveal_to_all(state, card)
+        state.log.append(
+            f"{card.printing.name} returns from P{controller_id}'s graveyard "
+            f"to hand"
+        )
+
+    def describe(self) -> str:
+        return "return a card from your graveyard to your hand"
+
+
+@dataclass(frozen=True)
+class SourceDealsLoyaltyDamageToChosen(Effect):
+    """"<This> deals damage equal to the number of loyalty counters on
+    <it> to a creature or player." -- untargeted: the recipient is
+    chosen on resolution (hexproof doesn't stop it) through the agent's
+    ``choose_target`` hook over every creature and living player."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.game import is_creature_now
+
+        src = state.resolving_source
+        if src is None:
+            return
+        amount = max(0, src.loyalty_counters)
+        options: list = [
+            ("creature", o.id) for o in state.battlefield if is_creature_now(o)
+        ]
+        options += [("player", p.id) for p in state.players if not p.has_lost]
+        if amount == 0:
+            return
+        # Default: an opponent.
+        pick = next(
+            (t for t in options if t[0] == "player" and t[1] != controller_id),
+            options[0],
+        )
+        me = state.player_by_id(controller_id)
+        if me.agent is not None:
+            chosen = me.agent.choose_target(state, controller_id, options)
+            if chosen in options:
+                pick = chosen
+        state.log.append(
+            f"{src.printing.name} deals {amount} damage (its loyalty)"
+        )
+        _apply_damage(state, pick, amount)
+
+    def describe(self) -> str:
+        return (
+            "deal damage equal to this planeswalker's loyalty to a creature "
+            "or player"
+        )
+
+
+@dataclass(frozen=True)
+class GrantExtraLoyaltyActivationsThisTurn(Effect):
+    """"You may activate <this>'s loyalty abilities N more times this
+    turn." -- ``GameObject.extra_loyalty_activations`` =
+    ``(turn_number, N)``, consumed by ``actions._activate_ability`` when
+    the walker's once-per-turn ledger entry already exists and read by
+    ``legal.loyalty_activation_available``."""
+
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        turn, left = src.extra_loyalty_activations or (0, 0)
+        if turn != state.turn_number:
+            left = 0
+        src.extra_loyalty_activations = (state.turn_number, left + self.count)
+        state.log.append(
+            f"{src.printing.name}: loyalty abilities may be activated "
+            f"{self.count} more time(s) this turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"you may activate its loyalty abilities {self.count} more "
+            f"times this turn"
+        )

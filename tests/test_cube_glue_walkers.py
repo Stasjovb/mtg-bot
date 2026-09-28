@@ -833,3 +833,110 @@ def test_kaito_minus_two_taps_and_stuns():
     agent(s, 0).targets = [("creature", bear.id)]
     activate_loyalty(s, 0, kaito, -2)
     assert bear.tapped and bear.stun_counters == 2
+
+
+# ---------------------------------------------------------------------------
+# Comet, Stellar Pup (die-roll loyalty ability)
+# ---------------------------------------------------------------------------
+
+_COMET = "Comet, Stellar Pup"
+
+
+class _FixedRoll:
+    def __init__(self, value):
+        self.value = value
+
+    def randint(self, lo, hi):
+        return self.value
+
+    def shuffle(self, seq):
+        return None
+
+
+def _comet(roll):
+    s = arena()
+    comet = put_walker(s, _COMET, 0)
+    s.rng = _FixedRoll(roll)
+    return s, comet
+
+
+def test_comet_parse_shape():
+    from mtg_bot.effects.generic.cube_creatures_rmc import RollDieTable
+
+    (ab,) = printing(_COMET).activated_abilities
+    assert ab.cost.loyalty == 0 and isinstance(ab.effect, RollDieTable)
+    assert ab.effect.sides == 6
+    assert [(lo, hi) for lo, hi, _ in ab.effect.table] == [
+        (1, 2), (3, 3), (4, 5), (6, 6),
+    ]
+
+
+def test_comet_roll_one_squirrels_with_haste():
+    s, comet = _comet(1)
+    activate_loyalty(s, 0, comet, 0)
+    assert comet.loyalty_counters == 7
+    squirrels = [o for o in s.battlefield if o.printing.name == "Squirrel"]
+    assert len(squirrels) == 2
+    assert all("haste" in effective_keywords(s, q) for q in squirrels)
+    from mtg_bot.turn import run_cleanup_step
+
+    run_cleanup_step(s)
+    assert all("haste" not in effective_keywords(s, q) for q in squirrels)
+
+
+def test_comet_roll_three_returns_a_cheap_card():
+    s, comet = _comet(3)
+    cheap = to_graveyard(s, _BOLT, 0)
+    to_graveyard(s, make_creature("Big", "{5}{G}", 6, 6), 0)
+    activate_loyalty(s, 0, comet, 0)
+    assert comet.loyalty_counters == 4
+    assert cheap in s.players[0].hand
+
+
+def test_comet_roll_four_deals_loyalty_damage_then_minus_two():
+    s, comet = _comet(4)
+    agent(s, 0).targets = [("player", 1)]
+    activate_loyalty(s, 0, comet, 0)
+    assert s.players[1].life == 15
+    assert comet.loyalty_counters == 3
+
+
+def test_comet_roll_six_allows_two_more_activations():
+    s, comet = _comet(6)
+    activate_loyalty(s, 0, comet, 0)
+    assert comet.loyalty_counters == 6
+
+    def activations():
+        from mtg_bot.actions import ActivateAbility
+
+        return [
+            a for a in legal_actions(s, 0)
+            if isinstance(a, ActivateAbility) and a.source_id == comet.id
+        ]
+
+    assert activations()
+    s.rng = _FixedRoll(1)
+    activate_loyalty(s, 0, comet, 0)
+    assert activations()
+    activate_loyalty(s, 0, comet, 0)
+    assert not activations()
+
+
+def test_die_table_assembly_rejects_gaps_and_orphans():
+    from mtg_bot.cards.parser.cube_glue_grammar import (
+        assemble_die_table,
+        parse_glue_die_roll_body,
+    )
+    from mtg_bot.cards.parser.planeswalker_builder import (
+        _build_planeswalker_printing,
+    )
+
+    assert parse_glue_die_roll_body("Roll a d20.") == 20
+    assert parse_glue_die_roll_body("Roll a die.") is None
+    assert assemble_die_table(6, [(1, 2, None), (4, 6, None)]) is None
+    orphan = {
+        "name": "Frob, Test Walker", "mana_cost": "{2}{R}",
+        "type_line": "Legendary Planeswalker — Frob", "loyalty": "3",
+        "oracle_text": "+1: Draw a card.\n1 or 2 — [+1], then draw a card.",
+    }
+    assert _build_planeswalker_printing(orphan) is None

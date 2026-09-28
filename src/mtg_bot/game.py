@@ -610,6 +610,10 @@ class GameObject:
     # triggers don't fire for an object that had no abilities as it
     # left (``actions.dispatch_event``). Recomputed on every departure.
     left_without_abilities: bool = False
+    # "You may activate <this>'s loyalty abilities N more times this
+    # turn" (Comet, Stellar Pup): ``(turn_number, remaining)``; see
+    # ``legal.loyalty_activation_available``.
+    extra_loyalty_activations: tuple = ()
     # Saga lore counters. Sagas would get a lore counter at the
     # start of each precombat main phase as a turn-based action;
     # the state-based action (CR 704.5r in audit numbering)

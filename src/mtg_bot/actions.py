@@ -3916,7 +3916,15 @@ def _activate_ability(
     # Gated on the source being a planeswalker so a non-walker activated
     # ability (which never carries loyalty) doesn't pollute the ledger.
     if source.printing.is_planeswalker:
-        state.loyalty_activated_this_turn.add((player_id, source.id))
+        key = (player_id, source.id)
+        extra = source.extra_loyalty_activations
+        if (
+            key in state.loyalty_activated_this_turn
+            and extra and extra[0] == state.turn_number and extra[1] > 0
+        ):
+            # An additional activation granted this turn (Comet).
+            source.extra_loyalty_activations = (extra[0], extra[1] - 1)
+        state.loyalty_activated_this_turn.add(key)
 
     # "Sacrifice a land" cost (Dust Bowl). Agent picks; excludes source.
     if ability.cost.sacrifice_a_land:

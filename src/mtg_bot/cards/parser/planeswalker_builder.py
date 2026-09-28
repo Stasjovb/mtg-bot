@@ -259,6 +259,10 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
     # Extra ``CardPrinting`` fields from the cube glue bucket's walker
     # lines, stamped on after ``make_planeswalker``.
     printing_fields: dict = {}
+    # Die-roll loyalty ability: (index into ``activated``, sides) and its
+    # result-table rows.
+    die_ability: tuple | None = None
+    die_rows: list = []
     for raw_line in card.get("oracle_text", "").split("\n"):
         line = _strip_reminder_text(raw_line)
         if not line:
@@ -268,7 +272,18 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
             cost_token, effect_body = loyalty_match.groups()
             effect = _parse_loyalty_effect(effect_body, name)
             if effect is None:
-                return None
+                # "Roll a six-sided die." followed by result-table lines
+                # (Comet, Stellar Pup; cube glue bucket): the table is
+                # assembled after the loop.
+                from mtg_bot.cards.parser.cube_glue_grammar import (
+                    parse_glue_die_roll_body,
+                )
+
+                sides = parse_glue_die_roll_body(effect_body)
+                if sides is None or die_ability is not None:
+                    return None
+                die_ability = (len(activated), sides)
+                effect = effect_body  # placeholder, replaced below
             activated.append(
                 ActivatedAbility(
                     cost=ActivationCost(
@@ -278,6 +293,12 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
                     sorcery_speed=True,
                 )
             )
+            continue
+        from mtg_bot.cards.parser.cube_glue_grammar import parse_glue_die_row
+
+        die_row = parse_glue_die_row(line, name)
+        if die_row is not None:
+            die_rows.append(die_row)
             continue
         kw = _parse_keyword_line(line)
         if kw is not None:
@@ -343,6 +364,19 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
             triggers.extend(parsed)
         else:
             triggers.append(parsed)
+
+    if die_ability is not None or die_rows:
+        from mtg_bot.cards.parser.cube_glue_grammar import assemble_die_table
+
+        if die_ability is None:
+            return None
+        idx, sides = die_ability
+        table = assemble_die_table(sides, die_rows)
+        if table is None:
+            return None
+        import dataclasses as _dc
+
+        activated[idx] = _dc.replace(activated[idx], effect=table)
 
     printing = make_planeswalker(
         name=name,
