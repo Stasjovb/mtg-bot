@@ -2207,7 +2207,8 @@ def effective_land_produces(
 
     Falls back to printed ``produces`` for lands whose effective
     subtypes contain no basic land type (e.g., colorless utility
-    lands like Strip Mine without any layer-4 effect on them).
+    lands like Strip Mine without any layer-4 effect on them) -- or to
+    ``produces_with_counter``'s colors while the land has that counter.
     """
     eff_subtypes = effective_subtypes(state, land_obj)
     produced = {
@@ -2217,7 +2218,13 @@ def effective_land_produces(
     }
     if produced:
         return frozenset(produced) | _granted_tap_mana(state, land_obj)
-    return land_obj.printing.produces | _granted_tap_mana(state, land_obj)
+    base = land_obj.printing.produces
+    gated = land_obj.printing.produces_with_counter
+    if gated is not None and counter_count(land_obj, gated[0]) > 0:
+        # "If <this> has a <kind> counter on it, instead add ..."
+        # (Gemstone Caverns' luck counter).
+        base = gated[1]
+    return base | _granted_tap_mana(state, land_obj)
 
 
 def _granted_tap_mana(state: "GameState", obj: "GameObject") -> frozenset[str]:

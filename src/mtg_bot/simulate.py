@@ -25,6 +25,7 @@ from mtg_bot.combat import (
 )
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
+from mtg_bot.opening_hand import apply_opening_hand_actions
 from mtg_bot.turn import (
     STEP_ORDER,
     STEPS_WITH_PRIORITY,
@@ -82,6 +83,7 @@ def setup_game(
     seed: Optional[int] = None,
     enable_mulligans: bool = True,
     max_mulligans: int = 7,
+    starting_player_idx: int = 0,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -120,10 +122,29 @@ def setup_game(
     last allowed offer the agent is forced to keep regardless of
     its choice. Set higher for stress tests; lower for shorter
     decision space.
+
+    Opening-hand actions
+    --------------------
+    ``starting_player_idx`` is the player who takes the first turn
+    (``state.active_player_idx``). After the final keep -- with or
+    without mulligans -- players take their opening-hand actions (CR
+    103.6) in turn order from the starting player
+    (``mtg_bot.opening_hand.apply_opening_hand_actions``): Gemstone
+    Caverns in a non-starting player's hand may begin the game on the
+    battlefield with a luck counter (the player decides through
+    ``Agent.choose_yes_no`` and exiles a card via ``choose_discard``).
+    Callers that alternate the starting seat must pass it here rather
+    than patch ``active_player_idx`` afterwards, or those actions would
+    be offered to the wrong player.
     """
     if len(decks) != len(agents):
         raise ValueError(
             f"decks length {len(decks)} != agents length {len(agents)}"
+        )
+    if not 0 <= starting_player_idx < len(agents):
+        raise ValueError(
+            f"starting_player_idx {starting_player_idx} out of range for "
+            f"{len(agents)} players"
         )
 
     state = GameState()
@@ -214,8 +235,9 @@ def setup_game(
                     # which pops index 0).
                     p.library.append(card)
 
-    state.active_player_idx = 0
-    state.priority_player_idx = 0
+    state.active_player_idx = starting_player_idx
+    state.priority_player_idx = starting_player_idx
+    apply_opening_hand_actions(state, starting_player_idx)
     state.step = Step.UNTAP
     state.turn_number = 1
     return state

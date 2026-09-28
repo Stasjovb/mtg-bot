@@ -893,6 +893,20 @@ class CardPrinting:
     # (the same "don't pay to death" gate ``legal_actions`` applies to
     # explicit ``pay_life`` activations). 0 = free.
     produces_life_cost: int = 0
+    # "{T}: Add {C}. If <this> has a <kind> counter on it, instead add
+    # one mana of any color." (Gemstone Caverns): ``(kind, colors)`` --
+    # while the permanent has at least one ``kind`` counter, automatic
+    # payment taps it for ``colors`` instead of ``produces``
+    # (``game.effective_land_produces``). The explicit mana ability is
+    # the matching ``IfConditionElse(SourceHasCounter(kind), ...)``, so
+    # both payment paths read the same counter.
+    produces_with_counter: "tuple[str, frozenset[str]] | None" = None
+    # CR 103.6 opening-hand action ("If this card is in your opening
+    # hand ..., you may begin the game with it on the battlefield ...");
+    # an ``mtg_bot.opening_hand.BeginGameOnBattlefield`` run by
+    # ``simulate.setup_game`` after the final keep. None for every other
+    # card.
+    opening_hand_action: "object | None" = None
     # Activated abilities that function while this card is in its
     # owner's hand (CR 602.2 + 702.29 Cycling / 702.140 Channel). Each
     # ability's cost carries ``discard_self=True``; ``legal_actions``
@@ -2458,6 +2472,8 @@ def make_utility_land(
     enters_choosing_basic_land_type: bool = False,
     is_chosen_basic_land_type: bool = False,
     enters_with_named_counters: tuple = (),
+    produces_with_counter: "tuple[str, frozenset[str]] | None" = None,
+    opening_hand_action: "object | None" = None,
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -2491,6 +2507,8 @@ def make_utility_land(
         enters_choosing_basic_land_type=enters_choosing_basic_land_type,
         is_chosen_basic_land_type=is_chosen_basic_land_type,
         enters_with_named_counters=tuple(enters_with_named_counters),
+        produces_with_counter=produces_with_counter,
+        opening_hand_action=opening_hand_action,
     )
 
 

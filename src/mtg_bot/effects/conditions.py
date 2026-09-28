@@ -643,6 +643,26 @@ class DeliriumActive(Condition):
 
 
 @dataclass(frozen=True)
+class SourceHasCounter(Condition):
+    """"If <this permanent> has a <kind> counter on it" -- the object
+    whose ability is resolving (``state.resolving_source``; set for mana
+    abilities too) has at least one ``kind`` counter. Source-aware in
+    statics through :meth:`matches_for_source`. Gemstone Caverns' luck
+    counter."""
+
+    kind: str
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        source = getattr(state, "resolving_source", None)
+        return source is not None and self.matches_for_source(state, source)
+
+    def matches_for_source(self, state, source) -> bool:
+        from mtg_bot.game import counter_count
+
+        return counter_count(source, self.kind) > 0
+
+
+@dataclass(frozen=True)
 class FirstSpellYouCastThisGame(Condition):
     """The viewer hasn't cast a spell yet this game (Once Upon a Time's
     "If this spell is the first spell you've cast this game")."""

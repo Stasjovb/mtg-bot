@@ -229,6 +229,29 @@ def _multi_mana_kind(effect) -> str | None:
 
 
 _TAP_ONLY = ActivationCost(tap_self=True)
+_WUBRG = frozenset("WUBRG")
+# "{T}: Add {C}. If <this land> has a <kind> counter on it, instead add
+# one mana of any color." (Gemstone Caverns) -- a counter-gated mana
+# ability: ``<base>`` without the counter, any color with it.
+_COUNTER_GATED_MANA_RE = re.compile(
+    r"^\{T\}: Add \{(?P<base>[WUBRGC])\}\. If (?P<self>.+?) has an? "
+    r"(?P<kind>[a-z]+) counter on it, instead add one mana of any color\.$"
+)
+
+
+def _counter_gated_mana_ability(kind: str, base: str) -> ActivatedAbility:
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.conditions import SourceHasCounter
+
+    return ActivatedAbility(
+        cost=_TAP_ONLY,
+        effect=IfConditionElse(
+            condition=SourceHasCounter(kind),
+            then_effect=AddManaToPool(produces=(("any", 1),)),
+            else_effect=AddManaToPool(produces=((base, 1),)),
+        ),
+        is_mana_ability=True,
+    )
 
 
 def _try_build_line_composed_land(
@@ -260,6 +283,9 @@ def _try_build_line_composed_land(
     is_chosen_type = False
     shock_life = 0
     named_counters: list[tuple[str, int]] = []
+    opening_hand_action = None
+    gated: tuple[str, str] | None = None  # (counter kind, base color)
+    self_refs = ("this land", card["name"])
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
         if m is not None:
@@ -270,6 +296,25 @@ def _try_build_line_composed_land(
         line = _strip_reminder_text(raw)
         if not line:
             return None
+        from mtg_bot.cards.parser.opening_hand_lines import (
+            parse_opening_hand_line,
+        )
+
+        action = parse_opening_hand_line(line, card["name"])
+        if action is not None:
+            if opening_hand_action is not None:
+                return None
+            opening_hand_action = action
+            continue
+        m = _COUNTER_GATED_MANA_RE.match(line)
+        if m is not None:
+            if gated is not None or m.group("self") not in self_refs:
+                return None
+            gated = (m.group("kind"), m.group("base"))
+            activated.append(
+                _counter_gated_mana_ability(gated[0], gated[1])
+            )
+            continue
         if line == _ENTERS_TAPPED_LINE:
             if enters_tapped or enters_tapped_unless is not None:
                 return None
@@ -366,6 +411,13 @@ def _try_build_line_composed_land(
     if chooses_type != is_chosen_type:
         return None
     produces = set(intrinsic) | free_colors
+    produces_with_counter = None
+    if gated is not None:
+        # Automatic payment: the base mana without the counter; with it
+        # the gated ability makes any color instead (other free mana
+        # abilities keep producing their own colors either way).
+        produces_with_counter = (gated[0], frozenset(produces) | _WUBRG)
+        produces.add(gated[1])
     produces_life_cost = 0
     if life_mana:
         life_amounts = {amount for amount, _, _ in life_mana}
@@ -396,4 +448,6 @@ def _try_build_line_composed_land(
         enters_choosing_basic_land_type=chooses_type,
         is_chosen_basic_land_type=is_chosen_type,
         enters_with_named_counters=tuple(named_counters),
+        produces_with_counter=produces_with_counter,
+        opening_hand_action=opening_hand_action,
     )

@@ -222,7 +222,7 @@ def test_blast_zone_sac_with_zero_counters_destroys_zero_mv_nonland():
 
 
 # -----------------------
-# Gemstone Caverns — simplified
+# Gemstone Caverns — luck-counter-gated mana (opening-hand hook: tests/test_opening_hand.py)
 # -----------------------
 
 
@@ -231,9 +231,23 @@ def test_gemstone_caverns_is_legendary():
     assert "Legendary" in p.supertypes
 
 
-def test_gemstone_caverns_taps_for_any_color():
+def test_gemstone_caverns_taps_for_colorless_without_a_luck_counter():
     state = _new_state()
     gc = _put(state, _PRINTINGS["Gemstone Caverns"])
+    apply_action(
+        state, 0, ActivateAbility(source_id=gc.id, ability_index=0),
+    )
+    pool = state.players[0].mana_pool
+    assert len(pool) == 1
+    assert pool[0].color == "C"
+
+
+def test_gemstone_caverns_taps_for_any_color_with_a_luck_counter():
+    from mtg_bot.game import add_counters
+
+    state = _new_state()
+    gc = _put(state, _PRINTINGS["Gemstone Caverns"])
+    add_counters(state, gc, "luck", 1)
     apply_action(
         state, 0, ActivateAbility(source_id=gc.id, ability_index=0),
     )
