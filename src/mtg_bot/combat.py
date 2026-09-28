@@ -699,6 +699,10 @@ def _resolve_damage_step(
 
     on_combat_damage_to_players(state, sources_hit_player)
     _fire_combat_damage_to_creature_triggers(state, sources_hit_creature)
+    # "Whenever <this creature> deals damage" (Event.DEALS_DAMAGE).
+    from mtg_bot.layouts import fire_combat_deals_damage
+
+    fire_combat_deals_damage(state, sources_hit_player + sources_hit_creature)
 
 
 def _fire_combat_damage_to_creature_triggers(

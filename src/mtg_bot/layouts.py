@@ -328,3 +328,43 @@ def gain_class_level(state: "GameState", obj: "GameObject", level: int) -> bool:
                 controller_id=obj.controller_id, label=f"level {level}",
             )
     return True
+
+
+# ---------------------------------------------------------------------------
+# "Whenever <source> deals damage" (Event.DEALS_DAMAGE)
+# ---------------------------------------------------------------------------
+
+
+def fire_deals_damage(state: "GameState", source, amount: int) -> None:
+    """Dispatch ``Event.DEALS_DAMAGE`` for ``source`` having dealt
+    ``amount`` damage in one event. Skipped unless some permanent (or
+    emblem) observes the event -- the common case costs one scan."""
+    from mtg_bot.effects.predicates import Event
+
+    if source is None or amount <= 0 or not hasattr(source, "printing"):
+        return
+    if not any(
+        ab.event is Event.DEALS_DAMAGE
+        for o in (*state.battlefield, *state.emblems)
+        for ab in o.printing.triggered_abilities
+    ):
+        return
+    from mtg_bot.actions import dispatch_event
+
+    dispatch_event(
+        state, Event.DEALS_DAMAGE, label="deals damage",
+        combat_damage_amount=amount, source=source,
+    )
+
+
+def fire_combat_deals_damage(
+    state: "GameState", events: "list[tuple[int, int, int]]",
+) -> None:
+    """Combat damage is one simultaneous event per source (CR 510.2):
+    sum each source's damage over its targets and fire once."""
+    totals: dict[int, int] = {}
+    for source_id, _target, amount in events:
+        totals[source_id] = totals.get(source_id, 0) + amount
+    for source_id, amount in totals.items():
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        fire_deals_damage(state, source, amount)

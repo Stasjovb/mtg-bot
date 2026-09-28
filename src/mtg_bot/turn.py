@@ -52,6 +52,13 @@ def run_untap_step(state: GameState) -> None:
     if ap.protected_from_everything:
         ap.protected_from_everything = False
         state.log.append(f"P{ap.id}'s protection from everything ends")
+    # "Until your next turn, whenever ..." delayed triggers end.
+    if state.emblems and any(
+        e.expires_at_untap_of == ap.id for e in state.emblems
+    ):
+        state.emblems = [
+            e for e in state.emblems if e.expires_at_untap_of != ap.id
+        ]
     # "Until your next turn" expiry: drop every continuous-effect
     # registry entry tagged ``expires_at="controller_untap"`` whose
     # ``expires_at_player_id`` is this active player. Matches Mouth of
@@ -1434,7 +1441,8 @@ def run_cleanup_step(state: GameState) -> None:
     from mtg_bot.game import _active_static_abilities
     no_max_hand_size = any(
         getattr(static, "grants_no_max_hand_size", False)
-        for obj in state.battlefield
+        # Emblems too ("You have no maximum hand size." emblems).
+        for obj in (*state.battlefield, *state.emblems)
         if obj.controller_id == ap.id
         for static in _active_static_abilities(obj)
     )

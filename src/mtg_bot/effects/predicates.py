@@ -267,6 +267,12 @@ class Event(str, Enum):
     # (``"obj"``), already showing its new face -- "When this creature
     # transforms into <face>" lives on that face.
     TRANSFORMS = "transforms"
+    # A permanent has just dealt damage (combat or noncombat; CR 120.1).
+    # Subject is the source (``"source"``); the amount (all the damage it
+    # dealt in that one event, summed over its targets) rides
+    # ``combat_damage_amount``. "Whenever <this creature> deals damage"
+    # (Cecil, Dark Knight). Fired by ``layouts.fire_deals_damage``.
+    DEALS_DAMAGE = "deals_damage"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -312,6 +318,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.WOULD_DRAW_A_CARD: ("player",),
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
     Event.TRANSFORMS: ("obj",),
+    Event.DEALS_DAMAGE: ("source",),
 }
 
 

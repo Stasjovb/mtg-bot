@@ -296,6 +296,7 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
         p = state.player_by_id(target_id)
         p.life -= amount
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
+        _fire_deals_damage(state, amount)
     elif kind == "creature":
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:
@@ -323,6 +324,7 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 
             _fire_enchanted_dealt_damage_triggers(state, obj, amount)
+            _fire_deals_damage(state, amount)
     elif kind == "planeswalker":
         # CR 120.3c: damage dealt to a planeswalker removes that many
         # loyalty counters from it. The 0-loyalty SBA (704.5i) buries it.
@@ -333,6 +335,16 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
                 f"{obj.printing.name} takes {amount} damage "
                 f"(loyalty: {obj.loyalty_counters})"
             )
+            _fire_deals_damage(state, amount)
+
+
+def _fire_deals_damage(state: "GameState", amount: int) -> None:
+    """Noncombat damage: "whenever <source> deals damage" observers of
+    the object dealing it (``keyword_rules.current_damage_source``)."""
+    from mtg_bot.keyword_rules import current_damage_source
+    from mtg_bot.layouts import fire_deals_damage
+
+    fire_deals_damage(state, current_damage_source(state), amount)
 
 
 

@@ -635,6 +635,10 @@ class GameObject:
     # triggered ability (CR 603.7c; ``CreateThisTurnTriggeredAbility``,
     # Forth Eorlingas!): removed from ``state.emblems`` at cleanup.
     expires_at_cleanup: bool = False
+    # Command-zone holder of an "until your next turn, whenever <event>"
+    # delayed triggered ability (``CreateTriggersUntilYourNextTurn``):
+    # the player whose next untap step removes it (-1 = never).
+    expires_at_untap_of: int = -1
     # The spell was cast with its optional additional cost paid
     # (Teamwork — "if this spell was cast using teamwork").
     optional_additional_cost_paid: bool = False

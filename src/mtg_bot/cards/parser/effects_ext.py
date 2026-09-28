@@ -156,6 +156,9 @@ _ADJECTIVES: dict[str, ObjectPredicate] = {
 # Trailing controller clauses.
 _CONTROLLER_SUFFIXES: tuple[tuple[str, ObjectPredicate], ...] = (
     (" an opponent controls", ControlledByOpponent()),
+    # In a two-player game the defending player is the attacking
+    # player's opponent (Frenzied Trapbreaker).
+    (" defending player controls", ControlledByOpponent()),
     (" you don't control", ~ControlledByYou()),
     (" you control", ControlledByYou()),
 )

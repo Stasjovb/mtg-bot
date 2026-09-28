@@ -99,8 +99,18 @@ _THEN_BECOMES_CREATURE_IF_NOT = re.compile(
 
 
 def parse_layout_effect(phrase: str) -> Effect | None:
-    """Effect for a normalized ``phrase`` of this bucket's shapes, or
-    ``None``."""
+    """Effect for a normalized ``phrase`` of this bucket's shapes (the
+    layout shapes here, then the faces' non-layout shapes of
+    :mod:`mtg_bot.cards.parser.layout_face_grammar`), or ``None``."""
+    eff = _parse_layout_shape(phrase)
+    if eff is not None:
+        return eff
+    from mtg_bot.cards.parser.layout_face_grammar import parse_face_effect
+
+    return parse_face_effect(phrase)
+
+
+def _parse_layout_shape(phrase: str) -> Effect | None:
     from mtg_bot.effects.generic.layout_effects import (
         ExileSourceThenReturnTransformed,
         TransformSource,
@@ -112,7 +122,9 @@ def parse_layout_effect(phrase: str) -> Effect | None:
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_effect_pieces
 
-        return _parse_effect_pieces([m.group("a"), m.group("b"), m.group("c")])
+        seq = _parse_effect_pieces([m.group("a"), m.group("b"), m.group("c")])
+        if seq is not None:
+            return seq
     m = _RETURN_UP_TO_N_TYPED_TO_HAND.match(phrase)
     if m is not None:
         from mtg_bot.effects.generic.graveyard import ReturnFromGraveyard
@@ -204,7 +216,11 @@ def parse_layout_trigger_phrase(phrase: str):
         # dispatches after the face change); entering transformed isn't
         # transforming (CR 701.28e).
         return (Event.TRANSFORMS, IsSelf())
-    return None
+    from mtg_bot.cards.parser.layout_face_grammar import (
+        parse_face_trigger_phrase,
+    )
+
+    return parse_face_trigger_phrase(phrase)
 
 
 def _parse_copy_token_except(m: "re.Match") -> Effect | None:

@@ -3424,6 +3424,9 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
 # Dauntless Scrapbot's ``exile each opponent's graveyard. Create a
 # Lander token.`` — split at the right boundary).
 _EFFECT_SENTENCE_BOUNDARY = re.compile(r"(?<=\.) (?=[A-Z](?!f you do,)(?!hen you do,))")
+# An "if <condition>, <effect>" clause still open at the end of a piece
+# (no sentence break after the condition's comma).
+_OPEN_CONDITIONAL = re.compile(r"(?:^|\. )(?:[Tt]hen )?[Ii]f [^,.]+, [^.]*$")
 
 
 def _split_effect_sentences(phrase: str) -> list[str]:
@@ -3520,8 +3523,15 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     # to the ``you may <effect>`` recognizer instead.
     if phrase.startswith("you may ") and " and " in phrase:
         return None
-    if " and " in phrase:
-        pieces = phrase.split(" and ")
+    and_pieces = phrase.split(" and ") if " and " in phrase else []
+    if any(_OPEN_CONDITIONAL.search(p) for p in and_pieces[:-1]):
+        # "if <condition>, A and B" -- the condition scopes over both
+        # halves; carving at " and " would make B unconditional (Cecil,
+        # Dark Knight's "... Then if <condition>, untap Cecil and
+        # transform it."). Try the other joiners instead.
+        and_pieces = []
+    if and_pieces:
+        pieces = and_pieces
     elif ", then " in phrase:
         pieces = phrase.split(", then ")
     elif _EFFECT_SENTENCE_BOUNDARY.search(phrase):
