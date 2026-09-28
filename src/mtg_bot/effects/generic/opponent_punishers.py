@@ -305,6 +305,12 @@ class EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage(Effect):
                 )
                 _sacrifice(state, chosen)
             elif chosen_tag == "discard":
+                from mtg_bot.player_protections import (
+                    opponent_effect_blocked_for,
+                )
+
+                if opponent_effect_blocked_for(state, opp.id):
+                    continue
                 hand_ids = [c.id for c in opp.hand]
                 pick_id = opp.agent.choose_discard(
                     state, opp.id, hand_ids,
