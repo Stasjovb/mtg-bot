@@ -623,7 +623,9 @@ _RECOGNIZERS = (
 def _is_exiling_effect(effect) -> bool:
     from mtg_bot.effects.generic.exile import Exile, ExileTargetCardFromGraveyard
 
-    return isinstance(effect, (Exile, ExileTargetCardFromGraveyard))
+    return isinstance(effect, (Exile, ExileTargetCardFromGraveyard)) or bool(
+        getattr(effect, "links_exiled_cards", False)
+    )
 
 
 def _consumes_exile_link(ability) -> bool:

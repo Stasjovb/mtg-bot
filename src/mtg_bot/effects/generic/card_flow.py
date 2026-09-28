@@ -316,6 +316,16 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
     opponent_only: bool = False
     optional: bool = False
     then_draws: int = 0
+    # ``"exile"``: "... and you choose a <filter> card from it. Exile that
+    # card." (Tidehollow Sculler) -- the chosen card is exiled instead of
+    # discarded; the parser wraps the effect in ``LinkExiledCardsToSource``
+    # when the card prints a consumer of "the exiled card".
+    destination: str = "discard"
+
+    @property
+    def links_exiled_cards(self) -> bool:
+        """An exiling effect for ``link_exile_abilities`` (CR 607.2a)."""
+        return self.destination == "exile"
 
     def requires_target(self) -> bool:
         return True
@@ -353,6 +363,16 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
                 state, controller_id, [c.id for c in options],
             )
             chosen = _agent_pick(options, picked) or options[0]
+        if self.destination == "exile":
+            from mtg_bot.effects.generic.cube_creatures_rmc import exile_card
+
+            p.hand.remove(chosen)
+            exile_card(state, chosen)
+            state.log.append(
+                f"P{controller_id} exiles {chosen.printing.name} from "
+                f"P{p.id}'s hand"
+            )
+            return
         discard_card(state, p, chosen)
         if self.then_draws:
             from mtg_bot.turn import draw_n_cards
@@ -361,9 +381,13 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
 
     def describe(self) -> str:
         who = "opponent" if self.opponent_only else "player"
+        fate = (
+            "exile that card" if self.destination == "exile"
+            else "that player discards it"
+        )
         return (
             f"target {who} reveals their hand; you choose a "
-            f"{self.card_filter.describe()} from it; that player discards it"
+            f"{self.card_filter.describe()} from it; {fate}"
         )
 
 

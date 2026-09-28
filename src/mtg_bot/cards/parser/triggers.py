@@ -1803,6 +1803,7 @@ def _substitute_self_name(line: str, name: str) -> str:
     (rare; usually the short form is used) still picks up the more-
     specific replacement first.
     """
+    original = line
     full_pattern = r"\b" + re.escape(name) + r"\b"
     line = re.sub(full_pattern, "this creature", line)
     short = name.split(",", 1)[0]
@@ -1818,7 +1819,21 @@ def _substitute_self_name(line: str, name: str) -> str:
         line = re.sub(
             r"\b" + re.escape(epithet) + r"\b(?! of )", "this creature", line,
         )
-    return line
+    # A plural-named creature ("Cloak and Dagger enter", "... leave the
+    # battlefield") takes plural verbs; after the rewrite to the
+    # singular "this creature" restore subject-verb agreement so the
+    # canonical phrase tables match. Only rewritten names are touched
+    # ("you may have this creature enter as a copy" is a bare infinitive,
+    # hence the ``have`` lookbehind).
+    if line == original:
+        return line
+    return _PLURAL_SELF_VERB_RE.sub(r"this creature \1s", line)
+
+
+_PLURAL_SELF_VERB_RE = re.compile(
+    r"(?<!have )\bthis creature (enter|leave|attack|block|die|deal|fight|"
+    r"become)\b"
+)
 
 
 def _parse_at_the_beginning_of_line(

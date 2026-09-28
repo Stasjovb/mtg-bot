@@ -204,6 +204,13 @@ _REVEAL_HAND_YOU_CHOOSE_DISCARD_RE = re.compile(
     rf"(?(may)(?:, then draws (?P<draws>{_AMT}) cards?)?|)"
     r"(?:\. (?P<rest>.+))?$"
 )
+# "Target opponent reveals their hand and you choose a nonland card from
+# it. Exile that card." (Tidehollow Sculler) -- the one-sentence reveal +
+# choose with an exile instead of a discard.
+_REVEAL_HAND_YOU_CHOOSE_EXILE_RE = re.compile(
+    r"^target (?P<who>player|opponent) reveals their hand and you choose "
+    r"(?P<desc>.+?) from it\. [Ee]xile that card$"
+)
 _SEARCH_TO_ZONE_RE = re.compile(
     r"^search your library for (?P<desc>.+? card(?: with mana (?:value "
     r"\d+ or less|cost \{[^}]+\}(?: or \{[^}]+\})*))?)"
@@ -633,6 +640,15 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
             then_draws=_amount(draws) if draws is not None else 0,
         )
         return _with_tail(eff, m.group("rest"))
+    m = _REVEAL_HAND_YOU_CHOOSE_EXILE_RE.match(phrase)
+    if m is not None:
+        f = parse_card_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return TargetPlayerRevealsHandYouChooseDiscard(
+            card_filter=f, opponent_only=m.group("who") == "opponent",
+            destination="exile",
+        )
     m = _SEARCH_TO_ZONE_RE.match(phrase)
     if m is not None:
         f = parse_card_descriptor(m.group("desc"))

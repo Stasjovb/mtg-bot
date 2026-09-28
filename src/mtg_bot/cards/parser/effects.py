@@ -3603,7 +3603,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # after every other grammar, so it only claims unparsed phrases.
     from mtg_bot.cards.parser.layout_grammar import parse_layout_effect
 
-    return parse_layout_effect(phrase)
+    eff = parse_layout_effect(phrase)
+    if eff is not None:
+        return eff
+    # Cube glue bucket shapes -- after every other bucket.
+    from mtg_bot.cards.parser.cube_glue_grammar import parse_glue_effect
+
+    return parse_glue_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:
