@@ -642,6 +642,11 @@ class GameObject:
     # ``state.turn_number`` when this card was last discarded (-1 =
     # never): mayhem's "if you discarded it this turn".
     discarded_turn: int = -1
+    # Prepare (``layouts``): on a prepared creature, the id of the copy
+    # of its prepare spell in exile (-1 = not prepared); on that copy,
+    # the id of the creature it belongs to (-1 = not a prepare copy).
+    prepared_copy_id: int = -1
+    prepare_copy_of: int = -1
     # The spell was cast with its optional additional cost paid
     # (Teamwork — "if this spell was cast using teamwork").
     optional_additional_cost_paid: bool = False

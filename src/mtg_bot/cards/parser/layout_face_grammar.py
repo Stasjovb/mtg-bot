@@ -99,7 +99,7 @@ _COUNTER_ON_EACH_YOU_CONTROL = re.compile(
     r"^put a \+1/\+1 counter on each (?P<noun>.+?) you control$"
 )
 _RETURN_CARD_TO_HAND = re.compile(
-    r"^return target (?P<desc>.+? card) from your graveyard to your hand"
+    r"^return target (?P<desc>(?:.+? )?card) from your graveyard to your hand"
     rf"(?:\. [Ii]f it's an? (?P<color>{_COLOR}) card, (?P<bonus>.+))?$"
 )
 _EMBLEM_WITH_QUOTED = re.compile(r'^you get an emblem with "(?P<body>.+)"$')
@@ -211,6 +211,12 @@ def parse_face_effect(phrase: str) -> Effect | None:
     m = _CHOOSE_ONE_OF_EACH_SACRIFICE_REST.match(phrase)
     if m is not None:
         return _choose_one_of_each(m)
+    if phrase == "this creature becomes prepared":
+        from mtg_bot.effects.generic.layout_face_effects import (
+            SourceBecomesPrepared,
+        )
+
+        return SourceBecomesPrepared()
     if phrase in ("he connives", "she connives", "they connive", "connives"):
         # "<this creature> connives" (CR 701.50) -- the source connives.
         from mtg_bot.effects.generic.layout_face_effects import SourceConnives
@@ -488,4 +494,35 @@ def parse_face_creature_line(line: str, card: dict):
         ),))
     if _MAYHEM_GRANT_LINE.match(line):
         return WGLine(fields={"grants_mayhem_to_graveyard": True})
+    if line in ("This creature enters prepared.", "this creature enters prepared."):
+        return WGLine(fields={"enters_prepared": True})
+    if line in (
+        "This creature can block only creatures with flying.",
+        "this creature can block only creatures with flying.",
+    ):
+        return WGLine(fields={"can_only_block_creatures_with_flying": True})
     return None
+
+
+# ---------------------------------------------------------------------------
+# Intervening-if gates
+# ---------------------------------------------------------------------------
+
+_YOU_CONTROL_N_OR_MORE = re.compile(
+    rf"^you control (?P<n>{_N}) or more (?P<noun>lands|artifacts|creatures|"
+    r"enchantments)$"
+)
+
+
+def parse_face_intervening_if(phrase: str):
+    """Trigger-time gate predicate for "if you control N or more <type>s"
+    (Emeritus of Abundance), or ``None``."""
+    m = _YOU_CONTROL_N_OR_MORE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.effects.generic.layout_face_effects import YouControlAtLeast
+    from mtg_bot.effects.predicates import StateBound
+
+    return StateBound(YouControlAtLeast(
+        n=_n(m.group("n")), card_type=m.group("noun")[:-1].capitalize(),
+    ))

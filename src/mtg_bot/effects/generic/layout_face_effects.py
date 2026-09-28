@@ -659,3 +659,42 @@ class SourceConnives(Effect):
 
     def describe(self) -> str:
         return "this creature connives"
+
+
+@dataclass(frozen=True)
+class SourceBecomesPrepared(Effect):
+    """"this creature becomes prepared" (``layouts.become_prepared``)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.layouts import become_prepared
+
+        source = state.resolving_source
+        if source is not None:
+            become_prepared(state, source)
+
+    def describe(self) -> str:
+        return "this creature becomes prepared"
+
+
+from mtg_bot.effects.state_predicates import StatePredicate  # noqa: E402
+
+
+@dataclass(frozen=True)
+class YouControlAtLeast(StatePredicate):
+    """"you control N or more <card type>s" (an intervening-if gate)."""
+
+    n: int = 1
+    card_type: str = "Land"
+
+    def test(self, state, viewer_id):
+        from mtg_bot.game import is_creature_now
+
+        def has(o):
+            if self.card_type == "Creature":
+                return is_creature_now(o)
+            return self.card_type in o.printing.card_types
+
+        return sum(
+            1 for o in state.battlefield
+            if o.controller_id == viewer_id and has(o)
+        ) >= self.n

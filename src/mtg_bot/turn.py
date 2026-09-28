@@ -545,6 +545,11 @@ def move_off_battlefield(
         )
         move_off_battlefield(state, aura, destination="graveyard")
     state.battlefield.remove(obj)
+    if obj.prepared_copy_id >= 0:
+        # The copy of its prepare spell in exile ceases to exist.
+        from mtg_bot.layouts import stop_being_prepared
+
+        stop_being_prepared(state, obj)
     from mtg_bot.game import restore_mdfc_front
 
     restore_mdfc_front(obj)

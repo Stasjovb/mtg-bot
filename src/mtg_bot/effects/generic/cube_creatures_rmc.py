@@ -249,6 +249,9 @@ class ExilePlayPermission:
     # "... may cast it for {2} rather than its mana cost" (airbend): the
     # mana cost string paid instead of the card's (empty = its own).
     alt_cost: str = ""
+    # "... may cast the creature later from exile" (an Adventure): the
+    # card may be cast only with its primary (creature) characteristics.
+    primary_only: bool = False
 
     def expired_after_cleanup(self, state: "GameState") -> bool:
         """Whether this permission ends at the cleanup step that is

@@ -144,6 +144,8 @@ def castable_faces(printing: "CardPrinting") -> tuple["CardPrinting", ...]:
     face (CR 712.11)."""
     if printing.split_faces:
         return tuple(printing.split_faces)
+    if printing.adventure_face is not None:
+        return (printing.adventure_face,)
     back = printing.mdfc_back_face
     if back is not None and not back.is_land:
         return (back,)
@@ -216,6 +218,10 @@ def face_cast_actions(state: "GameState", player_id: int, actions: list, core) -
     seen: set = set()
     for zi, card in cards:
         orig = card.printing
+        perm = card.exile_play_permission
+        if perm is not None and getattr(perm, "primary_only", False):
+            # On an adventure: only the creature may be cast (CR 715.3d).
+            continue
         for face in castable_faces(orig):
             card.printing = face
             try:
@@ -490,3 +496,93 @@ def mayhem_castable(state: "GameState", player_id: int, card) -> bool:
         o.controller_id == player_id and o.printing.grants_mayhem_to_graveyard
         for o in state.battlefield
     )
+
+
+# ---------------------------------------------------------------------------
+# Adventures (CR 715)
+# ---------------------------------------------------------------------------
+
+
+def is_adventure_cast(card) -> bool:
+    """True while ``card`` is a spell cast as its Adventure."""
+    front = card.mdfc_front_printing
+    return (
+        front is not None and front.adventure_face is not None
+        and _same_face(front.adventure_face, card.printing)
+    )
+
+
+def exile_on_adventure(state: "GameState", card, controller_id: int) -> None:
+    """As a spell cast as an Adventure resolves, its controller exiles it
+    instead of putting it into the graveyard; for as long as it stays
+    exiled they may cast it with its primary characteristics (CR 715.4)."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        WHILE_EXILED,
+        grant_exile_play,
+    )
+    from mtg_bot.game import Zone, restore_mdfc_front
+
+    restore_mdfc_front(card)
+    owner = state.player_by_id(card.owner_id)
+    card.zone = Zone.EXILE
+    owner.exile.append(card)
+    grant_exile_play(
+        state, card, controller_id, duration=WHILE_EXILED, cast_only=True,
+        primary_only=True,
+    )
+    state.log.append(f"{card.printing.name} goes on an adventure (exiled)")
+
+
+# ---------------------------------------------------------------------------
+# Prepare (Secrets of Strixhaven)
+# ---------------------------------------------------------------------------
+
+
+def become_prepared(state: "GameState", obj) -> bool:
+    """``obj`` becomes prepared: its controller creates a copy of its
+    prepare spell in exile, castable by them while ``obj`` stays on the
+    battlefield and prepared. A creature without a prepare spell, or
+    already prepared, doesn't (again). Returns whether it became prepared."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        WHILE_EXILED,
+        grant_exile_play,
+    )
+    from mtg_bot.game import Zone
+
+    spell = front_face(obj).prepare_spell
+    if spell is None or obj.prepared_copy_id >= 0 or obj not in state.battlefield:
+        return False
+    controller = state.player_by_id(obj.controller_id)
+    copy = state.new_object(spell, owner_id=controller.id, zone=Zone.EXILE)
+    copy.is_spell_copy = True
+    copy.prepare_copy_of = obj.id
+    controller.exile.append(copy)
+    grant_exile_play(
+        state, copy, controller.id, duration=WHILE_EXILED, cast_only=True,
+    )
+    obj.prepared_copy_id = copy.id
+    state.log.append(f"{obj.printing.name} becomes prepared ({spell.name})")
+    return True
+
+
+def stop_being_prepared(state: "GameState", obj) -> None:
+    """``obj`` stops being prepared; the copy of its prepare spell still
+    in exile ceases to exist."""
+    if obj.prepared_copy_id < 0:
+        return
+    for p in state.players:
+        for c in p.exile:
+            if c.id == obj.prepared_copy_id:
+                p.exile.remove(c)
+                break
+    obj.prepared_copy_id = -1
+
+
+def prepare_copy_cast(state: "GameState", card) -> None:
+    """As its controller casts the copy of a prepare spell, the creature
+    it belongs to stops being prepared."""
+    for obj in state.battlefield:
+        if obj.id == card.prepare_copy_of and obj.prepared_copy_id == card.id:
+            obj.prepared_copy_id = -1
+            state.log.append(f"{obj.printing.name} is no longer prepared")
+    card.prepare_copy_of = -1

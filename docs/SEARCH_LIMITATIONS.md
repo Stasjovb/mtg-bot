@@ -19574,3 +19574,21 @@ Engine code: `src/mtg_bot/layouts.py` (face changes, Saga lore, Class levels, da
 **Where:** `turn.fire_opponent_discards_triggers` stamps `GameObject.discarded_turn`; `layouts.mayhem_castable`.
 
 **What the shortcut is.** A discard that doesn't go through the discard-observer funnel (the cleanup-step hand-size discard) doesn't stamp the card, so Green Goblin's granted mayhem can't cast it. Mayhem casts use the graveyard-permission cast path (normal timing, mana cost).
+
+## PowerLSV cube adventurer and preparation cards — deliberate simplifications (2026-09-27, `feature/cube-adventure-prepared`)
+
+Engine: `layouts.exile_on_adventure` / `is_adventure_cast`, `layouts.become_prepared` / `stop_being_prepared` / `prepare_copy_cast`; parser: `cards/parser/adventure_builder.py`. A multi-face card whose layout isn't modeled (or whose faces don't build) is now unclaimed instead of built as a vanilla creature from its face-less top-level record (`source._build_printing_unpinned`).
+
+### The prepare-spell copy is a spell-copy object with a fixed caster
+
+**Where:** `layouts.become_prepared`.
+
+**What the shortcut is.** The copy of the prepare spell is an exiled `GameObject` flagged `is_spell_copy` (so it ceases to exist when it leaves the stack) carrying a never-expiring `ExilePlayPermission` for the creature's controller *at the time it became prepared*; if control of the prepared creature changes, the permission doesn't follow the new controller (the rulings say only the current controller may cast it). "Becomes unprepared" effects other than casting the copy or the creature leaving the battlefield aren't modeled (no card in the pool prints one). The "if you control eight or more lands" gate of Emeritus of Abundance is checked when the ability triggers, not again on resolution (the parser's existing intervening-if convention).
+
+**Impact.** Tiny (Emeritus of Abundance only).
+
+### Adventure casts share the face-cast action
+
+**Where:** `CastSpell(cast_face=<Adventure name>)` via `layouts.castable_faces`.
+
+**What the shortcut is.** Casting the Adventure half rides the split/MDFC face-cast machinery (same uncoded `cast_face` field, per-face legality enumeration). The on-an-adventure exile permission (`ExilePlayPermission.primary_only`) allows only the creature to be cast from exile.

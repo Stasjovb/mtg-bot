@@ -1565,7 +1565,15 @@ def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
     # Cube W/G creature bucket gates ("When you cast this spell" riders).
     from mtg_bot.cards.parser.creature_wg_effects import parse_wg_intervening_if
 
-    return parse_wg_intervening_if(phrase.strip())
+    pred = parse_wg_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Cube layouts bucket gates ("if you control N or more lands").
+    from mtg_bot.cards.parser.layout_face_grammar import (
+        parse_face_intervening_if,
+    )
+
+    return parse_face_intervening_if(phrase.strip())
 
 
 # Intervening-``while`` gate phrases. The DSK Delirium "while X"

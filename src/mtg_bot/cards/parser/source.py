@@ -115,9 +115,20 @@ def _run_builders(card: dict) -> CardPrinting | None:
         return _build_printing_unpinned(card)
 
 
+# Multi-face layouts whose faces the per-type builders model themselves:
+# Duskmourn Rooms (``split``) and spell // land modal DFCs.
+_FACE_AWARE_LAYOUTS = frozenset({"split", "modal_dfc"})
+
+
 def _build_printing_unpinned(card: dict) -> CardPrinting | None:
+    built = _build_layout_printing(card)
+    if built is not None:
+        return built
+    if card.get("card_faces") and card.get("layout") not in _FACE_AWARE_LAYOUTS:
+        # Unmodeled faces: never claim the card as a silent vanilla built
+        # from the face-less top-level record.
+        return None
     for builder in (
-        _build_layout_printing,
         _build_room_printing,
         _build_enchantment_printing,
         _build_planeswalker_printing,

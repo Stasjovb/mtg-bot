@@ -2812,6 +2812,11 @@ def _cast_spell(
             )
     card.zone = Zone.STACK
     card.controller_id = player_id
+    if card.prepare_copy_of >= 0:
+        # Casting a prepare spell's copy: the creature stops being prepared.
+        from mtg_bot.layouts import prepare_copy_cast
+
+        prepare_copy_cast(state, card)
 
     # Divided damage (CR 601.2d): announce the split now that X is known.
     division: tuple[int, ...] = ()
@@ -4974,6 +4979,12 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                 # The spell's own effect already moved it (Time
                 # Spiral's "Exile Time Spiral.").
                 return
+            from mtg_bot.layouts import exile_on_adventure, is_adventure_cast
+
+            if is_adventure_cast(card) and not card.is_spell_copy:
+                # CR 715.4: an Adventure is exiled as it resolves.
+                exile_on_adventure(state, card, item.controller_id)
+                return
             # Non-permanent spells go to their owner's graveyard —
             # unless a zone-change replacement routes them elsewhere
             # (Nexus of Fate + Green Sun's Zenith shuffle back in),
@@ -5425,6 +5436,11 @@ def put_into_battlefield(
 
         day_night_enters(state, obj)
     state.battlefield.append(obj)
+    if obj.printing.enters_prepared:
+        # "This creature enters prepared."
+        from mtg_bot.layouts import become_prepared
+
+        become_prepared(state, obj)
     if (obj.printing.daybound or obj.printing.nightbound) and not state.day_night:
         # CR 702.145c/f: controlling a daybound (nightbound) permanent
         # while it's neither day nor night makes it day (night).

@@ -1296,6 +1296,19 @@ class CardPrinting:
     # from their graveyard for its mana cost if they discarded it this
     # turn (``layouts.mayhem_castable``).
     grants_mayhem_to_graveyard: bool = False
+    # Adventurer card (CR 715): the Adventure half's printing (an instant
+    # or sorcery with the Adventure subtype). The card may be cast as it
+    # (``CastSpell(cast_face=<name>)``); as that spell resolves it's
+    # exiled "on an adventure" and its controller may cast the creature
+    # from exile (``layouts.exile_on_adventure``).
+    adventure_face: "CardPrinting | None" = None
+    # Preparation card (Secrets of Strixhaven "prepare"): the printing of
+    # the creature's prepare spell. As the creature becomes prepared its
+    # controller creates a copy of this spell in exile they may cast while
+    # the creature stays prepared (``layouts.become_prepared``).
+    prepare_spell: "CardPrinting | None" = None
+    # "This creature enters prepared."
+    enters_prepared: bool = False
     # "Plot {cost}" (CR 702.170): as a sorcery, pay the plot cost and
     # exile the card from hand; on a later turn it may be cast from
     # exile without paying its mana cost, as a sorcery. The special
