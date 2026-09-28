@@ -38,7 +38,7 @@ from mtg_bot.layouts import chapter_ability_on_stack, chapter_number
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import (
     run_delayed_end_step_triggers,
-    run_draw_step,
+    run_beginning_of_precombat_main_triggers,
     state_based_actions,
 )
 from tests._spells_b_helpers import ScriptedAgent, add, add_lands, make_state, printing
@@ -123,9 +123,9 @@ def test_urza_saga_full_cycle():
     # Chapter I: "{T}: Add {C}." -- now an automatic mana source.
     assert effective_land_produces(state, saga) == frozenset({"C"})
     assert can_pay_cost(state, 0, ManaCost(generic=1))
-    # Chapter II after the next draw step.
+    # Chapter II as the next precombat main phase begins.
     state.turn_number = 3
-    run_draw_step(state)
+    run_beginning_of_precombat_main_triggers(state)
     assert saga.lore_counters == 2
     drain_stack(state)
     abilities = effective_activated_abilities(state, saga)
@@ -138,7 +138,7 @@ def test_urza_saga_full_cycle():
     # Chapter III: search for a {0}/{1} artifact; the Saga isn't
     # sacrificed while the chapter ability is on the stack.
     agent.scripts["library"] = [pearl.id]
-    run_draw_step(state)
+    run_beginning_of_precombat_main_triggers(state)
     assert saga.lore_counters == 3
     state_based_actions(state)
     assert saga in state.battlefield
@@ -167,7 +167,7 @@ def test_lore_counter_only_on_active_players_sagas():
     theirs = add(state, 1, URZA, Zone.BATTLEFIELD)
     mine.lore_counters = theirs.lore_counters = 1
     add(state, 0, "Island", Zone.LIBRARY)
-    run_draw_step(state)
+    run_beginning_of_precombat_main_triggers(state)
     assert mine.lore_counters == 2 and theirs.lore_counters == 1
 
 
@@ -193,11 +193,11 @@ def test_fable_chapters_and_reflection():
     add(state, 0, "Island", Zone.LIBRARY)
     agent.scripts["x"] = [1]
     state.turn_number = 3
-    run_draw_step(state)
+    run_beginning_of_precombat_main_triggers(state)
     drain_stack(state)
     assert a in state.players[0].graveyard
     # Chapter III: exile, return transformed as Reflection of Kiki-Jiki.
-    run_draw_step(state)
+    run_beginning_of_precombat_main_triggers(state)
     state_based_actions(state)
     assert fable in state.battlefield
     drain_stack(state)

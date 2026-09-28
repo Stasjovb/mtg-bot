@@ -176,3 +176,39 @@ def test_mana_drain_delayed_trigger_via_search_adapter():
     state = adapter.engine_state
     assert state.delayed_triggers == []
     assert state.stack and state.stack[-1].ability is not None
+
+
+# ---------------------------------------------------------------------------
+# Saga lore counters ride the precombat-main hook (CR 714.3b)
+# ---------------------------------------------------------------------------
+
+
+def _saga_arena():
+    s = _passing_arena()
+    saga = put(s, printing("Urza's Saga"), 0)
+    saga.lore_counters = 1
+    return s, saga
+
+
+def test_saga_lore_counter_at_precombat_main_via_simulate_not_draw_step():
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.turn import run_draw_step
+
+    from tests._cube_glue_helpers import to_library
+
+    s, saga = _saga_arena()
+    to_library(s, BASIC_LANDS["Island"], 0)
+    run_draw_step(s)
+    assert saga.lore_counters == 1
+    run_step(s, Step.PRECOMBAT_MAIN)
+    assert saga.lore_counters == 2
+
+
+def test_saga_lore_counter_at_precombat_main_via_search_adapter():
+    from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+
+    s, saga = _saga_arena()
+    adapter = MtgGameStateAdapter(s)
+    state = adapter.engine_state
+    saga2 = next(o for o in state.battlefield if o.id == saga.id)
+    assert saga2.lore_counters == 2

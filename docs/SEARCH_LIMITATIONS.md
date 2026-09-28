@@ -19513,13 +19513,11 @@ New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `sr
 
 Engine code: `src/mtg_bot/layouts.py` (face changes, Saga lore, Class levels, day/night, waterbend, mayhem), `src/mtg_bot/effects/generic/layout_effects.py` / `layout_face_effects.py`; parser: `cards/parser/layout_builder.py` (dispatch), `dfc_builder.py`, `split_builder.py`, `saga_builder.py`, `class_builder.py`, `leveler_builder.py`, `layout_grammar.py`, `layout_face_grammar.py`. Every face change is a swap of `GameObject.printing` (front kept in `mdfc_front_printing`, restored on every zone change and when a spell leaves the stack).
 
-### Saga lore counters are added at the end of the draw step
+### ~~Saga lore counters are added at the end of the draw step~~ -- CLOSED (cube glue bucket)
 
-**Where:** `turn.run_draw_step` -> `layouts.run_saga_lore_counters`.
+**Where:** `turn.run_beginning_of_precombat_main_triggers` -> `layouts.run_saga_lore_counters`.
 
-**What the shortcut is.** CR 714.3b adds the lore counter "as your precombat main phase begins". The search adapter mirrors `simulate.run_step` and has no precombat-main hook (search code is out of scope for this bucket), so both turn loops add it at the end of the draw step's turn-based actions: the chapter triggers are put on the stack during the draw step (above any draw-step triggers) instead of at the start of main phase 1. On the starting player's first turn (no draw step) nothing is added, which only matters for a Saga put onto the battlefield during that turn's upkeep.
-
-**Impact / fix scope.** Tiny (Urza's Saga, Fable of the Mirror-Breaker): only instant-speed responses in the draw step vs main phase differ. Fix = a shared precombat-main hook in both loops.
+The glue bucket added a precombat-main hook to BOTH turn loops (`simulate.run_step` and the search adapter's `_enter_step`), and the lore counter now rides it: it is added as the precombat main phase begins (CR 714.3b), before that phase's triggers (chapter abilities and "at the beginning of your first main phase") are put on the stack. Pinned by `tests/test_layouts_saga.py` and `tests/test_cube_glue_turn_loop.py`.
 
 ### Transform bookkeeping (CR 701.28f) and copies of DFCs
 

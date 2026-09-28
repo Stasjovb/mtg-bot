@@ -346,13 +346,6 @@ def run_draw_step(state: GameState) -> None:
         state, Event.BEGINNING_OF_DRAW_STEP,
         label="beginning-of-draw-step", player=ap,
     )
-    # Saga lore counters (CR 714.3b: "as your precombat main phase
-    # begins"). Both turn loops share this draw-step hook, so the counter
-    # is added at the end of the draw step's turn-based actions -- see
-    # docs/SEARCH_LIMITATIONS.md (layouts bucket).
-    from mtg_bot.layouts import run_saga_lore_counters
-
-    run_saga_lore_counters(state)
 
 
 def note_cards_put_into_library(state: GameState, player_id: int | None = None) -> None:
@@ -1405,10 +1398,17 @@ def run_beginning_of_precombat_main_triggers(state: GameState) -> None:
     your next main phase" triggers of the active player (Mana Drain).
     Called by ``simulate.run_step`` and the search adapter's
     ``_enter_step`` as the precombat main phase begins, before priority
-    opens -- the ``run_beginning_of_postcombat_main_triggers`` pattern."""
+    opens -- the ``run_beginning_of_postcombat_main_triggers`` pattern.
+
+    First the Saga turn-based action (CR 714.3b: "as your precombat main
+    phase begins", the active player puts a lore counter on each Saga
+    they control), so chapter triggers and first-main-phase triggers are
+    put on the stack together."""
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event
+    from mtg_bot.layouts import run_saga_lore_counters
 
+    run_saga_lore_counters(state)
     dispatch_event(
         state, Event.BEGINNING_OF_PRECOMBAT_MAIN,
         label="beginning-of-precombat-main",

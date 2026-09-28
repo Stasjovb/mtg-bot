@@ -296,8 +296,9 @@ def saga_enters(state: "GameState", obj: "GameObject") -> None:
 
 def run_saga_lore_counters(state: "GameState") -> None:
     """The turn-based action of CR 714.3b: the active player puts a lore
-    counter on each Saga they control (after the draw step -- see
-    ``turn.run_draw_step``)."""
+    counter on each Saga they control as the precombat main phase begins
+    (``turn.run_beginning_of_precombat_main_triggers``, both turn
+    loops)."""
     ap = state.active_player()
     for obj in list(state.battlefield):
         if obj.controller_id == ap.id and obj.printing.is_saga:
