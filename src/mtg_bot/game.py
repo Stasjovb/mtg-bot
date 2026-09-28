@@ -604,6 +604,12 @@ class GameObject:
     # until the controller's NEXT untap step rather than ending with
     # the turn the object entered.
     entered_battlefield_turn: int = 0
+    # Last-known information for "loses all abilities" (layer 6): set by
+    # ``turn.move_off_battlefield`` from the registry just before the
+    # object's continuous effects are dropped, so its own leaves / dies
+    # triggers don't fire for an object that had no abilities as it
+    # left (``actions.dispatch_event``). Recomputed on every departure.
+    left_without_abilities: bool = False
     # Saga lore counters. Sagas would get a lore counter at the
     # start of each precombat main phase as a turn-based action;
     # the state-based action (CR 704.5r in audit numbering)

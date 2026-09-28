@@ -141,13 +141,21 @@ def test_bucket_planeswalker_is_claimed(name):
     assert all(a.sorcery_speed for a in p.activated_abilities)
 
 
-@pytest.mark.parametrize("name", [
-    "Oko, Thief of Crowns",
-])
-def test_unparseable_loyalty_body_leaves_walker_unclaimed(name):
+def test_unparseable_loyalty_body_leaves_walker_unclaimed():
     """No partial claims: a walker whose loyalty bodies the grammar can't
-    parse is not shipped with its abilities stripped."""
-    assert name not in _SOURCE.claimed_names
+    parse is not shipped with its abilities stripped. (Every cube walker
+    now parses -- the cube glue bucket claimed the last ones -- so the
+    rule is pinned with a synthetic record.)"""
+    from mtg_bot.cards.parser.planeswalker_builder import (
+        _build_planeswalker_printing,
+    )
+
+    card = {
+        "name": "Frob, Test Walker", "mana_cost": "{2}{U}",
+        "type_line": "Legendary Planeswalker — Frob", "loyalty": "3",
+        "oracle_text": "+1: Draw a card.\n−2: Frobnicate the widgets.",
+    }
+    assert _build_planeswalker_printing(card) is None
 
 
 def test_tezzeret_still_claims_all_three_abilities():

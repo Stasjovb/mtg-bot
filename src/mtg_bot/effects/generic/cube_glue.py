@@ -591,3 +591,173 @@ class PlayExiledCardFreeIfAnyLibraryAtMost(Effect):
             "you may play the exiled card without paying its mana cost if a "
             f"library has {self.library_at_most} or fewer cards in it"
         )
+
+
+# ---------------------------------------------------------------------------
+# "Target <np> [loses all abilities and ]becomes a <color> <Subtype>
+# creature with base power and toughness P/T." (Oko, Thief of Crowns)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TargetBecomesCreatureIndefinitely(Effect):
+    """A duration-less characteristic change on one target (CR 611.2a:
+    it lasts as long as the permanent stays on the battlefield, even
+    after the source leaves). Registry entries are SELF-sourced (source
+    = the affected permanent, the Earthbend precedent), so they end
+    only when the permanent leaves:
+
+    * layer 4 ``add_type "creature"`` (card types and supertypes are
+      kept -- an Oko'd Food is an artifact creature) and
+      ``set_creature_subtypes`` (creature types replaced, CR 205.1b);
+    * layer 5 ``set_colors``;
+    * layer 6 ``lose_all_abilities`` when ``lose_all_abilities``;
+    * layer 7b ``set_base_pt``.
+
+    Later timestamps win, so a second Oko activation re-applies over the
+    first; an effect that later grants abilities still applies."""
+
+    targets: tuple = ()
+    lose_all_abilities: bool = False
+    colors: frozenset = frozenset()
+    creature_subtypes: tuple = ()
+    base_pt: tuple = (0, 0)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        if not targets:
+            return
+        chosen = targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], chosen)
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            return
+        obj = next(o for o in state.battlefield if o.id == chosen[1])
+        name = obj.printing.name
+        if self.lose_all_abilities:
+            state.add_continuous_effect(
+                source_id=obj.id, layer=6, kind="lose_all_abilities",
+                target_id=obj.id, description=f"{name} loses all abilities",
+            )
+        state.add_continuous_effect(
+            source_id=obj.id, layer=4, kind="add_type", target_id=obj.id,
+            params=("creature",), description=f"{name} becomes a creature",
+        )
+        if (
+            not obj.printing.is_creature
+            and obj.entered_battlefield_turn == state.turn_number
+        ):
+            # CR 302.6: a noncreature that entered this turn becomes a
+            # creature that hasn't been controlled since the turn began.
+            obj.summoning_sick = True
+        obj.permanent_is_creature = True
+        state.add_continuous_effect(
+            source_id=obj.id, layer=4, kind="set_creature_subtypes",
+            target_id=obj.id, params=tuple(self.creature_subtypes),
+            description=f"{name} becomes a {' '.join(self.creature_subtypes)}",
+        )
+        if self.colors:
+            state.add_continuous_effect(
+                source_id=obj.id, layer=5, kind="set_colors",
+                target_id=obj.id, params=(frozenset(self.colors),),
+                description=f"{name} becomes {'/'.join(sorted(self.colors))}",
+            )
+        p, t = self.base_pt
+        state.add_continuous_effect(
+            source_id=obj.id, layer=7, sublayer=1, kind="set_base_pt",
+            target_id=obj.id, params=(p, t),
+            description=f"{name} base {p}/{t}",
+        )
+        state.log.append(
+            f"{name} becomes a {' '.join(self.creature_subtypes)} {p}/{t}"
+            + (" with no abilities" if self.lose_all_abilities else "")
+        )
+
+    def describe(self) -> str:
+        lose = "loses all abilities and " if self.lose_all_abilities else ""
+        return (
+            f"target {lose}becomes a {' '.join(self.creature_subtypes)} "
+            f"creature with base power and toughness "
+            f"{self.base_pt[0]}/{self.base_pt[1]}"
+        )
+
+
+@dataclass(frozen=True)
+class ExchangeControlOfTargets(Effect):
+    """"Exchange control of target <A> and target <B>." (Oko's -5:
+    A = artifact or creature you control, B = creature an opponent
+    controls with power 3 or less). Two ``TargetSpec`` slots enumerated
+    per slot (``legal_targets_for_slot``, the Saheeli precedent). If
+    either target is illegal on resolution, or both have the same
+    controller, nothing happens (CR 701.10). The exchange is indefinite
+    and sets ``controller_id`` directly (Dack Fayden's permanent-steal
+    precedent); each permanent is summoning-sick for its new
+    controller."""
+
+    targets: tuple = ()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def legal_targets_for_slot(self, state, controller_id, slot_idx):
+        return self._enumerate_for_filter(
+            state, controller_id, self.targets[slot_idx].filter,
+        )
+
+    def legal_targets(self, state, controller_id):
+        first = self.legal_targets_for_slot(state, controller_id, 0)
+        second = self.legal_targets_for_slot(state, controller_id, 1)
+        for a in first:
+            if any(b != a for b in second):
+                return first
+        return []
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        if len(targets) < 2 or targets[0] == targets[1]:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = all(
+                _slot_target_still_legal(state, slot, chosen)
+                for slot, chosen in zip(self.targets, targets)
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append("exchange of control fizzles")
+            return
+        a = next(o for o in state.battlefield if o.id == targets[0][1])
+        b = next(o for o in state.battlefield if o.id == targets[1][1])
+        if a.controller_id == b.controller_id:
+            return
+        a.controller_id, b.controller_id = b.controller_id, a.controller_id
+        a.summoning_sick = True
+        b.summoning_sick = True
+        state._invalidate_layered_cache()
+        state.log.append(
+            f"{a.printing.name} and {b.printing.name} exchange controllers"
+        )
+
+    def describe(self) -> str:
+        return "exchange control of two target permanents"

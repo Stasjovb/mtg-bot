@@ -398,3 +398,143 @@ def test_tamiyo_minus_three_returns_any_card():
     agent(s, 0).targets = [("graveyard_card", land.id)]
     activate_loyalty(s, 0, tam, -3)
     assert land in s.players[0].hand
+
+
+# ---------------------------------------------------------------------------
+# Oko, Thief of Crowns + "loses all abilities" in trigger dispatch
+# ---------------------------------------------------------------------------
+
+_OKO = "Oko, Thief of Crowns"
+
+
+def _oko_index(walker, cls_name):
+    return next(
+        i for i, a in enumerate(walker.printing.activated_abilities)
+        if type(a.effect).__name__ == cls_name
+    )
+
+
+def _upkeep_drawer(name="Drawer"):
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    return make_creature(
+        name, "{2}{U}", 1, 4, keywords=("flying",),
+        triggered_abilities=(TriggeredAbility(
+            event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
+            effect=DrawCards(amount=1),
+        ),),
+    )
+
+
+def test_oko_claims_three_abilities():
+    p = printing(_OKO)
+    assert sorted(a.cost.loyalty for a in p.activated_abilities) == [-2, -1, 5]
+
+
+def test_oko_plus_one_elks_a_creature_permanently():
+    from mtg_bot.game import effective_colors, effective_subtypes, effective_toughness
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers, run_cleanup_step
+
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    oko = put_walker(s, _OKO)
+    drawer = put(s, _upkeep_drawer(), 1)
+    to_library(s, _BOLT, 1)
+    agent(s, 0).targets = [("creature", drawer.id)]
+    activate_loyalty(s, 0, oko, +1, index=_oko_index(oko, "TargetBecomesCreatureIndefinitely"))
+    assert effective_power(s, drawer) == 3 and effective_toughness(s, drawer) == 3
+    assert effective_keywords(s, drawer) == frozenset()
+    assert effective_subtypes(s, drawer) == ("Elk",) or list(
+        effective_subtypes(s, drawer)
+    ) == ["Elk"]
+    assert effective_colors(s, drawer) == frozenset({"G"})
+    # Survives Oko leaving and the turn ending.
+    from mtg_bot.turn import sacrifice
+
+    sacrifice(s, oko)
+    run_cleanup_step(s)
+    assert effective_power(s, drawer) == 3
+    # Its printed upkeep trigger no longer exists.
+    s.active_player_idx = 1
+    run_beginning_of_upkeep_triggers(s)
+    assert s.stack == []
+
+
+def test_oko_plus_one_turns_a_food_into_an_artifact_creature_elk():
+    from mtg_bot.game import effective_activated_abilities, is_creature_now
+
+    s = arena()
+    oko = put_walker(s, _OKO)
+    food_idx = _oko_index(oko, "CreateToken") if any(
+        type(a.effect).__name__ == "CreateToken"
+        for a in oko.printing.activated_abilities
+    ) else None
+    activate_loyalty(s, 0, oko, +2, index=food_idx)
+    food = next(o for o in s.battlefield if o is not oko)
+    assert food.printing.is_artifact and effective_activated_abilities(s, food)
+    s.loyalty_activated_this_turn.clear()
+    agent(s, 0).targets = [("permanent", food.id)]
+    activate_loyalty(s, 0, oko, +1, index=_oko_index(oko, "TargetBecomesCreatureIndefinitely"))
+    assert is_creature_now(food) and food.printing.is_artifact
+    assert effective_power(s, food) == 3
+    assert effective_activated_abilities(s, food) == ()
+    assert food.summoning_sick  # entered this turn
+
+
+def test_oko_minus_five_exchanges_control():
+    s = arena()
+    oko = put_walker(s, _OKO)
+    oko.loyalty_counters = 6
+    mine = put(s, make_creature("Rat", "{B}", 1, 1), 0)
+    theirs = put(s, make_creature("Bear", "{1}{G}", 3, 3), 1)
+    big = put(s, make_creature("Giant", "{4}{G}", 5, 5), 1)
+    eff = oko.printing.activated_abilities[
+        _oko_index(oko, "ExchangeControlOfTargets")
+    ].effect
+    slot1 = eff.legal_targets_for_slot(s, 0, 1)
+    assert ("creature", theirs.id) in slot1
+    assert ("creature", big.id) not in slot1
+    assert eff.legal_targets_for_slot(s, 0, 0) == [("creature", mine.id)]
+    agent(s, 0).targets = [("creature", mine.id), ("creature", theirs.id)]
+    activate_loyalty(s, 0, oko, -5, index=_oko_index(oko, "ExchangeControlOfTargets"))
+    assert mine.controller_id == 1 and theirs.controller_id == 0
+
+
+def test_exchange_fizzles_when_a_target_is_gone():
+    from mtg_bot.effects.generic.cube_glue import ExchangeControlOfTargets
+
+    s = arena()
+    oko_eff = printing(_OKO).activated_abilities
+    eff = next(a.effect for a in oko_eff if isinstance(a.effect, ExchangeControlOfTargets))
+    mine = put(s, make_creature("Rat", "{B}", 1, 1), 0)
+    eff.resolve(s, 0, (("creature", mine.id), ("creature", 999)))
+    assert mine.controller_id == 0
+    assert eff.legal_targets(s, 0) == []  # no opposing creature
+    assert "exchange control" in eff.describe()
+
+
+def test_elked_creature_has_no_dies_trigger_last_known_information():
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.cube_glue import (
+        TargetBecomesCreatureIndefinitely,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    s = arena()
+    dies_draw = TriggeredAbility(
+        event=Event.DIES, predicate=IsSelf(), effect=DrawCards(amount=1),
+    )
+    c = put(s, make_creature("D", "{1}", 1, 1, triggered_abilities=(dies_draw,)), 1)
+    plain = put(s, make_creature("E", "{1}", 1, 1, triggered_abilities=(dies_draw,)), 1)
+    eff = next(
+        a.effect for a in printing(_OKO).activated_abilities
+        if isinstance(a.effect, TargetBecomesCreatureIndefinitely)
+    )
+    eff.resolve(s, 0, (("creature", c.id),))
+    assert "Elk" in eff.describe()
+    destroy(s, c)
+    assert s.stack == [] and c.left_without_abilities
+    destroy(s, plain)
+    assert len(s.stack) == 1 and not plain.left_without_abilities

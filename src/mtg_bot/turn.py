@@ -476,6 +476,13 @@ def move_off_battlefield(
     # Revolt: any permanent (lands and tokens included) leaving under
     # its controller's control.
     state.player_by_id(obj.controller_id).permanent_left_battlefield_this_turn = True
+    # LKI for "loses all abilities" (Oko's +1): recorded before the
+    # object's self-sourced registry entries are dropped below.
+    from mtg_bot.game import _source_layer6_wiped
+
+    obj.left_without_abilities = bool(
+        state.continuous_effects and _source_layer6_wiped(state, obj)
+    )
     # Layer-2 control-grant reversion: drop every continuous-effect
     # entry sourced by THIS leaving object, then refresh the
     # ``controller_id`` cache on each affected target via

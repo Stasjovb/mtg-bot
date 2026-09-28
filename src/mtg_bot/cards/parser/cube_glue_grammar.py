@@ -241,6 +241,24 @@ def parse_glue_keyword_trigger(line: str):
     )
 
 
+# "target <np> [loses all abilities and ]becomes a <color> <Subtypes>
+# creature with base power and toughness P/T" -- an indefinite change
+# (Oko, Thief of Crowns' +1).
+_TARGET_BECOMES_CREATURE_RE = re.compile(
+    r"^target (?P<np>.+?) (?P<lose>loses all abilities and )?becomes an? "
+    r"(?P<color>white|blue|black|red|green) "
+    r"(?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature with base power and "
+    r"toughness (?P<p>\d+)/(?P<t>\d+)$"
+)
+_COLOR_LETTER = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+# "exchange control of target <np> and target <np>" (Oko's -5).
+_EXCHANGE_CONTROL_RE = re.compile(
+    r"^exchange control of target (?P<a>.+?) and target (?P<b>.+)$"
+)
+
+
 def parse_glue_effect(phrase: str) -> Effect | None:
     """Last-resort effect recognizers for the glue bucket."""
     if _disabled():
@@ -263,6 +281,28 @@ def parse_glue_effect(phrase: str) -> Effect | None:
     m = _REMOVE_ALL_COUNTERS_ADD_MANA_RE.match(phrase)
     if m is not None and m.group("kind") == m.group("kind2"):
         return g.RemoveAllCountersAddManaPerCounter(kind=m.group("kind"))
+    m = _TARGET_BECOMES_CREATURE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _target_spec
+
+        spec = _target_spec(m.group("np"), up_to_one=False)
+        if spec is None:
+            return None
+        return g.TargetBecomesCreatureIndefinitely(
+            targets=(spec,), lose_all_abilities=bool(m.group("lose")),
+            colors=frozenset({_COLOR_LETTER[m.group("color")]}),
+            creature_subtypes=tuple(m.group("subs").split(" ")),
+            base_pt=(int(m.group("p")), int(m.group("t"))),
+        )
+    m = _EXCHANGE_CONTROL_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _target_spec
+
+        a = _target_spec(m.group("a"), up_to_one=False)
+        b = _target_spec(m.group("b"), up_to_one=False)
+        if a is None or b is None:
+            return None
+        return g.ExchangeControlOfTargets(targets=(a, b))
     m = _PLAY_EXILED_FREE_IF_LIBRARY_RE.match(phrase)
     if m is not None:
         n = _number(m.group("n"))

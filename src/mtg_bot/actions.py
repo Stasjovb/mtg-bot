@@ -5809,7 +5809,20 @@ def dispatch_event(
             if extra.id not in seen_ids:
                 permanents.append(extra)
                 seen_ids.add(extra.id)
+    from mtg_bot.game import _source_layer6_wiped
+
     for source in permanents:
+        # "Loses all abilities" (layer 6 -- Oko's +1, Lignify-style
+        # Auras): the permanent's PRINTED triggered abilities no longer
+        # exist, so they observe nothing (granted triggers re-added after
+        # the wipe ride ``effective_triggered_abilities`` elsewhere).
+        if (
+            state.continuous_effects and _source_layer6_wiped(state, source)
+        ) or (
+            source.left_without_abilities
+            and source.zone != Zone.BATTLEFIELD
+        ):
+            continue
         for ability_index, ability in enumerate(
             source.printing.triggered_abilities
         ):
