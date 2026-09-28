@@ -212,3 +212,93 @@ def test_saga_lore_counter_at_precombat_main_via_search_adapter():
     state = adapter.engine_state
     saga2 = next(o for o in state.battlefield if o.id == saga.id)
     assert saga2.lore_counters == 2
+
+
+# ---------------------------------------------------------------------------
+# Fear of Missing Out: first attack each turn + additional combat phase
+# ---------------------------------------------------------------------------
+
+
+def _delirium_graveyard(s, pid=0):
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.cards.base import make_artifact, make_creature, make_instant
+
+    from tests._cube_glue_helpers import to_graveyard
+
+    to_graveyard(s, BASIC_LANDS["Forest"], pid)
+    to_graveyard(s, make_artifact("Rock", "{1}"), pid)
+    to_graveyard(s, make_creature("Bear", "{1}{G}", 2, 2), pid)
+    to_graveyard(s, make_instant("Zap", "{R}", DrawCards(amount=1)), pid)
+
+
+def _fomo_attack(s, fomo):
+    from mtg_bot.actions import DeclareAttackers, apply_action
+
+    s.step = Step.DECLARE_ATTACKERS
+    apply_action(s, 0, DeclareAttackers(attacker_ids=frozenset({fomo.id})))
+
+
+def test_fomo_first_attack_untaps_and_adds_a_combat_phase():
+    from mtg_bot.combat import clear_combat_state
+
+    s = arena(active=0)
+    _delirium_graveyard(s)
+    fomo = put(s, printing("Fear of Missing Out"), 0)
+    _fomo_attack(s, fomo)
+    assert fomo.tapped
+    assert s.stack and s.stack[-1].targets
+    s.stack[-1].targets = (("creature", fomo.id),)
+    resolve_top_of_stack(s)
+    assert not fomo.tapped
+    assert s.extra_combat_phases == 1
+    # Second attack this turn (the additional combat): no new trigger.
+    clear_combat_state(s)
+    _fomo_attack(s, fomo)
+    assert s.stack == []
+
+
+def test_fomo_without_delirium_does_nothing():
+    s = arena(active=0)
+    fomo = put(s, printing("Fear of Missing Out"), 0)
+    _fomo_attack(s, fomo)
+    assert s.stack == []
+
+
+def test_next_step_inserts_the_additional_combat_phase():
+    from mtg_bot.turn import next_step, run_cleanup_step
+
+    s = arena()
+    assert next_step(s, Step.END_OF_COMBAT) == Step.POSTCOMBAT_MAIN
+    s.extra_combat_phases = 2
+    assert next_step(s, Step.END_OF_COMBAT) == Step.BEGINNING_OF_COMBAT
+    assert s.extra_combat_phases == 1
+    assert next_step(s, Step.CLEANUP) is None
+    run_cleanup_step(s)
+    assert s.extra_combat_phases == 0
+
+
+def test_simulate_run_turn_takes_the_additional_combat():
+    from mtg_bot.simulate import run_turn
+
+    s = _passing_arena()
+    s.extra_combat_phases = 1
+    seen = []
+    run_turn(s, on_snapshot=lambda st: seen.append(st.step))
+    assert seen.count(Step.BEGINNING_OF_COMBAT) == 2
+    assert seen.count(Step.END_OF_COMBAT) == 2
+    assert seen.index(Step.POSTCOMBAT_MAIN) > len(seen) - 4
+
+
+def test_search_adapter_takes_the_additional_combat():
+    from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+
+    s = _passing_arena()
+    adapter = MtgGameStateAdapter(s)
+    state = adapter.engine_state
+    state.step = Step.END_OF_COMBAT
+    state.extra_combat_phases = 1
+    adapter._advance_to_next_step()
+    assert state.step == Step.BEGINNING_OF_COMBAT
+    state.step = Step.END_OF_COMBAT
+    adapter._advance_to_next_step()
+    assert state.step == Step.POSTCOMBAT_MAIN

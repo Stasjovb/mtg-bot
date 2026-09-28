@@ -353,6 +353,14 @@ _TAP_THEN_STUN_RE = re.compile(
 )
 
 
+# "<effect>. After this phase, there is an additional combat phase"
+# (Fear of Missing Out).
+_THEN_ADDITIONAL_COMBAT_RE = re.compile(
+    r"^(?P<first>.+?)\. After this phase, there is an additional combat "
+    r"phase$"
+)
+
+
 def _sequence(*effects):
     from mtg_bot.effects.combinators import Sequence
 
@@ -433,6 +441,14 @@ def parse_glue_effect(phrase: str) -> Effect | None:
             rest = rest[:-1]
         return _sequence(
             _parse_effect(m.group("emblem")), _parse_effect(_lower_first(rest)),
+        )
+    m = _THEN_ADDITIONAL_COMBAT_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        return _sequence(
+            _parse_effect(m.group("first")),
+            g.AdditionalCombatPhaseAfterThisPhase(),
         )
     m = _THEN_DRAW_PER_OPPONENT_LOST_LIFE_RE.match(phrase)
     if m is not None:

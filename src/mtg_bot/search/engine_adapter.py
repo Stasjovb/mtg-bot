@@ -93,13 +93,13 @@ from mtg_bot.search.resolution_decisions import (
 from mtg_bot.search.tactical import DefaultTacticalAgent
 from mtg_bot.simulate import _advance_to_next_active_player, _next_alive
 from mtg_bot.turn import (
-    STEP_ORDER,
     STEPS_WITH_PRIORITY,
     Step,
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_beginning_of_postcombat_main_triggers,
     run_beginning_of_precombat_main_triggers,
+    next_step,
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
@@ -1239,8 +1239,9 @@ class MtgGameStateAdapter:
             _advance_to_next_active_player(self._state)
             self._state.step = Step.UNTAP
         else:
-            idx = STEP_ORDER.index(current)
-            self._state.step = STEP_ORDER[idx + 1]
+            # ``turn.next_step``: STEP_ORDER plus additional combat
+            # phases -- the same path ``simulate.run_turn`` takes.
+            self._state.step = next_step(self._state, current)
         self._step_entered = False
 
     def _enter_step(self, step: Step) -> None:

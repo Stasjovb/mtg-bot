@@ -39,6 +39,7 @@ from mtg_bot.turn import (
     run_delayed_end_step_triggers,
     run_impending_decrement_turn_based_action,
     run_draw_step,
+    next_step,
     run_untap_step,
     state_based_actions,
 )
@@ -492,12 +493,16 @@ def run_turn(
     state.log.append(
         f"--- Turn {state.turn_number}: P{state.active_player_idx} ---"
     )
-    for step in STEP_ORDER:
+    step: "Step | None" = STEP_ORDER[0]
+    while step is not None:
         run_step(state, step, priority_on_snapshot=priority_on_snapshot)
         if on_snapshot is not None:
             on_snapshot(state)
         if state.is_over():
             return
+        # ``turn.next_step`` follows STEP_ORDER, plus additional combat
+        # phases (Fear of Missing Out); mirrored by the search adapter.
+        step = next_step(state, step)
 
 
 _COLOR_TO_BASIC: dict[str, str] = {

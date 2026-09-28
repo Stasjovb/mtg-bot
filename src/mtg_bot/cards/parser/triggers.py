@@ -124,6 +124,7 @@ from mtg_bot.effects.predicates import (
     Always,
     Controlled,
     Event,
+    FirstAttackThisTurn,
     HostAttacksWithAnother,
     IsFormerHost,
     IsHost,
@@ -750,6 +751,12 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # subject default. Phase 5 migrated every ``trigger="attacks"``
     # static card to this predicate shape.
     "this creature attacks": (Event.ATTACKS, IsSelf()),
+    # ``Whenever this creature attacks for the first time each turn``
+    # (Fear of Missing Out) -- an attack in an additional combat phase
+    # doesn't trigger it again.
+    "this creature attacks for the first time each turn": (
+        Event.ATTACKS, IsSelf() & FirstAttackThisTurn(),
+    ),
     # ``Whenever this creature becomes tapped`` — the source's own
     # tap (Starfighter Pilot, Nanoform Sentinel, Astrobiologist,
     # Sterling Hippogriff, etc.). ``Event.BECOMES_TAPPED`` carries a

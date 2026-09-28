@@ -508,6 +508,23 @@ class StateBound(TriggerPredicate):
 
 
 @dataclass(frozen=True)
+class FirstAttackThisTurn(TriggerPredicate):
+    """"attacks for the first time each turn" (Fear of Missing Out): the
+    source appears exactly once in its controller's
+    ``Player.attacked_this_turn`` latch, which the attack declaration
+    appends to before dispatching ``Event.ATTACKS`` -- so an attack in an
+    additional combat phase doesn't trigger again."""
+
+    def matches(self, state, subjects, source):
+        player = state.player_by_id(source.controller_id)
+        n = 0
+        for obj in player.attacked_this_turn:
+            if obj.id == source.id:
+                n += 1
+        return n == 1
+
+
+@dataclass(frozen=True)
 class IsSelf(TriggerPredicate):
     """The named subject IS the firing source object (object identity).
 

@@ -3415,6 +3415,11 @@ class GameState:
     # Tales: "Spells and abilities your opponents control can't cause
     # you to discard cards or sacrifice permanents.").
     resolving_item_controller_id: Optional[int] = None
+    # "After this phase, there is an additional combat phase." (Fear of
+    # Missing Out): pending extra combat phases of the current turn,
+    # consumed by ``turn.next_step`` as a combat phase ends (both turn
+    # loops); reset at cleanup.
+    extra_combat_phases: int = 0
     # Mirrors StackItem.kicked during resolution so effects can branch
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
@@ -4149,6 +4154,7 @@ class GameState:
         new_state.resolving_item_controller_id = (
             self.resolving_item_controller_id
         )
+        new_state.extra_combat_phases = self.extra_combat_phases
         new_state.resolving_x_value = self.resolving_x_value
         new_state.resolving_kicked = self.resolving_kicked
         new_state.resolving_alt_cost_paid = self.resolving_alt_cost_paid

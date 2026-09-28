@@ -1228,3 +1228,31 @@ class GrantExtraLoyaltyActivationsThisTurn(Effect):
             f"you may activate its loyalty abilities {self.count} more "
             f"times this turn"
         )
+
+
+
+# ---------------------------------------------------------------------------
+# "After this phase, there is an additional combat phase." (Fear of
+# Missing Out)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdditionalCombatPhaseAfterThisPhase(Effect):
+    """Schedules an additional combat phase right after the current
+    combat phase (``GameState.extra_combat_phases``, consumed by
+    ``turn.next_step`` in both turn loops). The engine has no
+    additional main phase here (the card doesn't print one), so the
+    extra combat is followed by the turn's normal postcombat main
+    phase. Resolving outside a combat phase schedules the extra combat
+    after the turn's next combat phase instead of "this phase"."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        state.extra_combat_phases += 1
+        state.log.append("an additional combat phase will follow this one")
+
+    def describe(self) -> str:
+        return "after this phase, there is an additional combat phase"

@@ -54,6 +54,23 @@ def note_life_losses(state: GameState) -> None:
         p.life_checkpoint = p.life
 
 
+def next_step(state: GameState, current: Step) -> "Step | None":
+    """The step after ``current`` in this turn (``None`` after cleanup).
+
+    Follows ``STEP_ORDER`` except that a combat phase ending while
+    ``state.extra_combat_phases`` is pending starts another combat phase
+    ("After this phase, there is an additional combat phase." -- Fear of
+    Missing Out; CR 500.8). Shared by ``simulate.run_turn`` and the
+    search adapter so both turn loops take the same path."""
+    if current == Step.CLEANUP:
+        return None
+    if current == Step.END_OF_COMBAT and state.extra_combat_phases > 0:
+        state.extra_combat_phases -= 1
+        state.log.append("an additional combat phase begins")
+        return Step.BEGINNING_OF_COMBAT
+    return STEP_ORDER[STEP_ORDER.index(current) + 1]
+
+
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
@@ -1650,6 +1667,8 @@ def run_cleanup_step(state: GameState) -> None:
             p.mana_pool.clear()
     # Reset first-time-tokens-created gate (Moonlit Meditation).
     state.players_who_created_tokens_this_turn.clear()
+    # Unused extra combat phases don't carry into the next turn.
+    state.extra_combat_phases = 0
     # "Whenever <event> this turn, ..." delayed triggers end with the
     # turn (CreateThisTurnTriggeredAbility, Forth Eorlingas!).
     if state.emblems and any(e.expires_at_cleanup for e in state.emblems):
