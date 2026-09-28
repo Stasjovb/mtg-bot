@@ -19590,3 +19590,65 @@ Engine: `layouts.exile_on_adventure` / `is_adventure_cast`, `layouts.become_prep
 **Where:** `CastSpell(cast_face=<Adventure name>)` via `layouts.castable_faces`.
 
 **What the shortcut is.** Casting the Adventure half rides the split/MDFC face-cast machinery (same uncoded `cast_face` field, per-face legality enumeration). The on-an-adventure exile permission (`ExilePlayPermission.primary_only`) allows only the creature to be cast from exile.
+
+## PowerLSV cube "glue" bucket — deliberate simplifications (2026-09-27, `feature/cube-glue`)
+
+The last sixteen normal-layout cube cards (Chandra, Torch of Defiance; Oko, Thief of Crowns; Wrenn and Six; Ugin, Eye of the Storms; Kaito, Bane of Nightmares; Nissa, Who Shakes the World; Tamiyo, Collector of Tales; Comet, Stellar Pup; Shelldock Isle; Coalition Relic; Mana Drain; Fear of Missing Out; Mawloc; Cloak and Dagger, Entwined; Tidehollow Sculler; Gleemox). Engine code: `src/mtg_bot/effects/generic/cube_glue.py`, `src/mtg_bot/player_protections.py`, `src/mtg_bot/cube_glue_statics.py`, hooks in `turn.py` / `simulate.py` / `search/engine_adapter.py` (step hooks only) / `actions.py` / `legal.py` / `game.py`; grammar: `src/mtg_bot/cards/parser/cube_glue_grammar.py` (last `_parse_effect` fallback, switched off for EoE-only printings through the shared `creature_rmc_grammar` guard). Kaito, Bane of Nightmares and Fear of Missing Out are also Duskmourn printings, so -- like Enduring Innocence in the W/G bucket -- they become claimed in the `eoe` / `all` pools too; no other EoE printing's parse changes.
+
+### "This card is banned." is a deck-construction statement
+
+**Where:** `printing_keywords._DECK_CONSTRUCTION_STATEMENT_LINE` (artifact builder). **What:** Gleemox's line (and the "A deck can have any number of / up to N cards named <this card>." family, CR 100.2a) only constrains deck building; the engine plays already-built decks, so the recognizer claims exactly that class of statement and records nothing -- the same treatment as "<name> can be your commander." **Failure mode:** none in play; a deck builder that consults the printing won't see the ban. **Fix scope:** a `CardPrinting.deck_construction` note if a deck builder ever needs it (~minutes).
+
+### Main-phase trigger points and delayed "your next main phase" triggers
+
+**Where:** `turn.run_beginning_of_precombat_main_triggers` (new `Event.BEGINNING_OF_PRECOMBAT_MAIN`), `turn.run_delayed_main_phase_triggers`; called from `simulate.run_step` and `search/engine_adapter._enter_step`. **What:** Coalition Relic's "your first main phase" is the precombat main phase; Mana Drain's delayed trigger (`delayed_triggers` entry, `"step": "main"`) fires at the controller's next main phase (the same turn's second main phase if the counter resolved before it, else their next turn's first). The Saga lore counter (layouts bucket) now rides the same hook. Mana added there floats until cleanup (the engine's pre-existing pool model). Mana Drain's amount is the countered spell's mana value as it last existed on the stack (X included); if the spell wasn't countered, nothing is scheduled. **Failure mode:** none known; the delayed trigger is an ordinary stack object. **Impact:** zero cost when no such trigger exists (one empty dispatch per main phase).
+
+### Additional combat phases (Fear of Missing Out)
+
+**Where:** `turn.next_step` (used by `simulate.run_turn` and the adapter's `_advance_to_next_step`), `GameState.extra_combat_phases`, `AdditionalCombatPhaseAfterThisPhase`. **What:** "After this phase, there is an additional combat phase" re-enters BEGINNING_OF_COMBAT after END_OF_COMBAT, reusing the existing `Step` values (the step enum feeds the NN tokenizer, so no new step kinds). Resolving outside a combat phase adds the combat after the turn's next combat phase rather than directly after "this" phase (no card in the pool can do that); pending phases are dropped at cleanup. "Attacks for the first time each turn" counts the source in `Player.attacked_this_turn`. **Failure mode:** the search-side canonical-state hash doesn't include `extra_combat_phases` (search code out of scope beyond the step hook), so two states differing only in a pending extra combat can share a transposition entry for the rest of that combat. **Fix scope:** one field in `search/canonical_state.py` (~minutes).
+
+### "Loses all abilities": printed triggers in dispatch, last-known information
+
+**Where:** `actions.dispatch_event` skips the printed triggered abilities of a source with a layer-6 `lose_all_abilities` registry entry, and of a departed object whose `GameObject.left_without_abilities` was recorded by `turn.move_off_battlefield`. **What:** Oko's Elk (and a Lignify-style Aura's creature) no longer triggers. Humility-style synthesized wipes (`wipes_all_creature_abilities`, no card in either pool) and the printing-level flags listed in the U/B section (`min_blockers`, ...) still don't consult the wipe. **Fix scope:** route those flags through the layer-6 walk (~half a cycle).
+
+### Indefinite characteristic changes are self-sourced registry entries
+
+**Where:** `TargetBecomesCreatureIndefinitely` (Oko's +1), `PutCountersUntapItBecomesCreature` (Nissa's +1). **What:** entries are sourced by the affected permanent (the Earthbend precedent) so they survive the planeswalker leaving and end when the permanent leaves. An Elk'd noncreature that entered this turn is marked summoning-sick (CR 302.6 approximated by `entered_battlefield_turn`); a land animated by Nissa after being under your control since the turn began can attack (haste makes it moot).
+
+### Exchange of control and "they control" readings
+
+**Where:** `ExchangeControlOfTargets` (Oko's -5), `RevealHandMayExileCardOrChosenCreatureUntilSourceLeaves` (Cloak and Dagger). **What:** the exchange sets `controller_id` directly (the Dack Fayden precedent, no layer-2 entry); Cloak and Dagger's "creature they control" is "creature an opponent controls" (two players) and the choice between a hand card and the chosen creature goes through the generic `choose_card_from_library` id picker after a `choose_yes_no`.
+
+### Tamiyo's protection is checked at the discard / sacrifice sites
+
+**Where:** `player_protections.opponent_effect_blocked_for`, `GameState.resolving_item_controller_id` (set by `actions.resolve_top_of_stack`), consulted by `turn.sacrifice` and the effect-driven discard sites (`card_flow.discard_card`, the discard effect classes, `life.py`, the Fanatic / Memory Jar / cube R-multi hand discards). **What:** a discard or sacrifice that happens while an opponent-controlled spell/ability resolves is skipped. Costs are paid by their own controller outside the opponent's resolution, so they're never blocked. Osseous Sticktwister's "sacrifice or discard or take damage" choice (an EoE punisher) still offers the blocked options; choosing one does nothing (and avoids the damage). A discard site added later that bypasses these helpers would ignore the protection. **Fix scope:** a single discard choke point (see the U/B section's graveyard choke-point note).
+
+### Nissa's extra mana rides automatic payment only
+
+**Where:** `actions.extra_mana_grants_for_tapped_lands`, `_can_pay_from` / `_virtual_pretap` in `can_pay_cost`, `_pretap_lands_for_extra_mana` in `auto_tap_for_cost`. **What:** "Whenever you tap a Forest for mana, add an additional {G}" is folded into the automatic payer: affordability tries pre-tapping 1..all Forests (fewest other colors first), and payment taps Forests into the pool first while the cost isn't otherwise payable, floating any surplus {G} for the rest of the turn. The Forest's own mana is taken as {G}. Phyrexian-split affordability doesn't know the bonus. **Failure mode:** a dual Forest may be pre-tapped for {G} when its other color was needed only if every alternative failed; surplus floating mana is spent later that turn or lost at cleanup. **Impact:** the extra check runs only when the normal affordability check fails and a grant exists (a battlefield scan).
+
+### Kaito is a creature during your turn via UEOT entries
+
+**Where:** `cube_glue_statics` (applied by `turn.run_untap_step` and on entering during your turn from `actions.put_into_battlefield`). **What:** `is_creature_now` has no game-state argument, so the static writes cleanup-expiring layer 4/6/7 entries as each of the controller's turns begins (and when Kaito enters then -- summoning-sick). The "one or more loyalty counters" condition isn't re-checked mid-turn (at 0 loyalty the state-based action removes him). A control change mid-turn doesn't re-evaluate it. Damage to a planeswalker creature both marks damage and removes loyalty (CR 120.3c/e) in `_apply_damage` and combat damage. **Failure mode:** planeswalkers still can't be attacked (planeswalker-bucket note 4), so Kaito is never a combat defender.
+
+### "Opponent who lost life this turn"
+
+**Where:** `Player.lost_life_this_turn` / `life_checkpoint`, `turn.note_life_losses` (run at every state-based-action check and by the reader). **What:** a drop in life total between two checks latches the flag; a loss fully regained inside one resolution is missed. Reset as every turn begins.
+
+### Comet's die table and extra loyalty activations
+
+**Where:** `planeswalker_builder` + `cube_glue_grammar.parse_glue_die_row` / `assemble_die_table` -> `rmc.RollDieTable`; `GameObject.extra_loyalty_activations`, `legal.loyalty_activation_available`. **What:** the roll uses `state.rng` (not a chance node in search, like the R/multi bucket's die rolls); "a creature or player" (untargeted) is chosen with the `choose_target` hook; "you may activate Comet's loyalty ability two more times this turn" widens CR 606.3's once-per-turn gate. `extra_loyalty_activations` isn't in the search hash.
+
+### Hideaway and "play the exiled card"
+
+**Where:** `HideawayLookExileOneFaceDown`, `PlayExiledCardFreeIfAnyLibraryAtMost`. **What:** the hidden card is linked through the imprint link (source id + ETB timestamp); "a library has twenty or fewer cards" is checked on resolution; a land can be played only on your turn with a land play left (it uses the land play), a spell is cast free through `cast_now` (timing ignored). The "may" is a `choose_yes_no`.
+
+### Emblems as static sources and printing-level grants
+
+**Where:** `game._static_bonuses` / `_layer6_entries_for` scan `state.emblems`; `CreateEmblemWithAbilities.static_abilities` / `printing_fields`; `StaticScope.CARD_TYPE_PREFIX` (noncreature card-type scope); `CardPrinting.grants_retrace_to` (`graveyard_casting_wg.retrace_grant_filters`). **What:** emblem anthems (Kaito's Ninjas, Nissa's indestructible lands) and Wrenn and Six's retrace grant. Retrace keeps the W/G bucket's notes (the discarded land is chosen with `choose_discard`).
+
+### Other resolution-time choices
+
+Ugin's -11 and Nissa's -8 "any number" searches pick one card at a time through `choose_card_from_library` until the agent returns `None` (random / default agents take everything); Tamiyo's +1 names one of the distinct nonland names in your library or a "not in your library" option (the Demonic Consultation convention); Comet's "return a card with mana value 2 or less" (untargeted) uses the same id picker. Chandra's +1 casts through `cast_now` (the spell goes above the ability; if it's a land, uncastable, or declined, 2 damage to each opponent) and an uncast card stays in exile with no permission. Tidehollow Sculler follows the printed two-trigger text: if it leaves before its ETB resolves, the card is exiled forever.
+
+**New per-object / per-player / per-game state not hashed by search** (search code out of scope): `GameObject.left_without_abilities`, `extra_loyalty_activations`; `Player.lost_life_this_turn`, `life_checkpoint`; `GameState.extra_combat_phases`, `resolving_item_controller_id` (transient). Rust engine models none of this bucket (Python-only; no EoE parity surface changes).
