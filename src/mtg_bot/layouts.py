@@ -300,3 +300,31 @@ def chapter_ability_on_stack(state: "GameState", obj: "GameObject") -> bool:
         and chapter_number(item.ability)
         for item in state.stack
     )
+
+
+# ---------------------------------------------------------------------------
+# Classes (CR 716)
+# ---------------------------------------------------------------------------
+
+
+def gain_class_level(state: "GameState", obj: "GameObject", level: int) -> bool:
+    """Turn the Class ``obj`` to its level-``level`` printing (which
+    carries every ability of the levels up to it) and fire its "When
+    this Class becomes level <level>" abilities. Returns whether the
+    level was gained."""
+    from mtg_bot.actions import push_triggered_ability
+
+    base = front_face(obj)
+    idx = level - 2
+    if idx < 0 or idx >= len(base.class_levels):
+        return False
+    turn_to_back_face(obj, base.class_levels[idx])
+    state.log.append(f"{obj.printing.name} becomes level {level}")
+    key = f"class_level_{level}"
+    for i, ab in enumerate(obj.printing.triggered_abilities):
+        if getattr(ab, "trigger", "") == key:
+            push_triggered_ability(
+                state, source=obj, ability=ab, ability_index=i,
+                controller_id=obj.controller_id, label=f"level {level}",
+            )
+    return True

@@ -79,6 +79,25 @@ _COPY_TOKEN_EXCEPT_KEYWORDS_SAC = re.compile(
 )
 
 
+# "<A>, <B>, then <C>" -- a three-step sequence (Does Machines' "mill
+# two cards, draw two cards, then discard two cards"). Each piece parses
+# on its own; at most one may target.
+_THREE_STEP_LIST = re.compile(r"^(?P<a>[^,.]+), (?P<b>[^,.]+), then (?P<c>[^,.]+)$")
+# "return up to N target <type> cards from your graveyard to your hand"
+_RETURN_UP_TO_N_TYPED_TO_HAND = re.compile(
+    r"^return up to (?P<n>one|two|three|four|five|\d+) target "
+    r"(?P<type>artifact|creature|land) cards from your graveyard to your hand$"
+)
+_SMALL_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+# "<put counters on target ...>. If it isn't a creature, it becomes a
+# P/T <Subtype> creature in addition to its other types." (Does Machines)
+_THEN_BECOMES_CREATURE_IF_NOT = re.compile(
+    r"^(?P<first>.+ target .+)\. [Ii]f it isn't a creature, it becomes an? "
+    r"(?P<p>\d+)/(?P<t>\d+) (?P<sub>[A-Z][a-z]+) creature in addition to "
+    r"its other types$"
+)
+
+
 def parse_layout_effect(phrase: str) -> Effect | None:
     """Effect for a normalized ``phrase`` of this bucket's shapes, or
     ``None``."""
@@ -89,6 +108,37 @@ def parse_layout_effect(phrase: str) -> Effect | None:
 
     if _TRANSFORM_SELF.match(phrase):
         return TransformSource()
+    m = _THREE_STEP_LIST.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect_pieces
+
+        return _parse_effect_pieces([m.group("a"), m.group("b"), m.group("c")])
+    m = _RETURN_UP_TO_N_TYPED_TO_HAND.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.graveyard import ReturnFromGraveyard
+
+        n = m.group("n")
+        kind = m.group("type")
+        return ReturnFromGraveyard(
+            **{kind: True},
+            min_n=0,
+            max_n=int(n) if n.isdigit() else _SMALL_NUMBERS[n],
+            target_kind=f"graveyard_{kind}",
+        )
+    m = _THEN_BECOMES_CREATURE_IF_NOT.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.layout_effects import (
+            ThenTargetBecomesCreatureIfNot,
+        )
+
+        first = _parse_effect(m.group("first"))
+        if first is None or first.target_count_range() != (1, 1):
+            return None
+        return ThenTargetBecomesCreatureIfNot(
+            inner=first, power=int(m.group("p")),
+            toughness=int(m.group("t")), subtype=m.group("sub"),
+        )
     m = _COPY_TOKEN_EXCEPT_KEYWORDS_SAC.match(phrase)
     if m is not None:
         return _parse_copy_token_except(m)
