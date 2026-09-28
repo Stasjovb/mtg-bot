@@ -356,3 +356,112 @@ class ChooseNameRevealTopPutNamedIntoHand(Effect):
             f"put the named ones into your hand and the rest into your "
             f"graveyard"
         )
+
+
+# ---------------------------------------------------------------------------
+# "At the beginning of your next main phase" delayed mana (Mana Drain) and
+# counter-removal mana (Coalition Relic)
+# ---------------------------------------------------------------------------
+
+
+def stack_spell_mana_value(item) -> int:
+    """Mana value of a spell on the stack (CR 202.3e: X counts)."""
+    cost = item.source.printing.mana_cost
+    return cost.total + cost.x_pips * max(0, item.x_value)
+
+
+@dataclass(frozen=True)
+class CounterThenDelayedManaEqualToMV(Effect):
+    """"Counter target spell. At the beginning of your next main phase,
+    add an amount of {<color>} equal to that spell's mana value." (Mana
+    Drain.) ``counter`` is the parsed counter effect; its target is this
+    effect's target. The countered spell's mana value is taken as it
+    last existed on the stack (X included). If the spell wasn't
+    countered (it left the stack, or can't be countered) no delayed
+    trigger is created. The delayed trigger is a
+    ``state.delayed_triggers`` entry with ``"step": "main"``, fired by
+    ``turn.run_delayed_main_phase_triggers`` at the controller's next
+    main phase (both turn loops)."""
+
+    counter: Effect | None = None
+    color: str = "C"
+
+    def requires_target(self) -> bool:
+        return self.counter.requires_target()
+
+    def legal_targets(self, state, controller_id):
+        return self.counter.legal_targets(state, controller_id)
+
+    def target_count_range(self):
+        return self.counter.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        item = None
+        if targets and targets[0][0] == "stack":
+            idx = targets[0][1]
+            if 0 <= idx < len(state.stack):
+                item = state.stack[idx]
+        was_countered = item is not None and item.countered
+        self.counter.resolve(state, controller_id, targets)
+        if item is None or was_countered or not item.countered:
+            return
+        mv = stack_spell_mana_value(item)
+        source = state.resolving_spell or state.resolving_source
+        state.delayed_triggers.append({
+            "step": "main",
+            "controller_id": controller_id,
+            "source_id": source.id if source is not None else None,
+            "effect": AddManaToPool(produces=((self.color, mv),)),
+            "fire_at_turn": state.turn_number,
+        })
+        state.log.append(
+            f"P{controller_id} will add {mv} {{{self.color}}} at the "
+            f"beginning of their next main phase"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{self.counter.describe()}; at the beginning of your next main "
+            f"phase, add {{{self.color}}} equal to that spell's mana value"
+        )
+
+
+@dataclass(frozen=True)
+class RemoveAllCountersAddManaPerCounter(Effect):
+    """"Remove all <kind> counters from this <permanent>. Add one mana of
+    any color for each <kind> counter removed this way." (Coalition
+    Relic.) The mana is ``any``-color coins (the engine's one-mana-of-
+    any-color convention)."""
+
+    kind: str = "charge"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+        from mtg_bot.game import counter_count, remove_counters
+
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        n = counter_count(src, self.kind)
+        removed = remove_counters(src, self.kind, n) if n else 0
+        state.log.append(
+            f"{src.printing.name}: removes {removed} {self.kind} counter(s)"
+        )
+        if removed:
+            AddManaToPool(produces=(("any", removed),)).resolve(
+                state, controller_id,
+            )
+
+    def describe(self) -> str:
+        return (
+            f"remove all {self.kind} counters from this permanent; add one "
+            f"mana of any color for each"
+        )

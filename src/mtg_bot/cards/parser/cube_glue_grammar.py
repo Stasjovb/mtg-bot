@@ -62,6 +62,21 @@ _EXILE_TOP_MAY_CAST_ELSE_RE = re.compile(
 )
 
 
+# "<counter target spell>. At the beginning of your next main phase, add
+# an amount of {C} equal to that spell's mana value" (Mana Drain) -- the
+# counter sentence parses through the unified grammar.
+_COUNTER_THEN_NEXT_MAIN_MANA_RE = re.compile(
+    r"^(?P<counter>counter target .+?)\. At the beginning of your next main "
+    r"phase, add an amount of \{(?P<c>[WUBRGC])\} equal to that spell's mana "
+    r"value$"
+)
+# "remove all <kind> counters from this <permanent>. Add one mana of any
+# color for each <kind> counter removed this way" (Coalition Relic).
+_REMOVE_ALL_COUNTERS_ADD_MANA_RE = re.compile(
+    r"^remove all (?P<kind>[a-z]+) counters from this (?:artifact|creature|"
+    r"permanent|land|enchantment)\. Add one mana of any color for each "
+    r"(?P<kind2>[a-z]+) counter removed this way$"
+)
 # "choose a [nonland ]card name, then reveal the top <N> cards of your
 # library. Put all cards with the chosen name from among them into your
 # hand and the rest into your graveyard" (Tamiyo, Collector of Tales).
@@ -193,6 +208,19 @@ def parse_glue_effect(phrase: str) -> Effect | None:
 
     if _RETURN_EXILED_TO_HAND_RE.match(phrase):
         return g.ReturnCardsExiledWithSourceToOwnersHand()
+    m = _COUNTER_THEN_NEXT_MAIN_MANA_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        counter = _parse_effect(m.group("counter"))
+        if counter is None or counter.target_count_range() != (1, 1):
+            return None
+        return g.CounterThenDelayedManaEqualToMV(
+            counter=counter, color=m.group("c"),
+        )
+    m = _REMOVE_ALL_COUNTERS_ADD_MANA_RE.match(phrase)
+    if m is not None and m.group("kind") == m.group("kind2"):
+        return g.RemoveAllCountersAddManaPerCounter(kind=m.group("kind"))
     m = _CHOOSE_NAME_REVEAL_TOP_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import _amount

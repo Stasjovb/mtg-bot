@@ -33,6 +33,7 @@ from mtg_bot.turn import (
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_beginning_of_postcombat_main_triggers,
+    run_beginning_of_precombat_main_triggers,
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
@@ -350,6 +351,15 @@ def run_step(
 
     elif step == Step.BEGINNING_OF_COMBAT:
         run_beginning_of_combat_triggers(state)
+        state_based_actions(state)
+        if state.is_over():
+            return
+
+    elif step == Step.PRECOMBAT_MAIN:
+        # "At the beginning of your first main phase" (Coalition Relic)
+        # and delayed "your next main phase" triggers (Mana Drain);
+        # mirrored in the search adapter's ``_enter_step``.
+        run_beginning_of_precombat_main_triggers(state)
         state_based_actions(state)
         if state.is_over():
             return

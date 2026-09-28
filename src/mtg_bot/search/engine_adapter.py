@@ -99,6 +99,7 @@ from mtg_bot.turn import (
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_beginning_of_postcombat_main_triggers,
+    run_beginning_of_precombat_main_triggers,
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
@@ -1274,6 +1275,12 @@ class MtgGameStateAdapter:
 
         elif step == Step.BEGINNING_OF_COMBAT:
             run_beginning_of_combat_triggers(self._state)
+            state_based_actions(self._state)
+
+        elif step == Step.PRECOMBAT_MAIN:
+            # Mirror simulate.run_step: first-main-phase triggers and
+            # delayed "your next main phase" triggers (cube glue bucket).
+            run_beginning_of_precombat_main_triggers(self._state)
             state_based_actions(self._state)
 
         elif step == Step.POSTCOMBAT_MAIN:

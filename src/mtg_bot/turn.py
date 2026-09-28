@@ -1370,6 +1370,45 @@ def run_beginning_of_postcombat_main_triggers(state: GameState) -> None:
         label="beginning-of-postcombat-main",
         player=state.active_player(),
     )
+    run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_POSTCOMBAT_MAIN)
+
+
+def run_beginning_of_precombat_main_triggers(state: GameState) -> None:
+    """Push "At the beginning of your first main phase" triggered
+    abilities (Coalition Relic) and any delayed "at the beginning of
+    your next main phase" triggers of the active player (Mana Drain).
+    Called by ``simulate.run_step`` and the search adapter's
+    ``_enter_step`` as the precombat main phase begins, before priority
+    opens -- the ``run_beginning_of_postcombat_main_triggers`` pattern."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(
+        state, Event.BEGINNING_OF_PRECOMBAT_MAIN,
+        label="beginning-of-precombat-main",
+        player=state.active_player(),
+    )
+    run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_PRECOMBAT_MAIN)
+
+
+def run_delayed_main_phase_triggers(state: GameState, event) -> None:
+    """Fire ``state.delayed_triggers`` entries scheduled for "the
+    beginning of your next main phase" (``"step": "main"``) whose
+    controller is the active player: the next main phase of that
+    player that begins after the entry was created -- the same turn's
+    second main phase, or their next turn's first one."""
+    ap_id = state.active_player().id
+    remaining: list[dict] = []
+    to_push: list[dict] = []
+    for entry in state.delayed_triggers:
+        if entry.get("step") == "main" and entry["controller_id"] == ap_id:
+            to_push.append(entry)
+        else:
+            remaining.append(entry)
+    if not to_push:
+        return
+    state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, event)
 
 
 def run_impending_decrement_turn_based_action(state: GameState) -> None:

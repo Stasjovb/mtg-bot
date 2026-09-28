@@ -575,6 +575,12 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "your second main phase": (
         Event.BEGINNING_OF_POSTCOMBAT_MAIN, Controlled(YOU),
     ),
+    # ``At the beginning of your first main phase`` (Coalition Relic) --
+    # the precombat main phase (CR 505.1a); dispatched by both turn
+    # loops before main-phase priority opens.
+    "your first main phase": (
+        Event.BEGINNING_OF_PRECOMBAT_MAIN, Controlled(YOU),
+    ),
     # ``At the beginning of your draw step`` — Mana Vault's tapped-tax
     # trigger. Dispatched by ``turn.run_draw_step`` after the draw.
     "your draw step": (Event.BEGINNING_OF_DRAW_STEP, Controlled(YOU)),

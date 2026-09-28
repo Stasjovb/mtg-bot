@@ -133,6 +133,12 @@ class Event(str, Enum):
     # tapped" gate is encoded via ``Source(IsTapped())`` AND-ed onto
     # the source-self ``IsSelf()`` arm.
     BEGINNING_OF_POSTCOMBAT_MAIN = "beginning_of_postcombat_main"
+    # Beginning of the active player's FIRST (precombat) main phase
+    # (Coalition Relic: "At the beginning of your first main phase,
+    # ..."). Subject is the active Player. Dispatched by
+    # ``turn.run_beginning_of_precombat_main_triggers`` from both turn
+    # loops (``simulate.run_step`` and the search adapter).
+    BEGINNING_OF_PRECOMBAT_MAIN = "beginning_of_precombat_main"
     # Beginning of the active player's draw step (Mana Vault's "At the
     # beginning of your draw step, if this artifact is tapped, it deals
     # 1 damage to you."). Dispatched by ``turn.run_draw_step`` right
@@ -296,6 +302,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
+    Event.BEGINNING_OF_PRECOMBAT_MAIN: ("player",),
     Event.BEGINNING_OF_DRAW_STEP: ("player",),
     Event.ATTACKERS_UNBLOCKED: ("player", "defender"),
     Event.CREATURE_TOKENS_CREATED: ("player",),

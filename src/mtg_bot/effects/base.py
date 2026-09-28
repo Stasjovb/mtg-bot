@@ -1139,6 +1139,9 @@ class TriggeredAbility:
                 "beginning_of_end_step": (
                     "At the beginning of your end step"
                 ),
+                "beginning_of_precombat_main": (
+                    "At the beginning of your first main phase"
+                ),
                 "beginning_of_postcombat_main": (
                     "At the beginning of your second main phase"
                 ),
