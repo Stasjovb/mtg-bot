@@ -19508,3 +19508,69 @@ New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `sr
 **Where:** `cube_creatures_ub.OwnerPutsTargetSpellOnTopOrBottom`, `cube_creatures_ub.LookAtHandMayExileNonlandUntilSourceLeaves`, `GameObject.exiled_until_leaves_from_hand`, `turn._release_exiled_until_leaves`.
 
 **What the shortcut is.** Stack targets are `("stack", index)` pairs, so when Subtlety pulls a spell out from under other stack items, the engine re-indexes those items' `targets` above the removed spell; nothing else stores stack indices today, but a future effect that does would need the same fix-up. The owner's top/bottom choice goes through `choose_yes_no`. Deep-Cavern Bat's pick goes through `choose_card_from_opponent_hand`, and the card returns to its owner's hand (not the battlefield) through the base's until-leaves release hook.
+
+## PowerLSV cube non-normal layouts (DFCs, Sagas, Class, leveler, split) — deliberate simplifications (2026-09-27, `feature/cube-layouts`)
+
+Engine code: `src/mtg_bot/layouts.py` (face changes, Saga lore, Class levels, day/night, waterbend, mayhem), `src/mtg_bot/effects/generic/layout_effects.py` / `layout_face_effects.py`; parser: `cards/parser/layout_builder.py` (dispatch), `dfc_builder.py`, `split_builder.py`, `saga_builder.py`, `class_builder.py`, `leveler_builder.py`, `layout_grammar.py`, `layout_face_grammar.py`. Every face change is a swap of `GameObject.printing` (front kept in `mdfc_front_printing`, restored on every zone change and when a spell leaves the stack).
+
+### Saga lore counters are added at the end of the draw step
+
+**Where:** `turn.run_draw_step` -> `layouts.run_saga_lore_counters`.
+
+**What the shortcut is.** CR 714.3b adds the lore counter "as your precombat main phase begins". The search adapter mirrors `simulate.run_step` and has no precombat-main hook (search code is out of scope for this bucket), so both turn loops add it at the end of the draw step's turn-based actions: the chapter triggers are put on the stack during the draw step (above any draw-step triggers) instead of at the start of main phase 1. On the starting player's first turn (no draw step) nothing is added, which only matters for a Saga put onto the battlefield during that turn's upkeep.
+
+**Impact / fix scope.** Tiny (Urza's Saga, Fable of the Mirror-Breaker): only instant-speed responses in the draw step vs main phase differ. Fix = a shared precombat-main hook in both loops.
+
+### Transform bookkeeping (CR 701.28f) and copies of DFCs
+
+**Where:** `layouts.transform_permanent`, `layout_effects.TransformSource`.
+
+**What the shortcut is.** "Transform CARDNAME" from an activated / triggered ability resolves even if the permanent already transformed after the ability was put on the stack (CR 701.28f says it then does nothing): activating Ulvenwald Oddity's ability twice in response to itself flips it back. A token copy of a DFC copies the face that's up and never transforms (correct), but a non-token copy effect (`original_printing`) of a transformed permanent isn't specially handled.
+
+**Impact.** Negligible; fix = a per-object transform counter captured on the stack item.
+
+### Faces of split cards / MDFCs share the hand-cast policy slot and are enumerated per face
+
+**Where:** `CastSpell.cast_face`, `layouts.face_cast_actions` (called from `legal.legal_actions`).
+
+**What the shortcut is.** Casting a split half or a modal DFC's back face is a new `CastSpell` field the action codec doesn't encode (it collides with the normal hand-cast slot, like `use_bestow`). Legality of each face is computed by re-running the core legal-action enumerator with the card turned to that face, so `legal_actions` costs one extra enumeration per castable face while such a card is in a castable zone.
+
+**Impact.** Small (Life // Death, Jennifer Walters, Norman Osborn). Codec slots would expose the choice to the NN policy.
+
+### Class levels, day/night and level counters aren't in the search hashes
+
+**Where:** `layouts.gain_class_level` (the level printings share the card's name), `GameState.day_night` / `previous_turn_active_spells`, the leveler's `named_counters["level"]`.
+
+**What the shortcut is.** `search/info_set.py` and `search/canonical_state.py` hash the printing name, not the Class level; they don't hash day/night or named counters. ISMCTS may merge information sets that differ only in a Class's level, the day/night designation or a leveler's level count.
+
+**Impact / fix scope.** Small (Does Machines, Outland Liberator, Hexdrinker); fix = add the fields to both hashes (search-side change).
+
+### Reflexive "When you do" targets are chosen with the enclosing ability
+
+**Where:** `layout_face_grammar` `_WHEN_YOU_DO` (Ajani, Nacatl Avenger's 0).
+
+**What the shortcut is.** "Create a Cat token. When you do, if you control a red permanent other than Ajani, he deals damage ... to any target": the reflexive trigger's target is picked when the loyalty ability is activated (the `MayDoThenReflexive` precedent), and the intervening-if is checked on resolution.
+
+### Two-player readings of attack / defending-player text
+
+**Where:** `layout_face_grammar` ("a creature attacks you or a planeswalker you control" -> attacker controlled by an opponent; "other attacking creatures gain ..." -> your other attackers), `effects_ext._CONTROLLER_SUFFIXES` ("defending player controls" -> an opponent controls).
+
+**What the shortcut is.** Exact in two-player games (the only format the engine plays); wrong in multiplayer.
+
+### "Do this only once each turn" and "one or more <Cats> die"
+
+**Where:** The Sensational She-Hulk's trigger (`once_per_turn`, the parser's existing reading of the rider), Ajani, Nacatl Pariah's `OneOrMoreBatch` dies trigger.
+
+**What the shortcut is.** She-Hulk's trigger fires at most once a turn even when the controller declined the optional damage (the printed rider only limits doing it). Ajani's batch trigger doesn't fire again for a second Cat death while the first instance is still on the stack even if the deaths were separate events.
+
+### Choice hooks reused for new decisions
+
+**Where:** `EachChoosesOneOfEachTypeSacrificesRest` (Ajani's -4: `choose_legend_keep`, "which one stays"), `EachPlayerExilesUntilNonlandMayCastFree` (Etali: one `choose_yes_no` per castable card, in exile order), `pay_waterbend` (`choose_x` for the helper count, clamped to what the rest of the mana can't pay; `choose_permanent_to_tap` for which).
+
+**What the shortcut is.** The decisions exist but ride generic hooks; with several permanents of multiple listed types, Ajani's -4 lets a permanent satisfy more than one category (one pick per type).
+
+### Mayhem needs the discard to be reported
+
+**Where:** `turn.fire_opponent_discards_triggers` stamps `GameObject.discarded_turn`; `layouts.mayhem_castable`.
+
+**What the shortcut is.** A discard that doesn't go through the discard-observer funnel (the cleanup-step hand-size discard) doesn't stamp the card, so Green Goblin's granted mayhem can't cast it. Mayhem casts use the graveyard-permission cast path (normal timing, mana cost).
