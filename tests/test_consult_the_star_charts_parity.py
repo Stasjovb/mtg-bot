@@ -19,6 +19,16 @@ colored=(('U', 1),))`` / ``kicker_cost_str = '{1}{U}'``. It is
 **kicker-only** — there is NO warp cost on this printing
 (``warp_cost is None``).
 
+**2026-09-28 update (``feature/cube-fixes-1``):** the parser now
+composes the body from the generic look-at-top grammar --
+``IfConditionElse(SpellWasKicked(), LookAtTopCardsPutIntoHand(take=2),
+LookAtTopCardsPutIntoHand(take=1))`` over
+``CountControlledMatching(IsLand())`` with ``rest_random=True`` -- instead
+of the bespoke class described here. No printed clause was dropped; the
+frozen Rust bridge still only has the unit variant, so the Python shape
++ bridge round-trip tests are pinned as a divergence, while the
+real-printing cross-engine probes (same behaviour) stay parity.
+
 **Why this card was BLOCKED.** It is multi-gated in POOL_PARITY:
 "Kicker / Impending cost" (the declined cost-mechanic) AND
 "Effect-uncovered (no covered Rust counterpart)" — the bespoke
@@ -135,35 +145,59 @@ def test_consult_the_star_charts_is_kicker_only_not_warp():
     )
 
 
-def test_consult_the_star_charts_spell_effect_shape():
-    p = _PRINTINGS["Consult the Star Charts"]
-    assert isinstance(p.spell_effect, ConsultTheStarChartsEffect), (
-        f"Consult's spell_effect must be the bespoke "
-        f"ConsultTheStarChartsEffect; got {type(p.spell_effect).__name__}"
+def _consult_generic_shape():
+    """The faithful 2026-09-28 parse: the generic look-at-top grammar
+    with a kicked "instead" pick count over "X = lands you control"."""
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.formulas import CountControlledMatching
+    from mtg_bot.effects.generic.card_flow import LookAtTopCardsPutIntoHand
+    from mtg_bot.effects.generic.cast_conditionals import SpellWasKicked
+    from mtg_bot.effects.object_predicates import IsLand
+
+    def look(take):
+        return LookAtTopCardsPutIntoHand(
+            count=CountControlledMatching(IsLand()), take=take,
+            rest_zone="bottom", rest_random=True,
+        )
+
+    return IfConditionElse(
+        condition=SpellWasKicked(), then_effect=look(2), else_effect=look(1),
     )
 
 
+def test_consult_the_star_charts_spell_effect_shape():
+    """Updated 2026-09-28 (``feature/cube-fixes-1``): Consult composes
+    from the generic look-at-top grammar instead of the opaque
+    ``ConsultTheStarChartsEffect()`` (whose X definition, pick counts and
+    random-bottom rest were hidden in code)."""
+    p = _PRINTINGS["Consult the Star Charts"]
+    assert p.spell_effect == _consult_generic_shape()
+
+
 # ---------------------------------------------------------------------------
-# (2) Bridge round-trip — the consult_the_star_charts_effect dict shape
-# bridges to the bespoke Python ConsultTheStarChartsEffect, byte-equal
-# to the genuine parsed spell_effect.
+# (2) Bridge divergence pin (2026-09-28). The old bespoke shape encoded
+# exactly the printed rules -- no clause was dropped; the divergence is
+# representational: the frozen Rust bridge only has the opaque
+# ``consult_the_star_charts_effect`` unit variant, no arm for
+# ``IfConditionElse(SpellWasKicked, LookAtTopCardsPutIntoHand...)``.
+# Behaviour still matches (the real-printing cross-engine probes below
+# stay parity). Closure path: Rust arms for the generic look-at-top +
+# kicked-conditional shapes; then invert this pin.
 # ---------------------------------------------------------------------------
 
 
-def test_consult_the_star_charts_bridge_arm_round_trip():
+def test_consult_the_star_charts_bridge_arm_round_trip_generic_shape_divergence_pin():
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
     bridged = _ta_dict_to_python_effect(
         {"kind": "consult_the_star_charts_effect"}
     )
     assert isinstance(bridged, ConsultTheStarChartsEffect)
-    # Effect-level byte-equality between the parsed real-EoE printing's
-    # spell_effect and the bridged Effect.
     p = _PRINTINGS["Consult the Star Charts"]
-    assert p.spell_effect == bridged, (
-        f"Consult's spell_effect must be byte-equal to the bridged "
-        f"Effect; got parsed={p.spell_effect!r}, bridged={bridged!r}"
-    )
+    # The divergence: the bridged Rust shape is the old bespoke class,
+    # not the parsed generic composition.
+    assert p.spell_effect != bridged
+    assert p.spell_effect == _consult_generic_shape()
 
 
 # ---------------------------------------------------------------------------

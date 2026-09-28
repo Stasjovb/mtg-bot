@@ -40,13 +40,24 @@ indestructible per CR 702.12. Distinguishes Exorcise from the
 destroy siblings (Shattered Wings, etc.) which DO skip
 indestructible. Probed positively below.
 
+**2026-09-28 update (``feature/cube-fixes-1``):** the Python parse now
+composes Exorcise from the generic removal grammar
+(``RemoveTargetPermanents(action="exile", target_filter=IsArtifact() |
+IsEnchantment() | (IsCreature() & HasPowerAtLeast(4)))``) instead of the
+opaque ``ExorciseEffect()``. Nothing printed was dropped -- the old
+class encoded the same rules with its parameters hidden in code -- but
+the frozen Rust bridge only knows the unit variant, so the serializer /
+admit-gate / covered-class pins are now ``*_divergence_pin`` tests. The
+Rust resolve-arm pins and the real-printing field-view probe (same
+rules on both sides) stay parity tests.
+
 Covered:
 
-- Real Duskmourn printing's spell_effect IS ``ExorciseEffect()``.
-- Serializer round-trip emits the bare unit-variant dict; bridge
-  dict→Python arm reconstructs ``ExorciseEffect()``.
-- The card passes the ``_printing_is_bridge_simple_spell`` admit
-  gate (auto-grow §2 teeth).
+- Real Duskmourn printing's spell_effect is the generic exile shape.
+- Divergence pins: no reverse-serializer dict for it; the Rust unit
+  dict still bridges to ``ExorciseEffect()``; the card no longer passes
+  ``_printing_is_bridge_simple_spell``; ``ExorciseEffect`` is no longer
+  a covered class.
 - Rust resolve arm exiles each leg of the 3-way OR (artifact;
   enchantment; 4+ power creature) and fizzles silently on a
   non-matching creature (3/3 with effective power 3).
@@ -70,38 +81,53 @@ import pytest
 # -------------------------------------------------------------------
 
 
-def test_real_exorcise_spell_effect_is_exorcise_effect():
-    """**Verify-first.** The live parser maps Exorcise to
-    ``ExorciseEffect()`` — a parameterless frozen dataclass. This
-    pin freezes the parser SoT so a parser drift is caught here, not
-    silently downstream in the cross-engine probe."""
+def _exorcise_generic_shape():
+    """The faithful 2026-09-28 parse: the generic removal grammar's
+    exile over ``artifact | enchantment | (creature & power >= 4)``."""
+    from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
+    from mtg_bot.effects.object_predicates import (
+        HasPowerAtLeast, IsArtifact, IsCreature, IsEnchantment,
+    )
+
+    return RemoveTargetPermanents(
+        action="exile",
+        target_filter=(IsArtifact() | IsEnchantment())
+        | (IsCreature() & HasPowerAtLeast(4)),
+    )
+
+
+def test_real_exorcise_spell_effect_composes_the_generic_exile():
+    """**Verify-first (updated 2026-09-28, ``feature/cube-fixes-1``).**
+    The live parser maps Exorcise through the generic removal grammar
+    to ``RemoveTargetPermanents(action="exile", target_filter=
+    IsArtifact() | IsEnchantment() | (IsCreature() &
+    HasPowerAtLeast(4)))`` -- no longer the parameterless card-specific
+    ``ExorciseEffect()``, whose parameters (the three arms, the power
+    threshold 4) were hidden in code."""
     from mtg_bot.cards.source import get_active_source
-    from mtg_bot.effects.bespoke import ExorciseEffect
 
     p = get_active_source().get_printings().get("Exorcise")
     if p is None:
         pytest.skip("Exorcise absent from active CardSource")
     assert "Sorcery" in p.card_types
-    se = p.spell_effect
-    assert isinstance(se, ExorciseEffect), (
-        f"Exorcise spell_effect must be ExorciseEffect; got "
-        f"{type(se).__name__}"
-    )
+    assert p.spell_effect == _exorcise_generic_shape()
 
 
 # -------------------------------------------------------------------
-# Round-trip + admit-gate pins (the auto-grow §2 teeth).
+# Bridge divergence pins (2026-09-28). The old ``ExorciseEffect`` shape
+# encoded exactly the printed rules -- nothing was dropped; the
+# divergence is representational: the frozen Rust bridge only knows the
+# opaque ``Effect::ExorciseEffect`` unit variant and has no arm for the
+# generic ``RemoveTargetPermanents`` exile over a composed OR filter.
+# Closure path: a Rust ``RemoveTargetPermanents`` / composed-filter arm
+# + the reverse serializer; then these pins invert back to parity.
 # -------------------------------------------------------------------
 
 
-def test_exorcise_serializer_round_trip():
-    """The trajectory reverse-serializer must emit a clean
-    ``{"kind": "exorcise_effect"}`` unit dict; the dict→Python bridge
-    must reconstruct ``ExorciseEffect()``.
-
-    A no-emit serializer would short-circuit the admit gate (the no-
-    fallback-hybrid teeth). With the leaf landed and the variant
-    field-free, the round-trip is byte-equal both ways."""
+def test_exorcise_serializer_round_trip_generic_exile_divergence_pin():
+    """The reverse serializer has no dict for the generic exile shape
+    (``None``), while the Rust unit dict still round-trips to the old
+    ``ExorciseEffect()`` -- which is no longer what Python parses."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.bespoke import ExorciseEffect
     from mtg_bot.parity import trajectory
@@ -110,58 +136,34 @@ def test_exorcise_serializer_round_trip():
     p = get_active_source().get_printings().get("Exorcise")
     if p is None:
         pytest.skip("Exorcise absent from active CardSource")
-    d = trajectory._python_spell_effect_to_dict(p.spell_effect)
-    assert d == {"kind": "exorcise_effect"}, (
-        f"Exorcise reverse serializer must emit the bare unit-variant "
-        f"dict; got {d}"
-    )
-    rebuilt = _ta_dict_to_python_effect(d)
-    assert isinstance(rebuilt, ExorciseEffect), (
-        f"dict→Python bridge must round-trip to ExorciseEffect; got "
-        f"{type(rebuilt).__name__}"
-    )
+    assert trajectory._python_spell_effect_to_dict(p.spell_effect) is None
+    rebuilt = _ta_dict_to_python_effect({"kind": "exorcise_effect"})
+    assert isinstance(rebuilt, ExorciseEffect)
+    assert rebuilt != p.spell_effect
 
 
-def test_exorcise_passes_bridge_admit_gate():
-    """**The lever flip pin.** Post-slice (this lane), Exorcise MUST
-    pass ``_printing_is_bridge_simple_spell`` — the spell-card-bridge
-    admit gate. The card has (1, 1) target_count_range with the
-    permanent slot kind (Phase-1 admit shape); the spell_effect is
-    covered+bridged; the serializer round-trips cleanly (the §2 teeth
-    all fire positively)."""
+def test_exorcise_bridge_admit_gate_generic_exile_divergence_pin():
+    """Exorcise no longer passes ``_printing_is_bridge_simple_spell``:
+    its generic exile shape is neither covered-and-bridged nor
+    reverse-serializable (the per-tooth gates below)."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     p = get_active_source().get_printings().get("Exorcise")
     if p is None:
         pytest.skip("Exorcise absent from active CardSource")
-    assert trajectory._printing_is_bridge_simple_spell(p) is True, (
-        "Exorcise must auto-join the spell-card-bridge admit set now "
-        "that its Effect is covered+bridged + round-trips"
-    )
-    # Pin per-tooth gates — if any one fails, debug-time message points
-    # at WHICH tooth.
-    assert (
-        trajectory._spell_effect_is_covered_and_bridged(p) is True
-    )
-    assert (
-        trajectory._python_spell_effect_to_dict(p.spell_effect)
-        is not None
-    )
+    assert trajectory._printing_is_bridge_simple_spell(p) is False
+    assert trajectory._python_spell_effect_to_dict(p.spell_effect) is None
 
 
-def test_exorcise_class_covered():
-    """``ExorciseEffect`` must be in the covered-by-rust set — the
-    Rust ``Effect::ExorciseEffect`` variant declaration makes
-    ``covered_python_class_set()`` include it. Without this, the §2
-    admit-gate teeth refuse to flip the card."""
+def test_exorcise_class_no_longer_emitted_divergence_pin():
+    """``ExorciseEffect`` drops out of the covered-by-rust set: coverage
+    is ``python classes emitted by printings & rust variants`` and no
+    printing emits ``ExorciseEffect`` any more (the class survives only
+    for the parity bridge)."""
     from mtg_bot.parity.effect_coverage import covered_python_class_set
 
-    covered = covered_python_class_set()
-    assert "ExorciseEffect" in covered, (
-        "Rust Effect::ExorciseEffect variant must make the Python "
-        "ExorciseEffect class covered"
-    )
+    assert "ExorciseEffect" not in covered_python_class_set()
 
 
 # -------------------------------------------------------------------
@@ -435,14 +437,17 @@ def test_cross_engine_real_eoe_exorcise_parity(
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.game import StackItem, Zone
     from mtg_bot.turn import state_based_actions as py_sba
-    from mtg_bot.effects.bespoke import ExorciseEffect
     from mtg_bot.cards.base import CardPrinting, ManaCost
 
     real = get_active_source().get_printings().get("Exorcise")
     if real is None:
         pytest.skip("Exorcise absent from active CardSource")
     assert "Sorcery" in real.card_types
-    assert isinstance(real.spell_effect, ExorciseEffect)
+    # 2026-09-28: the Python side is the faithful generic exile shape;
+    # the Rust side still resolves the bridged ``exorcise_effect`` unit
+    # variant. Same rules, so the post-resolve field view must still be
+    # byte-equal.
+    assert real.spell_effect == _exorcise_generic_shape()
 
     def _exo_creature(name, power, toughness):
         return CardPrinting(

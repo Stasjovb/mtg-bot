@@ -222,10 +222,15 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
     # Pool + Ancient Tomb (each P4 C2), and Grove of the Burnwillows
     # (the Sequence-IN-AA admit). The loader-side Land admit set is now
     # the 7-card Phase-3 baseline + these 6 single-card FLIPs.
+    # 2026-09-28 (feature/cube-fixes-1): Gemstone Caverns LEFT the Land
+    # admit set. Its faithful parse gates the any-color mana on a luck
+    # counter (IfConditionElse(SourceHasCounter("luck"), Add{any},
+    # Add{C})) and carries the CR 103.6 opening-hand action; the old
+    # AddManaToPool(any) shape dropped the "{C} without a luck counter"
+    # clause. The frozen Rust bridge has no arm for the gated shape.
     expected_land_admits = sorted(
         set(PHASE_1_3_ADMITTED_LAND_CARRIERS)
         | {
-            "Gemstone Caverns",
             "Mirrorpool",
             "Meteor Crater",
             "Reflecting Pool",
@@ -240,7 +245,7 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
     assert set(loader_land_admits) == set(expected_land_admits), (
         f"LOADER-SIDE Land admit set diverged from the post-Grove + "
         f"Nesting-Grounds baseline; got {loader_land_admits}, expected "
-        f"{expected_land_admits} (Gemstone Caverns + Mirrorpool + "
+        f"{expected_land_admits} (Mirrorpool + "
         f"Meteor Crater + Reflecting Pool + Ancient Tomb + Grove + "
         f"Nesting Grounds FLIPs)"
     )

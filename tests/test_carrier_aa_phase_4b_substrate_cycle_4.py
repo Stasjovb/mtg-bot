@@ -467,7 +467,12 @@ PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Thespian's Stage",
     "Crystal Quarry",
     "Eldrazi Temple",
-    "Gemstone Caverns",
+    # 2026-09-28 (feature/cube-fixes-1): Gemstone Caverns removed. Its
+    # faithful parse gates the any-color mana on a luck counter
+    # (IfConditionElse(SourceHasCounter("luck"), Add{any}, Add{C})); the old
+    # AddManaToPool(any) shape dropped the "{C} without a luck counter"
+    # clause. The gated effect is not a Carrier-AA Effect class, so the card
+    # no longer passes the Land predicate.
     "Sunken Citadel",
     # Phase 4B C4.
     "Mirrorpool",

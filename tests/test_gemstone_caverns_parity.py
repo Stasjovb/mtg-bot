@@ -1,6 +1,16 @@
 """Gemstone Caverns — per-card real-EoE cross-engine byte-equal probe
 (covered_by_construction → PROBED tier flip).
 
+**2026-09-28 update (``feature/cube-fixes-1``):** the Python parse now
+models the printed card faithfully — "{T}: Add {C}. If Gemstone Caverns
+has a luck counter on it, instead add one mana of any color." is a
+luck-counter-gated ``IfConditionElse`` and the CR 103.6 opening-hand line
+is ``CardPrinting.opening_hand_action``. The ``AddManaToPool(any)`` shape
+described below dropped the "{C} without a luck counter" clause; the
+frozen Rust bridge still emits it, so the shape / bridge / mint probes are
+now ``*_divergence_pin`` tests, and the MINT + PAY probe drives the
+luck-counter branch (where the engines still agree).
+
 Gemstone Caverns is a ``{0}`` Legendary Land in the EoE pool (the
 classic Coldsnap legendary "you may have this in play turn 0" land).
 The load-bearing parity-relevant ability for this probe is the
@@ -67,8 +77,9 @@ ZONE_BATTLEFIELD = 2
 
 # ---------------------------------------------------------------------------
 # (1) Parser SoT — Gemstone Caverns is parser-claimed and carries one
-# mana-ability AA whose effect is ``AddManaToPool(produces=(('any', 1),),
-# spend_restriction=None)``.
+# mana-ability AA. Since 2026-09-28 its effect is the luck-counter-gated
+# ``IfConditionElse(SourceHasCounter("luck"), Add{any}, Add{C})`` (it was
+# ``AddManaToPool(produces=(('any', 1),))`` before).
 # ---------------------------------------------------------------------------
 
 
@@ -91,33 +102,39 @@ def test_gemstone_caverns_printed_attrs():
 
 
 def test_gemstone_caverns_mana_ability_shape():
-    """Gemstone Caverns has at least one ActivatedAbility carrying an
-    ``AddManaToPool(produces=(('any', 1),), spend_restriction=None)``
-    effect (the {T}: Add one mana of any color mana ability)."""
+    """Gemstone Caverns' single mana ability is the faithful
+    luck-counter-gated shape (2026-09-28, ``feature/cube-fixes-1``):
+    "{T}: Add {C}. If Gemstone Caverns has a luck counter on it, instead
+    add one mana of any color." ->
+    ``IfConditionElse(SourceHasCounter("luck"), AddManaToPool(any),
+    AddManaToPool(C))``; automatic payment mirrors it through
+    ``produces={C}`` + ``produces_with_counter=("luck", WUBRG)``, and the
+    opening-hand line is ``opening_hand_action``. (The pre-2026-09-28
+    ``AddManaToPool(produces=(("any", 1),))`` pinned here dropped the
+    "{C} without a luck counter" clause.)"""
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.conditions import SourceHasCounter
+    from mtg_bot.opening_hand import BeginGameOnBattlefield
+
     p = _PRINTINGS["Gemstone Caverns"]
-    add_mana_aas = [
-        aa for aa in p.activated_abilities
-        if isinstance(aa.effect, AddManaToPool)
-        and aa.effect.produces == (("any", 1),)
-    ]
-    assert len(add_mana_aas) >= 1, (
-        f"Gemstone Caverns must have at least one AddManaToPool any-1 "
-        f"AA; got {len(add_mana_aas)}"
-    )
-    aa = add_mana_aas[0]
-    assert aa.effect.spend_restriction is None, (
-        f"Gemstone Caverns AddManaToPool AA must NOT carry a spend_"
-        f"restriction (unrestricted any-color mana); got "
-        f"spend_restriction={aa.effect.spend_restriction!r}"
+    (aa,) = p.activated_abilities
+    assert aa.effect == IfConditionElse(
+        condition=SourceHasCounter("luck"),
+        then_effect=AddManaToPool(produces=(("any", 1),)),
+        else_effect=AddManaToPool(produces=(("C", 1),)),
     )
     assert aa.cost.tap_self is True
     # Distinct from Mana Confluence batch-4: NO pay_life cost atom.
-    assert aa.cost.pay_life == 0, (
-        f"Gemstone Caverns AA cost must NOT carry pay_life atom "
-        f"(distinct from Mana Confluence sibling); got "
-        f"pay_life={aa.cost.pay_life}"
-    )
+    assert aa.cost.pay_life == 0
     assert aa.is_mana_ability is True
+    assert p.produces == frozenset({"C"})
+    assert p.mana_only_from_produces is True
+    assert p.produces_with_counter == ("luck", frozenset("WUBRG"))
+    assert p.opening_hand_action == BeginGameOnBattlefield(
+        only_if_not_starting_player=True,
+        counters=(("luck", 1),),
+        exile_from_hand=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +147,21 @@ def test_gemstone_caverns_mana_ability_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_gemstone_caverns_bridge_arm_round_trip():
-    """The bridge arm ``add_mana_to_pool`` (cross_engine.py:7342)
-    round-trips ``{"kind": "add_mana_to_pool", "color": "any",
-    "amount": 1}`` to the matching Python
-    ``AddManaToPool(produces=(('any', 1),), spend_restriction=None)``
-    instance.  Bit-identical bridge round-trip to the Mana Confluence
-    sibling probe at the Effect level (the per-slug attribution
-    distinction is on the Legendary supertype, not the Effect)."""
+def test_gemstone_caverns_bridge_arm_round_trip_luck_counter_gate_divergence_pin():
+    """**Divergence pin (2026-09-28, ``feature/cube-fixes-1``).** The
+    frozen Rust bridge still emits Gemstone Caverns' mana ability as the
+    old ungated ``{"kind": "add_mana_to_pool", "color": "any"}`` ->
+    ``AddManaToPool(produces=(("any", 1),))``. That shape dropped the
+    printed clause "{T}: Add {C}. If Gemstone Caverns has a luck counter
+    on it, instead ..." -- without a luck counter the land makes {C}.
+
+    The Python parse (source of truth) is the gated
+    ``IfConditionElse(SourceHasCounter("luck"), Add{any}, Add{C})``: the
+    bridged Rust effect equals ONLY its luck-counter branch. Closure
+    path: a Rust counter-gated mana effect + bridge arm; when it lands,
+    ``parsed == bridged`` holds again and this pin must be inverted.
+    """
+    from mtg_bot.effects.combinators import IfConditionElse
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
     bridged = _ta_dict_to_python_effect(
@@ -147,20 +171,14 @@ def test_gemstone_caverns_bridge_arm_round_trip():
     assert bridged.produces == (("any", 1),)
     assert bridged.spend_restriction is None
 
-    # Effect-level byte-equality between the parsed real-EoE printing's
-    # AddManaToPool any-1 AA and the bridged Effect.
-    p = _PRINTINGS["Gemstone Caverns"]
-    aa = next(
-        aa for aa in p.activated_abilities
-        if isinstance(aa.effect, AddManaToPool)
-        and aa.effect.produces == (("any", 1),)
-    )
-    assert aa.effect == bridged, (
-        f"Gemstone Caverns AA Effect must be byte-equal to the bridged "
-        f"Effect (AddManaToPool(produces=(('any', 1),)) structural "
-        f"contract for the PROBED tier); got parsed={aa.effect!r}, "
-        f"bridged={bridged!r}"
-    )
+    (aa,) = _PRINTINGS["Gemstone Caverns"].activated_abilities
+    assert isinstance(aa.effect, IfConditionElse)
+    # The divergence: the parsed effect is not the bridged one ...
+    assert aa.effect != bridged
+    # ... the bridged shape is only the luck-counter branch; the
+    # dropped clause is the colorless else-branch.
+    assert aa.effect.then_effect == bridged
+    assert aa.effect.else_effect == AddManaToPool(produces=(("C", 1),))
 
 
 # ---------------------------------------------------------------------------
@@ -208,113 +226,63 @@ def test_rust_parser_accepts_gemstone_caverns_add_mana_to_pool_synthetic_dict():
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_gemstone_caverns_mana_ability_legendary_any_parity():
-    """**GENUINE real-EoE cross-engine probe — Gemstone Caverns mana
-    ability → AddManaToPool(produces=(('any', 1),)). PROBED-tier flip
-    (covered_by_construction → PROBED).**
+def test_cross_engine_real_eoe_gemstone_caverns_mana_ability_luck_counter_gate_divergence_pin():
+    """**Divergence pin (2026-09-28, ``feature/cube-fixes-1``) --
+    replaces the pre-2026-09-28 ``..._legendary_any_parity`` probe.**
 
-    Drives the **ACTUAL parsed Gemstone Caverns printing** on the
-    Python side through the AddManaToPool effect's resolve path.
-    Same EEEE-idiom + cost-substrate deferral as the immediately-
-    prior batch-4 sibling Mana Confluence probe; the distinguishing
-    dispatch here is the **Legendary** supertype on the printing.
+    The frozen Rust side mints ``any`` whenever Gemstone Caverns taps
+    (bridged ``AddManaToPool(produces=(("any", 1),))``). The printed
+    ability is "{T}: Add {C}. If Gemstone Caverns has a luck counter on
+    it, instead add one mana of any color." -- the old shape dropped the
+    "{C} without a luck counter" clause. The Python parse (source of
+    truth) resolves:
 
-    **NEW shape coverage:** the FIRST PROBE_MODULES-credited probe
-    binding the Gemstone Caverns slug to the AA + AddManaToPool(
-    produces=(('any', 1),)) Effect+bridge round-trip on a REAL parsed
-    EoE **Legendary** Land carrier.
+      * WITHOUT a luck counter -> one ``C`` coin (Rust: ``any``) --
+        the pinned divergence;
+      * WITH a luck counter -> one ``any`` coin, equal to the bridged
+        Rust emission.
 
-    **Bridge arm exercised:**
-      * ``add_mana_to_pool`` (round-27 bridge arm).
-
-    **Setup (Python-side):**
-      * p0 has Gemstone Caverns on the battlefield (the AA source).
-      * p0's mana pool starts empty.
-
-    **Observables asserted:**
-      * Bridge round-trip:
-        ``{"kind": "add_mana_to_pool", "color": "any", "amount": 1}``
-        translates to ``AddManaToPool(produces=(('any', 1),),
-        spend_restriction=None)``.
-      * The Land's mana ActivatedAbility emits the same Effect.
-      * Effect-level byte-equality between the parsed real-EoE
-        emission and the bridged Effect.
-      * Post-resolve: p0's mana pool gained exactly one ManaCoin with
-        color='any' and spend_restriction=None.
-      * Legendary supertype carrier — the per-slug attribution
-        distinction from Mana Confluence.
+    Closure path: a Rust counter-gated mana effect + bridge arm (and the
+    CR 103.6 opening-hand hook for the counter to exist at all).
     """
+    from mtg_bot.game import Zone, add_counters
     from mtg_bot.parity.cross_engine import (
         DeckSpec, build_python_state, _ta_dict_to_python_effect,
     )
-    from mtg_bot.game import Zone
 
-    # ------------------------------------------------------------------
-    # 1. Verify the genuine parsed Gemstone Caverns printing.
-    # ------------------------------------------------------------------
     real = _PRINTINGS.get("Gemstone Caverns")
     if real is None:
         pytest.skip("Gemstone Caverns absent from active CardSource")
     assert "Land" in real.card_types
-    assert real.is_legendary is True, (
-        "Gemstone Caverns must be a Legendary Land — the per-slug "
-        "attribution distinction from non-Legendary sibling Mana "
-        "Confluence"
-    )
-    aa = next(
-        aa for aa in real.activated_abilities
-        if isinstance(aa.effect, AddManaToPool)
-        and aa.effect.produces == (("any", 1),)
-    )
-    assert aa.effect.spend_restriction is None
+    assert real.is_legendary is True
+    (aa,) = real.activated_abilities
 
-    # ------------------------------------------------------------------
-    # 2. Bridge round-trip: Rust kind dict -> Python Effect.
-    # ------------------------------------------------------------------
     bridged = _ta_dict_to_python_effect(
         {"kind": "add_mana_to_pool", "color": "any", "amount": 1}
     )
-    assert isinstance(bridged, AddManaToPool)
-    assert aa.effect == bridged
 
-    # ------------------------------------------------------------------
-    # 3. Distinctness from sibling Effect shapes (regression guard).
-    # ------------------------------------------------------------------
-    # spend_restriction=None distinguishes from Power Depot /
-    # Steelswarm Operator / Eldrazi Temple AA[1] spend-restricted
-    # variants.  The 'any' wildcard distinguishes from 'C' colorless
-    # (Cascading Cataracts sibling probe has 'any', Eldrazi Temple
-    # AA[0] has 'C').
-    assert bridged.spend_restriction is None
-    assert bridged.produces[0][0] == "any"
+    def mint(with_luck, effect):
+        py_state = build_python_state(
+            DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        )
+        src = py_state.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+        py_state.battlefield.append(src)
+        if with_luck:
+            add_counters(py_state, src, "luck", 1)
+        py_state.resolving_source = src
+        effect.resolve(py_state, src.controller_id)
+        py_state.resolving_source = None
+        assert len(py_state.players[1].mana_pool) == 0
+        return [
+            (c.color, c.spend_restriction)
+            for c in py_state.players[0].mana_pool
+        ]
 
-    # ------------------------------------------------------------------
-    # 4. Python-side resolve smoke.
-    # ------------------------------------------------------------------
-    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
-    py_state = build_python_state(spec)
-
-    py_source = py_state.new_object(
-        real, owner_id=0, zone=Zone.BATTLEFIELD,
-    )
-    py_source.tapped = False
-    py_source.etb_timestamp = py_state.next_timestamp
-    py_state.next_timestamp += 1
-    py_state.battlefield.append(py_source)
-
-    assert len(py_state.players[0].mana_pool) == 0
-
-    aa.effect.resolve(py_state, py_source.controller_id)
-
-    p0_pool = py_state.players[0].mana_pool
-    assert len(p0_pool) == 1, (
-        f"Gemstone Caverns AA must mint exactly 1 coin; got pool "
-        f"size={len(p0_pool)}"
-    )
-    coin = p0_pool[0]
-    assert coin.color == "any"
-    assert coin.spend_restriction is None
-    assert len(py_state.players[1].mana_pool) == 0
+    # Without a luck counter: the pinned divergence (Python C, Rust any).
+    assert mint(False, aa.effect) == [("C", None)]
+    assert mint(False, bridged) == [("any", None)]
+    # With a luck counter: the two agree.
+    assert mint(True, aa.effect) == mint(True, bridged) == [("any", None)]
 
 
 # ---------------------------------------------------------------------------
@@ -400,12 +368,12 @@ def test_cross_engine_real_eoe_gemstone_caverns_mint_then_pay_colored_byte_equal
     real = get_active_source().get_printings().get("Gemstone Caverns")
     if real is None:
         pytest.skip("Gemstone Caverns absent from active CardSource")
-    aa = next(
-        aa for aa in real.activated_abilities
-        if isinstance(aa.effect, AddManaToPool)
-        and aa.effect.produces == (("any", 1),)
-    )
-    assert aa.effect.spend_restriction is None
+    # 2026-09-28: the mana ability is luck-counter gated (see the
+    # ``..._luck_counter_gate_divergence_pin`` above); this MINT + PAY
+    # probe drives the luck-counter branch, where Python and the frozen
+    # Rust ``any`` emission still agree byte-for-byte.
+    (aa,) = real.activated_abilities
+    assert aa.effect.then_effect == AddManaToPool(produces=(("any", 1),))
 
     # ------------------------------------------------------------------
     # 1. Empty-pool snapshot byte-equality (sanity / pre-mint).
@@ -435,7 +403,12 @@ def test_cross_engine_real_eoe_gemstone_caverns_mint_then_pay_colored_byte_equal
     # 2. Mint: resolve Gemstone Caverns's AA on Python; add_mana("any",1)
     #    on Rust. Snapshot equality after the mint.
     # ------------------------------------------------------------------
+    from mtg_bot.game import add_counters
+
+    add_counters(py_state, py_source, "luck", 1)
+    py_state.resolving_source = py_source
     aa.effect.resolve(py_state, py_source.controller_id)
+    py_state.resolving_source = None
     gs.add_mana(0, "any", 1)
 
     py_sig_post_mint = _python_mana_pool_signature(
