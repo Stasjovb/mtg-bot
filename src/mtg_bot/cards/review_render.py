@@ -1114,7 +1114,7 @@ def _tests_html(tests: list[tuple[str, int]]) -> str:
             f'<ul class="tests">{items(rest)}</ul></details>'
         )
     return (
-        f"<p>{len(tests)} files, {total} mentions.</p>"
+        f"<p>{_plural(len(tests), 'file')}, {_plural(total, 'mention')}.</p>"
         f'<ul class="tests">{items(tests[:_MAX_TEST_FILES_SHOWN])}</ul>{more}'
     )
 
@@ -1293,7 +1293,7 @@ def render_review_markdown(
         if len(r.tests) > _MD_TESTS_SHOWN:
             shown += f", and {len(r.tests) - _MD_TESTS_SHOWN} more"
         tail = f" - {shown}" if r.tests else ""
-        lines += [f"Tests: {len(r.tests)} files, {total} mentions{tail}", ""]
+        lines += [f"Tests: {_plural(len(r.tests), 'file')}, {_plural(total, 'mention')}{tail}", ""]
     return "\n".join(lines)
 
 

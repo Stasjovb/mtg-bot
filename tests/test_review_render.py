@@ -573,3 +573,10 @@ def test_script_end_to_end(script, tmp_path, capsys):
     out = capsys.readouterr().out
     assert f"cube: {n_cards} cards" in out
     assert "characteristics-only summaries:" in out
+
+
+def test_test_counts_pluralize():
+    assert "<p>1 file, 1 mention.</p>" in rr._tests_html([("tests/a.py", 1)])
+    assert "<p>2 files, 5 mentions.</p>" in rr._tests_html(
+        [("tests/a.py", 4), ("tests/b.py", 1)],
+    )
