@@ -228,3 +228,75 @@ def face_cast_actions(state: "GameState", player_id: int, actions: list, core) -
                 seen.add(key)
                 out.append(cast)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Sagas (CR 714)
+# ---------------------------------------------------------------------------
+
+_ROMAN = ("", "I", "II", "III", "IV", "V", "VI")
+
+
+def chapter_number(ability) -> int:
+    """The chapter number of a Saga chapter ability (``trigger ==
+    "chapter_<N>"``), else 0."""
+    trigger = getattr(ability, "trigger", "") or ""
+    if trigger.startswith("chapter_"):
+        return int(trigger[len("chapter_"):])
+    return 0
+
+
+def add_lore_counters(state: "GameState", obj: "GameObject", amount: int) -> int:
+    """Put ``amount`` lore counters on ``obj`` (CR 714.2b): each chapter
+    ability whose number the lore count newly reaches or passes
+    triggers (in chapter order). Returns the number added."""
+    from mtg_bot.actions import push_triggered_ability
+
+    if amount <= 0:
+        return 0
+    before = obj.lore_counters
+    obj.lore_counters = before + amount
+    state.log.append(
+        f"{obj.printing.name} gets {amount} lore counter(s) "
+        f"({obj.lore_counters})"
+    )
+    chapters = sorted(
+        (chapter_number(ab), idx, ab)
+        for idx, ab in enumerate(obj.printing.triggered_abilities)
+        if chapter_number(ab)
+    )
+    for n, idx, ab in chapters:
+        if before < n <= obj.lore_counters:
+            push_triggered_ability(
+                state, source=obj, ability=ab, ability_index=idx,
+                controller_id=obj.controller_id,
+                label=f"chapter {_ROMAN[n] if n < len(_ROMAN) else n}",
+            )
+    return amount
+
+
+def saga_enters(state: "GameState", obj: "GameObject") -> None:
+    """"As this Saga enters, add a lore counter" (CR 714.3a): the Saga
+    enters with one lore counter, triggering chapter I."""
+    obj.lore_counters = 0
+    add_lore_counters(state, obj, 1)
+
+
+def run_saga_lore_counters(state: "GameState") -> None:
+    """The turn-based action of CR 714.3b: the active player puts a lore
+    counter on each Saga they control (after the draw step -- see
+    ``turn.run_draw_step``)."""
+    ap = state.active_player()
+    for obj in list(state.battlefield):
+        if obj.controller_id == ap.id and obj.printing.is_saga:
+            add_lore_counters(state, obj, 1)
+
+
+def chapter_ability_on_stack(state: "GameState", obj: "GameObject") -> bool:
+    """True while a chapter ability of ``obj`` has triggered and not yet
+    left the stack (CR 714.4 holds off the final-chapter sacrifice)."""
+    return any(
+        item.source is obj and item.ability is not None
+        and chapter_number(item.ability)
+        for item in state.stack
+    )

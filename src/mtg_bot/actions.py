@@ -5889,4 +5889,9 @@ def _trigger_etb_abilities(state: GameState, creature: "GameObject") -> None:
     """
     from mtg_bot.effects.predicates import Event
 
+    if creature.printing.is_saga:
+        # CR 714.3a: a Saga enters with a lore counter (chapter I).
+        from mtg_bot.layouts import saga_enters
+
+        saga_enters(state, creature)
     dispatch_event(state, Event.ENTERS, label="enters", obj=creature)

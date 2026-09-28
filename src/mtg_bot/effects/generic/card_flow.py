@@ -75,6 +75,9 @@ class CardFilter:
     * ``color`` — the card must be this color ("a green creature card").
     * ``supertype`` — e.g. ``"Legendary"``.
     * ``subtype`` — e.g. ``"Equipment"`` ("an Equipment card").
+    * ``mana_costs`` — the card's printed mana cost is one of these
+      ("with mana cost {0} or {1}", CR 202.1; a card with no mana cost
+      has none, so it never matches). Empty = no restriction.
     """
 
     any_types: tuple[str, ...] = ()
@@ -83,6 +86,7 @@ class CardFilter:
     color: "str | None" = None
     supertype: "str | None" = None
     subtype: "str | None" = None
+    mana_costs: tuple[str, ...] = ()
 
     @property
     def has_quality(self) -> bool:
@@ -93,6 +97,7 @@ class CardFilter:
             self.any_types or self.excluded_types
             or self.max_mv is not None or self.color is not None
             or self.supertype is not None or self.subtype is not None
+            or bool(self.mana_costs)
         )
 
     def matches(self, printing: "CardPrinting") -> bool:
@@ -119,6 +124,8 @@ class CardFilter:
             return False
         if self.subtype is not None and self.subtype not in printing.subtypes:
             return False
+        if self.mana_costs and printing.mana_cost_str not in self.mana_costs:
+            return False
         return True
 
     def describe(self) -> str:
@@ -140,6 +147,8 @@ class CardFilter:
         text = " ".join(words)
         if self.max_mv is not None:
             text += f" with mana value {self.max_mv} or less"
+        if self.mana_costs:
+            text += f" with mana cost {' or '.join(self.mana_costs)}"
         return text
 
 

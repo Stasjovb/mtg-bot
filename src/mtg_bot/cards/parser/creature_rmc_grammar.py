@@ -439,7 +439,11 @@ _DISCARD_DRAW_TOKENS_PER_NONLAND = re.compile(
     r"nonland card discarded this way, (?P<tok>create .+)$"
 )
 _DISCARD_UP_TO_DRAW_THAT_MANY = re.compile(
-    rf"^discard up to (?P<n>{_N}) cards, then draw that many cards$"
+    rf"^(?:you may )?discard up to (?P<n>{_N}) cards"
+    # "You may discard up to two cards. If you do, draw that many cards."
+    # (Fable of the Mirror-Breaker's chapter II) -- the same choice: the
+    # count discarded may be zero.
+    r"(?:, then|\. If you do,) draw that many cards$"
 )
 _GET_EXPERIENCE = "you get an experience counter"
 _CREATE_FOR_EACH_EXPERIENCE = re.compile(

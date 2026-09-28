@@ -2185,8 +2185,32 @@ def effective_land_produces(
         if s in _BASIC_LAND_TYPE_TO_COLOR
     }
     if produced:
-        return frozenset(produced)
-    return land_obj.printing.produces
+        return frozenset(produced) | _granted_tap_mana(state, land_obj)
+    return land_obj.printing.produces | _granted_tap_mana(state, land_obj)
+
+
+def _granted_tap_mana(state: "GameState", obj: "GameObject") -> frozenset[str]:
+    """Mana a land taps for through a granted "{T}: Add {C}." ability
+    (Urza's Saga's chapter I; layer-6 ``grant_activated_ability``
+    entries whose ability is a bare ``{T}`` mana ability adding one
+    mana). Empty for every land without such a grant."""
+    colors: set[str] = set()
+    for ce in state.continuous_effects:
+        if (
+            ce.layer != 6 or ce.target_id != obj.id
+            or ce.kind != "grant_activated_ability" or not ce.params
+        ):
+            continue
+        ability = ce.params[0]
+        cost = ability.cost
+        produces = getattr(ability.effect, "produces", None)
+        if (
+            ability.is_mana_ability and cost.tap_self and cost.mana is None
+            and not cost.sacrifice_self and produces
+            and len(produces) == 1 and produces[0][1] == 1
+        ):
+            colors.add(produces[0][0])
+    return frozenset(colors)
 
 
 def effective_activated_abilities(
@@ -2589,6 +2613,11 @@ def add_counters(
         return add_plus_one_counters(state, obj, amount)
     if kind == "charge":
         return add_charge_counters(state, obj, amount)
+    if kind == "lore" and obj.printing.is_saga:
+        # Lore counters on a Saga trigger its chapters (CR 714.2b).
+        from mtg_bot.layouts import add_lore_counters
+
+        return add_lore_counters(state, obj, amount)
     attr = _DEDICATED_COUNTER_FIELDS.get(kind)
     if attr is not None:
         setattr(obj, attr, getattr(obj, attr) + amount)

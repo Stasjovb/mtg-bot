@@ -80,7 +80,9 @@ _SUPERTYPE_WORDS: dict[str, str] = {"legendary": "Legendary"}
 
 _DESCRIPTOR_RE = re.compile(
     r"^(?:a|an) (?:(?P<body>.+?) )?card"
-    r"(?: with mana value (?P<mv>\d+) or less)?$"
+    r"(?: with mana value (?P<mv>\d+) or less"
+    # "with mana cost {0} or {1}" (Urza's Saga): the printed mana cost.
+    r"| with mana cost (?P<costs>\{[^}]+\}(?: or \{[^}]+\})*))?$"
 )
 _PERMANENT_DESCRIPTOR_RE = re.compile(r"^(?:a|an) (?P<body>.+)$")
 _SUBTYPE_WORD_RE = re.compile(r"^[A-Z][a-z]+$")
@@ -148,6 +150,12 @@ def parse_card_descriptor(text: str) -> CardFilter | None:
             max_mv=int(m.group("mv")), color=f.color, supertype=f.supertype,
             subtype=f.subtype,
         )
+    if m.group("costs") is not None:
+        import dataclasses
+
+        f = dataclasses.replace(
+            f, mana_costs=tuple(m.group("costs").split(" or ")),
+        )
     return f
 
 
@@ -197,8 +205,9 @@ _REVEAL_HAND_YOU_CHOOSE_DISCARD_RE = re.compile(
     r"(?:\. (?P<rest>.+))?$"
 )
 _SEARCH_TO_ZONE_RE = re.compile(
-    r"^search your library for (?P<desc>.+? card(?: with mana value \d+ "
-    r"or less)?)(?P<reveal>, reveal (?:it|that card))?, "
+    r"^search your library for (?P<desc>.+? card(?: with mana (?:value "
+    r"\d+ or less|cost \{[^}]+\}(?: or \{[^}]+\})*))?)"
+    r"(?P<reveal>, reveal (?:it|that card))?, "
     r"put (?:that card|it) (?P<dest>into your hand|into your graveyard|"
     r"onto the battlefield)(?P<tapped> tapped)?, then shuffle$"
 )

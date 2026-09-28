@@ -129,3 +129,63 @@ class YourPermanentsBecomeCreaturesUEOT(Effect):
             f"all {self.card_type.lower()}s you control become "
             f"{self.power}/{self.toughness} creatures until end of turn"
         )
+
+
+@dataclass(frozen=True)
+class CreateTokenCopyOfTargetWithKeywordsSacAtEndStep(Effect):
+    """"Create a token that's a copy of <target>, except it has
+    <keywords>. Sacrifice it at the beginning of the next end step."
+    (Reflection of Kiki-Jiki).
+
+    The token copies the target's copiable values -- its current face's
+    printing (CR 707.2 / 707.8; a copy of a double-faced permanent has
+    only that face, so the token can't transform) -- with the Token
+    supertype and the ``keywords`` exception added. A delayed trigger
+    sacrifices it at the beginning of the next end step (whoever's turn).
+    ``targets`` carries the composed target filter (``TargetSpec``)."""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import dataclasses as _dc
+
+        from mtg_bot.effects.generic.delayed_actions import (
+            SacrificeSourceDelayed,
+            schedule_at_next_end_step,
+        )
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        if not targets:
+            return
+        _, tid = targets[0]
+        target = next((o for o in state.battlefield if o.id == tid), None)
+        if target is None:
+            return
+        base = target.printing
+        printing = _dc.replace(
+            base,
+            supertypes=base.supertypes + (
+                () if "Token" in base.supertypes else ("Token",)
+            ),
+            keywords=base.keywords | self.keywords,
+            transform_back_face=None,
+            mdfc_back_face=None,
+        )
+        before = {o.id for o in state.battlefield}
+        CreateToken(token_printing=printing).resolve(state, controller_id, ())
+        for obj in state.battlefield:
+            if obj.id not in before and obj.printing is printing:
+                schedule_at_next_end_step(
+                    state, controller_id, obj.id, SacrificeSourceDelayed(),
+                )
+
+    def describe(self) -> str:
+        kws = ", ".join(sorted(self.keywords))
+        return (
+            "create a token that's a copy of target creature, except it "
+            f"has {kws}; sacrifice it at the beginning of the next end step"
+        )

@@ -116,6 +116,7 @@ from mtg_bot.effects.object_predicates import (
     IsCreature,
     IsEnchantment,
     IsLand,
+    IsLegendary,
     IsNontoken,
     IsPlaneswalker,
     IsTapped,
@@ -149,6 +150,7 @@ _ADJECTIVES: dict[str, ObjectPredicate] = {
     "noncreature": ~IsCreature(),
     "nonartifact": ~IsArtifact(),
     "nontoken": IsNontoken(),
+    "nonlegendary": ~IsLegendary(),
 }
 
 # Trailing controller clauses.

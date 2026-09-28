@@ -314,6 +314,13 @@ def run_draw_step(state: GameState) -> None:
         state, Event.BEGINNING_OF_DRAW_STEP,
         label="beginning-of-draw-step", player=ap,
     )
+    # Saga lore counters (CR 714.3b: "as your precombat main phase
+    # begins"). Both turn loops share this draw-step hook, so the counter
+    # is added at the end of the draw step's turn-based actions -- see
+    # docs/SEARCH_LIMITATIONS.md (layouts bucket).
+    from mtg_bot.layouts import run_saga_lore_counters
+
+    run_saga_lore_counters(state)
 
 
 def note_cards_put_into_library(state: GameState, player_id: int | None = None) -> None:
@@ -1845,9 +1852,17 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # Saga age (CR 704.5r in audit numbering): if a saga has lore
     # counters greater than or equal to its final chapter number,
     # its controller sacrifices it (goes to owner's graveyard).
+    # CR 714.4: not while one of its chapter abilities has triggered and
+    # hasn't left the stack yet.
+    from mtg_bot.layouts import chapter_ability_on_stack
+
     sagas_to_bury: list = []
     for obj in state.battlefield:
-        if obj.printing.is_saga and obj.lore_counters >= obj.printing.chapter_count:
+        if (
+            obj.printing.is_saga
+            and obj.lore_counters >= obj.printing.chapter_count
+            and not chapter_ability_on_stack(state, obj)
+        ):
             sagas_to_bury.append(obj)
     for saga in sagas_to_bury:
         state.log.append(
