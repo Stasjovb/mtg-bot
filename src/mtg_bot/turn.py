@@ -47,6 +47,12 @@ def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
     ap.turns_started += 1
+    if state.day_night:
+        # CR 726.3a: day may become night (or night day) as the turn
+        # begins, transforming daybound / nightbound permanents.
+        from mtg_bot.layouts import run_day_night_check
+
+        run_day_night_check(state)
     # "… protection from everything until your next turn" (The One Ring)
     # ends as this player's turn begins.
     if ap.protected_from_everything:
@@ -1579,6 +1585,9 @@ def run_cleanup_step(state: GameState) -> None:
     state.creatures_died_this_turn = 0
     # Darkness-style combat-damage prevention expires at end of turn.
     state.prevent_combat_damage_this_turn = False
+    # Day / night (CR 726.3a) reads the ending turn's active player's
+    # spell count at the next untap step.
+    state.previous_turn_active_spells = ap.spells_cast_this_turn
     # Reset per-player spell counters for "your Nth spell" triggers.
     for p in state.players:
         p.spells_cast_this_turn = 0

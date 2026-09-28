@@ -67,7 +67,9 @@ def is_transformed(obj: "GameObject") -> bool:
     )
 
 
-def transform_permanent(state: "GameState", obj: "GameObject") -> bool:
+def transform_permanent(
+    state: "GameState", obj: "GameObject", *, by_day_night: bool = False,
+) -> bool:
     """Transform ``obj`` (CR 701.28a): turn it to its other face.
 
     The object keeps its counters, damage, tapped / attacking status and
@@ -76,6 +78,10 @@ def transform_permanent(state: "GameState", obj: "GameObject") -> bool:
     Dispatches ``Event.TRANSFORMS`` ("When this creature transforms into
     <face>") after the face change. Returns whether it transformed."""
     if obj not in state.battlefield:
+        return False
+    if (obj.printing.daybound or obj.printing.nightbound) and not by_day_night:
+        # CR 702.145b/d: it transforms only through day and night.
+        state.log.append(f"{obj.printing.name} can't transform (daybound)")
         return False
     front = obj.mdfc_front_printing
     if front is None:
@@ -368,3 +374,45 @@ def fire_combat_deals_damage(
     for source_id, amount in totals.items():
         source = next((o for o in state.battlefield if o.id == source_id), None)
         fire_deals_damage(state, source, amount)
+
+
+# ---------------------------------------------------------------------------
+# Day and night (CR 726, daybound / nightbound CR 702.145)
+# ---------------------------------------------------------------------------
+
+
+def set_day_night(state: "GameState", value: str) -> None:
+    """It becomes ``value`` ("day" / "night"). As it becomes night each
+    front-face-up daybound permanent transforms; as it becomes day each
+    nightbound permanent (back face up) transforms (CR 702.145b/d)."""
+    if state.day_night == value:
+        return
+    state.day_night = value
+    state.log.append(f"it becomes {value}")
+    for obj in list(state.battlefield):
+        if value == "night" and obj.printing.daybound:
+            transform_permanent(state, obj, by_day_night=True)
+        elif value == "day" and obj.printing.nightbound:
+            transform_permanent(state, obj, by_day_night=True)
+
+
+def run_day_night_check(state: "GameState") -> None:
+    """CR 726.3a, as the untap step begins: if it's day and the previous
+    turn's active player cast no spells during that turn, it becomes
+    night; if it's night and they cast two or more, it becomes day."""
+    n = state.previous_turn_active_spells
+    if n < 0:
+        return
+    if state.day_night == "day" and n == 0:
+        set_day_night(state, "night")
+    elif state.day_night == "night" and n >= 2:
+        set_day_night(state, "day")
+
+
+def day_night_enters(state: "GameState", obj: "GameObject") -> None:
+    """A daybound permanent entering while it's night enters transformed
+    (CR 702.145b) -- a replacement, not a transformation."""
+    if state.day_night == "night" and obj.printing.daybound:
+        back = transform_back_face(obj.printing)
+        if back is not None:
+            turn_to_back_face(obj, back)

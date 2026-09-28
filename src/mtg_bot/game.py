@@ -3306,6 +3306,12 @@ class GameState:
     # True when either flag is set, which is the Void trigger condition.
     permanent_left_battlefield_this_turn: bool = False
     spell_warped_this_turn: bool = False
+    # Day / night (CR 726): "" (neither), "day" or "night"; and how many
+    # spells the previous turn's active player cast during that turn
+    # (-1 before any turn ended), read by the untap-step day/night check
+    # (``layouts.run_day_night_check``).
+    day_night: str = ""
+    previous_turn_active_spells: int = -1
     # Tracks (source_id, ability_index) pairs for triggered abilities that
     # have already fired this turn under the ``once_per_turn`` restriction.
     # Reset by run_cleanup_step.
@@ -4072,6 +4078,8 @@ class GameState:
             self.permanent_left_battlefield_this_turn
         )
         new_state.spell_warped_this_turn = self.spell_warped_this_turn
+        new_state.day_night = self.day_night
+        new_state.previous_turn_active_spells = self.previous_turn_active_spells
         new_state.once_per_turn_fired = (
             set(self.once_per_turn_fired) if self.once_per_turn_fired else set()
         )

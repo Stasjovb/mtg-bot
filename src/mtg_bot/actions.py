@@ -5387,7 +5387,18 @@ def put_into_battlefield(
     # counters — see docstring on CardPrinting.devour_land_multiplier.
     if obj.printing.devour_land_multiplier > 0:
         _apply_devour(state, obj, controller_id)
+    if obj.printing.daybound or obj.printing.nightbound:
+        # Daybound (CR 702.145b): at night it enters transformed.
+        from mtg_bot.layouts import day_night_enters
+
+        day_night_enters(state, obj)
     state.battlefield.append(obj)
+    if (obj.printing.daybound or obj.printing.nightbound) and not state.day_night:
+        # CR 702.145c/f: controlling a daybound (nightbound) permanent
+        # while it's neither day nor night makes it day (night).
+        from mtg_bot.layouts import set_day_night
+
+        set_day_night(state, "day" if obj.printing.daybound else "night")
     # Track land ETBs for "lands entered under your control this turn"
     # (Bioengineered Future). Distinct from lands_played_this_turn — this
     # also covers basics fetched via Lander tokens or other search-and-

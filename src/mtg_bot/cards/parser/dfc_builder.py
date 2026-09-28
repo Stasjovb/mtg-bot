@@ -44,15 +44,34 @@ def face_record(face: dict) -> dict:
     return rec
 
 
+_DAY_NIGHT_LINES = {"Daybound": "daybound", "Nightbound": "nightbound"}
+
+
 def build_face(face: dict) -> CardPrinting | None:
-    """Build one face through the regular builder dispatch."""
+    """Build one face through the regular builder dispatch. The
+    Daybound / Nightbound keyword lines (CR 702.145) become the
+    printing's ``daybound`` / ``nightbound`` flags -- the day/night cycle
+    in ``mtg_bot.layouts`` implements them."""
     from mtg_bot.cards.parser.source import _build_printing, _split_hand_abilities
     from mtg_bot.cards.parser.source import _with_hand_abilities
+    from mtg_bot.cards.parser.text import _strip_reminder_text
 
-    body, hand_abilities = _split_hand_abilities(face_record(face))
+    rec = face_record(face)
+    flags: dict = {}
+    kept: list[str] = []
+    for raw in rec["oracle_text"].split("\n"):
+        flag = _DAY_NIGHT_LINES.get(_strip_reminder_text(raw))
+        if flag is not None:
+            flags[flag] = True
+        else:
+            kept.append(raw)
+    rec["oracle_text"] = "\n".join(kept)
+    body, hand_abilities = _split_hand_abilities(rec)
     built = _build_printing(body)
     if built is None:
         return None
+    if flags:
+        built = dataclasses.replace(built, **flags)
     return _with_hand_abilities(built, hand_abilities)
 
 
