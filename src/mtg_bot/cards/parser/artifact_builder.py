@@ -198,6 +198,7 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.cost_reduction import _parse_affinity_line
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_deck_construction_statement_line,
     _parse_crew_line,
     _parse_discard_land_to_enter_line,
     _parse_doesnt_untap_line,
@@ -368,6 +369,9 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
             continue
         if _parse_play_from_top_paying_life_line(line):
             play_from_top_paying_life = True
+            continue
+        if _parse_deck_construction_statement_line(line, card["name"]):
+            # "This card is banned." -- constrains deck building only.
             continue
         crew_n = _parse_crew_line(line)
         if crew_n is not None:

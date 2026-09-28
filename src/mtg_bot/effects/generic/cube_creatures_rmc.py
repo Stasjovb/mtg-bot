@@ -1596,19 +1596,28 @@ def fire_copy_triggers(state: "GameState", copy_obj: "GameObject", controller_id
 
 @dataclass(frozen=True)
 class SourceFightsTarget(Effect):
-    """"<This creature> fights [up to one ][other ]target creature."
-    (CR 701.12): each deals damage equal to its power to the other;
-    nothing happens if either creature has left the battlefield."""
+    """"<This creature> fights [up to one ][other ]target creature
+    [<qualifier>]." (CR 701.12): each deals damage equal to its power to
+    the other; nothing happens if either creature has left the
+    battlefield. ``np_filter`` replaces the bare ``IsCreature`` target
+    filter with a parsed noun phrase ("creature an opponent controls").
+    ``exile_if_dies_this_turn`` is Mawloc's rider ("If that creature
+    would die this turn, exile it instead."): the fought creature gets
+    the spells-A bucket's per-object ``exile_if_dies_this_turn`` flag
+    before it is dealt damage, so the replacement applies to the fight
+    damage itself."""
 
     optional: bool = False
     other: bool = True
     targets: tuple = ()
+    np_filter: object = None
+    exile_if_dies_this_turn: bool = False
 
     def __post_init__(self) -> None:
         from mtg_bot.effects.object_predicates import IsCreature, IsSource
         from mtg_bot.effects.targets import TargetSpec
 
-        pred = IsCreature()
+        pred = IsCreature() if self.np_filter is None else self.np_filter
         if self.other:
             pred = pred & ~IsSource()
         object.__setattr__(self, "targets", (TargetSpec(
@@ -1631,6 +1640,8 @@ class SourceFightsTarget(Effect):
             p_me = effective_power(state, me)
             p_them = effective_power(state, them)
             state.log.append(f"{me.printing.name} fights {them.printing.name}")
+            if self.exile_if_dies_this_turn:
+                them.exile_if_dies_this_turn = True
             if p_me > 0:
                 _apply_damage(state, ("creature", them.id), p_me)
             if p_them > 0:

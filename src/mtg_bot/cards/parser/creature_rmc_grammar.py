@@ -623,8 +623,19 @@ def _parse_counts_and_hand_effect(phrase: str) -> Effect | None:
         return rmc.RevealTopNOnePerCardTypeToHand(count=_n(m.group("n")))
     m = _SOURCE_FIGHTS.match(phrase)
     if m is not None:
+        np_filter = None
+        if m.group("np") != "creature":
+            from mtg_bot.cards.parser.target_phrases import (
+                parse_permanent_phrase,
+            )
+
+            np_filter = parse_permanent_phrase(m.group("np"))
+            if np_filter is None:
+                return None
         return rmc.SourceFightsTarget(
             optional=bool(m.group("upto")), other=bool(m.group("other")),
+            np_filter=np_filter,
+            exile_if_dies_this_turn=bool(m.group("exile")),
         )
     if phrase == _CHOOSE_PER_OPPONENT_DESTROY_RANDOM:
         return rmc.EachOpponentChoiceDestroyOneAtRandom()
@@ -714,8 +725,14 @@ _REVEAL_TOP_ONE_PER_TYPE = re.compile(
     r"into your hand\. Put the rest on the bottom of your library in a "
     r"random order$"
 )
+# "fights [up to one ][other ]target creature[ <qualifier>][. If that
+# creature would die this turn, exile it instead]" -- the qualifier
+# ("an opponent controls", "with power 3 or less", ...) goes through the
+# shared permanent-phrase grammar; the exile rider is Mawloc's.
 _SOURCE_FIGHTS = re.compile(
-    r"^fights (?P<upto>up to one )?(?P<other>other )?target creature$"
+    r"^fights (?P<upto>up to one )?(?P<other>other )?target "
+    r"(?P<np>creature(?: .+?)?)"
+    r"(?P<exile>\. If that creature would die this turn, exile it instead)?$"
 )
 _CHOOSE_PER_OPPONENT_DESTROY_RANDOM = (
     "for each opponent, choose a nonland permanent that player controls. "

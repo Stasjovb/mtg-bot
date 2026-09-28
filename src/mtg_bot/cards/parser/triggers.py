@@ -1685,9 +1685,10 @@ def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
 # all flow through the same path. The lookahead requires
 # ``When``/``Whenever`` after the dash so type-line strings (e.g.
 # ``Creature — Dragon``) and other em-dash uses don't accidentally
-# match.
+# match. Flavor words (CR 207.2d -- "Terror from the Deep —") share the
+# shape and are equally rules-free.
 _ABILITY_WORD_PREFIX = re.compile(
-    r"^[A-Z][A-Za-z']*(?: (?:[A-Z][A-Za-z']*|of|the|and))* — "
+    r"^[A-Z][A-Za-z']*(?: (?:[A-Z][A-Za-z']*|of|the|and|from))* — "
     r"(?=When |Whenever )"
 )
 

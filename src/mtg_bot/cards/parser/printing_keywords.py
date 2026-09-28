@@ -1313,3 +1313,31 @@ _PLAY_FROM_TOP_PAYING_LIFE_LINE = (
 
 def _parse_play_from_top_paying_life_line(line: str) -> bool:
     return line.strip() == _PLAY_FROM_TOP_PAYING_LIFE_LINE
+
+
+# ── Deck-construction statements (CR 100.2a / 100.4) ───────────────────────
+#
+# Rules text that only constrains how a DECK is built -- never anything a
+# game in progress can observe: "This card is banned." (Gleemox, whose
+# printed text makes it illegal in every sanctioned format) and the
+# "A deck can have any number of / up to N cards named <this card>." family
+# (the deck-size exceptions of CR 100.2a). The engine plays already-built
+# decks, so there is no in-game behavior to model: the recognizer is the
+# exact class of deckbuilding statements (see the "glue" section of
+# docs/SEARCH_LIMITATIONS.md), not a generic unrecognized-line escape. A
+# "cards named X" statement must name the card itself.
+_DECK_CONSTRUCTION_STATEMENT_LINE = re.compile(
+    r"^(?:This card is banned|A deck can have (?:any number of|up to "
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)) cards named "
+    r"(?P<name>.+))\.$"
+)
+
+
+def _parse_deck_construction_statement_line(line: str, name: str) -> bool:
+    """``True`` if ``line`` is a deck-construction statement about the
+    card ``name`` (see ``_DECK_CONSTRUCTION_STATEMENT_LINE``)."""
+    m = _DECK_CONSTRUCTION_STATEMENT_LINE.match(line.strip())
+    if m is None:
+        return False
+    named = m.group("name")
+    return named is None or named == name
