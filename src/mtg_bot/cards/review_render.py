@@ -650,6 +650,50 @@ def modeled_keywords(printing: CardPrinting) -> set[str]:
     return out
 
 
+# Acknowledged no-in-game-effect LINE CLASSES. Each entry is a printed
+# sentence shape whose only effect is outside a game this engine plays
+# (two players, decks given up front): deck-construction statements,
+# commander-format rules and draft-matters text. A line of one of these
+# shapes is not a dropped clause, so it produces no review hint (and its
+# numbers / keywords aren't demanded of the model). Keyed on the sentence
+# shape -- the card's own name is matched as "<name>" -- never on a card
+# name list. Add a shape here only when the line truly never matters
+# inside a game; anything with an in-game half (Companion's "put it into
+# your hand from outside the game", "Partner with <name>"'s ETB search)
+# stays out.
+NO_GAME_EFFECT_LINE_CLASSES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # "This card is banned." (Gleemox; CR 100.2a / 100.6 deck legality)
+    ("deck construction", re.compile(r"^This card is banned\.$")),
+    # "A deck can have any number of / up to seven cards named <name>."
+    ("deck construction", re.compile(
+        r"^A deck can have (?:any number of|up to \w+) cards named "
+        r"(?:<name>|this card)\.$"
+    )),
+    # "<name> can be your commander." (CR 903.3a)
+    ("commander format", re.compile(r"^(?:<name>|This card) can be your commander\.$")),
+    # "Choose a Background" / "Partner" / "Friends forever" (CR 702.124,
+    # 702.175): only which cards may be your commanders.
+    ("commander format", re.compile(r"^(?:Choose a Background|Partner|Friends forever)$")),
+    # Conspiracy draft-matters: "Draft <name> face up." / "As you draft a
+    # card, ..." (Cogwork Librarian; CR 905 draft actions).
+    ("draft", re.compile(r"^Draft (?:<name>|this card) face up\.$")),
+    ("draft", re.compile(r"^As you draft (?:a card|<name>|this card)\b.*\.$")),
+)
+
+
+def no_game_effect_line_class(line: str, card_name: str = "") -> str | None:
+    """The acknowledged no-in-game-effect class of an oracle ``line``
+    (reminder text already stripped), or ``None``. The card's own name
+    is normalized to ``<name>`` before matching."""
+    text = line.strip()
+    if card_name:
+        text = text.replace(card_name, "<name>")
+    for label, pattern in NO_GAME_EFFECT_LINE_CLASSES:
+        if pattern.match(text):
+            return label
+    return None
+
+
 @dataclass(frozen=True)
 class ReviewFlag:
     kind: str       # "line" | "number" | "keyword" | "unclaimed"
@@ -699,6 +743,11 @@ def review_flags(
       from the model text AND not explained (as above) by the reminder
       text of a line naming them. Ability / flavor words (printed as
       ``<word> —``) carry no rules meaning and are skipped.
+
+    Lines of an acknowledged no-in-game-effect class
+    (``NO_GAME_EFFECT_LINE_CLASSES``: deck-construction, commander-format
+    and draft-matters sentences) are skipped entirely -- no line hint,
+    and their numbers and keywords aren't demanded of the model.
     """
     flags: list[ReviewFlag] = []
     model_stems = content_stems(summary_text)
@@ -710,6 +759,10 @@ def review_flags(
         for raw in face["oracle_text"].splitlines():
             line = strip_reminder_text(raw)
             if not line:
+                continue
+            if no_game_effect_line_class(line, face["name"]) or (
+                no_game_effect_line_class(line, card.get("name", ""))
+            ):
                 continue
             raw_lines.append(raw)
             all_oracle.append(line)
@@ -731,7 +784,10 @@ def review_flags(
             continue  # ability word / flavor word
         norm = _normalize_keyword(kw)
         if norm not in _normalize_keyword(oracle_text):
-            continue  # Scryfall umbrella tag (e.g. "Typecycling"), never printed
+            # Scryfall umbrella tag (e.g. "Typecycling"), never printed --
+            # or the keyword of an acknowledged no-in-game-effect line
+            # ("Choose a Background"), which ``oracle_text`` leaves out.
+            continue
         if norm in kws or norm in model_lower:
             continue
         explained = any(

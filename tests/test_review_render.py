@@ -388,6 +388,48 @@ def test_flags_use_all_faces_and_ignore_name_words():
     assert [f.detail for f in flags] == ["Front Thing gets bigger."]
 
 
+@pytest.mark.parametrize("line, label", [
+    ("This card is banned.", "deck construction"),
+    ("A deck can have any number of cards named Test Card.", "deck construction"),
+    ("A deck can have up to seven cards named Test Card.", "deck construction"),
+    ("Test Card can be your commander.", "commander format"),
+    ("Choose a Background", "commander format"),
+    ("Partner", "commander format"),
+    ("Friends forever", "commander format"),
+    ("Draft Test Card face up.", "draft"),
+    ("As you draft a card, you may draft an additional card from that "
+     "booster pack. If you do, put this card into that booster pack.", "draft"),
+])
+def test_no_game_effect_line_classes(line, label):
+    assert rr.no_game_effect_line_class(line, "Test Card") == label
+
+
+@pytest.mark.parametrize("line", [
+    "Draw a card.",
+    "Other Card can be your commander.",  # another card's name
+    "A deck can have any number of cards named Other Card.",
+    "Partner with Other Card",  # has an in-game ETB half
+    "Companion — Each permanent card in your starting deck has mana value 2 or less.",
+])
+def test_lines_outside_the_classes_are_not_acknowledged(line):
+    assert rr.no_game_effect_line_class(line, "Test Card") is None
+
+
+def test_acknowledged_lines_produce_no_hints():
+    card = _card(
+        "Choose a Background (You can have a Background as a second commander.)\n"
+        "Test Card can be your commander.\n"
+        "Draft Test Card face up.\n"
+        "A deck can have up to seven cards named Test Card.\n"
+        "Flying",
+        keywords=["Choose a background", "Flying"],
+    )
+    assert rr.review_flags(card, _bird(), "keywords: flying") == []
+    # A real dropped line next to them is still flagged.
+    card = _card("This card is banned.\nWhenever you win, sacrifice everything.")
+    assert [f.kind for f in rr.review_flags(card, _bird(), "flying")] == ["line"]
+
+
 def test_modeled_keywords_walks_faces(printings):
     p = printings["Brazen Borrower // Petty Theft"]
     assert {"flash", "flying"} <= rr.modeled_keywords(p)
