@@ -558,6 +558,85 @@ def can_pay_cost(
         if _coin_satisfies_context(c, spell_kind)
     ]
     lands = _untapped_lands(state, player_id)
+    if _can_pay_from(state, cost, usable_pool, lands):
+        return True
+    # "Whenever you tap a <Forest> for mana, add an additional {G}"
+    # (Nissa, Who Shakes the World): tapping such lands first yields
+    # extra coins -- try pre-tapping 1..all of them.
+    extra = extra_mana_grants_for_tapped_lands(state, player_id)
+    if not extra:
+        return False
+    for n_tapped in range(1, len(_extra_mana_lands(state, lands, extra)) + 1):
+        pool2, lands2 = _virtual_pretap(state, usable_pool, lands, extra, n_tapped)
+        if _can_pay_from(state, cost, pool2, lands2):
+            return True
+    return False
+
+
+def extra_mana_grants_for_tapped_lands(
+    state: GameState, player_id: int,
+) -> list[tuple[str, str]]:
+    """``(land subtype, color)`` pairs from "Whenever you tap a
+    <Subtype> for mana, add an additional {<color>}" statics
+    (``CardPrinting.extra_mana_when_you_tap_land_subtype``) on
+    permanents ``player_id`` controls that still have their abilities."""
+    out: list[tuple[str, str]] = []
+    for o in state.battlefield:
+        grants = o.printing.extra_mana_when_you_tap_land_subtype
+        if not grants or o.controller_id != player_id:
+            continue
+        from mtg_bot.game import _source_layer6_wiped
+
+        if state.continuous_effects and _source_layer6_wiped(state, o):
+            continue
+        out.extend(grants)
+    return out
+
+
+def _extra_mana_lands(state, lands, extra) -> list:
+    """The untapped lands a tap-for-mana grant applies to, ordered so
+    lands with the fewest other colors are tapped first."""
+    from mtg_bot.game import effective_subtypes
+
+    subtypes = {s for s, _ in extra}
+    hits = [
+        l for l in lands
+        if subtypes & set(effective_subtypes(state, l))
+    ]
+    hits.sort(key=lambda l: len(effective_land_produces(state, l)))
+    return hits
+
+
+def _extra_coins_for_land(state, land, extra) -> list[str]:
+    """Colors of the coins tapping ``land`` yields under ``extra``: its
+    own mana (the grant's color when it can make it) plus one per
+    matching grant."""
+    from mtg_bot.game import effective_subtypes
+
+    subs = set(effective_subtypes(state, land))
+    produces = effective_land_produces(state, land)
+    bonus = [color for s, color in extra if s in subs]
+    own = bonus[0] if bonus and bonus[0] in produces else (
+        next(iter(sorted(produces)), "C")
+    )
+    return [own] + bonus
+
+
+def _virtual_pretap(state, usable_pool, lands, extra, n_tapped):
+    from mtg_bot.game import ManaCoin
+
+    chosen = _extra_mana_lands(state, lands, extra)[:n_tapped]
+    ids = {l.id for l in chosen}
+    pool = list(usable_pool)
+    for l in chosen:
+        pool.extend(ManaCoin(color=c) for c in _extra_coins_for_land(state, l, extra))
+    return pool, [l for l in lands if l.id not in ids]
+
+
+def _can_pay_from(
+    state: GameState, cost: ManaCost, usable_pool: list, lands: list,
+) -> bool:
+    """The pool-then-lands affordability core of ``can_pay_cost``."""
     used_coins: set[int] = set()
     used_lands: set[int] = set()
     # Pay colored requirements first — prefer pool coins, then lands.
@@ -1222,6 +1301,9 @@ def auto_tap_for_cost(
         cost = cost.with_colored(cost.phyrexian)
     track = color_sources is not None
     p = state.player_by_id(player_id)
+    extra = extra_mana_grants_for_tapped_lands(state, player_id)
+    if extra:
+        _pretap_lands_for_extra_mana(state, player_id, cost, spell_kind, extra)
     lands = _untapped_lands(state, player_id)
     used_coin_ids: list[int] = []  # indices into p.mana_pool
     used_lands: set[int] = set()
@@ -1301,6 +1383,38 @@ def auto_tap_for_cost(
 
 
 _WUBRG_SET: frozenset[str] = frozenset({"W", "U", "B", "R", "G"})
+
+
+def _pretap_lands_for_extra_mana(
+    state: GameState, player_id: int, cost: ManaCost, spell_kind, extra,
+) -> None:
+    """Nissa, Who Shakes the World's triggered mana ability during
+    automatic payment: while ``cost`` isn't payable from the pool plus
+    the untapped lands, tap a land a "whenever you tap a <Subtype> for
+    mana" grant applies to and float its mana plus the extra mana (CR
+    605.1b: a triggered mana ability resolves immediately). Extra mana
+    left over floats for the rest of the turn (the engine empties pools
+    at cleanup)."""
+    from mtg_bot.game import ManaCoin
+    from mtg_bot.turn import tap_permanent
+
+    p = state.player_by_id(player_id)
+    while True:
+        usable = [c for c in p.mana_pool if _coin_satisfies_context(c, spell_kind)]
+        lands = _untapped_lands(state, player_id)
+        if _can_pay_from(state, cost, usable, lands):
+            return
+        candidates = _extra_mana_lands(state, lands, extra)
+        if not candidates:
+            return
+        land = candidates[0]
+        coins = _extra_coins_for_land(state, land, extra)
+        tap_permanent(state, land)
+        p.mana_pool.extend(ManaCoin(color=c) for c in coins)
+        state.log.append(
+            f"P{player_id} taps {land.printing.name} for "
+            f"{''.join('{' + c + '}' for c in coins)} (extra mana)"
+        )
 
 
 def max_distinct_colors(color_sources: list) -> int:
@@ -5437,6 +5551,11 @@ def put_into_battlefield(
         obj.loyalty_counters = obj.printing.loyalty
     # "As long as ~ entered this turn" stamp (The Wandering Emperor).
     obj.entered_battlefield_turn = state.turn_number
+    if obj.printing.creature_during_your_turn:
+        # Kaito, Bane of Nightmares (cube glue bucket).
+        from mtg_bot.cube_glue_statics import on_enters_battlefield
+
+        on_enters_battlefield(state, obj)
     # Devour land N: as ``obj`` enters, agent may sacrifice any number
     # of lands; obj enters with N counters per land sacrificed.
     # Simplification: the random baseline doesn't ramp Famished's own

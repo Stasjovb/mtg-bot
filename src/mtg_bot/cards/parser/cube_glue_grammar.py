@@ -100,13 +100,65 @@ _OPPONENTS_CANT_MAKE_YOU_DISCARD_OR_SACRIFICE = (
 )
 
 
+# "Whenever you tap a <Subtype> for mana, add an additional {<C>}."
+# (Nissa, Who Shakes the World) -- a triggered mana ability folded into
+# automatic payment (``actions.extra_mana_grants_for_tapped_lands``).
+_EXTRA_MANA_ON_TAP_RE = re.compile(
+    r"^Whenever you tap an? (?P<sub>[A-Z][a-z]+) for mana, add an additional "
+    r"\{(?P<c>[WUBRGC])\}\.$"
+)
+# "During your turn, as long as <self> has one or more loyalty counters on
+# <pronoun>, <pronoun>'s a P/T <Subtypes> creature[ and has <keywords>]."
+# (Kaito, Bane of Nightmares).
+_CREATURE_DURING_YOUR_TURN_RE = re.compile(
+    r"^During your turn, as long as (?P<self>.+?) has one or more loyalty "
+    r"counters on (?:him|her|it|them), (?:he|she|it|they)(?:'s| are) an? "
+    r"(?P<p>\d+)/(?P<t>\d+) (?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature"
+    r"(?: and (?:has|have) (?P<kw>[a-z ,]+))?\.$"
+)
+
+
+def _is_self_reference(text: str, name: str) -> bool:
+    short = name.split(",", 1)[0]
+    return text in (name, short, "this planeswalker")
+
+
 def parse_glue_walker_line(line: str, name: str) -> dict | None:
-    """``CardPrinting`` field overrides for a planeswalker static line
-    the planeswalker builder declined, or ``None``."""
+    """``CardPrinting`` field overrides for a planeswalker line the
+    planeswalker builder declined, or ``None``: Tamiyo's protection,
+    Nissa's extra mana, Kaito's creature-during-your-turn static and
+    his Ninjutsu hand ability."""
     if _disabled():
         return None
     if line == _OPPONENTS_CANT_MAKE_YOU_DISCARD_OR_SACRIFICE:
         return {"opponents_cant_make_you_discard_or_sacrifice": True}
+    m = _EXTRA_MANA_ON_TAP_RE.match(line)
+    if m is not None:
+        return {
+            "extra_mana_when_you_tap_land_subtype": (
+                (m.group("sub"), m.group("c")),
+            ),
+        }
+    m = _CREATURE_DURING_YOUR_TURN_RE.match(line)
+    if m is not None and _is_self_reference(m.group("self"), name):
+        kws: frozenset = frozenset()
+        if m.group("kw"):
+            from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+            kws = frozenset(_parse_keyword_grant_body(m.group("kw")) or ())
+            if not kws:
+                return None
+        return {
+            "creature_during_your_turn": (
+                int(m.group("p")), int(m.group("t")),
+                tuple(m.group("subs").split(" ")), kws,
+            ),
+        }
+    from mtg_bot.cards.parser.cube_creatures_ub import _parse_ninjutsu_line
+
+    ninjutsu = _parse_ninjutsu_line(line)
+    if ninjutsu is not None:
+        return {"hand_activated_abilities": tuple(ninjutsu.hand_abilities)}
     return None
 
 
@@ -269,6 +321,52 @@ _SEARCH_ANY_NUMBER_EXILE_CAST_FREE_RE = re.compile(
 )
 
 
+# "put <N> <kind> counters on up to one target <np>. Untap it. It becomes
+# a P/T <Subtypes> creature[ with <keywords>] that's still a <type>"
+# (Nissa, Who Shakes the World's +1).
+_PUT_COUNTERS_UNTAP_BECOMES_RE = re.compile(
+    r"^put (?P<n>\w+) (?P<kind>\+1/\+1|[a-z]+) counters? on up to one target "
+    r"(?P<np>.+?)\. Untap it\. It becomes an? (?P<p>\d+)/(?P<t>\d+) "
+    r"(?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature(?: with "
+    r"(?P<kw>[a-z ,]+?))? that's still an? (?:land|artifact|enchantment)$"
+)
+# "search your library for any number of <desc> cards, put them onto the
+# battlefield[ tapped], then shuffle" (Nissa's -8).
+_SEARCH_ANY_NUMBER_ONTO_BATTLEFIELD_RE = re.compile(
+    r"^search your library for any number of (?P<desc>.+?) cards, put them "
+    r"onto the battlefield(?P<tapped> tapped)?, then shuffle$"
+)
+# "you get an emblem with "<body>" <Next sentence>" -- the emblem's closing
+# quote hides the sentence boundary from the generic splitter (Nissa's -8).
+_EMBLEM_THEN_SENTENCE_RE = re.compile(
+    r'^(?P<emblem>you get an emblem with "[^"]+") (?P<rest>[A-Z].+)$'
+)
+# "<effect>. Then draw a card for each opponent who lost life this turn"
+# (Kaito's 0).
+_THEN_DRAW_PER_OPPONENT_LOST_LIFE_RE = re.compile(
+    r"^(?P<first>.+?)\. Then draw a card for each opponent who lost life "
+    r"this turn$"
+)
+# "tap target <np>. Put <N> stun counters on it" (Kaito's -2).
+_TAP_THEN_STUN_RE = re.compile(
+    r"^tap target (?P<np>.+?)\. Put (?P<n>\w+) stun counters? on it$"
+)
+
+
+def _sequence(*effects):
+    from mtg_bot.effects.combinators import Sequence
+
+    if any(e is None for e in effects):
+        return None
+    if sum(1 for e in effects if e.requires_target()) > 1:
+        return None
+    return Sequence(effects=tuple(effects))
+
+
+def _lower_first(text: str) -> str:
+    return text[0].lower() + text[1:] if text else text
+
+
 def parse_glue_effect(phrase: str) -> Effect | None:
     """Last-resort effect recognizers for the glue bucket."""
     if _disabled():
@@ -291,6 +389,67 @@ def parse_glue_effect(phrase: str) -> Effect | None:
     m = _REMOVE_ALL_COUNTERS_ADD_MANA_RE.match(phrase)
     if m is not None and m.group("kind") == m.group("kind2"):
         return g.RemoveAllCountersAddManaPerCounter(kind=m.group("kind"))
+    m = _PUT_COUNTERS_UNTAP_BECOMES_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+        from mtg_bot.effects.targets import TargetSpec
+
+        n = _number(m.group("n"))
+        pred = parse_permanent_phrase(m.group("np"))
+        kws: frozenset = frozenset()
+        if m.group("kw"):
+            from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+            kws = frozenset(
+                _parse_keyword_grant_body(m.group("kw").replace(", and ", " and "))
+                or ()
+            )
+            if not kws:
+                return None
+        if n is None or pred is None:
+            return None
+        return g.PutCountersUntapItBecomesCreature(
+            targets=(TargetSpec(filter=pred, count_min=0, count_max=1),),
+            counter_kind=m.group("kind"), counter_count=n,
+            base_pt=(int(m.group("p")), int(m.group("t"))),
+            subtypes=tuple(m.group("subs").split(" ")), keywords=kws,
+        )
+    m = _SEARCH_ANY_NUMBER_ONTO_BATTLEFIELD_RE.match(phrase)
+    if m is not None:
+        desc = m.group("desc")
+        art = "an" if desc[0].lower() in "aeiou" else "a"
+        f = parse_card_descriptor(f"{art} {desc} card")
+        if f is None:
+            return None
+        return g.SearchAnyNumberOntoBattlefield(
+            card_filter=f, tapped=bool(m.group("tapped")),
+        )
+    m = _EMBLEM_THEN_SENTENCE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        rest = m.group("rest")
+        if rest.endswith("."):
+            rest = rest[:-1]
+        return _sequence(
+            _parse_effect(m.group("emblem")), _parse_effect(_lower_first(rest)),
+        )
+    m = _THEN_DRAW_PER_OPPONENT_LOST_LIFE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        return _sequence(
+            _parse_effect(m.group("first")), g.DrawPerOpponentWhoLostLifeThisTurn(),
+        )
+    m = _TAP_THEN_STUN_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects_ext import _target_spec
+
+        n = _number(m.group("n"))
+        spec = _target_spec(m.group("np"), up_to_one=False)
+        if n is None or spec is None:
+            return None
+        return g.TapTargetPutStunCounters(targets=(spec,), count=n)
     m = _TARGET_BECOMES_CREATURE_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects_ext import _target_spec

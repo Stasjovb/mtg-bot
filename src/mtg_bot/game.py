@@ -3092,6 +3092,13 @@ class Player:
     # Energy counters (CR 122.1, ``{E}``): gained by "you get {E}",
     # spent by "Pay {E}" costs.
     energy: int = 0
+    # "an opponent who lost life this turn" (Kaito, Bane of Nightmares):
+    # ``lost_life_this_turn`` is latched by ``turn.note_life_losses``
+    # (run at every state-based-action check and before a reader looks)
+    # whenever ``life`` dropped below ``life_checkpoint``; both reset as
+    # every turn begins (``run_untap_step``).
+    lost_life_this_turn: bool = False
+    life_checkpoint: int = 20
     is_monarch: bool = False
     has_initiative: bool = False
     dungeon_room: Optional[str] = None

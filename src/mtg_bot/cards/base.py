@@ -1417,6 +1417,16 @@ class CardPrinting:
     # discard cards or sacrifice permanents." (Tamiyo, Collector of
     # Tales) -- ``mtg_bot.player_protections``.
     opponents_cant_make_you_discard_or_sacrifice: bool = False
+    # "Whenever you tap a <Subtype> for mana, add an additional {C}."
+    # (Nissa, Who Shakes the World) -- ``(subtype, color)`` pairs read
+    # by automatic payment (``actions.extra_mana_grants_for_tapped_lands``).
+    extra_mana_when_you_tap_land_subtype: tuple = ()
+    # "During your turn, as long as <this> has one or more loyalty
+    # counters on <it>, <it>'s a P/T <Subtypes> creature [and has
+    # <keywords>]." (Kaito, Bane of Nightmares) -- ``(power, toughness,
+    # subtypes, keywords)``, applied at each of the controller's turns
+    # (``mtg_bot.cube_glue_statics``).
+    creature_during_your_turn: tuple = ()
     # Anointed Peacekeeper: "As this creature enters, look at an
     # opponent's hand, then choose any card name." plus the named-card
     # taxes -- opponents' spells with the chosen name cost {N} more;

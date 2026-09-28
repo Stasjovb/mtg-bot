@@ -833,3 +833,214 @@ class SearchAnyNumberExileCastFreeThisTurn(Effect):
             "shuffle; until end of turn you may cast them without paying "
             "their mana costs"
         )
+
+
+# ---------------------------------------------------------------------------
+# Nissa, Who Shakes the World
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PutCountersUntapItBecomesCreature(Effect):
+    """"Put <N> <kind> counters on up to one target <np>. Untap it. It
+    becomes a P/T <Subtypes> creature with <keywords> that's still a
+    <type>." (Nissa, Who Shakes the World's +1.) The animation has no
+    duration: self-sourced registry entries (layer 4 ``add_type`` /
+    ``add_subtype``, layer 6 ``grant_keyword``, layer 7b ``set_base_pt``)
+    last until the permanent leaves the battlefield -- the permanent
+    counterpart of the base's UEOT ``BecomeLandCreatureUEOT``. A land
+    that entered this turn becomes a summoning-sick creature (haste
+    usually makes that moot)."""
+
+    targets: tuple = ()
+    counter_kind: str = "+1/+1"
+    counter_count: int = 0
+    base_pt: tuple = (0, 0)
+    subtypes: tuple = ()
+    keywords: frozenset = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.game import add_counters
+
+        if not targets:
+            return
+        chosen = targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], chosen)
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            return
+        obj = next(o for o in state.battlefield if o.id == chosen[1])
+        name = obj.printing.name
+        if self.counter_count:
+            add_counters(state, obj, self.counter_kind, self.counter_count)
+        obj.tapped = False
+        if not obj.printing.is_creature and (
+            obj.entered_battlefield_turn == state.turn_number
+        ):
+            obj.summoning_sick = True
+        state.add_continuous_effect(
+            source_id=obj.id, layer=4, kind="add_type", target_id=obj.id,
+            params=("creature",), description=f"{name} becomes a creature",
+        )
+        obj.permanent_is_creature = True
+        for sub in self.subtypes:
+            state.add_continuous_effect(
+                source_id=obj.id, layer=4, kind="add_subtype",
+                target_id=obj.id, params=(sub,),
+                description=f"{name} becomes a {sub}",
+            )
+        for kw in sorted(self.keywords):
+            state.add_continuous_effect(
+                source_id=obj.id, layer=6, kind="grant_keyword",
+                target_id=obj.id, params=(kw,), description=f"{name} has {kw}",
+            )
+        p, t = self.base_pt
+        state.add_continuous_effect(
+            source_id=obj.id, layer=7, sublayer=1, kind="set_base_pt",
+            target_id=obj.id, params=(p, t), description=f"{name} base {p}/{t}",
+        )
+        state.log.append(
+            f"{name} gets {self.counter_count} {self.counter_kind} counter(s), "
+            f"untaps and becomes a {p}/{t} {' '.join(self.subtypes)} creature"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put {self.counter_count} {self.counter_kind} counters on up to "
+            f"one target; untap it; it becomes a {self.base_pt[0]}/"
+            f"{self.base_pt[1]} {' '.join(self.subtypes)} creature"
+        )
+
+
+@dataclass(frozen=True)
+class SearchAnyNumberOntoBattlefield(Effect):
+    """"Search your library for any number of <desc> cards, put them
+    onto the battlefield[ tapped], then shuffle." Picks go through
+    ``choose_card_from_library`` until ``None`` or no match is left."""
+
+    card_filter: object = None
+    tapped: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+        found = []
+        while True:
+            options = [
+                c for c in p.library
+                if self.card_filter is None or self.card_filter.matches(c.printing)
+            ]
+            if not options:
+                break
+            pick = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in options],
+                )
+            card = next((c for c in options if c.id == pick), None)
+            if card is None:
+                break
+            p.library.remove(card)
+            found.append(card)
+        for card in found:
+            put_into_battlefield(state, card, controller_id)
+            if self.tapped and card in state.battlefield:
+                card.tapped = True
+        shuffle_library(state, controller_id)
+        state.log.append(
+            f"P{controller_id} puts {len(found)} card(s) onto the battlefield"
+            + (" tapped" if self.tapped else "")
+        )
+
+    def describe(self) -> str:
+        tapped = " tapped" if self.tapped else ""
+        return (
+            f"search your library for any number of cards, put them onto the "
+            f"battlefield{tapped}, then shuffle"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Kaito, Bane of Nightmares
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DrawPerOpponentWhoLostLifeThisTurn(Effect):
+    """"Draw a card for each opponent who lost life this turn." --
+    ``Player.lost_life_this_turn`` (latched by ``turn.note_life_losses``,
+    refreshed here first)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_n_cards, note_life_losses
+
+        note_life_losses(state)
+        n = sum(
+            1 for p in state.players
+            if p.id != controller_id and p.lost_life_this_turn
+        )
+        if n:
+            draw_n_cards(state, controller_id, n)
+        state.log.append(
+            f"P{controller_id} draws {n} (opponents who lost life this turn)"
+        )
+
+    def describe(self) -> str:
+        return "draw a card for each opponent who lost life this turn"
+
+
+@dataclass(frozen=True)
+class TapTargetPutStunCounters(Effect):
+    """"Tap target <np>. Put <N> stun counters on it." (Kaito's -2.)"""
+
+    targets: tuple = ()
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.game import add_stun_counters
+        from mtg_bot.turn import tap_permanent
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        if not obj.tapped:
+            tap_permanent(state, obj)
+        added = add_stun_counters(state, obj, self.count)
+        state.log.append(
+            f"{obj.printing.name} is tapped and gets {added} stun counter(s)"
+        )
+
+    def describe(self) -> str:
+        return f"tap target creature; put {self.count} stun counters on it"

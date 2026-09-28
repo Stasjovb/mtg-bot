@@ -43,6 +43,17 @@ COMBAT_STEPS: frozenset[Step] = frozenset({
 STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, Step.CLEANUP})
 
 
+def note_life_losses(state: GameState) -> None:
+    """Latch ``Player.lost_life_this_turn`` for every player whose life
+    total dropped since the last check (damage, life loss and paid life
+    all lower it). A loss fully regained between two checks inside one
+    resolution is missed."""
+    for p in state.players:
+        if p.life < p.life_checkpoint:
+            p.lost_life_this_turn = True
+        p.life_checkpoint = p.life
+
+
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
@@ -53,6 +64,14 @@ def run_untap_step(state: GameState) -> None:
         from mtg_bot.layouts import run_day_night_check
 
         run_day_night_check(state)
+    # A new turn: "lost life this turn" starts over for every player.
+    for _p in state.players:
+        _p.lost_life_this_turn = False
+        _p.life_checkpoint = _p.life
+    # "During your turn, <this> is a P/T creature" (Kaito).
+    from mtg_bot.cube_glue_statics import apply_creature_during_your_turn
+
+    apply_creature_during_your_turn(state)
     # "… protection from everything until your next turn" (The One Ring)
     # ends as this player's turn begins.
     if ap.protected_from_everything:
@@ -1708,6 +1727,7 @@ def state_based_actions(state: GameState) -> bool:
     cap converts a runaway into an early bailout instead of a hang.
     """
     any_changed = False
+    note_life_losses(state)
     for _ in range(_SBA_MAX_PASSES):
         if not _state_based_actions_pass(state):
             break

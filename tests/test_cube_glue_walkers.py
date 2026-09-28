@@ -628,3 +628,208 @@ def test_ugin_minus_eleven_may_stop_early():
     SearchAnyNumberExileCastFreeThisTurn(colorless=True).resolve(s, 0)
     assert s.players[0].exile == []
     assert "any number" in SearchAnyNumberExileCastFreeThisTurn().describe()
+
+
+# ---------------------------------------------------------------------------
+# Nissa, Who Shakes the World
+# ---------------------------------------------------------------------------
+
+_NISSA = "Nissa, Who Shakes the World"
+
+
+def test_nissa_extra_mana_from_forests_in_automatic_payment():
+    from mtg_bot.actions import auto_tap_for_cost, can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+
+    s = arena()
+    forests = [put(s, BASIC_LANDS["Forest"], 0) for _ in range(2)]
+    cost = parse_mana_cost("{3}{G}")
+    assert not can_pay_cost(s, 0, cost)
+    put_walker(s, _NISSA, 0)
+    assert can_pay_cost(s, 0, cost)
+    assert not can_pay_cost(s, 0, parse_mana_cost("{4}{G}"))
+    auto_tap_for_cost(s, 0, cost)
+    assert all(f.tapped for f in forests)
+    assert s.players[0].mana_pool == []
+
+
+def test_nissa_extra_mana_mixes_with_other_lands_and_floats_leftovers():
+    from mtg_bot.actions import auto_tap_for_cost, can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+
+    s = arena()
+    put_walker(s, _NISSA, 0)
+    forest = put(s, BASIC_LANDS["Forest"], 0)
+    island = put(s, BASIC_LANDS["Island"], 0)
+    cost = parse_mana_cost("{1}{U}")
+    assert can_pay_cost(s, 0, cost)
+    auto_tap_for_cost(s, 0, cost)
+    # The Island pays {U}; the Forest isn't needed for {1}... unless it is.
+    assert island.tapped
+    cost2 = parse_mana_cost("{2}{U}")
+    s2 = arena()
+    put_walker(s2, _NISSA, 0)
+    f2 = put(s2, BASIC_LANDS["Forest"], 0)
+    i2 = put(s2, BASIC_LANDS["Island"], 0)
+    assert can_pay_cost(s2, 0, cost2)
+    auto_tap_for_cost(s2, 0, cost2)
+    assert f2.tapped and i2.tapped
+    assert forest is not None
+
+
+def test_opponents_nissa_gives_you_nothing():
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+
+    s = arena()
+    put_walker(s, _NISSA, 1)
+    put(s, BASIC_LANDS["Forest"], 0)
+    assert not can_pay_cost(s, 0, parse_mana_cost("{1}{G}"))
+
+
+def test_nissa_plus_one_animates_a_land_permanently():
+    from mtg_bot.game import is_creature_now
+    from mtg_bot.turn import run_cleanup_step, sacrifice
+
+    s = arena()
+    nissa = put_walker(s, _NISSA, 0)
+    land = put(s, BASIC_LANDS["Forest"], 0, tapped=True)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 0)
+    eff = nissa.printing.activated_abilities[
+        next(i for i, a in enumerate(nissa.printing.activated_abilities)
+             if a.cost.loyalty == -1)
+    ].effect
+    legal = eff.legal_targets(s, 0)
+    assert ("permanent", land.id) in legal
+    assert all(t[1] != bear.id for t in legal)
+    agent(s, 0).targets = [("permanent", land.id)]
+    activate_loyalty(s, 0, nissa, +1)
+    assert not land.tapped and is_creature_now(land)
+    assert effective_power(s, land) == 3
+    assert {"vigilance", "haste"} <= set(effective_keywords(s, land))
+    assert land.printing.is_land
+    sacrifice(s, nissa)
+    run_cleanup_step(s)
+    assert is_creature_now(land) and effective_power(s, land) == 3
+
+
+def test_nissa_minus_eight_emblem_and_forest_search():
+    from tests._cube_glue_helpers import to_library
+
+    s = arena()
+    nissa = put_walker(s, _NISSA, 0)
+    nissa.loyalty_counters = 8
+    forests = [to_library(s, BASIC_LANDS["Forest"], 0) for _ in range(3)]
+    island = to_library(s, BASIC_LANDS["Island"], 0)
+    activate_loyalty(s, 0, nissa, -8)
+    assert len(s.emblems) == 1
+    assert all(f in s.battlefield and f.tapped for f in forests)
+    assert island in s.players[0].library
+    destroy(s, forests[0])
+    assert forests[0] in s.battlefield  # emblem: lands are indestructible
+
+
+# ---------------------------------------------------------------------------
+# Kaito, Bane of Nightmares
+# ---------------------------------------------------------------------------
+
+_KAITO = "Kaito, Bane of Nightmares"
+
+
+def test_kaito_is_a_hexproof_ninja_creature_only_during_your_turn():
+    from mtg_bot.game import effective_subtypes, effective_toughness, is_creature_now
+    from mtg_bot.turn import run_cleanup_step, run_untap_step
+
+    s = arena(active=1)
+    kaito = put_walker(s, _KAITO, 0)
+    assert not is_creature_now(kaito)
+    s.active_player_idx = 0
+    run_untap_step(s)
+    assert is_creature_now(kaito)
+    assert (effective_power(s, kaito), effective_toughness(s, kaito)) == (3, 4)
+    assert "Ninja" in effective_subtypes(s, kaito)
+    assert "hexproof" in effective_keywords(s, kaito)
+    run_cleanup_step(s)
+    assert not is_creature_now(kaito)
+
+
+def test_kaito_entering_on_your_turn_is_a_summoning_sick_creature():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.game import Zone, is_creature_now
+
+    s = arena(active=0)
+    kaito = s.new_object(printing(_KAITO), 0, Zone.HAND)
+    put_into_battlefield(s, kaito, controller_id=0)
+    assert kaito.loyalty_counters == 4
+    assert is_creature_now(kaito) and kaito.summoning_sick
+    s2 = arena(active=1)
+    k2 = s2.new_object(printing(_KAITO), 0, Zone.HAND)
+    put_into_battlefield(s2, k2, controller_id=0)
+    assert not is_creature_now(k2)
+
+
+def test_kaito_ninjutsu_puts_him_in_attacking():
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        PutSourceOntoBattlefieldTappedAndAttacking,
+    )
+    from mtg_bot.game import is_creature_now
+
+    s = arena(active=0)
+    (ninjutsu,) = printing(_KAITO).hand_activated_abilities
+    assert ninjutsu.cost.return_unblocked_attacker
+    assert isinstance(ninjutsu.effect, PutSourceOntoBattlefieldTappedAndAttacking)
+    kaito = to_hand(s, printing(_KAITO), 0)
+    s.resolving_source = kaito
+    ninjutsu.effect.resolve(s, 0)
+    s.resolving_source = None
+    assert kaito.attacking and kaito.tapped and is_creature_now(kaito)
+
+
+def test_kaito_damage_as_a_creature_also_removes_loyalty():
+    from mtg_bot.effects.base import _apply_damage
+    from mtg_bot.turn import run_untap_step
+
+    s = arena(active=0)
+    kaito = put_walker(s, _KAITO, 0)
+    run_untap_step(s)
+    _apply_damage(s, ("creature", kaito.id), 2)
+    assert kaito.damage == 2 and kaito.loyalty_counters == 2
+
+
+def test_kaito_emblem_pumps_kaito_himself_on_your_turn():
+    from mtg_bot.turn import run_untap_step
+
+    s = arena(active=0)
+    kaito = put_walker(s, _KAITO, 0)
+    run_untap_step(s)
+    activate_loyalty(s, 0, kaito, +1)
+    assert effective_power(s, kaito) == 4
+
+
+def test_kaito_zero_surveils_then_draws_per_opponent_who_lost_life():
+    from mtg_bot.turn import run_untap_step
+
+    from tests._cube_glue_helpers import to_library
+
+    s = arena(active=0)
+    kaito = put_walker(s, _KAITO, 0)
+    for _ in range(5):
+        to_library(s, _BOLT, 0)
+    run_untap_step(s)
+    agent(s, 0).yes = False  # keep surveilled cards on top
+    activate_loyalty(s, 0, kaito, 0)
+    assert len(s.players[0].hand) == 0  # nobody lost life yet
+    s.loyalty_activated_this_turn.clear()
+    s.players[1].life -= 3
+    activate_loyalty(s, 0, kaito, 0)
+    assert len(s.players[0].hand) == 1
+    assert s.players[1].lost_life_this_turn
+
+
+def test_kaito_minus_two_taps_and_stuns():
+    s = arena(active=0)
+    kaito = put_walker(s, _KAITO, 0)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 1)
+    agent(s, 0).targets = [("creature", bear.id)]
+    activate_loyalty(s, 0, kaito, -2)
+    assert bear.tapped and bear.stun_counters == 2

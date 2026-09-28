@@ -665,6 +665,10 @@ def _resolve_damage_step(
                         healed_this_step.add(obj.id)
                     obj.damage += amount
                     obj.damaged_this_turn = True
+                    if obj.printing.is_planeswalker:
+                        # CR 120.3c: a planeswalker creature also loses
+                        # loyalty (Kaito, Bane of Nightmares).
+                        obj.loyalty_counters -= amount
                 sources_hit_creature.append((source_id, target_id, amount))
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True

@@ -319,6 +319,10 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
                 heal_before_damage(obj)
             obj.damage += amount
             obj.damaged_this_turn = True
+            if obj.printing.is_planeswalker:
+                # CR 120.3c + 120.3e: a planeswalker creature (Kaito
+                # during your turn) both loses loyalty and is marked.
+                obj.loyalty_counters -= amount
             state.log.append(f"{obj.printing.name} takes {amount} damage")
             # Lazy-imported to avoid an effects <-> combat import cycle.
             from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
