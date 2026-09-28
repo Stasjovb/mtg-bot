@@ -199,6 +199,48 @@ def parse_glue_emblem(body: str):
     return None
 
 
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "fifteen": 15,
+    "twenty": 20, "thirty": 30,
+}
+
+
+def _number(token: str) -> int | None:
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.get(token)
+
+
+# "you may play the exiled card without paying its mana cost if a library
+# has <N> or fewer cards in it" (Shelldock Isle; the Hideaway payoff).
+_PLAY_EXILED_FREE_IF_LIBRARY_RE = re.compile(
+    r"^you may play the exiled card without paying its mana cost if a "
+    r"library has (?P<n>\w+) or fewer cards in it$"
+)
+
+# "Hideaway N" (CR 702.75a; reminder text already stripped).
+_HIDEAWAY_RE = re.compile(r"^Hideaway (?P<n>\d+)$")
+
+
+def parse_glue_keyword_trigger(line: str):
+    """The triggered ability a keyword line stands for (``Hideaway N`` ->
+    its enters trigger), or ``None``."""
+    if _disabled():
+        return None
+    m = _HIDEAWAY_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.cube_glue import HideawayLookExileOneFaceDown
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    return TriggeredAbility(
+        event=Event.ENTERS, predicate=IsSelf(),
+        effect=HideawayLookExileOneFaceDown(n=int(m.group("n"))),
+    )
+
+
 def parse_glue_effect(phrase: str) -> Effect | None:
     """Last-resort effect recognizers for the glue bucket."""
     if _disabled():
@@ -221,6 +263,12 @@ def parse_glue_effect(phrase: str) -> Effect | None:
     m = _REMOVE_ALL_COUNTERS_ADD_MANA_RE.match(phrase)
     if m is not None and m.group("kind") == m.group("kind2"):
         return g.RemoveAllCountersAddManaPerCounter(kind=m.group("kind"))
+    m = _PLAY_EXILED_FREE_IF_LIBRARY_RE.match(phrase)
+    if m is not None:
+        n = _number(m.group("n"))
+        if n is None:
+            return None
+        return g.PlayExiledCardFreeIfAnyLibraryAtMost(library_at_most=n)
     m = _CHOOSE_NAME_REVEAL_TOP_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import _amount

@@ -105,3 +105,115 @@ def test_plain_fight_still_parses_without_rider():
     assert parse_rmc_effect(
         "this creature fights target creature with frobnitz"
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Shelldock Isle: Hideaway 4 + conditional free play
+# ---------------------------------------------------------------------------
+
+
+def _shelldock_setup(library_extra=0, top=None):
+    from mtg_bot.actions import PlayLand, apply_action, resolve_top_of_stack
+    from mtg_bot.cards import BASIC_LANDS
+
+    from tests._cube_glue_helpers import agent, to_hand, to_library
+
+    s = arena()
+    top = top or [BASIC_LANDS["Island"]] * 4
+    first = [to_library(s, pr, 0) for pr in top]
+    for _ in range(library_extra):
+        to_library(s, BASIC_LANDS["Island"], 0)
+    isle = to_hand(s, printing("Shelldock Isle"), 0)
+    agent(s, 0).library_pick = first[1].id
+    apply_action(s, 0, PlayLand(isle.id))
+    resolve_top_of_stack(s)
+    return s, isle, first
+
+
+def test_hideaway_exiles_one_face_down_and_bottoms_the_rest():
+    s, isle, first = _shelldock_setup(library_extra=2)
+    hidden = first[1]
+    assert hidden in s.players[0].exile
+    assert hidden.imprinted_on == (isle.id, isle.etb_timestamp)
+    assert hidden.publicly_known_to == frozenset({0}) or (
+        1 not in hidden.publicly_known_to
+    )
+    lib = s.players[0].library
+    assert len(lib) == 5
+    assert set(c.id for c in lib[-3:]) == {first[0].id, first[2].id, first[3].id}
+    assert isle.tapped  # "This land enters tapped."
+
+
+def _activate_isle(s, isle):
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
+    from mtg_bot.game import ManaCoin
+
+    isle.tapped = False
+    s.players[0].mana_pool.append(ManaCoin(color="U"))
+    idx = next(
+        i for i, a in enumerate(isle.printing.activated_abilities)
+        if not a.is_mana_ability
+    )
+    _activate_ability(s, 0, isle.id, idx)
+    resolve_top_of_stack(s)
+
+
+def test_shelldock_does_nothing_while_every_library_is_big():
+    from mtg_bot.cards.base import make_sorcery
+    from mtg_bot.effects.generic import DrawCards
+
+    from tests._cube_glue_helpers import to_library
+
+    spell = make_sorcery("Ancestral", "{U}", DrawCards(amount=1))
+    s, isle, first = _shelldock_setup(
+        library_extra=0, top=[spell, spell, spell, spell],
+    )
+    for _ in range(25):
+        to_library(s, spell, 0)
+        to_library(s, spell, 1)
+    _activate_isle(s, isle)
+    assert first[1] in s.players[0].exile
+    assert s.stack == []
+
+
+def test_shelldock_casts_the_hidden_spell_free_with_a_small_library():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards.base import make_sorcery
+    from mtg_bot.effects.generic import DrawCards
+
+    spell = make_sorcery("Ancestral", "{5}{U}", DrawCards(amount=1))
+    s, isle, first = _shelldock_setup(top=[spell, spell, spell, spell])
+    _activate_isle(s, isle)
+    assert s.stack and s.stack[-1].source is first[1]
+    resolve_top_of_stack(s)
+    assert first[1] in s.players[0].graveyard
+
+
+def test_shelldock_plays_a_hidden_land_only_with_a_land_drop():
+    s, isle, first = _shelldock_setup()
+    # The Isle itself used this turn's land drop.
+    _activate_isle(s, isle)
+    assert first[1] in s.players[0].exile
+    s.players[0].lands_played_this_turn = 0
+    _activate_isle(s, isle)
+    assert first[1] in s.battlefield
+    assert s.players[0].lands_played_this_turn == 1
+
+
+def test_hideaway_recognizer_and_empty_library():
+    from mtg_bot.cards.parser.cube_glue_grammar import (
+        parse_glue_effect,
+        parse_glue_keyword_trigger,
+    )
+    from mtg_bot.effects.generic.cube_glue import HideawayLookExileOneFaceDown
+
+    assert parse_glue_keyword_trigger("Hideaway 5").effect.n == 5
+    assert parse_glue_keyword_trigger("Hideaway") is None
+    assert parse_glue_effect(
+        "you may play the exiled card without paying its mana cost if a "
+        "library has umpteen or fewer cards in it"
+    ) is None
+    s = arena()
+    HideawayLookExileOneFaceDown(n=4).resolve(s, 0)
+    assert s.players[0].exile == []
+    assert "exile one face down" in HideawayLookExileOneFaceDown().describe()

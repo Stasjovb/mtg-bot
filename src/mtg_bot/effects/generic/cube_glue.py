@@ -465,3 +465,129 @@ class RemoveAllCountersAddManaPerCounter(Effect):
             f"remove all {self.kind} counters from this permanent; add one "
             f"mana of any color for each"
         )
+
+
+# ---------------------------------------------------------------------------
+# Hideaway (CR 702.75) and "play the exiled card without paying its mana
+# cost" (Shelldock Isle)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HideawayLookExileOneFaceDown(Effect):
+    """Hideaway N's enters trigger: look at the top ``n`` cards of your
+    library, exile one of them face down, then put the rest on the
+    bottom in a random order. The exiled card is linked to the source's
+    battlefield incarnation (``GameObject.imprinted_on``) and known only
+    to the controller. The pick goes through ``choose_card_from_library``.
+    """
+
+    n: int = 4
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import exile_card
+        from mtg_bot.effects.generic.cube_creatures_wg import exile_link_key
+        from mtg_bot.game import reveal_to
+
+        p = state.player_by_id(controller_id)
+        looked = p.library[: self.n]
+        if not looked:
+            return
+        del p.library[: len(looked)]
+        for c in looked:
+            reveal_to(c, controller_id)
+        pick = looked[0]
+        if p.agent is not None:
+            picked = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in looked],
+            )
+            pick = next((c for c in looked if c.id == picked), looked[0])
+        exile_card(state, pick, face_down_for=controller_id)
+        src = state.resolving_source
+        if src is not None:
+            pick.imprinted_on = exile_link_key(src)
+        rest = [c for c in looked if c is not pick]
+        state.rng.shuffle(rest)
+        p.library.extend(rest)
+        state.log.append(
+            f"P{controller_id} hides a card away (looked at {len(looked)})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.n} cards of your library, exile one face "
+            f"down, then put the rest on the bottom in a random order"
+        )
+
+
+@dataclass(frozen=True)
+class PlayExiledCardFreeIfAnyLibraryAtMost(Effect):
+    """"You may play the exiled card without paying its mana cost if a
+    library has <N> or fewer cards in it." (Shelldock Isle.) The
+    condition is checked on resolution; the exiled card is the one
+    linked to this source by Hideaway. A spell is cast right away
+    (``creature_casting_ub.cast_now``, free) -- timing restrictions don't
+    apply; a land can be played only on the controller's turn with a
+    land play left (it counts as the land play)."""
+
+    library_at_most: int = 20
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.effects.generic.cube_creatures_rmc import grant_exile_play
+        from mtg_bot.effects.generic.cube_creatures_wg import cards_exiled_with
+
+        src = state.resolving_source
+        if src is None:
+            return
+        if not any(
+            len(pl.library) <= self.library_at_most for pl in state.players
+        ):
+            state.log.append(
+                f"{src.printing.name}: no library has "
+                f"{self.library_at_most} or fewer cards"
+            )
+            return
+        p = state.player_by_id(controller_id)
+        for card in cards_exiled_with(state, src):
+            if card.printing.is_land:
+                if not self._land_play_available(state, controller_id):
+                    continue
+            elif not can_cast_now(state, controller_id, card, free=True):
+                continue
+            if p.agent is not None and not p.agent.choose_yes_no(
+                state, controller_id, f"play {card.printing.name} for free?",
+            ):
+                continue
+            card.imprinted_on = None
+            if card.printing.is_land:
+                from mtg_bot.actions import _play_land
+
+                grant_exile_play(state, card, controller_id)
+                _play_land(state, controller_id, card.id)
+            else:
+                cast_now(state, controller_id, card, free=True)
+            return
+
+    @staticmethod
+    def _land_play_available(state, controller_id) -> bool:
+        p = state.player_by_id(controller_id)
+        if state.active_player().id != controller_id:
+            return False
+        allowed = 1 + sum(
+            o.printing.grants_additional_land_per_turn
+            for o in state.battlefield if o.controller_id == controller_id
+        )
+        return p.lands_played_this_turn < allowed
+
+    def describe(self) -> str:
+        return (
+            "you may play the exiled card without paying its mana cost if a "
+            f"library has {self.library_at_most} or fewer cards in it"
+        )

@@ -320,6 +320,15 @@ def _try_build_line_composed_land(
                 )
             )
             continue
+        from mtg_bot.cards.parser.cube_glue_grammar import (
+            parse_glue_keyword_trigger,
+        )
+
+        keyword_trigger = parse_glue_keyword_trigger(line)
+        if keyword_trigger is not None:
+            # Hideaway N (Shelldock Isle; cube glue bucket).
+            triggered.append(keyword_trigger)
+            continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
         if m is not None:
             line = m.group("rest")
