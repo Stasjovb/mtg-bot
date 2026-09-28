@@ -115,9 +115,10 @@ def test_jace_back_face_abilities():
     state.loyalty_activated_this_turn.clear()
     agent.scripts["target"] = [("graveyard_card", bolt.id)]
     _loyalty(state, 0, jace, 1)
-    assert bolt.flashback_granted_until_eot
+    assert bolt.castable_from_graveyard_this_turn
+    assert bolt.exile_if_put_into_graveyard_from_stack
     add_lands(state, 0, "Mountain", 1)
-    assert CastSpell(bolt.id, use_flashback=True) in legal_actions(state, 0)
+    assert CastSpell(bolt.id) in legal_actions(state, 0)
     # -9: emblem -- whenever you cast a spell, target opponent mills five.
     for _ in range(6):
         add(state, 1, "Island", Zone.LIBRARY)
@@ -125,7 +126,7 @@ def test_jace_back_face_abilities():
     _loyalty(state, 0, jace, 2)
     assert state.emblems
     agent.scripts["target"] = [("player", 1), ("player", 1)]
-    apply_action(state, 0, CastSpell(bolt.id, use_flashback=True))
+    apply_action(state, 0, CastSpell(bolt.id))
     drain_stack(state)
     assert len(state.players[1].graveyard) == 5
     assert bolt in state.players[0].exile
@@ -472,3 +473,26 @@ def test_pump_until_next_turn_fizzles_on_illegal_target():
     eff = PumpTargetUntilYourNextTurn(power=-2, targets=(TargetSpec(IsCreature()),))
     eff.resolve(state, 0, (("creature", land.id),))
     assert not state.continuous_effects
+
+
+def test_jace_cast_permission_expires_at_cleanup():
+    from mtg_bot.effects.generic.card_flow import CardFilter
+    from mtg_bot.effects.generic.layout_face_effects import (
+        MayCastTargetGraveyardCardThisTurnExileInstead,
+    )
+
+    state = make_state()
+    bolt = add(state, 0, "Lightning Bolt", Zone.GRAVEYARD)
+    eff = MayCastTargetGraveyardCardThisTurnExileInstead(
+        card_filter=CardFilter(any_types=("Instant",)),
+    )
+    assert eff.requires_target()
+    assert eff.legal_targets(state, 0) == [("graveyard_card", bolt.id)]
+    eff.resolve(state, 0, ())
+    eff.resolve(state, 0, (("graveyard_card", 999),))
+    eff.resolve(state, 0, (("graveyard_card", bolt.id),))
+    assert bolt.exile_if_put_into_graveyard_from_stack
+    run_cleanup_step(state)
+    assert not bolt.castable_from_graveyard_this_turn
+    assert not bolt.exile_if_put_into_graveyard_from_stack
+    assert "exile it instead" in eff.describe()

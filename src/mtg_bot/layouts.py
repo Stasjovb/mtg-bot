@@ -416,3 +416,57 @@ def day_night_enters(state: "GameState", obj: "GameObject") -> None:
         back = transform_back_face(obj.printing)
         if back is not None:
             turn_to_back_face(obj, back)
+
+
+# ---------------------------------------------------------------------------
+# Waterbend (Avatar: The Last Airbender)
+# ---------------------------------------------------------------------------
+
+
+def waterbend_helpers(state: "GameState", player_id: int) -> list:
+    """Untapped artifacts and creatures ``player_id`` controls -- each can
+    be tapped to pay {1} of a waterbend cost (summoning sickness doesn't
+    matter: tapping it isn't an activated ability's {T} cost)."""
+    from mtg_bot.game import is_creature_now
+
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id and not o.tapped
+        and (o.printing.is_artifact or is_creature_now(o))
+    ]
+
+
+def pay_waterbend(state, player_id: int, source, mana, spell_kind):
+    """Tap helpers for the generic part of a waterbend cost and return
+    the rest of the cost. The controller picks how many to tap
+    (``choose_x``; at least as many as the rest of their mana can't
+    cover) and which (``choose_permanent_to_tap``)."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.turn import tap_permanent
+
+    helpers = waterbend_helpers(state, player_id)
+    upper = min(mana.generic, len(helpers))
+    lower = 0
+    while lower < upper and not can_pay_cost(
+        state, player_id, mana.reduced(lower), spell_kind,
+    ):
+        lower += 1
+    agent = state.player_by_id(player_id).agent
+    k = lower
+    if agent is not None and upper > lower:
+        k = max(lower, min(upper, agent.choose_x(
+            state, player_id, f"{source.printing.name} (waterbend helpers)",
+            upper,
+        )))
+    for _ in range(k):
+        pick = helpers[0]
+        if agent is not None and len(helpers) > 1:
+            chosen = agent.choose_permanent_to_tap(
+                state, player_id, [o.id for o in helpers],
+            )
+            pick = next((o for o in helpers if o.id == chosen), helpers[0])
+        helpers.remove(pick)
+        tap_permanent(state, pick)
+    if k:
+        state.log.append(f"P{player_id} taps {k} permanent(s) to waterbend")
+    return mana.reduced(k)

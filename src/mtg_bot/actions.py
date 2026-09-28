@@ -3490,6 +3490,20 @@ def _activate_ability(
             ability_spell_kinds.add("legendary_permanent_ability")
         if source.printing.is_land:
             ability_spell_kinds.add("land_activation")
+        if ability.cost.waterbend:
+            from mtg_bot.layouts import pay_waterbend
+
+            mana = pay_waterbend(
+                state, player_id, source, mana, frozenset(ability_spell_kinds),
+            )
+        if mana.phyrexian:
+            # Phyrexian pips in an activation cost ({9}{G/P}: Etali,
+            # Primal Conqueror) are paid with 2 life or mana of their
+            # color, like a spell's (CR 107.4f).
+            mana = _settle_phyrexian_pips(
+                state, player_id, source.printing.name, mana,
+                frozenset(ability_spell_kinds),
+            )
         auto_tap_for_cost(
             state, player_id, mana,
             spell_kind=frozenset(ability_spell_kinds),

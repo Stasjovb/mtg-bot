@@ -459,3 +459,176 @@ class EachChoosesOneOfEachTypeSacrificesRest(Effect):
         who = "each opponent" if self.opponents_only else "each player"
         types = ", ".join(t.lower() for t in self.card_types)
         return f"{who} keeps one {types}; sacrifices the rest"
+
+
+@dataclass(frozen=True)
+class MayCastTargetGraveyardCardThisTurnExileInstead(Effect):
+    """"You may cast target <filter> card from your graveyard this turn.
+    If that spell would be put into your graveyard, exile it instead."
+    (Jace, Telepath Unbound's -3): the card may be cast this turn for
+    its mana cost at its normal timing (``castable_from_graveyard_this_
+    turn``) and is exiled if it would go to the graveyard from the stack
+    (``exile_if_put_into_graveyard_from_stack``); cleanup clears both
+    while the card is still in the graveyard."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("graveyard_card", c.id)
+            for c in state.player_by_id(controller_id).graveyard
+            if self.card_filter.matches(c.printing)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import _CowList
+
+        if not targets:
+            return
+        p = state.player_by_id(controller_id)
+        if not any(
+            c.id == targets[0][1] and self.card_filter.matches(c.printing)
+            for c in p.graveyard
+        ):
+            state.log.append("cast-permission target is gone")
+            return
+        if isinstance(p.graveyard, _CowList):
+            p.graveyard.fork()
+        card = next(c for c in p.graveyard if c.id == targets[0][1])
+        card.castable_from_graveyard_this_turn = True
+        card.exile_if_put_into_graveyard_from_stack = True
+        state.log.append(
+            f"P{controller_id} may cast {card.printing.name} from their "
+            "graveyard this turn (exiled afterwards)"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"you may cast target {self.card_filter.describe()} from your "
+            "graveyard this turn; exile it instead of putting it into your "
+            "graveyard"
+        )
+
+
+@dataclass(frozen=True)
+class EachPlayerExilesUntilNonlandMayCastFree(Effect):
+    """"Each player exiles cards from the top of their library until they
+    exile a nonland card. You may cast any number of spells from among
+    the nonland cards exiled this way without paying their mana costs."
+    (Etali, Primal Conqueror.) Players exile in APNAP order; then, for
+    each nonland card exiled this way that can be cast right now, the
+    controller chooses (``choose_yes_no``) whether to cast it for free
+    during the resolution (``creature_casting_ub.cast_now``, CR 608.2g)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.effects.generic.mass_effects import _apnap
+        from mtg_bot.game import Zone
+
+        found: list = []
+        for p in _apnap(state, controller_id):
+            exiled = 0
+            while p.library:
+                card = p.library.pop(0)
+                card.zone = Zone.EXILE
+                p.exile.append(card)
+                exiled += 1
+                if not card.printing.is_land:
+                    found.append(card)
+                    break
+            state.log.append(f"P{p.id} exiles {exiled} card(s)")
+        caster = state.player_by_id(controller_id)
+        for card in found:
+            owner = state.player_by_id(card.owner_id)
+            if card not in owner.exile or not can_cast_now(
+                state, controller_id, card, free=True,
+            ):
+                continue
+            if caster.agent is not None and not caster.agent.choose_yes_no(
+                state, controller_id,
+                f"Cast {card.printing.name} without paying its mana cost?",
+            ):
+                continue
+            cast_now(state, controller_id, card, free=True)
+
+    def describe(self) -> str:
+        return (
+            "each player exiles cards from the top of their library until "
+            "a nonland card; you may cast any of those for free"
+        )
+
+
+@dataclass(frozen=True)
+class Airbend(Effect):
+    """"Airbend up to one other target creature or spell" (Avatar: The
+    Last Airbender keyword action): "Exile it. While it's exiled, its
+    owner may cast it for {2} rather than its mana cost." A creature is
+    exiled from the battlefield (a token ceases to exist), a spell from
+    the stack; the owner then holds a never-expiring cast permission with
+    the alternative cost ``alt_cost`` (``ExilePlayPermission``)."""
+
+    alt_cost: str = "{2}"
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self):
+        return (0, 1)
+
+    def legal_targets(self, state, controller_id):
+        from mtg_bot.game import is_creature_now
+
+        source = state.resolving_source
+        out = [
+            ("creature", o.id) for o in state.battlefield
+            if is_creature_now(o) and (source is None or o.id != source.id)
+        ]
+        out.extend(
+            ("stack", i) for i, item in enumerate(state.stack)
+            if item.ability is None and not item.countered
+        )
+        return out
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import move_spell_off_stack
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            WHILE_EXILED,
+            grant_exile_play,
+        )
+        from mtg_bot.game import is_creature_now
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        kind, tid = targets[0]
+        if kind == "stack":
+            if not (0 <= tid < len(state.stack)):
+                return
+            item = state.stack[tid]
+            if item.ability is not None or item.countered:
+                return
+            del state.stack[tid]
+            card = item.source
+            move_spell_off_stack(state, card, destination="exile")
+        else:
+            card = next((o for o in state.battlefield if o.id == tid), None)
+            if card is None or not is_creature_now(card):
+                return
+            move_off_battlefield(state, card, destination="exile")
+        owner = state.player_by_id(card.owner_id)
+        if card not in owner.exile:
+            return  # a token / spell copy ceased to exist
+        grant_exile_play(
+            state, card, card.owner_id, duration=WHILE_EXILED,
+            cast_only=True, alt_cost=self.alt_cost,
+        )
+        state.log.append(
+            f"{card.printing.name} is airbent (P{card.owner_id} may cast it "
+            f"for {self.alt_cost})"
+        )
+
+    def describe(self) -> str:
+        return "airbend up to one other target creature or spell"

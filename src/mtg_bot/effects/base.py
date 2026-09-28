@@ -569,6 +569,10 @@ class ActivationCost:
     # this creature", "Tap an untapped Rebel you control", "Exile this
     # card from your graveyard").
     extra_costs: tuple = ()
+    # Waterbend {N} (Avatar: The Last Airbender): "While paying a
+    # waterbend cost, you can tap your untapped artifacts and creatures to
+    # help. Each one pays for {1}." (``layouts.pay_waterbend``).
+    waterbend: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []

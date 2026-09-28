@@ -211,6 +211,24 @@ def parse_face_effect(phrase: str) -> Effect | None:
     m = _CHOOSE_ONE_OF_EACH_SACRIFICE_REST.match(phrase)
     if m is not None:
         return _choose_one_of_each(m)
+    if phrase == "airbend up to one other target creature or spell":
+        # Airbend (the only airbend target shape in the pool).
+        from mtg_bot.effects.generic.layout_face_effects import Airbend
+
+        return Airbend()
+    if phrase == (
+        "each player exiles cards from the top of their library until they "
+        "exile a nonland card. You may cast any number of spells from among "
+        "the nonland cards exiled this way without paying their mana costs"
+    ):
+        # Etali, Primal Conqueror -- the only card with this shape in the
+        # pool; generalization (other stop filters / paid casts) deferred
+        # until a second printing varies it.
+        from mtg_bot.effects.generic.layout_face_effects import (
+            EachPlayerExilesUntilNonlandMayCastFree,
+        )
+
+        return EachPlayerExilesUntilNonlandMayCastFree()
     return None
 
 
@@ -258,18 +276,14 @@ def _gets_until_next_turn(m: "re.Match") -> Effect | None:
 
 def _cast_from_graveyard_this_turn(desc: str) -> Effect | None:
     from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
-    from mtg_bot.effects.generic.graveyard_casting import (
-        GrantFlashbackToTargetCardUEOT,
+    from mtg_bot.effects.generic.layout_face_effects import (
+        MayCastTargetGraveyardCardThisTurnExileInstead,
     )
 
     f = parse_card_descriptor("an " + desc if desc[0] in "aeiou" else "a " + desc)
     if f is None:
         return None
-    # "You may cast it this turn; exile it instead of putting it into your
-    # graveyard" rides the granted-flashback substrate (cost = its mana
-    # cost). See docs/SEARCH_LIMITATIONS.md (layouts bucket) for the
-    # difference.
-    return GrantFlashbackToTargetCardUEOT(card_filter=f)
+    return MayCastTargetGraveyardCardThisTurnExileInstead(card_filter=f)
 
 
 def _other_attacking_gain(kws_text: str) -> Effect | None:

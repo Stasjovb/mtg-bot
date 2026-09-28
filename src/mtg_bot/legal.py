@@ -1371,6 +1371,12 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
             ):
                 from mtg_bot.actions import _effective_ability_mana_cost
                 effective_mana = _effective_ability_mana_cost(state, obj, ability)
+                if ability.cost.waterbend:
+                    from mtg_bot.layouts import waterbend_helpers
+
+                    effective_mana = effective_mana.reduced(
+                        len(waterbend_helpers(state, player_id)),
+                    )
                 # Activation spend-restriction context: combine all the
                 # tags this source qualifies for so coins with any of
                 # those restrictions are usable. Mirrors

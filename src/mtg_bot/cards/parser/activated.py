@@ -123,6 +123,7 @@ from mtg_bot.effects.object_predicates import (
 _ACTIVATED_ABILITY_LINE = re.compile(
     r"^([^:]+): (.+\.\"?)$"
 )
+_WATERBEND_PREFIX = "Waterbend "
 
 # A bare mana cost is one or more brace-wrapped mana symbols, no commas.
 _MANA_COST_ONLY = re.compile(r"^(\{[^}]+\})+$")
@@ -1151,12 +1152,21 @@ def _parse_activated_ability_line(
         # standard ``{cost}: <effect>.`` shape still matches without
         # any further fix-up.
         stripped = stripped[: rider_match.start()]
+    waterbend = stripped.startswith(_WATERBEND_PREFIX)
+    if waterbend:
+        # "Waterbend {N}: <effect>" -- the cost is {N}, payable with help
+        # from untapped artifacts and creatures.
+        stripped = stripped[len(_WATERBEND_PREFIX):]
     m = _ACTIVATED_ABILITY_LINE.match(stripped)
     if m is None:
         return None
     cost = _parse_activation_cost(m.group(1))
     if cost is None:
         return None
+    if waterbend:
+        if cost.mana is None or cost.tap_self:
+            return None
+        cost = replace(cost, waterbend=True)
     # ``from_hand`` lines (Cycling / Channel bodies) must carry the
     # "Discard this card" cost atom, and only they may: a battlefield
     # ability can't pay it.

@@ -213,6 +213,8 @@ def pay_extra_costs(state, player_id: int, source, cost) -> list:
 THIS_TURN = "this_turn"
 UNTIL_YOUR_NEXT_END_STEP = "until_your_next_end_step"
 UNTIL_END_OF_YOUR_NEXT_TURN = "until_end_of_your_next_turn"
+# "While it's exiled, its owner may cast it" (airbend): never expires.
+WHILE_EXILED = "while_exiled"
 
 
 @dataclass(frozen=True)
@@ -244,11 +246,14 @@ class ExilePlayPermission:
     cast_only: bool = False
     requires_attacked_with_subtype: str = ""
     any_color_mana: bool = False
+    # "... may cast it for {2} rather than its mana cost" (airbend): the
+    # mana cost string paid instead of the card's (empty = its own).
+    alt_cost: str = ""
 
     def expired_after_cleanup(self, state: "GameState") -> bool:
         """Whether this permission ends at the cleanup step that is
         running now (called from ``turn.run_cleanup_step``)."""
-        if self.requires_attacked_with_subtype:
+        if self.requires_attacked_with_subtype or self.duration == WHILE_EXILED:
             return False
         if self.duration == THIS_TURN:
             return True
@@ -299,6 +304,10 @@ def exile_permission_cast_cost(card: "GameObject", perm: ExilePlayPermission):
     cost = card.printing.mana_cost
     if perm.free:
         return ManaCost()
+    if perm.alt_cost:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        return parse_mana_cost(perm.alt_cost)
     if perm.any_color_mana:
         return ManaCost(
             generic=cost.generic + sum(n for _, n in cost.colored)
