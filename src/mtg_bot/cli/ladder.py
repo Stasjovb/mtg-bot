@@ -42,6 +42,8 @@ table.
 
 from __future__ import annotations
 
+from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+
 import argparse
 import itertools
 import json
@@ -73,8 +75,8 @@ def _split_label(label: str) -> tuple[str, Optional[str], Optional[int]]:
     """``"v22+heurvalue+b1"`` -> ``("v22", "heurvalue", 1)``.
 
     Modifiers after ``+``: a head variant from ``VARIANT_SUFFIXES``
-    (at most one) and/or ``b<N>`` = MCTS leaf batch size (NN agents
-    default to 32, the heuristic to 1; ``heuristic+b32`` / ``v22+b1``
+    (at most one) and/or ``b<N>`` = MCTS leaf batch size (default
+    ``SEARCH_LEAF_BATCH_SIZE`` = 1 for every agent since 2026-10-01; ``heuristic+b32`` / ``v22+b1``
     are the search-batching controls, 2026-10-01).
     """
     parts = label.split("+")
@@ -196,7 +198,7 @@ def resolve_agent(
         weights_path=str(weights_path),
         samples=samples,
         inner_nodes=nodes,
-        batch_size=batch or 32,
+        batch_size=batch or SEARCH_LEAF_BATCH_SIZE,
         with_policy=bool(meta.with_policy),
         puct=bool(meta.with_policy) and variant != "valueonly",
         hidden_sizes=hidden_sizes,

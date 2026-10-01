@@ -265,7 +265,8 @@ def test_resolve_nn_version_reads_registry_metadata(tmp_path):
     assert d["action_encoding_version"] == "canonical_v2"
     assert d["with_policy"] is True and d["puct"] is True
     assert d["inner_nodes"] == 8 and d["samples"] == 1
-    assert d["batch_size"] == 32
+    from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+    assert d["batch_size"] == SEARCH_LEAF_BATCH_SIZE == 1
     assert d["weights_path"].endswith(os.path.join("v13s", "weights.pt"))
     assert d["git_commit"] == "3af7edea"
 
@@ -566,3 +567,16 @@ def test_batch_modifier_rejects_bad_values(tmp_path):
         L.resolve_agent("heuristic+valueonly", registry_root=tmp_path, nodes=4, samples=1)
     with pytest.raises(ValueError, match="more than one head variant"):
         L.resolve_agent("v22+valueonly+heurvalue", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_default_leaf_batch_is_one_for_every_agent(tmp_path):
+    """2026-10-01: batch 32 was an ~8-point search handicap vs the
+    batch-1 heuristic; the production default is now 1 everywhere."""
+    from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+    _policy_version(tmp_path)
+    assert SEARCH_LEAF_BATCH_SIZE == 1
+    for label in ("heuristic", "v22", "v22+valueonly"):
+        d = L.resolve_agent(label, registry_root=tmp_path, nodes=4, samples=1).description
+        assert d["batch_size"] == 1, label
+    hv = L.resolve_agent("v22+heurvalue", registry_root=tmp_path, nodes=4, samples=1).description
+    assert hv["nn"]["batch_size"] == 1

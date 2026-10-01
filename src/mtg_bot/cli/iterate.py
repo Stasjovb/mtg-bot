@@ -58,6 +58,8 @@ by re-invoking; the current-best pointer + data files persist).
 
 from __future__ import annotations
 
+from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+
 import argparse
 import json
 import re
@@ -694,11 +696,10 @@ def _self_play(  # pragma: no cover
             weights_path=str(weights_path),
             samples=samples,
             inner_nodes=nodes,
-            # PUCT now supports batched leaf evaluation
-            # (feature/batched-puct): 32 leaves per NN forward
-            # amortizes the Python↔C round-trip and is a meaningful
-            # speedup on the self-play hot path.
-            batch_size=32,
+            # Leaf batch 1 on the CPU path: batching at 32 cost ~8
+            # points of strength at nodes 100-200 for ~3 % wall (see
+            # mtg_bot.search.leaf_batch).
+            batch_size=SEARCH_LEAF_BATCH_SIZE,
             with_policy=True,
             puct=True,
             hidden_sizes=hidden_sizes,
@@ -1343,16 +1344,15 @@ def _eval_match(  # pragma: no cover
     iterate loop's contract (see main()'s ``iter_hidden_sizes``).
     Without it the worker NNEvaluator load fails with state_dict
     size mismatch and every game crashes."""
-    # Both NN seats run with batch_size=32 — PUCT now supports batched
-    # leaf evaluation (feature/batched-puct), so the eval-match path
-    # picks up the same per-call speedup the data-gen path got. The
-    # heuristic seat keeps batch_size=1 since there's no NN to
-    # amortize across.
+    # Both NN seats use the production leaf batch size (1 on CPU --
+    # see mtg_bot.search.leaf_batch; batch 32 was an ~8-point search
+    # handicap at these node budgets). The heuristic seat is batch 1
+    # as well, so new, old and heuristic search at equal quality.
     new_cfg = NNPimcConfig(
         weights_path=str(new_weights),
         samples=samples,
         inner_nodes=nodes,
-        batch_size=32,
+        batch_size=SEARCH_LEAF_BATCH_SIZE,
         with_policy=True,
         puct=True,
         hidden_sizes=hidden_sizes,
@@ -1365,7 +1365,7 @@ def _eval_match(  # pragma: no cover
             weights_path=str(old_weights),
             samples=samples,
             inner_nodes=nodes,
-            batch_size=32,
+            batch_size=SEARCH_LEAF_BATCH_SIZE,
             with_policy=True,
             puct=True,
             hidden_sizes=hidden_sizes,

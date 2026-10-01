@@ -500,6 +500,38 @@ CUDA amortizes 20x (b1->b32) vs CPU 3.5x; at a TRUE batch of 64, CUDA is ~13x fa
 
 **CORRECTION (verified 2026-06-01, same session): batched-PUCT b=32 is ALREADY the production default — nothing to "ship".** `NNPimcConfig.batch_size` defaults to 32, `NNPimcConfig.build()` threads it (+`puct=True`) into `MCTS`, and every NN site sets it explicitly: `cli/iterate.py` self-play (`:567`) + both eval seats (`:1019`/`:1032`), `cli/capture.py` (`:85`), `cli/bench_kinds/per_game_wall.py` (`:89`), `worker_daemon_production_runner.py` (`:169`). The only `batch_size=1` is the heuristic eval seat (no NN forward to batch — correct). Landed with `feature/batched-puct` + the Phase-2c production runner. **So the `cuda/cpu b=32` rows above ARE current production; the `b=1` baseline is counterfactual.** Implication: production already realizes the ~2.45x; the live NN share is ~68% (the b=32 row), so the Rust engine+search-port ceiling in *actual* production is ~1.47x (not the 1.18x computed from the counterfactual b=1). b=32 is also near the CPU plateau (b=64 is only 579 vs 625 us/eval), so bumping it buys ~nothing. Net: no code change available here — the one free lever was already pulled; remaining throughput requires the large-batch search re-architecture (§6b item 4).
 
+### 6c. Batched-PUCT is a STRENGTH handicap at production node budgets — production default moved to `batch_size=1` (2026-10-01)
+
+§6b measured batched-PUCT as throughput only (one game on an idle box).
+Measured the strength cost with the ladder (`mtg_bot ladder`, 200 games
+per pair, samples 2, 16 workers, `+b<N>` label modifier; full tables in
+`docs/STRENGTH_LADDER.md` 2026-10-01):
+
+| nodes | agent | vs heuristic (batch 1) | note |
+|---:|---|---|---|
+| 100 | heuristic+b32 (same evaluator, batched search) | 83-115 (41.9 %) | batching alone: -8 pts |
+| 100 | v22 (b32) / v22+b1 | 46.7 % / **52.0 %** | the net at equal search beats the heuristic |
+| 200 | heuristic+b32 | 83-117 (41.5 %) | self-play depth: -8.5 pts |
+| 200 | v22 (b32) / v22+b1 | 50.8 % / **53.3 %** | wall 2223 s vs 2297 s per 200 games |
+| 400 | heuristic+b32 | 93-106 (46.7 %) | -3 pts; the handicap fades with depth |
+
+**Why §6b's 2.45x did not show up as wall.** Under the production
+shape (16 worker processes on a 32-thread box, torch intra-op threads
+competing) the batched forward's per-process win is eaten by
+saturation: the ladder saw **~3 % extra wall at batch 1**, not 2.45x.
+The strength cost is ~8 points at nodes 100-200 because 100-200 nodes
+is only 3-6 waves of 32 virtual-loss-steered leaves (and §6b already
+noted the tree only yields an effective batch of ~4-8 anyway).
+
+**Change.** `mtg_bot.search.leaf_batch.SEARCH_LEAF_BATCH_SIZE = 1` is
+now the single production constant, used by the self-play runner
+(`worker_daemon_production_runner._build_nn_pimc_config`), both
+`iterate` arena seats, `capture`, and the ladder default.
+`NNPimcConfig.batch_size` keeps its 32 default for explicit opt-in
+(GPU workers, benches). Every "vs heuristic" number in the lineage
+before 2026-10-01 was measured through this handicap (NN seats at 32,
+heuristic seat at 1) and reads ~5-8 points low.
+
 ## 7. `effective_power` / layered-read hot path — closure removal (2026-09-23)
 
 **Method.** Synthetic 12-permanent battlefield (3 of them carrying a
