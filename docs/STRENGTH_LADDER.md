@@ -283,3 +283,38 @@ A better fit to the driver's own root values is not a stronger player.
 in a 36-48 % band vs heuristic; neither value-target choice nor teacher
 depth has cleared 50 %.
 
+### 2026-10-01 -- head isolation, then the search-batching control (nodes 100 / samples 2, 200 games per pair)
+
+Which head loses? Two agent variants (`mtg_bot.search.hybrid_evaluator`,
+ladder labels `<v>+valueonly` / `<v>+heurvalue`) split v22:
+
+| agent | search | vs heuristic | vs random |
+|---|---|---|---|
+| v22 (plain) | PUCT on NN priors, NN value, batch 32 | 93-106 (46.7 %) | 93.5 % |
+| v22+valueonly | UCB1, NN value, batch 32 | 93-107 (46.5 %) | 91.0 % |
+| v22+heurvalue | PUCT on NN priors, heuristic value, batch 32 | 89-110 (44.7 %) | 92.0 % |
+
+Neither head explains the gap and the effects do not add: three
+different head combinations land at the same ~46 %. The one thing
+they share is the search: every NN-side agent in this lineage runs
+MCTS with ``batch_size=32`` (batched leaf evaluation with virtual
+loss; ~3 waves at nodes 100) while the heuristic opponent runs
+``batch_size=1``. Controls with the new ``+b<N>`` label modifier:
+
+| agent | vs heuristic (batch 1) |
+|---|---|
+| heuristic+b32 (same evaluator, batched search) | **83-115 (41.9 %)** |
+| v22+b1 | **104-96 (52.0 %)** |
+| v22+valueonly+b1 | 103-96 (51.8 %) |
+
+Reading: batching alone costs the *heuristic* 8 points at nodes 100,
+and at equal search quality v22 beats the heuristic. The 36-48 % band
+every version sat in since v15 was a search handicap, not a learning
+ceiling. Production self-play (`worker_daemon_production_runner`),
+`iterate`'s arenas (NN seats batch 32, heuristic seat batch 1) and
+this ladder (`resolve_agent` hardcoded 32) all carried it; NN-vs-NN
+arenas were fair, which is why cycle gating never exposed it. All
+earlier "vs heuristic" rows in this file are biased low by roughly
+5-8 points; a batch-1 re-ladder of v15/v18/v25 is in progress.
+
+
