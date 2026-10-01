@@ -481,3 +481,66 @@ def test_end_to_end_smoke_random_vs_heuristic(tmp_path):
     assert r.crashed == 0
     assert r.wall_seconds > 0
     assert (out / L.REPORT_FILENAME).is_file()
+
+
+# --------------------------------------------------------------------------
+# Head-isolation variants: <version>+valueonly / <version>+heurvalue
+# --------------------------------------------------------------------------
+
+
+def _policy_version(tmp_path, label="v22"):
+    _fake_registry_version(tmp_path, label, {
+        "version": label, "created_at": "2026-09-28T02:01:22Z",
+        "feature_dim": 51, "hidden_sizes": [],
+        "with_policy": True, "architecture": "structured",
+        "action_encoding_version": "canonical_v2",
+        "training": {"structured_config": {"emb_dim": 128}},
+        "git_commit": "916b8972",
+    })
+
+
+def test_resolve_valueonly_variant_disables_puct_but_keeps_policy_head(tmp_path):
+    _policy_version(tmp_path)
+    s = L.resolve_agent("v22+valueonly", registry_root=tmp_path, nodes=8, samples=1)
+    d = s.description
+    assert s.label == "v22+valueonly"
+    assert d["kind"] == "nn_pimc_value_only" and d["version"] == "v22"
+    assert d["with_policy"] is True and d["puct"] is False
+    assert d["weights_path"].endswith(os.path.join("v22", "weights.pt"))
+    # Plain label is untouched.
+    assert L.resolve_agent("v22", registry_root=tmp_path, nodes=8, samples=1).description["puct"] is True
+
+
+def test_resolve_heurvalue_variant_builds_hybrid_config(tmp_path):
+    from mtg_bot.search.hybrid_evaluator import HybridPimcConfig
+    _policy_version(tmp_path)
+    s = L.resolve_agent("v22+heurvalue", registry_root=tmp_path, nodes=8, samples=2)
+    d = s.description
+    assert d["kind"] == "hybrid_heur_value_nn_policy" and d["version"] == "v22"
+    assert d["inner_nodes"] == 8 and d["samples"] == 2
+    assert d["nn"]["with_policy"] is True and d["nn"]["puct"] is True
+    assert d["heuristic"] is not None
+    assert isinstance(s.factory.__self__, HybridPimcConfig)
+
+
+def test_resolve_heurvalue_needs_policy_head(tmp_path):
+    _fake_registry_version(tmp_path, "v1", {
+        "version": "v1", "created_at": "x", "feature_dim": 51,
+        "hidden_sizes": [], "with_policy": False, "architecture": "structured",
+    })
+    with pytest.raises(ValueError, match="policy head"):
+        L.resolve_agent("v1+heurvalue", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_resolve_unknown_variant_rejected(tmp_path):
+    _policy_version(tmp_path)
+    with pytest.raises(ValueError, match="unknown agent variant"):
+        L.resolve_agent("v22+bogus", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_variant_labels_survive_pair_parsing():
+    pairs = L.parse_pairs(
+        "heuristic:v22+valueonly,heuristic:v22+heurvalue",
+        ["heuristic", "v22+valueonly", "v22+heurvalue"],
+    )
+    assert pairs == [("heuristic", "v22+valueonly"), ("heuristic", "v22+heurvalue")]

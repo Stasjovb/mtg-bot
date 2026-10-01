@@ -66,6 +66,7 @@ from mtg_bot.search.strategy import RandomChoice, SearchStrategy
 # registry (``trained_weights/<label>/``).
 RANDOM_LABEL = "random"
 HEURISTIC_LABEL = "heuristic"
+VARIANT_SUFFIXES = frozenset({"valueonly", "heurvalue"})
 
 RESULTS_FILENAME = "results.json"
 REPORT_FILENAME = "ladder.md"
@@ -142,16 +143,31 @@ def resolve_agent(
             description={"kind": "heuristic_pimc", **cfg.to_dict()},
         )
 
+    # Head-isolation variants (2026-10-01): ``<version>+valueonly`` runs
+    # the net's value head under plain UCB1 (no policy priors, i.e. the
+    # heuristic's search); ``<version>+heurvalue`` runs PUCT on the
+    # net's policy priors with the heuristic's static value. See
+    # ``mtg_bot.search.hybrid_evaluator`` for the rationale.
+    variant = None
+    version = label
+    if "+" in label:
+        version, variant = label.split("+", 1)
+        if variant not in VARIANT_SUFFIXES:
+            raise ValueError(
+                f"unknown agent variant {variant!r} in {label!r}; "
+                f"expected one of {sorted(VARIANT_SUFFIXES)}"
+            )
+
     registry = Registry(registry_root)
-    if not registry.has(label):
+    if not registry.has(version):
         available = ", ".join(registry.list_versions()) or "<none>"
         raise ValueError(
             f"unknown agent {label!r}: not 'random', not 'heuristic', "
             f"and not a registered version under {registry_root} "
             f"(available: {available})"
         )
-    weights_path = registry.weights_path(label)
-    meta = registry.load_metadata(label)
+    weights_path = registry.weights_path(version)
+    meta = registry.load_metadata(version)
     hidden_sizes = tuple(meta.hidden_sizes) if meta.hidden_sizes else None
     policy_hidden = (
         tuple(meta.training.get("policy_hidden_sizes") or ()) or None
@@ -162,17 +178,38 @@ def resolve_agent(
         inner_nodes=nodes,
         batch_size=32,
         with_policy=bool(meta.with_policy),
-        puct=bool(meta.with_policy),
+        puct=bool(meta.with_policy) and variant != "valueonly",
         hidden_sizes=hidden_sizes,
         architecture=meta.architecture,
         policy_hidden_sizes=policy_hidden,
         action_encoding_version=meta.action_encoding_version,
     )
+    if variant == "heurvalue":
+        from mtg_bot.search.hybrid_evaluator import HybridPimcConfig
+        if not meta.with_policy:
+            raise ValueError(
+                f"{label!r}: the heurvalue variant needs a policy head, "
+                f"but {version} was trained without one"
+            )
+        hcfg = HybridPimcConfig(
+            nn=cfg, heuristic=HeuristicConfig(),
+            samples=samples, inner_nodes=nodes,
+        )
+        return AgentSpec(
+            label=label, factory=hcfg.build,
+            description={
+                "kind": "hybrid_heur_value_nn_policy",
+                "version": version,
+                "git_commit": meta.git_commit,
+                "created_at": meta.created_at,
+                **hcfg.to_dict(),
+            },
+        )
     return AgentSpec(
         label=label, factory=cfg.build,
         description={
-            "kind": "nn_pimc",
-            "version": label,
+            "kind": "nn_pimc_value_only" if variant == "valueonly" else "nn_pimc",
+            "version": version,
             "git_commit": meta.git_commit,
             "created_at": meta.created_at,
             **cfg.to_dict(),
