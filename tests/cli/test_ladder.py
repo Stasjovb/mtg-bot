@@ -544,3 +544,25 @@ def test_variant_labels_survive_pair_parsing():
         ["heuristic", "v22+valueonly", "v22+heurvalue"],
     )
     assert pairs == [("heuristic", "v22+valueonly"), ("heuristic", "v22+heurvalue")]
+
+
+def test_batch_modifier_overrides_leaf_batch_size(tmp_path):
+    _policy_version(tmp_path)
+    h = L.resolve_agent("heuristic+b32", registry_root=tmp_path, nodes=4, samples=1)
+    assert h.description["kind"] == "heuristic_pimc" and h.description["batch_size"] == 32
+    v = L.resolve_agent("v22+b1", registry_root=tmp_path, nodes=4, samples=1)
+    assert v.description["kind"] == "nn_pimc" and v.description["batch_size"] == 1
+    assert v.description["puct"] is True
+    both = L.resolve_agent("v22+heurvalue+b1", registry_root=tmp_path, nodes=4, samples=1)
+    assert both.description["kind"] == "hybrid_heur_value_nn_policy"
+    assert both.description["nn"]["batch_size"] == 1
+
+
+def test_batch_modifier_rejects_bad_values(tmp_path):
+    _policy_version(tmp_path)
+    with pytest.raises(ValueError, match="unknown agent variant"):
+        L.resolve_agent("v22+b0", registry_root=tmp_path, nodes=4, samples=1)
+    with pytest.raises(ValueError, match="head variants need a registered version"):
+        L.resolve_agent("heuristic+valueonly", registry_root=tmp_path, nodes=4, samples=1)
+    with pytest.raises(ValueError, match="more than one head variant"):
+        L.resolve_agent("v22+valueonly+heurvalue", registry_root=tmp_path, nodes=4, samples=1)

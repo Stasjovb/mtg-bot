@@ -68,6 +68,31 @@ RANDOM_LABEL = "random"
 HEURISTIC_LABEL = "heuristic"
 VARIANT_SUFFIXES = frozenset({"valueonly", "heurvalue"})
 
+
+def _split_label(label: str) -> tuple[str, Optional[str], Optional[int]]:
+    """``"v22+heurvalue+b1"`` -> ``("v22", "heurvalue", 1)``.
+
+    Modifiers after ``+``: a head variant from ``VARIANT_SUFFIXES``
+    (at most one) and/or ``b<N>`` = MCTS leaf batch size (NN agents
+    default to 32, the heuristic to 1; ``heuristic+b32`` / ``v22+b1``
+    are the search-batching controls, 2026-10-01).
+    """
+    parts = label.split("+")
+    base, variant, batch = parts[0], None, None
+    for mod in parts[1:]:
+        if mod in VARIANT_SUFFIXES:
+            if variant is not None:
+                raise ValueError(f"{label!r}: more than one head variant")
+            variant = mod
+        elif mod.startswith("b") and mod[1:].isdigit() and int(mod[1:]) >= 1:
+            batch = int(mod[1:])
+        else:
+            raise ValueError(
+                f"unknown agent variant {mod!r} in {label!r}; expected one "
+                f"of {sorted(VARIANT_SUFFIXES)} or b<N> (leaf batch size)"
+            )
+    return base, variant, batch
+
 RESULTS_FILENAME = "results.json"
 REPORT_FILENAME = "ladder.md"
 DEFAULT_GAMES = 500
@@ -133,10 +158,13 @@ def resolve_agent(
             label=label, factory=RandomConfig().build,
             description={"kind": "random"},
         )
-    if label == HEURISTIC_LABEL:
+    base, variant, batch = _split_label(label)
+    if base == HEURISTIC_LABEL:
+        if variant is not None:
+            raise ValueError(f"{label!r}: head variants need a registered version")
         cfg = PimcConfig(
             samples=samples, inner_nodes=nodes,
-            heuristic=HeuristicConfig(), batch_size=1,
+            heuristic=HeuristicConfig(), batch_size=batch or 1,
         )
         return AgentSpec(
             label=label, factory=cfg.build,
@@ -148,15 +176,7 @@ def resolve_agent(
     # heuristic's search); ``<version>+heurvalue`` runs PUCT on the
     # net's policy priors with the heuristic's static value. See
     # ``mtg_bot.search.hybrid_evaluator`` for the rationale.
-    variant = None
-    version = label
-    if "+" in label:
-        version, variant = label.split("+", 1)
-        if variant not in VARIANT_SUFFIXES:
-            raise ValueError(
-                f"unknown agent variant {variant!r} in {label!r}; "
-                f"expected one of {sorted(VARIANT_SUFFIXES)}"
-            )
+    version = base
 
     registry = Registry(registry_root)
     if not registry.has(version):
@@ -176,7 +196,7 @@ def resolve_agent(
         weights_path=str(weights_path),
         samples=samples,
         inner_nodes=nodes,
-        batch_size=32,
+        batch_size=batch or 32,
         with_policy=bool(meta.with_policy),
         puct=bool(meta.with_policy) and variant != "valueonly",
         hidden_sizes=hidden_sizes,
