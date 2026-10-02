@@ -1006,7 +1006,25 @@ def _search_different_names_onto_battlefield(m):
     )
 
 
+# "you gain control of target opponent during that player's next turn[.
+# After that turn, that player takes an extra turn]" (Emrakul, the
+# Promised End's cast trigger).
+_CONTROL_OPPONENT_NEXT_TURN_RE = re.compile(
+    r"^you gain control of target opponent during that player's next turn"
+    r"(?P<extra>\. After that turn, that player takes an extra turn)?$"
+)
+
+
+def _control_opponent_next_turn(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    return rw.ControlTargetOpponentDuringNextTurn(
+        extra_turn_after=bool(m.group("extra")),
+    )
+
+
 _PHRASE_RECOGNIZERS_3 = (
+    (_CONTROL_OPPONENT_NEXT_TURN_RE, _control_opponent_next_turn),
     (_TOKEN_COPY_OF_TARGET_EXCEPT_RE, _token_copy_of_target_except),
     (_EXILE_THEN_COPY_UNLESS_AURA_RE, _exile_then_copy_unless_aura),
     (_SEARCH_DIFFERENT_NAMES_ONTO_BATTLEFIELD_RE,

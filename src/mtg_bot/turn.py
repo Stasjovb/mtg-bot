@@ -1751,6 +1751,13 @@ def run_cleanup_step(state: GameState) -> None:
             p.agent = p.agent_override_saved
             p.agent_override_saved = None
             p.scheduled_agent_override_by = None
+            # Roto P4: "After that turn, that player takes an extra
+            # turn." (Emrakul, the Promised End).
+            from mtg_bot.effects.generic.roto_walkers import (
+                extra_turn_after_controlled_turn,
+            )
+
+            extra_turn_after_controlled_turn(state, p)
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
     # Reset per-turn loyalty-ability activation tracking (CR 606.3).

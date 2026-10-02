@@ -1425,3 +1425,87 @@ class SearchUpToNDifferentNamesOntoBattlefield(Effect):
             f"search for up to {self.count} {self.card_filter.describe()}s "
             "with different names and put them onto the battlefield"
         )
+
+
+# ---------------------------------------------------------------------------
+# Emrakul, the Promised End
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PerCardTypeInYourGraveyard:
+    """Variable-amount condition: the number of card types among cards
+    in the viewer's graveyard (the shared delirium count,
+    ``effects.card_types``). ``matches`` iff at least one; ``multiplier``
+    is the count -- "This spell costs {1} less to cast for each card type
+    among cards in your graveyard." (Emrakul, the Promised End)."""
+
+    def _count(self, state, viewer_id) -> int:
+        from mtg_bot.effects.card_types import count_card_types
+
+        return count_card_types(state.player_by_id(viewer_id).graveyard)
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        return self._count(state, viewer_id) > 0
+
+    def multiplier(self, state, viewer_id, chosen_targets=None) -> int:
+        return self._count(state, viewer_id)
+
+
+@dataclass(frozen=True)
+class ControlTargetOpponentDuringNextTurn(Effect):
+    """"You gain control of target opponent during that player's next
+    turn. [After that turn, that player takes an extra turn.]" (Emrakul,
+    the Promised End's cast trigger). The controller's agent makes the
+    target's decisions during their next turn (the Dominion Bracelet
+    mechanism: ``Player.scheduled_agent_override``, installed by
+    ``turn.run_untap_step`` and reverted at that turn's cleanup);
+    ``extra_turn_after`` makes that cleanup queue an extra turn for the
+    controlled player (``Player.extra_turn_after_controlled_turn``)."""
+
+    extra_turn_after: bool = False
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        pid = next((t[1] for t in targets if t[0] == "player"), None)
+        if pid is None:
+            return
+        target = state.player_by_id(pid)
+        if target.has_lost:
+            return
+        target.scheduled_agent_override = state.player_by_id(controller_id).agent
+        target.scheduled_agent_override_by = controller_id
+        if self.extra_turn_after:
+            target.extra_turn_after_controlled_turn = True
+        state.log.append(
+            f"P{controller_id} will control P{pid} during P{pid}'s next turn"
+        )
+
+    def describe(self) -> str:
+        rider = "; after that turn, they take an extra turn" if (
+            self.extra_turn_after
+        ) else ""
+        return f"you control target opponent during their next turn{rider}"
+
+
+def extra_turn_after_controlled_turn(state: "GameState", player) -> None:
+    """At the cleanup of a turn another player controlled: "After that
+    turn, that player takes an extra turn." -- the most recently created
+    extra turn is taken first (CR 500.7), so it goes to the front of
+    ``state.extra_turn_queue``."""
+    if not player.extra_turn_after_controlled_turn:
+        return
+    player.extra_turn_after_controlled_turn = False
+    state.extra_turn_queue.insert(0, player.id)
+    state.log.append(f"P{player.id} will take an extra turn")

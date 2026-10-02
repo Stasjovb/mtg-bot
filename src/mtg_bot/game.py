@@ -3168,6 +3168,10 @@ class Player:
     # Great Creator; ``mtg_bot.roto_turns.take_from_outside_the_game``).
     # Set once by ``simulate.setup_game(sideboards=...)``; empty by default.
     sideboard: tuple = ()
+    # Roto P4: "After that turn, that player takes an extra turn."
+    # (Emrakul, the Promised End) -- set with ``scheduled_agent_override``;
+    # the cleanup that reverts the override queues the extra turn.
+    extra_turn_after_controlled_turn: bool = False
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

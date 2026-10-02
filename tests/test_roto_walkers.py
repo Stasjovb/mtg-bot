@@ -1251,3 +1251,63 @@ def test_token_copy_exception_grammar_declines():
         "search your library for up to two frob cards with different names, "
         "put them onto the battlefield, then shuffle"
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Emrakul, the Promised End
+# ---------------------------------------------------------------------------
+
+
+def test_emrakul_costs_one_less_per_card_type_in_graveyard():
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.effects.generic.roto_walkers import PerCardTypeInYourGraveyard
+
+    s = arena()
+    emrakul = printing("Emrakul, the Promised End")
+    assert apply_cost_reductions(emrakul, s, 0, emrakul.mana_cost).total == 13
+    to_graveyard(s, _BEAR, 0)
+    to_graveyard(s, BASIC_LANDS["Swamp"], 0)
+    to_graveyard(s, make_instant("Shock", "{R}", DrawCards(amount=1)), 0)
+    to_graveyard(s, _BEAR, 1)  # the opponent's graveyard doesn't count
+    assert apply_cost_reductions(emrakul, s, 0, emrakul.mana_cost).total == 10
+    assert PerCardTypeInYourGraveyard().multiplier(s, 0) == 3
+    assert PerCardTypeInYourGraveyard().matches(s, 1)
+
+
+def test_emrakul_cast_trigger_controls_their_next_turn_then_extra_turn():
+    from mtg_bot.turn import run_cleanup_step, run_untap_step
+
+    s = arena()
+    (trig,) = printing("Emrakul, the Promised End").triggered_abilities
+    eff = trig.effect
+    assert eff.legal_targets(s, 0) == [("player", 1)]
+    p0_agent, p1_agent = s.players[0].agent, s.players[1].agent
+    eff.resolve(s, 0, (("player", 1),))
+    assert s.players[1].extra_turn_after_controlled_turn
+    # Their next turn: P0's agent decides for P1.
+    s.active_player_idx = 1
+    run_untap_step(s)
+    assert s.players[1].agent is p0_agent
+    run_cleanup_step(s)
+    assert s.players[1].agent is p1_agent
+    # After that turn, that player takes an extra turn.
+    assert s.extra_turn_queue == [1]
+    assert not s.players[1].extra_turn_after_controlled_turn
+    assert "extra turn" in eff.describe()
+
+
+def test_control_opponent_next_turn_edge_cases():
+    from mtg_bot.effects.generic.roto_walkers import (
+        ControlTargetOpponentDuringNextTurn,
+        extra_turn_after_controlled_turn,
+    )
+
+    s = arena()
+    eff = ControlTargetOpponentDuringNextTurn()
+    eff.resolve(s, 0, ())
+    s.players[1].has_lost = True
+    eff.resolve(s, 0, (("player", 1),))
+    assert s.players[1].scheduled_agent_override is None
+    extra_turn_after_controlled_turn(s, s.players[1])
+    assert s.extra_turn_queue == []
+    assert "extra turn" not in eff.describe()

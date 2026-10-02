@@ -136,6 +136,21 @@ _COST_REDUCTION_PER_EACH: dict[str, Condition] = {
 }
 
 
+def _per_each_condition(what: str):
+    """The counted thing's condition, or ``None``. Roto P4 adds "card
+    type among cards in your graveyard" (Emrakul, the Promised End)."""
+    condition = _COST_REDUCTION_PER_EACH.get(what)
+    if condition is not None:
+        return condition
+    if what == "card type among cards in your graveyard":
+        from mtg_bot.effects.generic.roto_walkers import (
+            PerCardTypeInYourGraveyard,
+        )
+
+        return PerCardTypeInYourGraveyard()
+    return None
+
+
 # Conditions recognized as cost-reduction triggers. The mapping is from
 # the verbatim oracle-text phrase (after the ``if`` and before the
 # trailing period) to a structural ``Condition`` object. Each
@@ -285,7 +300,7 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     # condition whose ``multiplier`` scales the unit amount.
     m = _COST_REDUCTION_LINE_FOR_EACH.match(stripped)
     if m is not None:
-        condition = _COST_REDUCTION_PER_EACH.get(m.group("what"))
+        condition = _per_each_condition(m.group("what"))
         if condition is None:
             return None
         return CostReduction(amount=int(m.group(1)), condition=condition)
