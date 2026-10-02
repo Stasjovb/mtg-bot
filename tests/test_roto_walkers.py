@@ -1311,3 +1311,183 @@ def test_control_opponent_next_turn_edge_cases():
     extra_turn_after_controlled_turn(s, s.players[1])
     assert s.extra_turn_queue == []
     assert "extra turn" not in eff.describe()
+
+
+# ---------------------------------------------------------------------------
+# Chain of Vapor
+# ---------------------------------------------------------------------------
+
+
+def test_chain_of_vapor_bounces_and_offers_a_land_for_a_copy():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    land = put(s, BASIC_LANDS["Island"], 1)
+    mine = put(s, _ROCK, 0)
+    vapor = _cast_on_stack(s, printing("Chain of Vapor"), 0)
+    s.stack[-1].targets = (("creature", bear.id),)
+    agent(s, 1).targets = [("permanent", mine.id)]
+    resolve_top_of_stack(s)
+    assert bear in s.players[1].hand
+    assert land not in s.battlefield  # sacrificed for the copy
+    (copy_item,) = s.stack
+    assert copy_item.controller_id == 1 and copy_item.source.is_spell_copy
+    assert copy_item.targets == (("permanent", mine.id),)
+    resolve_top_of_stack(s)
+    assert mine in s.players[0].hand
+    assert vapor in s.players[0].graveyard
+
+
+def test_chain_of_vapor_declined_or_without_lands():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    _cast_on_stack(s, printing("Chain of Vapor"), 0)
+    s.stack[-1].targets = (("creature", bear.id),)
+    resolve_top_of_stack(s)  # no lands: no copy
+    assert bear in s.players[1].hand and s.stack == []
+    s2 = arena()
+    bear2 = put(s2, _BEAR, 1)
+    put(s2, BASIC_LANDS["Island"], 1)
+    agent(s2, 1).yes = False
+    _cast_on_stack(s2, printing("Chain of Vapor"), 0)
+    s2.stack[-1].targets = (("creature", bear2.id),)
+    resolve_top_of_stack(s2)
+    assert s2.stack == [] and len(s2.battlefield) == 1
+    eff = printing("Chain of Vapor").spell_effect
+    eff.resolve(s2, 0, ())
+    eff.resolve(s2, 0, (("creature", 999),))
+    assert "copy this spell" in eff.describe()
+
+
+# ---------------------------------------------------------------------------
+# Sin, Spira's Punishment
+# ---------------------------------------------------------------------------
+
+
+def test_sin_exiles_random_permanent_cards_and_repeats_on_lands():
+    import random as _random
+
+    s = arena()
+    s.rng = _random.Random(3)
+    land = to_graveyard(s, BASIC_LANDS["Forest"], 0)
+    bear = to_graveyard(s, _BEAR, 0)
+    instant = to_graveyard(s, make_instant("Shock", "{R}", DrawCards(amount=1)), 0)
+    eff = printing("Sin, Spira's Punishment").triggered_abilities[0].effect
+    eff.resolve(s, 0, ())
+    tokens = [o for o in s.battlefield if "Token" in o.printing.supertypes]
+    names = sorted(o.printing.name for o in tokens)
+    assert all(o.tapped for o in tokens)
+    # Either the Bear came first (one token) or the Forest first (then
+    # the process repeated onto the Bear).
+    assert names in (["Bear"], ["Bear", "Forest"])
+    assert bear in s.players[0].exile and instant in s.players[0].graveyard
+    assert (land in s.players[0].exile) == ("Forest" in names)
+    assert "random" in eff.describe()
+
+
+def test_sin_with_only_lands_keeps_going_until_none_left():
+    s = arena()
+    for _ in range(3):
+        to_graveyard(s, BASIC_LANDS["Forest"], 0)
+    eff = printing("Sin, Spira's Punishment").triggered_abilities[0].effect
+    eff.resolve(s, 0, ())
+    assert len([o for o in s.battlefield if o.printing.name == "Forest"]) == 3
+    assert s.players[0].graveyard == []
+
+
+# ---------------------------------------------------------------------------
+# Chandra, Hope's Beacon
+# ---------------------------------------------------------------------------
+
+from mtg_bot.effects.generic.life import GainLife  # noqa: E402
+
+_GROWTH = make_instant("Growth Stand-in", "{R}", GainLife(amount=2))
+
+
+def test_chandra_copies_the_first_instant_or_sorcery_each_turn():
+    s = arena()
+    _walker(s, "Chandra, Hope's Beacon")
+    for _ in range(2):
+        put(s, BASIC_LANDS["Mountain"], 0)
+    first = to_hand(s, _GROWTH, 0)
+    second = to_hand(s, _GROWTH, 0)
+    apply_action(s, 0, CastSpell(first.id))
+    # The copy trigger sits above the spell.
+    assert s.stack[-1].ability is not None
+    drain_stack(s)
+    assert s.players[0].life == 24  # the spell and its copy
+    apply_action(s, 0, CastSpell(second.id))
+    assert s.stack[-1].ability is None  # once each turn
+    drain_stack(s)
+    assert s.players[0].life == 26
+
+
+def test_copy_triggering_spell_when_the_spell_is_gone():
+    from mtg_bot.effects.generic.roto_walkers import CopyTriggeringSpell
+
+    s = arena()
+    s.resolving_event_subject_id = 12345
+    CopyTriggeringSpell().resolve(s, 0, ())
+    assert s.stack == [] and "gone" in s.log[-1]
+    assert CopyTriggeringSpell().event_subject_id({}) == -1
+    assert "copy that spell" in CopyTriggeringSpell().describe()
+
+
+def test_chandra_plus_one_may_cast_one_instant_or_sorcery_from_among_them():
+    from mtg_bot.actions import CastSpell as _Cast
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        expire_exile_play_permissions,
+    )
+
+    s = arena()
+    chandra = _walker(s, "Chandra, Hope's Beacon")
+    for _ in range(2):
+        put(s, BASIC_LANDS["Mountain"], 0)
+    a = to_library(s, _GROWTH, 0)
+    b = to_library(s, _GROWTH, 0)
+    bear = to_library(s, _BEAR, 0)
+    for _ in range(3):
+        to_library(s, BASIC_LANDS["Mountain"], 0)
+    _activate_ability(s, 0, chandra.id, _ability_index(chandra, loyalty=-1))
+    drain_stack(s)
+    assert len(s.players[0].exile) == 5 and len(s.players[0].library) == 1
+    assert bear.exile_play_permission is None
+    casts = {x.card_id for x in legal_actions(s, 0) if isinstance(x, _Cast)}
+    assert {a.id, b.id} <= casts
+    apply_action(s, 0, _Cast(a.id))
+    drain_stack(s)
+    casts = {x.card_id for x in legal_actions(s, 0) if isinstance(x, _Cast)}
+    assert b.id not in casts  # one spell from among them
+    # The permission outlives this turn's cleanup ...
+    eff = chandra.printing.activated_abilities[1].effect
+    assert "from among them" in eff.describe()
+
+
+def test_chandra_minus_x_hits_up_to_two_targets():
+    s = arena()
+    chandra = _walker(s, "Chandra, Hope's Beacon", loyalty=5)
+    bear = put(s, _BEAR, 1)
+    agent(s, 0).x_value = 3
+    agent(s, 0).targets = [("player", 1), ("creature", bear.id)]
+    _activate_ability(s, 0, chandra.id, _ability_index(chandra, x=True))
+    drain_stack(s)
+    assert chandra.loyalty_counters == 2
+    assert s.players[1].life == 17 and bear not in s.battlefield
+
+
+def test_exile_top_cast_one_with_a_short_library():
+    from mtg_bot.effects.generic.card_flow import CardFilter
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExileTopMayCastOneFromAmongUntilEndOfNextTurn,
+    )
+
+    s = arena()
+    to_library(s, _GROWTH, 0)
+    ExileTopMayCastOneFromAmongUntilEndOfNextTurn(
+        count=3, card_filter=CardFilter(any_types=("Instant",)),
+    ).resolve(s, 0, ())
+    (card,) = s.players[0].exile
+    assert card.exile_play_permission.group_ids == (card.id,)

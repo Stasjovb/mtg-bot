@@ -1023,7 +1023,113 @@ def _control_opponent_next_turn(m):
     )
 
 
+# "return target <np> to its owner's hand. Then that permanent's
+# controller may sacrifice a land of their choice. If the player does,
+# they may copy this spell and may choose a new target for that copy"
+# (Chain of Vapor).
+_BOUNCE_CHAIN_COPY_RE = re.compile(
+    r"^return target (?P<np>.+?) to its owner's hand\. Then that "
+    r"permanent's controller may sacrifice a land of their choice\. If the "
+    r"player does, they may copy this spell and may choose a new target for "
+    r"that copy$"
+)
+
+
+def _bounce_chain_copy(m):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.targets import TargetSpec
+
+    target_filter = parse_permanent_phrase(m.group("np"))
+    if target_filter is None:
+        return None
+    return rw.BounceThenChainCopyBySacrificingLand(
+        targets=(TargetSpec(filter=target_filter),),
+    )
+
+
+# "exile a <desc> card from your graveyard at random, then create a tapped
+# token that's a copy of that card. If the exiled card is a land card,
+# repeat this process" (Sin, Spira's Punishment).
+_RANDOM_GRAVEYARD_TOKEN_COPY_RE = re.compile(
+    r"^exile an? (?P<desc>.+?) card from your graveyard at random, then "
+    r"create a tapped token that's a copy of that card\. If the exiled card "
+    r"is a land card, repeat this process$"
+)
+
+
+def _random_graveyard_token_copy(m):
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+    if card_filter is None:
+        return None
+    return rw.ExileRandomGraveyardCardTokenCopyRepeatIfLand(
+        card_filter=card_filter,
+    )
+
+
+# "copy it / that spell. You may choose new targets for the copy" -- the
+# body of a "whenever you cast <a spell>" trigger (Chandra, Hope's
+# Beacon); "it" is the cast spell (the trigger's event subject).
+_COPY_CAST_SPELL_RE = re.compile(
+    r"^copy (?:it|that spell)\. You may choose new targets for the copy$"
+)
+
+
+def _copy_cast_spell(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    return rw.CopyTriggeringSpell()
+
+
+# "exile the top <N> cards of your library. Until the end of your next
+# turn, you may cast a <desc> spell from among those exiled cards"
+# (Chandra, Hope's Beacon's +1).
+_EXILE_TOP_CAST_ONE_RE = re.compile(
+    rf"^exile the top (?P<n>{_N}) cards of your library\. Until the end of "
+    r"your next turn, you may cast an? (?P<desc>.+?) spell from among those "
+    r"exiled cards$"
+)
+
+
+def _exile_top_cast_one(m):
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+    if card_filter is None:
+        return None
+    return rw.ExileTopMayCastOneFromAmongUntilEndOfNextTurn(
+        count=_n(m.group("n")), card_filter=card_filter,
+    )
+
+
+# "deals X damage to each of up to <N> targets" (Chandra, Hope's
+# Beacon's -X; X is the loyalty X).
+_X_DAMAGE_EACH_OF_UP_TO_N_RE = re.compile(
+    rf"^deals X damage to each of up to (?P<n>{_N}) targets$"
+)
+
+
+def _x_damage_each_of_up_to_n(m):
+    from mtg_bot.effects.formulas import ResolvingX
+    from mtg_bot.effects.generic.cube_creatures_rmc import DealDamageByFormula
+    from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+    slot = TargetSpec(any_target_filter(), count_min=0, count_max=1)
+    return DealDamageByFormula(
+        amount=ResolvingX(), targets=(slot,) * _n(m.group("n")),
+    )
+
+
 _PHRASE_RECOGNIZERS_3 = (
+    (_COPY_CAST_SPELL_RE, _copy_cast_spell),
+    (_EXILE_TOP_CAST_ONE_RE, _exile_top_cast_one),
+    (_X_DAMAGE_EACH_OF_UP_TO_N_RE, _x_damage_each_of_up_to_n),
+    (_RANDOM_GRAVEYARD_TOKEN_COPY_RE, _random_graveyard_token_copy),
+    (_BOUNCE_CHAIN_COPY_RE, _bounce_chain_copy),
     (_CONTROL_OPPONENT_NEXT_TURN_RE, _control_opponent_next_turn),
     (_TOKEN_COPY_OF_TARGET_EXCEPT_RE, _token_copy_of_target_except),
     (_EXILE_THEN_COPY_UNLESS_AURA_RE, _exile_then_copy_unless_aura),

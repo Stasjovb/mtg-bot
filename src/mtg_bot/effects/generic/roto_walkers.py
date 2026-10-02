@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.generic.cube_creatures_rmc import ExilePlayPermission
 
 if TYPE_CHECKING:
     from mtg_bot.game import GameState
@@ -1509,3 +1510,247 @@ def extra_turn_after_controlled_turn(state: "GameState", player) -> None:
     player.extra_turn_after_controlled_turn = False
     state.extra_turn_queue.insert(0, player.id)
     state.log.append(f"P{player.id} will take an extra turn")
+
+
+# ---------------------------------------------------------------------------
+# Chain of Vapor
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BounceThenChainCopyBySacrificingLand(Effect):
+    """"Return target <np> to its owner's hand. Then that permanent's
+    controller may sacrifice a land of their choice. If the player does,
+    they may copy this spell and may choose a new target for that copy."
+    (Chain of Vapor). The bounced permanent's controller (as it last
+    existed) decides through ``choose_yes_no`` / ``choose_sacrifice``;
+    the copy goes on the stack under their control
+    (``actions.push_spell_copy``, the Chain Lightning precedent)."""
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import push_spell_copy
+        from mtg_bot.effects.generic.spell_copies import _choose_copy_targets
+        from mtg_bot.effects.generic.targets_helpers import (
+            _bounce_to_hand,
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.turn import sacrifice
+
+        if not targets or not self.targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, targets[0]))
+            return
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if obj is None:  # pragma: no cover - legality checked above
+            return
+        chooser = state.player_by_id(obj.controller_id)
+        _bounce_to_hand(state, obj)
+        state.log.append(f"{obj.printing.name} returns to its owner's hand")
+        spell = state.resolving_spell
+        if spell is None or chooser.has_lost or chooser.agent is None:
+            return
+        lands = [
+            o for o in state.battlefield
+            if o.controller_id == chooser.id and o.printing.is_land
+        ]
+        if not lands or not chooser.agent.choose_yes_no(
+            state, chooser.id, f"Sacrifice a land to copy {spell.printing.name}?",
+        ):
+            return
+        pick = chooser.agent.choose_sacrifice(
+            state, chooser.id, [o.id for o in lands],
+        )
+        land = next((o for o in lands if o.id == pick), lands[0])
+        sacrifice(state, land)
+        if not chooser.agent.choose_yes_no(
+            state, chooser.id, f"Copy {spell.printing.name}?",
+        ):
+            return
+        copy_targets = _choose_copy_targets(
+            state, chooser.id, spell.printing, targets,
+        )
+        push_spell_copy(state, spell.printing, chooser.id, copy_targets)
+
+    def describe(self) -> str:
+        return (
+            "return target permanent to its owner's hand; its controller may "
+            "sacrifice a land to copy this spell"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sin, Spira's Punishment
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExileRandomGraveyardCardTokenCopyRepeatIfLand(Effect):
+    """"Exile a <filter> card from your graveyard at random, then create a
+    tapped token that's a copy of that card. If the exiled card is a land
+    card, repeat this process." (Sin, Spira's Punishment). The random
+    pick uses ``state.rng``; the token copies the card's copiable values
+    (its printing) and enters tapped."""
+
+    card_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import exile_card
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        p = state.player_by_id(controller_id)
+        while True:
+            options = [
+                c for c in p.graveyard if self.card_filter.matches(c.printing)
+            ]
+            if not options:
+                return
+            card = state.rng.choice(options)
+            p.graveyard.remove(card)
+            exile_card(state, card)
+            state.log.append(
+                f"P{controller_id} exiles {card.printing.name} at random"
+            )
+            CreateToken(
+                token_printing=CopyExceptions().apply(card.printing),
+                tapped=True,
+            ).resolve(state, controller_id, ())
+            if not card.printing.is_land:
+                return
+
+    def describe(self) -> str:
+        return (
+            f"exile a {self.card_filter.describe()} from your graveyard at "
+            "random and create a tapped token copy; repeat if it's a land"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Chandra, Hope's Beacon
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CopyTriggeringSpell(Effect):
+    """"Whenever you cast <a spell>, copy it. You may choose new targets
+    for the copy." (Chandra, Hope's Beacon). The triggering spell is the
+    event's ``spell`` subject (``event_subject_id``, bound when the
+    trigger is put on the stack); if it is still on the stack it is
+    copied under the trigger's controller (``actions.push_spell_copy``),
+    new targets through ``spell_copies._choose_copy_targets``."""
+
+    def event_subject_id(self, subjects) -> int:
+        spell = subjects.get("spell")
+        return spell.id if spell is not None else -1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import push_spell_copy
+        from mtg_bot.effects.generic.spell_copies import _choose_copy_targets
+
+        sid = state.resolving_event_subject_id
+        item = next(
+            (
+                i for i in state.stack
+                if i.ability is None and i.source.id == sid
+            ),
+            None,
+        )
+        if item is None:
+            state.log.append("the spell to copy is gone")
+            return
+        printing = item.source.printing
+        copy_targets = _choose_copy_targets(
+            state, controller_id, printing, item.targets,
+        )
+        push_spell_copy(
+            state, printing, controller_id, copy_targets, x_value=item.x_value,
+        )
+        state.log.append(f"P{controller_id} copies {printing.name}")
+
+    def describe(self) -> str:
+        return "copy that spell; you may choose new targets for the copy"
+
+
+@dataclass(frozen=True)
+class GroupedExilePlayPermission(ExilePlayPermission):
+    """"You may cast <a spell> from among those exiled cards": one
+    permission per eligible card, all void once any card of the group
+    has left exile (the one that was cast)."""
+
+    group_ids: tuple = ()
+
+    def usable_now(self, state, player_id) -> bool:
+        if not ExilePlayPermission.usable_now(self, state, player_id):
+            return False
+        in_exile = {c.id for pl in state.players for c in pl.exile}
+        return all(gid in in_exile for gid in self.group_ids)
+
+
+@dataclass(frozen=True)
+class ExileTopMayCastOneFromAmongUntilEndOfNextTurn(Effect):
+    """"Exile the top <N> cards of your library. Until the end of your
+    next turn, you may cast <a filter> spell from among those exiled
+    cards." (Chandra, Hope's Beacon's +1). The cards are exiled face
+    up; each matching card gets a grouped, cast-only permission lasting
+    until the end of the controller's next turn, and casting one voids
+    the rest ("a spell", one)."""
+
+    count: int = 1
+    card_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            UNTIL_END_OF_YOUR_NEXT_TURN,
+            exile_card,
+        )
+
+        p = state.player_by_id(controller_id)
+        exiled = []
+        for _ in range(self.count):
+            if not p.library:
+                break
+            card = p.library.pop(0)
+            exile_card(state, card)
+            exiled.append(card)
+        eligible = [c for c in exiled if self.card_filter.matches(c.printing)]
+        group = tuple(c.id for c in eligible)
+        for card in eligible:
+            card.exile_play_permission = GroupedExilePlayPermission(
+                player_id=controller_id,
+                duration=UNTIL_END_OF_YOUR_NEXT_TURN,
+                granted_turn=state.turn_number,
+                granted_player_turns=p.turns_started,
+                cast_only=True,
+                group_ids=group,
+            )
+        state.log.append(
+            f"P{controller_id} exiles {len(exiled)} card(s); may cast one of "
+            f"{len(eligible)}"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"exile the top {self.count} cards; until the end of your next "
+            f"turn, you may cast a {self.card_filter.describe()} from among them"
+        )
