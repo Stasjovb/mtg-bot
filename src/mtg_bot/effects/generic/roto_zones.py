@@ -983,3 +983,344 @@ def pay_flashback_extra_costs(state, player_id: int, card) -> None:
                 f"flashback cost: P{player_id} sacrifices {chosen.printing.name}"
             )
             sacrifice(state, chosen)
+
+
+# ---------------------------------------------------------------------
+# Recursion & reanimation (F13)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReturnSelfToOwnersHandCost:
+    """``ActivationCost.extra_costs`` atom: "Return this <permanent> to
+    its owner's hand" (Recurring Nightmare). Payable while the source is
+    on the battlefield; paying it bounces the source (CR 602.2: the
+    ability still resolves)."""
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return source is not None and source in state.battlefield
+
+    def pay(self, state, player_id: int, source) -> list:
+        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
+
+        state.log.append(
+            f"P{player_id} returns {source.printing.name} to its owner's hand "
+            f"(cost)"
+        )
+        _bounce_to_hand(state, source)
+        return []
+
+    def describe(self) -> str:
+        return "Return this permanent to its owner's hand"
+
+
+@dataclass(frozen=True)
+class MillThenReturnCardFromGraveyardToHand(Effect):
+    """"Mill N cards, then return a <creature or planeswalker> card from
+    your graveyard to your hand." (Takenuma, Abandoned Mire's channel.)
+    The return is untargeted and chosen on resolution
+    (``choose_card_from_library`` over the graveyard ids), so a card just
+    milled qualifies; with no matching card nothing returns."""
+
+    count: int = 3
+    card_filter: CardFilter = CardFilter()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        milled = 0
+        for _ in range(self.count):
+            if not p.library:
+                break
+            put_into_graveyard(state, p.library.pop(0))
+            milled += 1
+        state.log.append(f"P{controller_id} mills {milled} card(s)")
+        options = [c for c in p.graveyard if self.card_filter.matches(c.printing)]
+        if not options:
+            return
+        pick = options[0].id
+        if p.agent is not None:
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == pick), options[0])
+        p.graveyard.remove(card)
+        card.zone = Zone.HAND
+        p.hand.append(card)
+        state.log.append(f"P{controller_id} returns {card.printing.name} to hand")
+
+    def describe(self) -> str:
+        return (
+            f"mill {self.count} cards, then return a "
+            f"{self.card_filter.describe()} from your graveyard to your hand"
+        )
+
+
+def _graveyard_card_targets(state, card_filter) -> list:
+    return [
+        ("card_in_graveyard", c.id)
+        for p in state.players for c in p.graveyard
+        if card_filter.matches(c.printing)
+    ]
+
+
+def _graveyard_target_card(state, targets, card_filter):
+    """The targeted card if it is still a matching card in a graveyard."""
+    for kind, tid in targets:
+        if kind != "card_in_graveyard":
+            continue
+        for p in state.players:
+            for c in p.graveyard:
+                if c.id == tid and card_filter.matches(c.printing):
+                    return p, c
+    return None, None
+
+
+@dataclass(frozen=True)
+class ExileTargetGraveyardCardThen(Effect):
+    """"Exile target <land> card from a graveyard. <Then>." (Deathrite
+    Shaman's three abilities: add one mana of any color / each opponent
+    loses 2 life / you gain 2 life.) ``then`` is untargeted. If the
+    target is gone when this resolves, the whole ability does nothing
+    (CR 608.2b)."""
+
+    card_filter: CardFilter = CardFilter()
+    then: "Effect | None" = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return _graveyard_card_targets(state, self.card_filter)
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        owner, card = _graveyard_target_card(state, targets, self.card_filter)
+        if card is None:
+            state.log.append("the graveyard target is gone; nothing happens")
+            return
+        owner.graveyard.remove(card)
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(f"{card.printing.name} is exiled from a graveyard")
+        if self.then is not None:
+            self.then.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        text = f"exile target {self.card_filter.describe()} from a graveyard"
+        if self.then is not None:
+            text += f"; {self.then.describe()}"
+        return text
+
+
+@dataclass(frozen=True)
+class ExileTargetGraveyardCardThenIfType(Effect):
+    """"Exile target card from a graveyard. If it was a <creature> card,
+    <A>. Otherwise, <B>." (Cling to Dust.) The type is the exiled card's
+    (last known in the graveyard)."""
+
+    card_filter: CardFilter = CardFilter()
+    if_filter: CardFilter = CardFilter()
+    if_effect: "Effect | None" = None
+    else_effect: "Effect | None" = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return _graveyard_card_targets(state, self.card_filter)
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        owner, card = _graveyard_target_card(state, targets, self.card_filter)
+        if card is None:
+            return
+        owner.graveyard.remove(card)
+        card.zone = Zone.EXILE
+        owner.exile.append(card)
+        state.log.append(f"{card.printing.name} is exiled from a graveyard")
+        branch = (
+            self.if_effect if self.if_filter.matches(card.printing)
+            else self.else_effect
+        )
+        branch.resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return (
+            f"exile target {self.card_filter.describe()} from a graveyard; if "
+            f"it was a {self.if_filter.describe()}, {self.if_effect.describe()};"
+            f" otherwise, {self.else_effect.describe()}"
+        )
+
+
+@dataclass(frozen=True)
+class PutTargetGraveyardCardOnTopOfLibrary(Effect):
+    """"Put target card from a graveyard on top of its owner's library."
+    (Noxious Revival.) The card becomes known to every player."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return _graveyard_card_targets(state, self.card_filter)
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+        from mtg_bot.turn import note_cards_put_into_library
+
+        owner, card = _graveyard_target_card(state, targets, self.card_filter)
+        if card is None:
+            return
+        owner.graveyard.remove(card)
+        card.zone = Zone.LIBRARY
+        owner.library.insert(0, card)
+        reveal_to_all(state, card)
+        note_cards_put_into_library(state, owner.id)
+        state.log.append(
+            f"{card.printing.name} is put on top of P{owner.id}'s library"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"put target {self.card_filter.describe()} from a graveyard on top "
+            f"of its owner's library"
+        )
+
+
+@dataclass(frozen=True)
+class ReturnTargetsFromYourGraveyardToBattlefield(Effect):
+    """"Return [up to N] target <creature> card[s] from your graveyard to
+    the battlefield[ with a -1/-1 counter on it][ and attach this
+    Equipment to it]."
+
+    * ``min_n`` / ``max_n`` -- the target count (Reveillark: up to two;
+      Persist and Pre-War Formalwear: one).
+    * ``minus_one_counter`` -- Persist: the creature gets a -1/-1 counter
+      as it arrives (before state-based actions are checked).
+    * ``attach_source`` -- Pre-War Formalwear: the resolving Equipment
+      becomes attached to the returned creature if both are still on
+      the battlefield.
+
+    Each target still in your graveyard and matching is returned; the
+    others are skipped."""
+
+    card_filter: CardFilter = CardFilter()
+    min_n: int = 1
+    max_n: int = 1
+    minus_one_counter: bool = False
+    attach_source: bool = False
+
+    def requires_target(self) -> bool:
+        return self.min_n > 0
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (self.min_n, self.max_n)
+
+    def legal_targets(self, state, controller_id):
+        p = state.player_by_id(controller_id)
+        return [
+            ("card_in_graveyard", c.id) for c in p.graveyard
+            if self.card_filter.matches(c.printing)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.reanimation import reanimate_card
+
+        p = state.player_by_id(controller_id)
+        seen: set[int] = set()
+        returned = []
+        for kind, tid in targets:
+            if kind != "card_in_graveyard" or tid in seen:
+                continue
+            seen.add(tid)
+            card = next(
+                (c for c in p.graveyard
+                 if c.id == tid and self.card_filter.matches(c.printing)),
+                None,
+            )
+            if card is not None:
+                returned.append(card)
+        for card in returned[: self.max_n]:
+            reanimate_card(state, card, controller_id)
+            if card not in state.battlefield:
+                continue
+            if self.minus_one_counter:
+                from mtg_bot.game import add_minus_one_counters
+
+                add_minus_one_counters(state, card, 1)
+            if self.attach_source:
+                src = state.resolving_source
+                if src is not None and src in state.battlefield:
+                    src.attached_to = card.id
+                    state.log.append(
+                        f"{src.printing.name} becomes attached to "
+                        f"{card.printing.name}"
+                    )
+
+    def describe(self) -> str:
+        count = (
+            f"up to {self.max_n} target " if self.min_n == 0
+            else "target "
+        )
+        text = (
+            f"return {count}{self.card_filter.describe()}(s) from your "
+            f"graveyard to the battlefield"
+        )
+        if self.minus_one_counter:
+            text += " with a -1/-1 counter on it"
+        if self.attach_source:
+            text += " and attach this Equipment to it"
+        return text
+
+
+@dataclass(frozen=True)
+class CopyIfCastFromGraveyard(Effect):
+    """"<Effect>. If this spell was cast from a graveyard, you may copy
+    this spell and may choose a new target for the copy." (Sevinne's
+    Reclamation, cast with flashback.) The copy is put on the stack above
+    the original with a new target chosen through ``choose_target`` among
+    the inner effect's legal targets (it keeps the original's when the
+    agent answers outside them)."""
+
+    inner: "Effect | None" = None
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def target_count_range(self) -> tuple[int, int]:
+        return self.inner.target_count_range()
+
+    def legal_targets(self, state, controller_id):
+        return self.inner.legal_targets(state, controller_id)
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import push_spell_copy
+
+        spell = state.resolving_spell
+        self.inner.resolve(state, controller_id, targets)
+        if spell is None or spell.is_spell_copy or not spell.cast_via_flashback:
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, f"copy {spell.printing.name}?",
+        ):
+            return
+        new_targets = tuple(targets)
+        legal = self.inner.legal_targets(state, controller_id)
+        if legal and p.agent is not None:
+            pick = p.agent.choose_target(state, controller_id, legal)
+            if pick in legal:
+                new_targets = (pick,)
+        push_spell_copy(state, spell.printing, controller_id, targets=new_targets)
+        state.log.append(f"P{controller_id} copies {spell.printing.name}")
+
+    def describe(self) -> str:
+        return (
+            f"{self.inner.describe()}; if this spell was cast from a graveyard, "
+            f"you may copy it and choose a new target for the copy"
+        )

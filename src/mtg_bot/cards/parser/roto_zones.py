@@ -481,6 +481,135 @@ def roto_zones_casting_keyword_fields(clause: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------
+# Recursion & reanimation (F13)
+# ---------------------------------------------------------------------
+
+_MILL_THEN_RETURN_RE = re.compile(
+    r"^mill (?P<n>\w+) cards, then return (?P<desc>an? .+? card) from your "
+    r"graveyard to your hand$"
+)
+# "exile target <desc> card from a graveyard. <then>" as ONE effect, so a
+# target that left the graveyard stops the follow-up too (CR 608.2b; a
+# compound ``Sequence`` would still run it). Deliberately no bare
+# "exile target <desc> card from a graveyard" recognizer: it would let the
+# compound splitter claim these lines as a ``Sequence`` first.
+_EXILE_TARGET_GRAVEYARD_THEN_RE = re.compile(
+    r"^exile target (?P<desc>(?:.+? )?card) from a graveyard\. (?P<then>.+)$"
+)
+_EXILE_TARGET_GRAVEYARD_IF_TYPE_RE = re.compile(
+    r"^exile target (?P<desc>(?:.+? )?card) from a graveyard\. If it was "
+    r"(?P<if>an? .+? card), (?P<a>.+?)\. Otherwise, (?P<b>.+)$"
+)
+_PUT_TARGET_GRAVEYARD_CARD_ON_TOP_RE = re.compile(
+    r"^put target (?P<desc>(?:.+? )?card) from a graveyard on top of its owner's "
+    r"library$"
+)
+_RETURN_FROM_YOUR_GRAVEYARD_RE = re.compile(
+    r"^return (?P<upto>up to (?P<n>two|three) )?target (?P<desc>.+?) "
+    r"(?P<noun>cards?)(?P<suffix> with (?:power|toughness|mana value) \d+ "
+    r"or less)? from your graveyard to the battlefield"
+    r"(?P<counter> with a -1/-1 counter on it)?"
+    r"(?P<attach> and attach this Equipment to it)?$"
+)
+# "<sentence>. If this spell was cast from a graveyard, you may copy this
+# spell and may choose a new target for the copy" (Sevinne's Reclamation).
+_COPY_IF_CAST_FROM_GRAVEYARD_RE = re.compile(
+    r"^(?P<body>.+)\. If this spell was cast from a graveyard, you may copy "
+    r"this spell and may choose a new target for the copy$"
+)
+
+
+def _target_card_filter(desc: str):
+    """``land card`` / ``instant or sorcery card`` / ``card`` -> filter."""
+    article = "an" if desc[0] in "aeiou" else "a"
+    return parse_roto_descriptor(f"{article} {desc}")
+
+
+def _lower(sentence: str) -> str:
+    return sentence[0].lower() + sentence[1:]
+
+
+def _parse_recursion(phrase: str) -> Effect | None:
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import roto_zones as rz
+
+    m = _MILL_THEN_RETURN_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n"))
+        f = parse_roto_descriptor(m.group("desc"))
+        if n is None or f is None:
+            return None
+        return rz.MillThenReturnCardFromGraveyardToHand(count=n, card_filter=f)
+    m = _EXILE_TARGET_GRAVEYARD_IF_TYPE_RE.match(phrase)
+    if m is not None:
+        f = _target_card_filter(m.group("desc"))
+        if_f = parse_roto_descriptor(m.group("if"))
+        a = _parse_effect(m.group("a"))
+        b = _parse_effect(_lower(m.group("b")))
+        if None in (f, if_f, a, b) or a.requires_target() or b.requires_target():
+            return None
+        return rz.ExileTargetGraveyardCardThenIfType(
+            card_filter=f, if_filter=if_f, if_effect=a, else_effect=b,
+        )
+    m = _EXILE_TARGET_GRAVEYARD_THEN_RE.match(phrase)
+    if m is not None:
+        f = _target_card_filter(m.group("desc"))
+        then = _parse_effect(_lower(m.group("then")))
+        if f is None or then is None or then.requires_target():
+            return None
+        return rz.ExileTargetGraveyardCardThen(card_filter=f, then=then)
+    m = _PUT_TARGET_GRAVEYARD_CARD_ON_TOP_RE.match(phrase)
+    if m is not None:
+        f = _target_card_filter(m.group("desc"))
+        if f is None:
+            return None
+        return rz.PutTargetGraveyardCardOnTopOfLibrary(card_filter=f)
+    m = _RETURN_FROM_YOUR_GRAVEYARD_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n")) if m.group("upto") else 1
+        # The plural noun goes with "up to N" and only with it.
+        if (m.group("noun") == "cards") != (n > 1):
+            return None
+        f = _target_card_filter(
+            f"{m.group('desc')} card{m.group('suffix') or ''}"
+        )
+        if f is None:
+            return None
+        return rz.ReturnTargetsFromYourGraveyardToBattlefield(
+            card_filter=f, min_n=0 if m.group("upto") else 1, max_n=n,
+            minus_one_counter=m.group("counter") is not None,
+            attach_source=m.group("attach") is not None,
+        )
+    m = _COPY_IF_CAST_FROM_GRAVEYARD_RE.match(phrase)
+    if m is not None:
+        inner = _parse_effect(m.group("body"))
+        if inner is None or inner.target_count_range() != (1, 1):
+            return None
+        return rz.CopyIfCastFromGraveyard(inner=inner)
+    return None
+
+
+# "Return this <permanent> to its owner's hand" -- a cost piece
+# (Recurring Nightmare).
+_RETURN_SELF_TO_HAND_COST_RE = re.compile(
+    r"^[Rr]eturn this (?:enchantment|artifact|creature|land|permanent) to "
+    r"its owner's hand$"
+)
+
+
+def parse_roto_zones_cost_piece(piece: str):
+    """``activated._classify_cost_piece`` hook: a P2 ``extra_costs``
+    atom for ``piece``, or ``None``."""
+    if _disabled():
+        return None
+    if _RETURN_SELF_TO_HAND_COST_RE.match(piece):
+        from mtg_bot.effects.generic.roto_zones import ReturnSelfToOwnersHandCost
+
+        return ReturnSelfToOwnersHandCost()
+    return None
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
@@ -488,6 +617,7 @@ _EFFECT_PARSERS = (
     _parse_tutors,
     _parse_graveyard_hate,
     _parse_hand_disruption,
+    _parse_recursion,
 )
 
 

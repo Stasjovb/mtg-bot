@@ -332,6 +332,11 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_cost_piece
 
     atom = parse_rmc_cost_piece(piece)
+    if atom is None:
+        # Roto P2 cost atoms (return this permanent to its owner's hand).
+        from mtg_bot.cards.parser.roto_zones import parse_roto_zones_cost_piece
+
+        atom = parse_roto_zones_cost_piece(piece)
     if atom is not None:
         return _CostPiece(kind="extra", atom=atom)
     return None

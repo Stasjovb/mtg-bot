@@ -71,6 +71,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Necromancy",
     "Oath of Druids",
     "Parallax Wave",
+    "Recurring Nightmare",
     "Rest in Peace",
     "Sneak Attack",
     "Squandered Resources",
