@@ -981,6 +981,9 @@ class GameObject:
     # hand ("if you cast it from your hand" on an enters trigger: Amped
     # Raptor); set by ``put_into_battlefield`` from ``cast_via_hand``.
     entered_from_hand_cast: bool = False
+    # How much mana was spent to cast this object as a spell (set by
+    # ``actions._cast_spell``; 0 for a free cast).
+    mana_spent_to_cast: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

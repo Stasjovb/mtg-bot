@@ -410,6 +410,134 @@ class GetEnergyThenExileUntilNonlandCastForEnergy(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Mana spent to cast
+# ---------------------------------------------------------------------------
+
+
+def _object_by_id(state: "GameState", obj_id: int):
+    """The object with ``obj_id`` wherever it is now (stack, battlefield,
+    any player's zones) -- its fields keep the cast-time facts."""
+    for item in state.stack:
+        src = getattr(item, "source", None)
+        if src is not None and src.id == obj_id:
+            return src
+    for o in state.battlefield:
+        if o.id == obj_id:
+            return o
+    for p in state.players:
+        for zone in (p.graveyard, p.exile, p.hand, p.library):
+            for c in zone:
+                if c.id == obj_id:
+                    return c
+    return None
+
+
+@dataclass(frozen=True)
+class MillTargetPlayerMoreIfManaSpent(Effect):
+    """"Target player mills N cards. If M or more mana was spent to cast
+    that spell, that player mills K cards instead." (Exhibition
+    Tidecaller's Opus) -- "that spell" is the cast spell that triggered
+    it (``event_subject_id``), read through ``mana_spent_to_cast``."""
+
+    amount: int = 1
+    amount_if_spent: int = 1
+    mana_spent_at_least: int = 0
+
+    def event_subject_id(self, subjects) -> int:
+        spell = subjects.get("spell")
+        return spell.id if spell is not None else -1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+
+        spell = _object_by_id(state, state.resolving_event_subject_id)
+        spent = spell.mana_spent_to_cast if spell is not None else 0
+        n = (
+            self.amount_if_spent if spent >= self.mana_spent_at_least
+            else self.amount
+        )
+        MillTargetPlayer(amount=n).resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            f"target player mills {self.amount} ({self.amount_if_spent} if "
+            f"{self.mana_spent_at_least}+ mana was spent on that spell)"
+        )
+
+
+def _colors_spent_on_resolving_spell(state: "GameState") -> int:
+    spell = state.resolving_spell
+    return spell.sunburst_colors_spent if spell is not None else 0
+
+
+@dataclass(frozen=True)
+class ConvergeDrawDamageGainLife(Effect):
+    """"Converge -- Target player draws X cards, <this> deals X damage to
+    any target, and you gain X life, where X is the number of colors of
+    mana spent to cast this spell." (Together as One). Two target slots:
+    the player (slot 0) and any target (slot 1, from ``damage``'s
+    legal targets)."""
+
+    damage: Effect = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def target_slot_kinds(self) -> tuple[str, ...]:
+        return ("player",)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        players = [("player", p.id) for p in state.players if not p.has_lost]
+        rest = [
+            t for t in self.damage.legal_targets(state, controller_id)
+            if t not in players
+        ]
+        return players + rest
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.game import gain_life
+        from mtg_bot.turn import draw_n_cards
+
+        x = _colors_spent_on_resolving_spell(state)
+        state.log.append(f"converge: X = {x}")
+        if x <= 0:
+            return
+        if targets and targets[0][0] == "player":
+            draw_n_cards(state, targets[0][1], x)
+        if len(targets) > 1 and targets[1] in self.damage.legal_targets(
+            state, controller_id,
+        ):
+            _apply_damage(state, targets[1], x)
+        gain_life(state, controller_id, x)
+
+    def describe(self) -> str:
+        return (
+            "target player draws X cards, X damage to any target, you gain X "
+            "life (X = colors of mana spent)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -1381,6 +1509,8 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "ConvergeDrawDamageGainLife",
+    "MillTargetPlayerMoreIfManaSpent",
     "GetEnergyThenExileUntilNonlandCastForEnergy",
     "GetXEnergyPayAnyDestroyMVAtMostPaid",
     "SacrificeSourceUnlessSacrificeTotalPower",

@@ -224,6 +224,23 @@ _AMPED_RAPTOR_RE = re.compile(
     r"card\. You may cast that card by paying an amount of \{E\} equal "
     r"to its mana value rather than paying its mana cost$"
 )
+# "target player mills N cards. If M or more mana was spent to cast that
+# spell, that player mills K cards instead" (Exhibition Tidecaller).
+_MILL_MORE_IF_MANA_SPENT_RE = re.compile(
+    r"^target player mills (?P<n>[a-z]+) cards\. If (?P<m>[a-z]+) or more "
+    r"mana was spent to cast that spell, that player mills (?P<k>[a-z]+) "
+    r"cards instead$"
+)
+# "[converge — ]target player draws X cards, <this> deals X damage to any
+# target, and you gain X life, where X is the number of colors of mana
+# spent to cast this spell" (Together as One). A literal: the only card
+# in the pools with this three-part converge body; broader grammar
+# deferred until a second example exists.
+_CONVERGE_DRAW_DAMAGE_LIFE_RE = re.compile(
+    r"^(?:[Cc]onverge — )?[Tt]arget player draws X cards, (?P<self>.+?) deals X "
+    r"damage to any target, and you gain X life, where X is the number of "
+    r"colors of mana spent to cast this spell$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -332,6 +349,20 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.GetEnergyThenExileUntilNonlandCastForEnergy(
             energy=m.group("e").count("{E}"),
         )
+    m = _MILL_MORE_IF_MANA_SPENT_RE.match(phrase)
+    if m is not None:
+        n, mm, k = (_COUNT_WORDS.get(m.group(g)) for g in ("n", "m", "k"))
+        if None in (n, mm, k):
+            return None
+        return rm.MillTargetPlayerMoreIfManaSpent(
+            amount=n, amount_if_spent=k, mana_spent_at_least=mm,
+        )
+    m = _CONVERGE_DRAW_DAMAGE_LIFE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        damage = _parse_effect("deals 1 damage to any target")
+        return rm.ConvergeDrawDamageGainLife(damage=damage)
     m = _SAC_UNLESS_TOTAL_POWER_RE.match(phrase)
     if m is not None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
@@ -397,7 +428,6 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
             return rm.AddFormulaManaInAnyCombination(
                 amount=formula, options=tuple(base.options),
             )
-        return None
     m = _REMOVE_COUNTERS_FROM_SELF_RE.match(phrase)
     if m is not None:
         n = 1 if m.group("n") in ("a", "an") else _COUNT_WORDS.get(m.group("n"))

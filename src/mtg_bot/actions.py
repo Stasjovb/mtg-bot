@@ -2885,6 +2885,9 @@ def _cast_spell(
     # many counters on a Sunburst permanent, and converge spells read
     # it while on the stack.
     card.sunburst_colors_spent = max_distinct_colors(color_sources)
+    # Total mana spent ("if five or more mana was spent to cast that
+    # spell", Exhibition Tidecaller; Vintage Roto P3).
+    card.mana_spent_to_cast = len(color_sources)
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
