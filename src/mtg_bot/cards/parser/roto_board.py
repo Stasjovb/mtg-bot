@@ -285,6 +285,42 @@ _RETURN_ANY_NUMBER_DRAW = re.compile(
 )
 
 
+_COLOR_WORDS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+# "until end of turn, <target|each> <np> becomes a <color> <Subtypes>
+# with base power and toughness P/T" (Scale Up and its overload).
+_BECOMES_COLORED_SUBTYPE_UEOT = re.compile(
+    r"^until end of turn, (?P<who>target|each) (?P<np>.+?) becomes an? "
+    r"(?P<color>white|blue|black|red|green) (?P<subs>[A-Z][a-z]+"
+    r"(?: [A-Z][a-z]+)*) with base power and toughness (?P<p>\d+)/(?P<t>\d+)$"
+)
+# "until end of turn, target <np> gets +1/+1 for each supertype, card
+# type, and subtype it has" (Embiggen).
+_PUMP_PER_TYPES_UEOT = re.compile(
+    r"^until end of turn, target (?P<np>.+?) gets \+(?P<p>\d+)/\+(?P<t>\d+) "
+    r"for each supertype, card type, and subtype it has$"
+)
+
+
+# "target <np> can't be the target of spells or abilities your
+# opponents control this turn[. If this spell was kicked, that creature
+# gets +P/+T until end of turn]" (Vines of Vastwood).
+_UNTARGETABLE_BY_OPPONENTS = re.compile(
+    r"^target (?P<np>.+?) can't be the target of spells or abilities your "
+    r"opponents control this turn(?:\. If this spell was kicked, that "
+    r"creature gets \+(?P<p>\d+)/\+(?P<t>\d+) until end of turn)?$"
+)
+# "target <np> gains <keywords> and gets +X/+0 until end of turn, where
+# X is its power. At the beginning of the next end step, destroy that
+# creature if it attacked this turn" (Berserk).
+_POWER_PUMP_DESTROY_IF_ATTACKED = re.compile(
+    r"^target (?P<np>.+?) gains (?P<kws>[a-z ,]+?) and gets \+X/\+0 until "
+    r"end of turn, where X is its power\. At the beginning of the next end "
+    r"step, destroy that creature if it attacked this turn$"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -386,6 +422,57 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _UNTARGETABLE_BY_OPPONENTS.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.UntargetableByOpponentsThisTurn(
+            kicked_power=int(m.group("p") or 0),
+            kicked_toughness=int(m.group("t") or 0),
+            targets=(TargetSpec(f),),
+        )
+    m = _POWER_PUMP_DESTROY_IF_ATTACKED.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        kws = _keyword_list(m.group("kws"))
+        if f is None or kws is None:
+            return None
+        return rb.PowerPumpThenDestroyIfAttacked(
+            keywords=kws, targets=(TargetSpec(f),),
+        )
+    m = _BECOMES_COLORED_SUBTYPE_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        kwargs = dict(
+            colors=frozenset({_COLOR_WORDS[m.group("color")]}),
+            creature_subtypes=tuple(m.group("subs").split()),
+            base_pt=(int(m.group("p")), int(m.group("t"))),
+        )
+        if m.group("who") == "each":
+            return rb.BecomeColoredSubtypeBasePTUEOT(each_filter=f, **kwargs)
+        return rb.BecomeColoredSubtypeBasePTUEOT(
+            targets=(TargetSpec(f),), **kwargs,
+        )
+    m = _PUMP_PER_TYPES_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.PumpPerTypeCountUEOT(
+            per_power=int(m.group("p")), per_toughness=int(m.group("t")),
+            targets=(TargetSpec(f),),
+        )
     m = _SAC_UNLESS_DISCARD.match(phrase)
     if m is not None:
         if m.group("verb") is None:
@@ -1157,6 +1244,33 @@ def claim_equipment_lines(card: dict):
     return "\n".join(kept), out
 
 
+# "Cast this spell only before the <step> step." (Berserk).
+_CAST_ONLY_BEFORE_STEP = re.compile(
+    r"^Cast this spell only before the (?P<step>combat damage|declare "
+    r"blockers|declare attackers|end) step\.$"
+)
+
+
+def claim_spell_lines(text: str) -> tuple[str, dict]:
+    """The spell builder's pre-pass: lines that are rules of the card
+    itself become printing fields (``CastOnlyBeforeStep``); returns the
+    remaining oracle text and the fields."""
+    from mtg_bot import roto_board_statics as rs
+
+    if _disabled():
+        return text, {}
+    kept, fields = [], {}
+    for raw in text.split("\n"):
+        m = _CAST_ONLY_BEFORE_STEP.match(raw.strip())
+        if m is not None:
+            merge_board_fields(fields, {"board_rules": (rs.CastOnlyBeforeStep(
+                step=m.group("step").replace(" ", "_"),
+            ),)})
+            continue
+        kept.append(raw)
+    return "\n".join(kept), fields
+
+
 def apply_board_fields(printing, fields: dict):
     """``dataclasses.replace`` for a builder's accumulated P5 fields:
     accumulated fields extend what the printing already carries."""
@@ -1203,6 +1317,7 @@ def absorb_enchantment_line(line: str, card: dict, acc) -> bool:
 
 __all__ = [
     "BoardLine",
+    "claim_spell_lines",
     "parse_roto_dynamic_pt_line",
     "claim_equipment_lines",
     "parse_roto_trigger_phrase",

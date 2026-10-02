@@ -349,6 +349,67 @@ def fire_becomes_blocked(state, assignments: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Targeting and casting restrictions
+# ---------------------------------------------------------------------------
+
+
+def untargetable_by(state: "GameState", obj, controller_id: int) -> bool:
+    """Whether ``obj`` can't be the target of spells or abilities
+    ``controller_id`` controls because of a "can't be the target of
+    spells or abilities your opponents control this turn" effect
+    (Vines of Vastwood) of one of ``controller_id``'s opponents
+    (``keyword_rules.can_be_targeted_by``'s hook)."""
+    from mtg_bot.effects.generic.roto_board import UNTARGETABLE_BY_OPPONENTS_OF
+
+    for ce in state.continuous_effects:
+        if (
+            ce.kind == UNTARGETABLE_BY_OPPONENTS_OF
+            and ce.target_id == obj.id
+            and ce.params and ce.params[0] != controller_id
+        ):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class CastOnlyBeforeStep:
+    """"Cast this spell only before the <step>." (Berserk: the combat
+    damage step) -- a rule of the card itself: it can be cast only in a
+    step of the turn that precedes ``step``."""
+
+    step: str = "combat_damage"
+
+    def allows(self, state) -> bool:
+        from mtg_bot.turn import STEP_ORDER, Step
+
+        return STEP_ORDER.index(state.step) < STEP_ORDER.index(Step(self.step))
+
+    def describe(self) -> str:
+        return f"Cast this spell only before the {self.step.replace('_', ' ')} step."
+
+
+def filter_cast_timing(state: "GameState", player_id: int, actions: list) -> list:
+    """``legal.legal_actions``' hook: drop casts of a card whose own
+    ``CastOnlyBeforeStep`` rule forbids casting it now."""
+    from mtg_bot.actions import CastSpell
+
+    p = state.player_by_id(player_id)
+    blocked = {
+        c.id for zone in (p.hand, p.graveyard, p.exile) for c in zone
+        if c.printing.board_rules and any(
+            isinstance(r, CastOnlyBeforeStep) and not r.allows(state)
+            for r in c.printing.board_rules
+        )
+    }
+    if not blocked:
+        return actions
+    return [
+        a for a in actions
+        if not (isinstance(a, CastSpell) and a.card_id in blocked)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Untap step
 # ---------------------------------------------------------------------------
 
@@ -449,6 +510,9 @@ def untap_step_held(
 
 
 __all__ = [
+    "CastOnlyBeforeStep",
+    "filter_cast_timing",
+    "untargetable_by",
     "CantAttack",
     "CantBlock",
     "DoesntUntap",

@@ -1091,6 +1091,314 @@ class ReturnAnyNumberDrawPerOwned(Effect):
 ANY_NUMBER_OF_TARGETS = 10_000
 
 
+@dataclass(frozen=True)
+class BecomeColoredSubtypeBasePTUEOT(Effect):
+    """"Until end of turn, target <creature> becomes a <color> <Subtype>
+    with base power and toughness P/T." (Scale Up; its overloaded "each"
+    version uses ``each_filter``). Cleanup-expiring registry entries:
+    layer 4 ``set_creature_subtypes`` (CR 205.1b: the new creature types
+    replace the old), layer 5 ``set_colors`` and layer 7b
+    ``set_base_pt``, all with this resolution's timestamps."""
+
+    colors: frozenset = frozenset()
+    creature_subtypes: tuple = ()
+    base_pt: tuple = (0, 0)
+    each_filter: "ObjectPredicate | None" = None
+    targets: tuple = ()
+
+    def _apply(self, state, obj, source_id: int) -> None:
+        name = obj.printing.name
+        state.add_continuous_effect(
+            source_id=source_id, layer=4, kind="set_creature_subtypes",
+            target_id=obj.id, params=tuple(self.creature_subtypes),
+            expires_at="cleanup",
+            description=f"{name} becomes a {' '.join(self.creature_subtypes)}",
+        )
+        if self.colors:
+            state.add_continuous_effect(
+                source_id=source_id, layer=5, kind="set_colors",
+                target_id=obj.id, params=(frozenset(self.colors),),
+                expires_at="cleanup",
+                description=f"{name} becomes {'/'.join(sorted(self.colors))}",
+            )
+        p, t = self.base_pt
+        state.add_continuous_effect(
+            source_id=source_id, layer=7, sublayer=1, kind="set_base_pt",
+            target_id=obj.id, params=(p, t), expires_at="cleanup",
+            description=f"{name} base {p}/{t} UEOT",
+        )
+        state.log.append(
+            f"{name} becomes a {' '.join(self.creature_subtypes)} with base "
+            f"P/T {p}/{t} until end of turn"
+        )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        src = state.resolving_source or state.resolving_spell
+        sid = src.id if src is not None else -1
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            if self.each_filter is not None:
+                affected = [
+                    o for o in state.battlefield
+                    if self.each_filter.test(o, state)
+                ]
+            elif targets and _slot_target_still_legal(
+                state, self.targets[0], targets[0],
+            ):
+                affected = [
+                    o for o in state.battlefield if o.id == targets[0][1]
+                ]
+            else:
+                affected = []
+        finally:
+            state.resolving_controller_id = prior
+        for obj in affected:
+            self._apply(state, obj, sid)
+
+    def describe(self) -> str:
+        who = "each matching creature" if self.each_filter is not None else (
+            "target creature"
+        )
+        return (
+            f"until end of turn, {who} becomes a "
+            f"{' '.join(self.creature_subtypes)} with base power and "
+            f"toughness {self.base_pt[0]}/{self.base_pt[1]}"
+        )
+
+
+@dataclass(frozen=True)
+class PumpPerTypeCountUEOT(Effect):
+    """"Until end of turn, target <creature> gets +1/+1 for each
+    supertype, card type, and subtype it has." (Embiggen). Counted as
+    the spell resolves (CR 608.2h): supertypes as printed (a token isn't
+    a supertype), card types including a creature type an effect added,
+    subtypes through the layered ``effective_subtypes``."""
+
+    per_power: int = 1
+    per_toughness: int = 1
+    targets: tuple = ()
+
+    @staticmethod
+    def type_count(state, obj) -> int:
+        from mtg_bot.game import effective_subtypes, is_creature_now
+
+        supertypes = [s for s in obj.printing.supertypes if s != "Token"]
+        card_types = set(obj.printing.card_types)
+        if is_creature_now(obj):
+            card_types.add("Creature")
+        return (
+            len(supertypes) + len(card_types)
+            + len(effective_subtypes(state, obj))
+        )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        n = self.type_count(state, obj)
+        src = state.resolving_source or state.resolving_spell
+        state.grant_pt_pump_ueot(
+            source_id=src.id if src is not None else -1, target_id=obj.id,
+            power=n * self.per_power, toughness=n * self.per_toughness,
+            description=f"{obj.printing.name} +{n}/+{n} (types) UEOT",
+        )
+        state.log.append(f"{obj.printing.name} gets +{n}/+{n} until end of turn")
+
+    def describe(self) -> str:
+        return (
+            "target creature gets +1/+1 for each supertype, card type, and "
+            "subtype it has until end of turn"
+        )
+
+
+# Registry kind for "can't be the target of spells or abilities your
+# opponents control this turn" (params: the protecting player's id),
+# read by ``roto_board_statics.untargetable_by``.
+UNTARGETABLE_BY_OPPONENTS_OF = "untargetable_by_opponents_of"
+
+
+@dataclass(frozen=True)
+class UntargetableByOpponentsThisTurn(Effect):
+    """"Target <creature> can't be the target of spells or abilities your
+    opponents control this turn.[ If this spell was kicked, that creature
+    gets +P/+T until end of turn.]" (Vines of Vastwood). "Your opponents"
+    are the caster's -- unlike hexproof, which protects from the
+    creature's controller's opponents -- so the restriction carries the
+    caster's id. The kicked pump applies to the same target."""
+
+    kicked_power: int = 0
+    kicked_toughness: int = 0
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        src = state.resolving_source or state.resolving_spell
+        sid = src.id if src is not None else -1
+        state.add_continuous_effect(
+            source_id=sid, layer=6, kind=UNTARGETABLE_BY_OPPONENTS_OF,
+            target_id=obj.id, params=(controller_id,), expires_at="cleanup",
+            description=(
+                f"{obj.printing.name} can't be targeted by P{controller_id}'s "
+                f"opponents this turn"
+            ),
+        )
+        state.log.append(
+            f"{obj.printing.name} can't be the target of spells or abilities "
+            f"P{controller_id}'s opponents control this turn"
+        )
+        if state.resolving_kicked and (self.kicked_power or self.kicked_toughness):
+            state.grant_pt_pump_ueot(
+                source_id=sid, target_id=obj.id, power=self.kicked_power,
+                toughness=self.kicked_toughness,
+                description=f"{obj.printing.name} kicked pump UEOT",
+            )
+
+    def describe(self) -> str:
+        text = (
+            "target creature can't be the target of spells or abilities "
+            "your opponents control this turn"
+        )
+        if self.kicked_power or self.kicked_toughness:
+            text += (
+                f"; if kicked, it gets +{self.kicked_power}/"
+                f"+{self.kicked_toughness} until end of turn"
+            )
+        return text
+
+
+@dataclass(frozen=True)
+class PowerPumpThenDestroyIfAttacked(Effect):
+    """"Target creature gains <keywords> and gets +X/+0 until end of
+    turn, where X is its power. At the beginning of the next end step,
+    destroy that creature if it attacked this turn." (Berserk). X is the
+    creature's power as the spell resolves; the delayed trigger is the
+    engine's ``delayed_triggers`` entry (fires at the next end step,
+    whoever's it is) with the creature as its source, so it does nothing
+    if the creature is gone."""
+
+    keywords: frozenset = frozenset()
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.game import effective_power
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        src = state.resolving_source or state.resolving_spell
+        sid = src.id if src is not None else -1
+        x = effective_power(state, obj)
+        state.grant_pt_pump_ueot(
+            source_id=sid, target_id=obj.id, power=x, toughness=0,
+            description=f"{obj.printing.name} +{x}/+0 UEOT",
+        )
+        for kw in sorted(self.keywords):
+            state.add_continuous_effect(
+                source_id=sid, layer=6, kind="grant_keyword",
+                target_id=obj.id, params=(kw,), expires_at="cleanup",
+                description=f"{obj.printing.name} gains {kw} UEOT",
+            )
+        state.delayed_triggers.append({
+            "fire_at_turn": state.turn_number,
+            "controller_id": controller_id,
+            "source_id": obj.id,
+            "any_player_end_step": True,
+            "effect": DestroySourceIfAttackedThisTurn(),
+        })
+        state.log.append(
+            f"{obj.printing.name} gets +{x}/+0 until end of turn; destroyed "
+            f"at the next end step if it attacked"
+        )
+
+    def describe(self) -> str:
+        kw = ", ".join(sorted(self.keywords))
+        return (
+            f"target creature gains {kw} and gets +X/+0 until end of turn, "
+            f"where X is its power; destroy it at the next end step if it "
+            f"attacked this turn"
+        )
+
+
+@dataclass(frozen=True)
+class DestroySourceIfAttackedThisTurn(Effect):
+    """The delayed half of Berserk: "destroy that creature if it attacked
+    this turn" (the creature is the delayed trigger's source)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+
+        obj = state.resolving_source
+        if obj is None or obj not in state.battlefield:
+            return
+        attacked = any(
+            o.id == obj.id for p in state.players for o in p.attacked_this_turn
+        )
+        if not attacked:
+            state.log.append(f"{obj.printing.name} didn't attack -- survives")
+            return
+        destroy_permanent(state, obj)
+
+    def describe(self) -> str:
+        return "destroy that creature if it attacked this turn"
+
+
 # ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
@@ -1176,6 +1484,12 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "DestroySourceIfAttackedThisTurn",
+    "PowerPumpThenDestroyIfAttacked",
+    "UNTARGETABLE_BY_OPPONENTS_OF",
+    "UntargetableByOpponentsThisTurn",
+    "BecomeColoredSubtypeBasePTUEOT",
+    "PumpPerTypeCountUEOT",
     "CardTypesInYourGraveyardPT",
     "ReturnAnyNumberDrawPerOwned",
     "SacrificeSourceUnlessDiscard",

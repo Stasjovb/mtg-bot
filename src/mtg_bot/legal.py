@@ -1750,7 +1750,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
 
     actions = filter_cast_restrictions(state, player_id, actions)
     actions = filter_unusable_abilities(state, actions)
-    return filter_activation_locks(state, actions)
+    actions = filter_activation_locks(state, actions)
+    # "Cast this spell only before ..." (Berserk; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import filter_cast_timing
+
+    return filter_cast_timing(state, player_id, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

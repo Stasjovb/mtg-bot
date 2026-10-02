@@ -169,6 +169,13 @@ def can_be_targeted_by(
         return False
     if "hexproof" in kws and obj.controller_id != controller_id:
         return False
+    if state.continuous_effects:
+        # "can't be the target of spells or abilities your opponents
+        # control this turn" (Vines of Vastwood; Vintage Roto P5).
+        from mtg_bot.roto_board_statics import untargetable_by
+
+        if untargetable_by(state, obj, controller_id):
+            return False
     return not is_protected_from(state, obj, source)
 
 
