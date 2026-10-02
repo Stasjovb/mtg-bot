@@ -334,7 +334,10 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     atom = parse_rmc_cost_piece(piece)
     if atom is not None:
         return _CostPiece(kind="extra", atom=atom)
-    return None
+    # Vintage Roto P5 cost atoms -- after the cube grammar.
+    from mtg_bot.cards.parser.roto_board import parse_roto_cost_piece
+
+    return parse_roto_cost_piece(piece)
 
 
 def _classify_builtin_cost_piece(piece: str) -> _CostPiece | None:

@@ -323,6 +323,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     sunburst: bool = False
     look_at_top: bool = False
     play_from_top_paying_life: bool = False
+    roto_fields: dict = {}
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -415,6 +416,18 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
             continue
         clause = _parse_clause(line, name=card["name"])
         if clause is None:
+            # Vintage Roto P5 lines (printing-level statics, ...) --
+            # consulted only for lines the grammar above declined.
+            from mtg_bot.cards.parser.roto_board import parse_roto_board_line
+
+            board = parse_roto_board_line(line, card)
+            if board is not None:
+                keywords.update(board.keywords)
+                triggers.extend(board.triggers)
+                activated.extend(board.activated)
+                statics.extend(board.statics)
+                roto_fields.update(board.fields)
+                continue
             # Anything the unified parser doesn't recognize - composite
             # triggers, zone-change triggers, custom effects - falls
             # through and we skip the whole card rather than half-claim
@@ -474,6 +487,8 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         printing = replace(printing, grants_look_at_top_of_library=True)
     if play_from_top_paying_life:
         printing = replace(printing, grants_play_from_top_paying_life=True)
+    if roto_fields:
+        printing = replace(printing, **roto_fields)
     if "Vehicle" in subtypes:
         # Vehicles carry printed P/T that applies while they're
         # creatures (crewed / animated).

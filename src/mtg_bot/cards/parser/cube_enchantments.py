@@ -70,6 +70,8 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Necromancy",
     "Oath of Druids",
     "Parallax Wave",
+    "Pernicious Deed",
+    "Seal of Cleansing",
     "Sneak Attack",
     "Squandered Resources",
     "Touch the Spirit Realm",
