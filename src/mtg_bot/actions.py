@@ -1588,6 +1588,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     apply_land_etb_replacements(
         state, player_id, card, force_tapped=lightstall_land,
     )
+    card.entered_battlefield_turn = state.turn_number
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     p.lands_entered_this_turn += 1

@@ -940,6 +940,7 @@ class CreateNTokensFromLastExileRecall(Effect):
         printing = TOKEN_PRINTINGS[self.token_name]
         for _ in range(count):
             token = state.new_object(printing, controller_id, Zone.BATTLEFIELD)
+            token.entered_battlefield_turn = state.turn_number
             state.battlefield.append(token)
         state.log.append(
             f"P{controller_id} creates {count} {self.token_name} tokens "

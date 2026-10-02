@@ -401,6 +401,7 @@ class PutBasicLandFromHandOntoBattlefieldTapped(Effect):
         basic.zone = Zone.BATTLEFIELD
         basic.controller_id = controller_id
         basic.tapped = True
+        basic.entered_battlefield_turn = state.turn_number
         state.battlefield.append(basic)
         state.log.append(
             f"P{controller_id} puts {basic.printing.name} onto the "

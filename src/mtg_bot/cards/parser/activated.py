@@ -825,7 +825,10 @@ def _parse_activate_only_if_condition(phrase: str) -> "Condition | None":
     ):
         # Delirium (Shifting Woodland's copy ability).
         return DeliriumActive()
-    return None
+    # Vintage Roto P3 riders ("you control an artifact").
+    from mtg_bot.cards.parser.roto_mana import parse_activate_only_if_condition
+
+    return parse_activate_only_if_condition(phrase)
 
 
 # Inline cost-reduction rider for activated abilities:
