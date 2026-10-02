@@ -4,21 +4,24 @@ Line recognizers for the Vintage Roto cards P6 claims
 (``docs/ROTO_COVERAGE_PLAN.md`` section 6). Recognizers are
 parameterized over the printed shape (the two literals say why); the
 engine side lives in ``mtg_bot.conspiracies``, ``mtg_bot.opening_hand``
-and ``mtg_bot.effects.generic.roto_keywords``.
+and ``mtg_bot.effects.generic.roto_keywords`` / ``roto_damage``.
 
 Entry points, each called from one hook:
 
 * :func:`parse_conspiracy_rule_line` -- ``conspiracy_builder`` (CR 313):
   "You are the starting player. ..." (Power Play), "Your minimum deck
   size is reduced|increased by <N>." (Advantageous Proclamation).
-* :func:`build_with_p6_lines` -- ``source.build_card_record``:
-  printing-level lines peeled off before the per-type builders run (like
-  the cycling family) and attached to the built printing -- pregame
-  actions (``opening_hand_action``: Chancellor of the Tangle's
-  opening-hand reveal, Serum Powder's mulligan-window exchange) and hand
-  keyword abilities (Transmute).
+* :func:`build_with_p6_lines` -- ``source.build_card_record`` and
+  ``dfc_builder.build_face``: printing-level lines peeled off before the
+  per-type builders run (like the cycling family) and attached to the
+  built printing -- pregame actions (``opening_hand_action``: Chancellor
+  of the Tangle's opening-hand reveal, Serum Powder's mulligan-window
+  exchange), hand keyword abilities (Transmute) and prevention statics
+  ("Prevent all damage that would be dealt to <self>.").
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
+* :func:`parse_p6_trigger_phrase` -- last in
+  ``triggers._parse_predicate_trigger_phrase``.
 """
 
 from __future__ import annotations
@@ -128,6 +131,70 @@ def _card_types_phrase(text: str) -> tuple[str, ...] | None:
     return tuple(_CARD_TYPE_WORDS[w] for w in words)
 
 
+_PREVENT_COMBAT_TO_AND_BY_TAIL = (
+    r"prevent all combat damage that would be dealt to and dealt by "
+)
+_UNTAP_THEN_PREVENT_COMBAT_RE = re.compile(
+    r"^untap target (?P<np>[a-z ]+?)\. " + _PREVENT_COMBAT_TO_AND_BY_TAIL
+    + r"that (?:creature|permanent) this turn$",
+    re.IGNORECASE,
+)
+_PREVENT_COMBAT_TO_AND_BY_TARGET_RE = re.compile(
+    r"^" + _PREVENT_COMBAT_TO_AND_BY_TAIL + r"target (?P<np>[a-z ]+?) this turn$",
+    re.IGNORECASE,
+)
+_REDIRECT_NEXT_DAMAGE_RE = re.compile(
+    r"^the next (?P<n>\w+) damage that would be dealt to this creature this "
+    r"turn is dealt to target (?P<np>[a-z ]+?) instead$",
+    re.IGNORECASE,
+)
+
+
+def target_noun_filter(np: str):
+    """``parse_permanent_phrase`` plus a leading "attacking" modifier
+    ("target attacking creature"), else ``None``."""
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.object_predicates import IsAttacking
+
+    np = np.strip().lower()
+    attacking = np.startswith("attacking ")
+    if attacking:
+        np = np[len("attacking "):]
+    base = parse_permanent_phrase(np)
+    if base is None:
+        return None
+    return base & IsAttacking() if attacking else base
+
+
+def _parse_damage_phrase(phrase: str):
+    from mtg_bot.effects.generic.roto_damage import (
+        PreventCombatDamageToAndByTarget,
+        RedirectNextDamageToSourceToTarget,
+    )
+    from mtg_bot.effects.targets import TargetSpec
+
+    for regex, untap in (
+        (_UNTAP_THEN_PREVENT_COMBAT_RE, True),
+        (_PREVENT_COMBAT_TO_AND_BY_TARGET_RE, False),
+    ):
+        m = regex.match(phrase)
+        if m is not None:
+            f = target_noun_filter(m.group("np"))
+            if f is None:
+                return None
+            return PreventCombatDamageToAndByTarget(
+                targets=(TargetSpec(f),), untap=untap,
+            )
+    m = _REDIRECT_NEXT_DAMAGE_RE.match(phrase)
+    if m is not None:
+        n = number_word(m.group("n"))
+        f = target_noun_filter(m.group("np"))
+        if n is None or f is None:
+            return None
+        return RedirectNextDamageToSourceToTarget(amount=n, targets=(TargetSpec(f),))
+    return None
+
+
 def parse_p6_effect(phrase: str):
     """A normalized effect phrase (lowercased first letter, no final
     period) the P6 grammar models, else ``None``."""
@@ -144,6 +211,23 @@ def parse_p6_effect(phrase: str):
         return LookAtTopMayRevealIfMatches(
             card_filter=CardFilter(any_types=types), then=then,
         )
+    return _parse_damage_phrase(phrase)
+
+
+# ── Trigger conditions (hooked last into ``triggers``) ─────────────────
+
+
+def parse_p6_trigger_phrase(phrase: str):
+    """``(Event, Predicate)`` for a trigger condition (the text between
+    "Whenever" and the comma) the P6 grammar models, else ``None``.
+
+    * "this creature becomes the target of a spell or ability" --
+      ``BECOMES_TARGET`` of the source itself (Cephalid Illusionist).
+    """
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    if phrase == "this creature becomes the target of a spell or ability":
+        return (Event.BECOMES_TARGET, IsSelf(subject="target"))
     return None
 
 
@@ -185,6 +269,33 @@ def parse_hand_keyword_line(line: str, card: dict):
     return None
 
 
+# ── Printed replacement / prevention statics ───────────────────────────
+
+_PREVENT_ALL_DAMAGE_TO_SELF_RE = re.compile(
+    r"^Prevent all damage that would be dealt to (?P<self>.+)\.$"
+)
+
+
+def is_self_reference(text: str, card_name: str) -> bool:
+    """``text`` names the card itself: "this creature", its full name or
+    a legendary short name ("Black Panther" for "Black Panther, Hope
+    Enduring")."""
+    return text in (
+        "this creature", "this permanent", card_name,
+        card_name.split(", ")[0],
+    )
+
+
+def parse_replacement_static_line(line: str, card_name: str):
+    """A printed prevention / replacement static, or ``None``."""
+    from mtg_bot.effects.generic.roto_damage import PreventAllDamageToSelf
+
+    m = _PREVENT_ALL_DAMAGE_TO_SELF_RE.match(line.strip())
+    if m is not None and is_self_reference(m.group("self"), card_name):
+        return PreventAllDamageToSelf()
+    return None
+
+
 # ── The printing-line pre-pass ─────────────────────────────────────────
 
 def _attach_opening_hand_action(printing, action):
@@ -202,6 +313,13 @@ def _attach_hand_ability(printing, ability):
     )
 
 
+def _attach_replacement_static(printing, rule):
+    return replace(
+        printing,
+        replacement_statics=tuple(printing.replacement_statics) + (rule,),
+    )
+
+
 def _line_patch(line: str, card: dict):
     """A ``CardPrinting -> CardPrinting | None`` patch for a P6
     printing-level line, or ``None`` when the line isn't one."""
@@ -211,6 +329,9 @@ def _line_patch(line: str, card: dict):
     ability = parse_hand_keyword_line(line, card)
     if ability is not None:
         return lambda p: _attach_hand_ability(p, ability)
+    rule = parse_replacement_static_line(line, card["name"])
+    if rule is not None:
+        return lambda p: _attach_replacement_static(p, rule)
     return None
 
 
@@ -243,7 +364,8 @@ def _split_p6_lines(card: dict) -> tuple[dict, list]:
 
 def build_with_p6_lines(card: dict, build: Callable[[dict], object]):
     """Build ``card`` with ``build`` after peeling off its P6 printing-
-    level lines (pregame actions, hand keyword abilities), then apply
+    level lines (pregame actions, hand keyword abilities, prevention /
+    replacement statics), then apply
     each line's patch. Any patch refusing (``None``) leaves the card
     unclaimed."""
     body, patches = _split_p6_lines(card)

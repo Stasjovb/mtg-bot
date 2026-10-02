@@ -1569,6 +1569,11 @@ class CardPrinting:
     # ``mtg_bot.conspiracies`` rules (``YouAreTheStartingPlayer``,
     # ``MinimumDeckSizeChange``) applied by ``simulate.setup_game``.
     conspiracy_rules: tuple = ()
+    # Printed static prevention / replacement effects modeled by roto
+    # P6: ``effects.generic.roto_damage.PreventAllDamageToSelf`` ("Prevent
+    # all damage that would be dealt to <this creature>.", read by the
+    # damage routing hooks).
+    replacement_statics: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

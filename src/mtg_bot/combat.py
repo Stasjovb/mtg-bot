@@ -590,6 +590,12 @@ def _resolve_damage_step(
         ev for ev in damage_events_typed
         if not _prevented_by_protection(state, ev[0], ev[1], ev[3])
     ]
+    # Roto P6: per-creature combat prevention (Maze of Ith), "prevent all
+    # damage dealt to <self>" (Black Panther), redirection shields
+    # (Nomads en-Kor).
+    from mtg_bot.effects.generic.roto_damage import route_combat_damage_events
+
+    damage_events_typed = route_combat_damage_events(state, damage_events_typed)
 
     # Combat damage in MTG is simultaneous, so aggregate damage to each
     # player into a single end-of-step log line ("P0 takes 5 (life:

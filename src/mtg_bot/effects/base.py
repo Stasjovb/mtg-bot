@@ -289,6 +289,13 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     damage amount in ``state.resolving_combat_damage_amount``.
     """
     kind, target_id = target
+    # Roto P6: prevention / redirection effects (Black Panther, Nomads
+    # en-Kor); redirected damage is dealt from inside the router.
+    from mtg_bot.effects.generic.roto_damage import route_damage
+
+    amount = route_damage(state, target, amount)
+    if amount <= 0:
+        return
     if kind == "player":
         from mtg_bot.game import player_damage_prevented
         if player_damage_prevented(state, target_id):
