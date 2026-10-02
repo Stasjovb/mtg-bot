@@ -183,6 +183,68 @@ class ReturnPermanentYouControlToHand(Effect):
         return f"return a {self.label} you control to its owner's hand"
 
 
+@dataclass(frozen=True)
+class LookAtTopMayPutOntoBattlefieldRestBottom(Effect):
+    """"Look at the top N cards of your library. You may put a[n]
+    <filter> card from among them onto the battlefield. Put the rest on
+    the bottom of your library in a random order." (Kinnan, Bonder
+    Prodigy: a non-Human creature card). ``excluded_subtype`` carries the
+    "non-<Subtype>" qualifier the card-descriptor grammar lacks."""
+
+    count: int = 1
+    card_filter: object = None
+    excluded_subtype: str = ""
+
+    def _ok(self, card) -> bool:
+        return self.card_filter.matches(card.printing) and (
+            not self.excluded_subtype
+            or self.excluded_subtype not in card.printing.subtypes
+        )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        n = min(self.count, len(p.library))
+        looked = [p.library.pop(0) for _ in range(n)]
+        for c in looked:
+            reveal_to(c, controller_id)
+        options = [c for c in looked if self._ok(c)]
+        chosen = None
+        if options and p.agent is not None:
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            chosen = next((c for c in options if c.id == pick), None)
+        rest = [c for c in looked if c is not chosen]
+        state.rng.shuffle(rest)
+        for c in rest:
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+        if chosen is not None:
+            state.log.append(
+                f"P{controller_id} puts {chosen.printing.name} onto the "
+                "battlefield"
+            )
+            put_into_battlefield(state, chosen, controller_id)
+        state.log.append(
+            f"P{controller_id} looks at {n} card(s); {len(rest)} go to the "
+            "bottom"
+        )
+
+    def describe(self) -> str:
+        qual = f"non-{self.excluded_subtype} " if self.excluded_subtype else ""
+        return (
+            f"look at the top {self.count} cards; you may put a {qual}"
+            f"{self.card_filter.describe()} onto the battlefield; the rest "
+            "go to the bottom in a random order"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -224,6 +286,10 @@ def roto_coin_satisfies(coin, kinds: "frozenset[str]") -> bool:
       creature spell (``creature_type:*`` for a changeling).
     """
     tag = coin.spend_restriction or ""
+    if tag == "colored_only":
+        # "This mana can't be spent to pay generic mana costs." --
+        # spendable in any context; the generic-payment loops skip it.
+        return True
     if tag == "not_nonartifact_spell":
         return "artifact_spell" in kinds or bool(kinds & _NON_SPELL_CONTEXTS)
     if tag.startswith("creature_type:"):
@@ -1041,22 +1107,120 @@ class SacrificeSourceThen(Effect):
 
 def after_mana_ability(
     state: "GameState", player_id: int, source, pool_before: int,
+    *, tapped: bool = False,
 ) -> None:
     """Called by ``actions._activate_ability`` right after a mana ability
     of ``source`` resolved; the coins from index ``pool_before`` on are
-    what it produced. Mana from a snow source is snow mana (CR 107.4h,
-    paying {S})."""
-    if "Snow" not in source.printing.supertypes:
-        return
+    what it produced. ``tapped``: the ability's cost tapped the source
+    ("tap it for mana").
+
+    - Mana from a snow source is snow mana (CR 107.4h, paying {S}).
+    - Kinnan, Bonder Prodigy: tapping a nonland permanent for mana adds
+      one more mana of a type it produced (a triggered mana ability).
+    - "Whenever you tap this <permanent> for mana" triggers (Forbidden
+      Orchard) go on the stack."""
     from dataclasses import replace
 
     pool = state.player_by_id(player_id).mana_pool
-    for i in range(pool_before, len(pool)):
-        pool[i] = replace(pool[i], snow=True)
+    if "Snow" in source.printing.supertypes:
+        for i in range(pool_before, len(pool)):
+            pool[i] = replace(pool[i], snow=True)
+    if not tapped:
+        return
+    produced = pool[pool_before:]
+    if produced and not source.printing.is_land:
+        _kinnan_extra_mana(state, player_id, produced)
+    if source.printing.tapped_for_mana_triggers:
+        push_tapped_for_mana_triggers(state, player_id, source)
+
+
+def _kinnan_extra_mana(state: "GameState", player_id: int, produced) -> None:
+    from mtg_bot.game import ManaCoin, _source_layer6_wiped
+
+    types = sorted({c.color for c in produced})
+    p = state.player_by_id(player_id)
+    for o in state.battlefield:
+        if (
+            o.controller_id != player_id
+            or not o.printing.extra_mana_when_you_tap_nonland_for_mana
+        ):
+            continue
+        if state.continuous_effects and _source_layer6_wiped(state, o):
+            continue
+        color = types[0]
+        if p.agent is not None and len(types) > 1:
+            picked = p.agent.choose_mana_color(state, player_id, types)
+            if picked in types:
+                color = picked
+        p.mana_pool.append(ManaCoin(color=color))
+        state.log.append(f"{o.printing.name} adds an additional {{{color}}}")
+
+
+def push_tapped_for_mana_triggers(
+    state: "GameState", player_id: int, source,
+) -> None:
+    """"Whenever you tap this <permanent> for mana, <effect>." -- stack
+    ``source``'s triggers (targets picked as they go on the stack)."""
+    from mtg_bot.actions import push_triggered_ability
+
+    for trig in source.printing.tapped_for_mana_triggers:
+        push_triggered_ability(
+            state, source=source, ability=trig, ability_index=-1,
+            controller_id=player_id, label="tapped for mana",
+        )
+
+
+# "Until end of turn, whenever a player taps an <Subtype> for mana, that
+# player adds an additional {C}." -- a registry entry (layer 0: no layer
+# effect, only the cleanup expiry) read by automatic payment through
+# ``actions.extra_mana_grants_for_tapped_lands``.
+UEOT_LAND_TAP_MANA_KIND = "roto_extra_mana_on_land_tap"
+
+
+def ueot_land_tap_mana_grants(state: "GameState") -> list:
+    return [
+        tuple(ce.params) for ce in state.continuous_effects
+        if ce.kind == UEOT_LAND_TAP_MANA_KIND
+    ]
+
+
+@dataclass(frozen=True)
+class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
+    """High Tide: "Until end of turn, whenever a player taps an Island
+    for mana, that player adds an additional {U}." (every player's lands;
+    expires at cleanup)."""
+
+    subtype: str = "Island"
+    color: str = "U"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_spell or state.resolving_source
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else -1, layer=0,
+            kind=UEOT_LAND_TAP_MANA_KIND, params=(self.subtype, self.color),
+            expires_at="cleanup",
+            description=(
+                f"{self.subtype}s tapped for mana add an additional "
+                f"{{{self.color}}} this turn"
+            ),
+        )
+
+    def describe(self) -> str:
+        return (
+            f"until end of turn, whenever a player taps an {self.subtype} "
+            f"for mana, that player adds an additional {{{self.color}}}"
+        )
 
 
 __all__ = [
     "after_mana_ability",
+    "LookAtTopMayPutOntoBattlefieldRestBottom",
+    "GrantExtraManaOnLandTapUntilEndOfTurn",
+    "push_tapped_for_mana_triggers",
+    "ueot_land_tap_mana_grants",
     "ReturnPermanentYouControlToHand",
     "DestroyEachThenAddManaPerDestroyed",
     "AddFormulaManaInAnyCombination",

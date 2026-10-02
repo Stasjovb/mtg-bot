@@ -601,6 +601,12 @@ def extra_mana_grants_for_tapped_lands(
         if state.continuous_effects and _source_layer6_wiped(state, o):
             continue
         out.extend(grants)
+    if state.continuous_effects:
+        # "Until end of turn, whenever a player taps an Island for mana,
+        # that player adds an additional {U}." (High Tide; Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import ueot_land_tap_mana_grants
+
+        out.extend(ueot_land_tap_mana_grants(state))
     return out
 
 
@@ -693,7 +699,10 @@ def _can_pay_from(
     # them, the strict color restriction isn't enforced). The pip
     # count must still be included in the bound — without this, a
     # {U/R} cost would be silently free.
-    remaining_pool = len(usable_pool) - len(used_coins)
+    remaining_pool = sum(
+        1 for idx, coin in enumerate(usable_pool)
+        if idx not in used_coins and coin.spend_restriction != "colored_only"
+    )
     remaining_lands = sum(1 for l in lands if l.id not in used_lands)
     needed = cost.generic + len(cost.hybrid)
     return remaining_pool + remaining_lands >= needed
@@ -1380,6 +1389,10 @@ def auto_tap_for_cost(
             continue
         if not _coin_satisfies_context(coin, spell_kind):
             continue
+        if coin.spend_restriction == "colored_only":
+            # "This mana can't be spent to pay generic mana costs."
+            # (Jegantha, the Wellspring; Vintage Roto P3).
+            continue
         used_coin_ids.append(idx)
         if track:
             color_sources.append(
@@ -1406,6 +1419,13 @@ def auto_tap_for_cost(
         # life is part of the mana ability's cost, paid as it's tapped.
         life_cost = _land_tap_life_cost(state, l)
         tap_permanent(state, l)
+        if l.printing.tapped_for_mana_triggers:
+            # "Whenever you tap this land for mana" (Vintage Roto P3).
+            from mtg_bot.effects.generic.roto_mana import (
+                push_tapped_for_mana_triggers,
+            )
+
+            push_tapped_for_mana_triggers(state, player_id, l)
         if life_cost:
             p.life -= life_cost
             state.log.append(
@@ -4446,7 +4466,10 @@ def _activate_ability(
         # mana from a snow source, ...).
         from mtg_bot.effects.generic.roto_mana import after_mana_ability
 
-        after_mana_ability(state, player_id, source, pool_before)
+        after_mana_ability(
+            state, player_id, source, pool_before,
+            tapped=ability.cost.tap_self,
+        )
         if ability.cost.tap_self:
             # "Whenever you tap a creature for mana, add an additional
             # {G}." (Badgermole Cub; a triggered mana ability).

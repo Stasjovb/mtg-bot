@@ -166,9 +166,30 @@ def _parse_x_formula(phrase: str):
     return None
 
 
+# "look at the top N cards of your library. You may put a[n] [non-<Sub> ]
+# <descriptor> card from among them onto the battlefield. Put the rest on
+# the bottom of your library in a random order" (Kinnan, Bonder Prodigy).
+_LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE = re.compile(
+    r"^look at the top (?P<n>[a-z]+) cards of your library\. You may put "
+    r"an? (?:non-(?P<nonsub>[A-Z][a-z]+) )?(?P<desc>.+? card) from among "
+    r"them onto the battlefield\. Put the rest on the bottom of your "
+    r"library in a random order$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
+# "add <mana>. This mana can't be spent to pay generic mana costs"
+# (Jegantha, the Wellspring).
+_ADD_MANA_NOT_FOR_GENERIC_RE = re.compile(
+    r"^add (?P<mana>(?:\{[WUBRGC]\})+)\. This mana can't be spent to pay "
+    r"generic mana costs$"
+)
+# "until end of turn, whenever a player taps an <Subtype> for mana, that
+# player adds an additional {C}" (High Tide).
+_UEOT_EXTRA_MANA_ON_LAND_TAP_RE = re.compile(
+    r"^until end of turn, whenever a player taps an? (?P<sub>[A-Z][a-z]+) "
+    r"for mana, that player adds an additional \{(?P<c>[WUBRGC])\}$"
+)
 # Cavern of Souls' restricted, uncounterable any-color mana. A literal:
 # the only card in the pools with this restriction; broader grammar
 # (other "of the chosen type" spend restrictions) deferred until a second
@@ -224,6 +245,20 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         )
     if phrase == _CHOSEN_CREATURE_TYPE_MANA_LINE:
         return rm.AddAnyColorManaForChosenCreatureType()
+    m = _ADD_MANA_NOT_FOR_GENERIC_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        colors = re.findall(r"\{([WUBRGC])\}", m.group("mana"))
+        return AddManaToPool(
+            produces=tuple((c, 1) for c in colors),
+            spend_restriction="colored_only",
+        )
+    m = _UEOT_EXTRA_MANA_ON_LAND_TAP_RE.match(phrase)
+    if m is not None:
+        return rm.GrantExtraManaOnLandTapUntilEndOfTurn(
+            subtype=m.group("sub"), color=m.group("c"),
+        )
     if phrase == _SHUFFLE_EXILE_TOP_PLAY_FREE_LINE:
         from mtg_bot.effects.generic.cube_creatures_ub import (
             ShuffleThenExileTopMayPlayFree,
@@ -232,6 +267,21 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        n = _COUNT_WORDS.get(m.group("n"))
+        desc = m.group("desc")
+        card_filter = parse_card_descriptor(
+            f"{'an' if desc[0] in 'aeiou' else 'a'} {desc}",
+        )
+        if n is None or card_filter is None:
+            return None
+        return rm.LookAtTopMayPutOntoBattlefieldRestBottom(
+            count=n, card_filter=card_filter,
+            excluded_subtype=m.group("nonsub") or "",
+        )
     m = _RETURN_YOUR_PERMANENT_TO_HAND_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
@@ -325,8 +375,6 @@ class RotoLine:
     triggered: tuple = ()
 
 
-RotoLandLine = RotoLine
-
 
 # Enchantment statics (``cube_enchantments`` hook).
 # "You may cast spells from your hand without paying their mana costs."
@@ -367,6 +415,56 @@ def parse_roto_enchantment_line(line: str) -> RotoLine | None:
     return None
 
 
+# "Whenever you tap this <permanent> for mana, <effect>." (Forbidden
+# Orchard).
+_TAPPED_FOR_MANA_TRIGGER_RE = re.compile(
+    r"^Whenever you tap this (?:land|artifact|creature|permanent) for mana, "
+    r"(?P<eff>.+)\.$"
+)
+# "Whenever you tap a nonland permanent for mana, add one mana of any type
+# that permanent produced." (Kinnan, Bonder Prodigy). A literal: the only
+# card in the pools with this triggered mana ability; broader grammar
+# deferred until a second example exists.
+_KINNAN_EXTRA_MANA_LINE = (
+    "Whenever you tap a nonland permanent for mana, add one mana of any "
+    "type that permanent produced."
+)
+
+
+def _tapped_for_mana_trigger(line: str):
+    m = _TAPPED_FOR_MANA_TRIGGER_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always, Event
+
+    eff = _parse_effect(m.group("eff"))
+    if eff is None:
+        return None
+    # The event is bookkeeping only: these triggers are stacked by the
+    # mana-ability / automatic-payment hooks, never by event dispatch.
+    return TriggeredAbility(
+        event=Event.BECOMES_TAPPED, predicate=Always(), effect=eff,
+    )
+
+
+def parse_roto_creature_line(line: str, card: dict):
+    """A creature line of this bucket (the creature builder's last
+    fallback, after every other bucket declined it) as a ``WGLine``, or
+    ``None``."""
+    if _disabled():
+        return None
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+
+    if line == _KINNAN_EXTRA_MANA_LINE:
+        return WGLine(fields={"extra_mana_when_you_tap_nonland_for_mana": True})
+    trig = _tapped_for_mana_trigger(line)
+    if trig is not None:
+        return WGLine(fields={"tapped_for_mana_triggers": (trig,)})
+    return None
+
+
 def extra_land_supertypes() -> frozenset[str]:
     """Supertypes beyond Legendary the line-composed land builder accepts
     (Snow: Dark Depths)."""
@@ -392,13 +490,16 @@ def _self_ref(text: str, name: str) -> bool:
     return text in (name, "this land", "this permanent")
 
 
-def parse_roto_land_line(line: str, name: str = "") -> RotoLandLine | None:
+def parse_roto_land_line(line: str, name: str = "") -> RotoLine | None:
     """A land line of this bucket, or ``None`` (the line-composed land
     grammar then tries its own)."""
     if _disabled():
         return None
     if _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE.match(line):
-        return RotoLandLine(fields={"enters_choosing_creature_type": True})
+        return RotoLine(fields={"enters_choosing_creature_type": True})
+    trig = _tapped_for_mana_trigger(line)
+    if trig is not None:
+        return RotoLine(fields={"tapped_for_mana_triggers": (trig,)})
     m = _SELF_ENTERS_WITH_COUNTERS_RE.match(line)
     if m is not None and _self_ref(m.group("self"), name):
         n = _COUNT_WORDS.get(m.group("n"))
@@ -406,7 +507,7 @@ def parse_roto_land_line(line: str, name: str = "") -> RotoLandLine | None:
             n = int(m.group("n"))
         if n is None:
             return None
-        return RotoLandLine(
+        return RotoLine(
             fields={"enters_with_named_counters": ((m.group("kind"), n),)},
         )
     m = _STATE_TRIGGER_NO_COUNTERS_RE.match(line)
@@ -419,7 +520,7 @@ def parse_roto_land_line(line: str, name: str = "") -> RotoLandLine | None:
             StateTrigger,
         )
 
-        return RotoLandLine(fields={"state_triggers": (StateTrigger(
+        return RotoLine(fields={"state_triggers": (StateTrigger(
             condition=HasNoCountersOfKind(m.group("kind")), effect=trig,
         ),)})
     if name and name in line:
@@ -431,7 +532,7 @@ def parse_roto_land_line(line: str, name: str = "") -> RotoLandLine | None:
 
         ability = _parse_activated_ability_line(line.replace(name, "this land"))
         if ability is not None:
-            return RotoLandLine(activated=(ability,))
+            return RotoLine(activated=(ability,))
     return None
 
 

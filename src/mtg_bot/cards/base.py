@@ -1602,6 +1602,13 @@ class CardPrinting:
     grants_free_casts_from_hand: bool = False
     free_flash_creature_casts_max_mv: "int | None" = None
     grants_discard_alternative_cost: bool = False
+    # Mana triggers: "Whenever you tap this land for mana, <effect>."
+    # (Forbidden Orchard; ``TriggeredAbility`` entries stacked by
+    # ``roto_mana.after_mana_ability`` / automatic payment) and "Whenever
+    # you tap a nonland permanent for mana, add one mana of any type that
+    # permanent produced." (Kinnan, Bonder Prodigy).
+    tapped_for_mana_triggers: tuple = ()
+    extra_mana_when_you_tap_nonland_for_mana: bool = False
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
