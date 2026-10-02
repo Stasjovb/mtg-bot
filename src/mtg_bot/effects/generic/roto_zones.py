@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.conditions import Condition as _Condition
+from mtg_bot.effects.predicates import TriggerPredicate as _TriggerPredicate
 from mtg_bot.effects.generic.card_flow import CardFilter
 from mtg_bot.effects.generic.roto_search import (
     library_search,
@@ -2417,3 +2419,272 @@ class PutXCountersOnSelfThenDrawHalfX(Effect):
 
     def describe(self) -> str:
         return "put X +1/+1 counters on this creature; draw half X cards, rounded down"
+
+
+
+@dataclass(frozen=True)
+class PerCardDrawnThisTurn(_Condition):
+    """Variable-amount count for "This spell costs {1} less to cast for
+    each card you've drawn this turn." (Deem Inferior):
+    ``Player.cards_drawn_this_turn``."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        return self.multiplier(state, viewer_id) > 0
+
+    def multiplier(self, state, viewer_id, chosen_targets=None) -> int:
+        try:
+            return state.player_by_id(viewer_id).cards_drawn_this_turn
+        except (KeyError, AttributeError, StopIteration):
+            return 0
+
+
+# ---------------------------------------------------------------------
+# Graveyard-functioning triggers (Bridge from Below), self-to-graveyard
+# piles (Triumph of Saint Katherine), Scroll Rack, Winota
+# ---------------------------------------------------------------------
+
+
+class CreaturePutIntoGraveyardOf(_TriggerPredicate):
+    """``Event.DIES`` predicate: "a [nontoken] creature is put into
+    <your / an opponent's> graveyard from the battlefield", where "your"
+    is the source card's owner (Bridge from Below works from its owner's
+    graveyard; who controlled the creature doesn't matter -- only which
+    graveyard it went to, i.e. its owner)."""
+
+    def __init__(self, whose: str = "yours", nontoken: bool = False) -> None:
+        self.whose = whose
+        self.nontoken = nontoken
+
+    def matches(self, state, subjects, source) -> bool:
+        obj = subjects.get("obj")
+        if obj is None or source is None or not obj.printing.is_creature:
+            return False
+        if self.nontoken and obj.printing.is_token:
+            return False
+        same = obj.owner_id == source.owner_id
+        return same if self.whose == "yours" else not same
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, CreaturePutIntoGraveyardOf)
+            and (other.whose, other.nontoken) == (self.whose, self.nontoken)
+        )
+
+    def __hash__(self):
+        return hash(("CreaturePutIntoGraveyardOf", self.whose, self.nontoken))
+
+    def __repr__(self):
+        return f"CreaturePutIntoGraveyardOf({self.whose!r}, {self.nontoken!r})"
+
+
+class SelfPutIntoYourGraveyard(_TriggerPredicate):
+    """``Event.DIES`` predicate: "When this creature is put into your
+    graveyard from the battlefield" -- the source itself died while its
+    owner controlled it (so it went to its controller's graveyard)."""
+
+    def matches(self, state, subjects, source) -> bool:
+        obj = subjects.get("obj")
+        return (
+            obj is not None and source is not None and obj.id == source.id
+            and obj.controller_id == obj.owner_id
+        )
+
+    def __eq__(self, other):
+        return isinstance(other, SelfPutIntoYourGraveyard)
+
+    def __hash__(self):
+        return hash("SelfPutIntoYourGraveyard")
+
+    def __repr__(self):
+        return "SelfPutIntoYourGraveyard()"
+
+
+@dataclass(frozen=True)
+class IfSourceInGraveyard(Effect):
+    """The intervening "if this card is in your graveyard" rechecked as
+    the ability resolves (CR 603.4)."""
+
+    inner: "Effect | None" = None
+
+    def resolve(self, state, controller_id, targets=()):
+        src = state.resolving_source
+        if src is None or src not in state.player_by_id(src.owner_id).graveyard:
+            return
+        self.inner.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"if this card is in your graveyard, {self.inner.describe()}"
+
+
+@dataclass(frozen=True)
+class ExileSelfAndTopNShuffleOnTop(Effect):
+    """"Exile it and the top N cards of your library in a face-down pile.
+    If you do, shuffle that pile and put it back on top of your
+    library." (Triumph of Saint Katherine.) Nothing happens unless the
+    card is still in its owner's graveyard and the library has N cards
+    (its ruling)."""
+
+    count: int = 6
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        card = state.resolving_source
+        if card is None:
+            return
+        p = state.player_by_id(card.owner_id)
+        if card not in p.graveyard or len(p.library) < self.count:
+            return
+        p.graveyard.remove(card)
+        pile = [card] + [p.library.pop(0) for _ in range(self.count)]
+        state.rng.shuffle(pile)
+        for c in reversed(pile):
+            c.zone = Zone.LIBRARY
+            p.library.insert(0, c)
+        reveal_to(card, card.owner_id)
+        state.log.append(
+            f"{card.printing.name} and the top {self.count} cards are "
+            f"shuffled back on top of P{p.id}'s library"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"exile it and the top {self.count} cards of your library; "
+            f"shuffle them and put them back on top"
+        )
+
+
+@dataclass(frozen=True)
+class ScrollRackSwap(Effect):
+    """"Exile any number of cards from your hand face down. Put that many
+    cards from the top of your library into your hand. Then look at the
+    exiled cards and put them on top of your library in any order."
+    (Scroll Rack.) Cards to exile are picked one at a time
+    (``choose_card_from_hand``, ``None`` stops); the order they go back
+    is a ``choose_card_from_library`` pick per position, top first. Not
+    a draw: with too few cards in the library you just get those."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        exiled = []
+        while p.hand and p.agent is not None:
+            pick = p.agent.choose_card_from_hand(
+                state, controller_id, [c.id for c in p.hand],
+            )
+            card = next((c for c in p.hand if c.id == pick), None)
+            if card is None:
+                break
+            p.hand.remove(card)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            exiled.append(card)
+        for _ in range(min(len(exiled), len(p.library))):
+            top = p.library.pop(0)
+            top.zone = Zone.HAND
+            p.hand.append(top)
+            reveal_to(top, controller_id)
+        order = []
+        while len(order) < len(exiled):
+            options = [c for c in exiled if c not in order]
+            order.append(search_pick(state, p, options, may_fail=False))
+        for c in reversed(order):
+            p.exile.remove(c)
+            c.zone = Zone.LIBRARY
+            p.library.insert(0, c)
+        state.log.append(f"P{controller_id} swaps {len(exiled)} card(s)")
+
+    def describe(self) -> str:
+        return (
+            "exile any number of cards from your hand face down; put that "
+            "many from the top of your library into your hand; put the "
+            "exiled cards on top in any order"
+        )
+
+
+class AttackerYouControlWithoutSubtype(_TriggerPredicate):
+    """``Event.ATTACKS`` predicate: "a non-<Subtype> creature you control
+    attacks" (Winota: non-Human)."""
+
+    def __init__(self, subtype: str) -> None:
+        self.subtype = subtype
+
+    def matches(self, state, subjects, source) -> bool:
+        from mtg_bot.game import effective_subtypes
+
+        attacker = subjects.get("attacker")
+        return (
+            attacker is not None and source is not None
+            and attacker.controller_id == source.controller_id
+            and self.subtype not in effective_subtypes(state, attacker)
+        )
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, AttackerYouControlWithoutSubtype)
+            and other.subtype == self.subtype
+        )
+
+    def __hash__(self):
+        return hash(("AttackerYouControlWithoutSubtype", self.subtype))
+
+    def __repr__(self):
+        return f"AttackerYouControlWithoutSubtype({self.subtype!r})"
+
+
+@dataclass(frozen=True)
+class LookTopMayPutAttackingGainKeyword(Effect):
+    """"Look at the top N cards of your library. You may put a <Human
+    creature> card from among them onto the battlefield tapped and
+    attacking. It gains <indestructible> until end of turn. Put the rest
+    of the cards on the bottom of your library in a random order."
+    (Winota.) It attacks the attacking player's opponent (two-player);
+    it was never declared as an attacker, so attack triggers don't
+    fire for it."""
+
+    count: int = 6
+    card_filter: CardFilter = CardFilter()
+    keyword: str = "indestructible"
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.grant_keywords import GrantKeywords
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        looked = [p.library.pop(0) for _ in range(min(self.count, len(p.library)))]
+        for c in looked:
+            reveal_to(c, controller_id)
+        options = [c for c in looked if self.card_filter.matches(c.printing)]
+        pick = search_pick(state, p, options, may_fail=True)
+        rest = [c for c in looked if c is not pick]
+        state.rng.shuffle(rest)
+        for c in rest:
+            c.zone = Zone.LIBRARY
+            p.library.append(c)
+        if pick is None:
+            return
+        put_into_battlefield(state, pick, controller_id)
+        if pick not in state.battlefield:
+            return
+        pick.tapped = True
+        pick.attacking = True
+        ApplyEffect(
+            inner=GrantKeywords(keywords=frozenset({self.keyword})),
+            ends_at=EndOfTurn(),
+        ).resolve(state, controller_id, (("creature", pick.id),))
+        state.log.append(
+            f"{pick.printing.name} enters tapped and attacking with "
+            f"{self.keyword}"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.count} cards; you may put a "
+            f"{self.card_filter.describe()} onto the battlefield tapped and "
+            f"attacking with {self.keyword} until end of turn; the rest on "
+            f"the bottom in a random order"
+        )

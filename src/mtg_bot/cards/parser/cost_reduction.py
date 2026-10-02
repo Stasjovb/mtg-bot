@@ -287,6 +287,13 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     if m is not None:
         condition = _COST_REDUCTION_PER_EACH.get(m.group("what"))
         if condition is None:
+            # Roto P2 counted things ("card you've drawn this turn").
+            from mtg_bot.cards.parser.roto_zones import (
+                roto_zones_per_each_condition,
+            )
+
+            condition = roto_zones_per_each_condition(m.group("what"))
+        if condition is None:
             return None
         return CostReduction(amount=int(m.group(1)), condition=condition)
     # Per-differently-named-land variable-amount X-cost reduction

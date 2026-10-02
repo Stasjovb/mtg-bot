@@ -349,11 +349,57 @@ def _merge_fields(into: dict, fields: dict) -> bool:
 
 def roto_zones_enchantment_line(line: str, acc) -> bool:
     """``cube_enchantments`` line-recognizer hook: claim a P2 static
-    line into the accumulator's printing fields."""
+    line into the accumulator's printing fields, or a P2 graveyard-
+    functioning trigger into its triggers."""
     fields = parse_roto_zones_static_line(line, "")
-    if fields is None:
+    if fields is not None:
+        return _merge_fields(acc.printing_fields, fields)
+    trigger = _parse_graveyard_trigger_line(line)
+    if trigger is None:
         return False
-    return _merge_fields(acc.printing_fields, fields)
+    acc.triggers.append(trigger)
+    acc.printing_fields["has_graveyard_triggers"] = True
+    return True
+
+
+# "Whenever a [nontoken ]creature is put into <your / an opponent's>
+# graveyard from the battlefield, if this card is in your graveyard,
+# <effect>." -- abilities that function from the graveyard (Bridge from
+# Below).
+_GRAVEYARD_DIES_TRIGGER_RE = re.compile(
+    r"^(?:Whenever|When) a (?P<nontoken>nontoken )?creature is put into "
+    r"(?P<whose>your|an opponent's) graveyard from the battlefield, if this "
+    r"card is in your graveyard, (?P<eff>.+)\.$"
+)
+
+
+def _parse_graveyard_trigger_line(line: str):
+    if _disabled():
+        return None
+    m = _GRAVEYARD_DIES_TRIGGER_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import roto_zones as rz
+    from mtg_bot.effects.predicates import Event
+
+    body = m.group("eff")
+    if body == "exile this card":
+        effect = rz.ExileSourceCardFromGraveyard()
+    else:
+        effect = _parse_effect(body)
+        if effect is None or effect.requires_target():
+            return None
+    return TriggeredAbility(
+        event=Event.DIES,
+        predicate=rz.CreaturePutIntoGraveyardOf(
+            whose="yours" if m.group("whose") == "your" else "opponents",
+            nontoken=m.group("nontoken") is not None,
+        ),
+        effect=rz.IfSourceInGraveyard(inner=effect),
+        functions_in_graveyard=True,
+    )
 
 
 # "Whenever this creature deals combat damage to a creature, destroy
@@ -366,6 +412,18 @@ _COMBAT_DAMAGE_DESTROY_THAT_CREATURE_RE = re.compile(
 )
 
 
+# "[<Ability word> — ]When this creature is put into your graveyard from
+# the battlefield, <effect>." (Triumph of Saint Katherine).
+_SELF_INTO_YOUR_GRAVEYARD_TRIGGER_RE = re.compile(
+    r"^(?:[A-Z][a-z]+(?: [A-Z][a-z]+)* — )?When this creature is put into "
+    r"your graveyard from the battlefield, (?P<eff>.+)\.$"
+)
+# "Whenever a non-<Subtype> creature you control attacks, <effect>."
+# (Winota, Joiner of Forces).
+_NON_SUBTYPE_ATTACKS_TRIGGER_RE = re.compile(
+    r"^Whenever a non-(?P<sub>[A-Z][a-z]+) creature you control attacks, "
+    r"(?P<eff>.+)\.$"
+)
 # "Whenever an opponent searches their library, <effect>." (Wan Shi Tong,
 # Librarian).
 _OPPONENT_SEARCHES_TRIGGER_RE = re.compile(
@@ -385,6 +443,37 @@ def parse_roto_zones_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
+    m = _SELF_INTO_YOUR_GRAVEYARD_TRIGGER_RE.match(
+        _substitute_self_name(line, card["name"])
+    )
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic import roto_zones as rz
+        from mtg_bot.effects.predicates import Event
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None or effect.requires_target():
+            return None
+        return WGLine(triggers=(TriggeredAbility(
+            event=Event.DIES, predicate=rz.SelfPutIntoYourGraveyard(),
+            effect=effect,
+        ),))
+    m = _NON_SUBTYPE_ATTACKS_TRIGGER_RE.match(line)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic import roto_zones as rz
+        from mtg_bot.effects.predicates import Event
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None or effect.requires_target():
+            return None
+        return WGLine(triggers=(TriggeredAbility(
+            event=Event.ATTACKS,
+            predicate=rz.AttackerYouControlWithoutSubtype(m.group("sub")),
+            effect=effect,
+        ),))
     m = _OPPONENT_SEARCHES_TRIGGER_RE.match(
         _substitute_self_name(line, card["name"])
     )
@@ -710,6 +799,24 @@ _RETURN_SELF_TO_HAND_COST_RE = re.compile(
 )
 
 
+_PER_EACH_CONDITIONS = {
+    "card you've drawn this turn": "PerCardDrawnThisTurn",
+}
+
+
+def roto_zones_per_each_condition(what: str):
+    """``cost_reduction`` hook: the variable-amount ``Condition`` for a
+    P2 "costs {N} less to cast for each <what>" rider, or ``None``."""
+    if _disabled():
+        return None
+    name = _PER_EACH_CONDITIONS.get(what)
+    if name is None:
+        return None
+    from mtg_bot.effects.generic import roto_zones
+
+    return getattr(roto_zones, name)()
+
+
 def parse_roto_zones_cost_piece(piece: str):
     """``activated._classify_cost_piece`` hook: a P2 ``extra_costs``
     atom for ``piece``, or ``None``."""
@@ -900,6 +1007,21 @@ def _parse_more_tutors(phrase: str) -> Effect | None:
     m = _PUT_X_COUNTERS_DRAW_HALF_X_RE.match(phrase)
     if m is not None:
         return rz.PutXCountersOnSelfThenDrawHalfX()
+    m = _EXILE_SELF_AND_TOP_N_PILE_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n"))
+        return None if n is None else rz.ExileSelfAndTopNShuffleOnTop(count=n)
+    if _SCROLL_RACK_RE.match(phrase):
+        return rz.ScrollRackSwap()
+    m = _LOOK_TOP_MAY_PUT_ATTACKING_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n"))
+        f = parse_roto_descriptor(m.group("desc"))
+        if n is None or f is None:
+            return None
+        return rz.LookTopMayPutAttackingGainKeyword(
+            count=n, card_filter=f, keyword=m.group("kw"),
+        )
 
     m = _SEARCH_EXILE_FACE_DOWN_BARGAIN_RE.match(phrase)
     if m is not None:
@@ -942,6 +1064,23 @@ def _parse_more_tutors(phrase: str) -> Effect | None:
     return None
 
 
+_EXILE_SELF_AND_TOP_N_PILE_RE = re.compile(
+    r"^exile it and the top (?P<n>\w+) cards of your library in a face-down "
+    r"pile\. If you do, shuffle that pile and put it back on top of your "
+    r"library$"
+)
+# Scroll Rack -- the only card in the pool with this hand/library swap.
+_SCROLL_RACK_RE = re.compile(
+    r"^exile any number of cards from your hand face down\. Put that many "
+    r"cards from the top of your library into your hand\. Then look at the "
+    r"exiled cards and put them on top of your library in any order$"
+)
+_LOOK_TOP_MAY_PUT_ATTACKING_RE = re.compile(
+    r"^look at the top (?P<n>\w+) cards of your library\. You may put "
+    r"(?P<desc>an? .+? card) from among them onto the battlefield tapped and "
+    r"attacking\. It gains (?P<kw>[a-z]+) until end of turn\. Put the rest "
+    r"of the cards on the bottom of your library in a random order$"
+)
 _MILLS_SPELLED_RE = re.compile(
     r"^target (?P<who>opponent|player) mills (?P<n>[a-z]+) cards$"
 )

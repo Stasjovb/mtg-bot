@@ -464,12 +464,14 @@ def parse_ub_effect(phrase: str) -> Effect | None:
         )
 
         return GainControlOfTargetThenAttachIfEquipment()
-    if phrase == (
-        "target nonland permanent's owner puts it into their library second "
-        "from the top or on the bottom"
+    if re.fullmatch(
+        r"(?:target nonland permanent's owner|the owner of target nonland "
+        r"permanent) puts it into their library second from the top or on "
+        r"the bottom",
+        phrase,
     ):
-        # Literal: Wan Shi Tong is the only card in the pool with this
-        # owner's-choice tuck.
+        # The owner's-choice tuck in both printed word orders (Wan Shi
+        # Tong; Deem Inferior in the roto pool).
         from mtg_bot.effects.generic.cube_creatures_ub import (
             OwnerPutsTargetSecondFromTopOrBottom,
         )
