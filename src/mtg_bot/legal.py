@@ -1750,7 +1750,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
 
     actions = filter_cast_restrictions(state, player_id, actions)
     actions = filter_unusable_abilities(state, actions)
-    return filter_activation_locks(state, actions)
+    actions = filter_activation_locks(state, actions)
+    # Split second (CR 702.61; roto P6).
+    from mtg_bot.effects.generic.roto_keywords import filter_split_second
+
+    return filter_split_second(state, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

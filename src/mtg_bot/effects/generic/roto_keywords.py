@@ -350,6 +350,190 @@ class DealDamageToPlayerEqualToTheirHandSize(Effect):
         )
 
 
+# ----------------------------------------------------------- split second
+
+SPLIT_SECOND = "split second"
+
+
+def split_second_on_stack(state: "GameState") -> bool:
+    """A spell with split second (copies included) is on the stack."""
+    return any(
+        item.ability is None and SPLIT_SECOND in item.source.printing.keywords
+        for item in state.stack
+    )
+
+
+def _is_mana_ability_action(state: "GameState", action) -> bool:
+    from mtg_bot.game import Zone, effective_activated_abilities
+
+    obj = next((o for o in state.battlefield if o.id == action.source_id), None)
+    if obj is not None:
+        abilities = effective_activated_abilities(state, obj)
+    else:
+        obj = next(
+            (
+                c for p in state.players for c in (*p.hand, *p.graveyard)
+                if c.id == action.source_id
+            ),
+            None,
+        )
+        if obj is None:
+            return False
+        abilities = (
+            obj.printing.hand_activated_abilities if obj.zone == Zone.HAND
+            else obj.printing.graveyard_activated_abilities
+        )
+    if not 0 <= action.ability_index < len(abilities):
+        return False
+    return abilities[action.ability_index].is_mana_ability
+
+
+def filter_split_second(state: "GameState", actions: list) -> list:
+    """CR 702.61b: while a spell with split second is on the stack,
+    players can't cast spells or activate abilities that aren't mana
+    abilities. Special actions stay legal (plotting a card, turning a
+    face-down permanent face up, unlocking a door), and triggered
+    abilities still trigger."""
+    if not state.stack or not split_second_on_stack(state):
+        return actions
+    from mtg_bot.actions import ActivateAbility, ActivateStation, CastSpell
+
+    kept = []
+    for action in actions:
+        if isinstance(action, CastSpell) and not action.use_plot:
+            continue
+        if isinstance(action, ActivateStation):
+            continue
+        if isinstance(action, ActivateAbility) and not _is_mana_ability_action(
+            state, action,
+        ):
+            continue
+        kept.append(action)
+    return kept
+
+
+@dataclass(frozen=True)
+class SourceDealsDamageEqualToItsPowerToTarget(Effect):
+    """"<this creature> deals damage equal to its power to [up to one]
+    target <np>." -- the resolving ability's source is the damage
+    source; its power is read on resolution (last known power if it
+    has left the battlefield)."""
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import _slot_target_still_legal
+        from mtg_bot.game import effective_power
+
+        source = state.resolving_source
+        if not targets or source is None:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(state, self.targets[0], targets[0]):
+                return
+        finally:
+            state.resolving_controller_id = prior
+        amount = effective_power(state, source)
+        if amount > 0:
+            _apply_damage(state, targets[0], amount)
+
+    def describe(self) -> str:
+        from mtg_bot.effects.generic.targets_helpers import _describe_targets
+
+        return (
+            "this creature deals damage equal to its power to "
+            f"{_describe_targets(self.targets)}"
+        )
+
+
+@dataclass(frozen=True)
+class UntapTargetThenGrantUntilEndOfTurn(Effect):
+    """"Untap target <np>. Until end of turn, it gains <keywords>[, and
+    "<triggered ability>"]." (Legolas's Quick Reflexes.)"""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+    granted_trigger: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.combinators import ApplyEffect
+        from mtg_bot.effects.durations import EndOfTurn
+        from mtg_bot.effects.generic.grant_keywords import (
+            GrantKeywords,
+            GrantTriggeredAbility,
+        )
+        from mtg_bot.effects.generic.targets_helpers import _slot_target_still_legal
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(state, self.targets[0], targets[0]):
+                return
+        finally:
+            state.resolving_controller_id = prior
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if obj is None:
+            return
+        if obj.tapped:
+            obj.tapped = False
+            state.log.append(f"{obj.printing.name} is untapped")
+        it = (("creature", obj.id),)
+        if self.keywords:
+            ApplyEffect(
+                inner=GrantKeywords(keywords=self.keywords), ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, it)
+        if self.granted_trigger is not None:
+            ApplyEffect(
+                inner=GrantTriggeredAbility(ability=self.granted_trigger),
+                ends_at=EndOfTurn(),
+            ).resolve(state, controller_id, it)
+
+    def describe(self) -> str:
+        from mtg_bot.effects.generic.targets_helpers import _describe_targets
+
+        text = (
+            f"untap {_describe_targets(self.targets)}; until end of turn it "
+            f"gains {', '.join(sorted(self.keywords))}"
+        )
+        if self.granted_trigger is not None:
+            text += f' and "{self.granted_trigger.describe()}"'
+        return text
+
+
+def fire_granted_becomes_tapped_triggers(state: "GameState", obj) -> None:
+    """Push "Whenever this creature becomes tapped" abilities ``obj``
+    has been granted (layer-6 registry grants, which the printed-ability
+    ``dispatch_event`` sweep doesn't see) -- the ``combat`` granted
+    attack-trigger pattern, called from ``turn.tap_permanent``."""
+    if not state.continuous_effects:
+        return
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import effective_triggered_abilities
+
+    granted = [
+        ab for ab in effective_triggered_abilities(state, obj)
+        if ab not in obj.printing.triggered_abilities
+    ]
+    for i, ability in enumerate(granted):
+        if ability.matches_event(Event.BECOMES_TAPPED, {"obj": obj}, obj, state):
+            push_triggered_ability(
+                state, source=obj, ability=ability, ability_index=4000 + i,
+                controller_id=obj.controller_id, label="becomes-tapped (granted)",
+            )
+
+
 # ------------------------------------------------------------------ toxic
 
 TOXIC_PREFIX = "toxic "
@@ -389,6 +573,12 @@ def apply_toxic(state: "GameState", sources_hit_player) -> None:
 
 
 __all__ = [
+    "SPLIT_SECOND",
+    "SourceDealsDamageEqualToItsPowerToTarget",
+    "UntapTargetThenGrantUntilEndOfTurn",
+    "filter_split_second",
+    "fire_granted_becomes_tapped_triggers",
+    "split_second_on_stack",
     "DealDamageToPlayerEqualToTheirHandSize",
     "TOXIC_PREFIX",
     "TargetIsPlayerOrPermanent",

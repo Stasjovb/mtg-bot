@@ -1038,6 +1038,12 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
         state, Event.BECOMES_TAPPED,
         label="becomes-tapped", obj=obj,
     )
+    # Granted "whenever this creature becomes tapped" (roto P6).
+    from mtg_bot.effects.generic.roto_keywords import (
+        fire_granted_becomes_tapped_triggers,
+    )
+
+    fire_granted_becomes_tapped_triggers(state, obj)
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:

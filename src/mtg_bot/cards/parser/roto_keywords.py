@@ -19,7 +19,7 @@ Entry points, each called from one hook:
   exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
   prevention / replacement statics ("Prevent all damage that would be
   dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one"),
-  Plot on a permanent card and Toxic N.
+  Plot on a permanent card, Toxic N and Split second.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -253,6 +253,76 @@ def _parse_damage_phrase(phrase: str):
     return None
 
 
+_UNTAP_THEN_GRANT_RE = re.compile(
+    r'^untap target (?P<np>[a-z ]+?)\. until end of turn, it gains '
+    r'(?P<kws>[a-z]+(?:[a-z ,]*[a-z])?)(?:,? and "(?P<quoted>[^"]+)")?\.?$',
+    re.IGNORECASE,
+)
+_TAPPED_BITE_TRIGGER_RE = re.compile(
+    r"^Whenever this creature becomes tapped, it deals damage equal to its "
+    r"power to (?P<count>up to one target|target) (?P<np>[a-z ]+?)\.?$"
+)
+
+
+def _keyword_list(text: str) -> frozenset | None:
+    """``"reach, hexproof"`` / ``"reach and hexproof"`` -> engine
+    keywords, every piece a known evergreen keyword."""
+    from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+
+    known = {v for v in _KEYWORD_LINES.values()}
+    pieces = [p.strip() for p in re.split(r",\s*(?:and\s+)?|\s+and\s+", text) if p.strip()]
+    if not pieces or any(p.lower() not in known for p in pieces):
+        return None
+    return frozenset(p.lower() for p in pieces)
+
+
+def _parse_tapped_bite_trigger(text: str):
+    """The quoted "Whenever this creature becomes tapped, it deals damage
+    equal to its power to up to one target <np>." -- "it" is the
+    creature itself (the trigger's subject)."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.roto_keywords import (
+        SourceDealsDamageEqualToItsPowerToTarget,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.targets import TargetSpec
+
+    m = _TAPPED_BITE_TRIGGER_RE.match(text.strip())
+    if m is None:
+        return None
+    f = target_noun_filter(m.group("np"))
+    if f is None:
+        return None
+    count_min = 0 if m.group("count") == "up to one target" else 1
+    return TriggeredAbility(
+        event=Event.BECOMES_TAPPED, predicate=IsSelf(),
+        effect=SourceDealsDamageEqualToItsPowerToTarget(
+            targets=(TargetSpec(f, count_min, 1),),
+        ),
+    )
+
+
+def _parse_untap_then_grant(phrase: str):
+    from mtg_bot.effects.generic.roto_keywords import UntapTargetThenGrantUntilEndOfTurn
+    from mtg_bot.effects.targets import TargetSpec
+
+    m = _UNTAP_THEN_GRANT_RE.match(phrase)
+    if m is None:
+        return None
+    f = target_noun_filter(m.group("np"))
+    kws = _keyword_list(m.group("kws"))
+    if f is None or kws is None:
+        return None
+    trigger = None
+    if m.group("quoted") is not None:
+        trigger = _parse_tapped_bite_trigger(m.group("quoted"))
+        if trigger is None:
+            return None
+    return UntapTargetThenGrantUntilEndOfTurn(
+        targets=(TargetSpec(f),), keywords=kws, granted_trigger=trigger,
+    )
+
+
 def parse_p6_effect(phrase: str):
     """A normalized effect phrase (lowercased first letter, no final
     period) the P6 grammar models, else ``None``."""
@@ -269,7 +339,11 @@ def parse_p6_effect(phrase: str):
         return LookAtTopMayRevealIfMatches(
             card_filter=CardFilter(any_types=types), then=then,
         )
-    return _parse_damage_phrase(phrase) or _parse_keyword_action_phrase(phrase)
+    return (
+        _parse_damage_phrase(phrase)
+        or _parse_keyword_action_phrase(phrase)
+        or _parse_untap_then_grant(phrase)
+    )
 
 
 # ── Trigger conditions (hooked last into ``triggers``) ─────────────────
@@ -450,6 +524,7 @@ def _attach_hand_ability(printing, ability):
 
 _PLOT_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
 _TOXIC_RE = re.compile(r"^Toxic (?P<n>\d+)$")
+_SPLIT_SECOND_LINE = "Split second"
 
 
 def _attach_keyword(printing, keyword: str):
@@ -490,6 +565,9 @@ def _line_patch(line: str, card: dict):
         # instants' and sorceries' Plot lines.
         cost = m.group("cost")
         return lambda p: _attach_plot(p, cost)
+    if line.strip() == _SPLIT_SECOND_LINE:
+        # Split second (CR 702.61): ``roto_keywords.filter_split_second``.
+        return lambda p: _attach_keyword(p, "split second")
     m = _TOXIC_RE.match(line.strip())
     if m is not None:
         # Toxic N (CR 702.164): ``effects.generic.roto_keywords.apply_toxic``.
