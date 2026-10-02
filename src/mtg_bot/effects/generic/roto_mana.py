@@ -396,6 +396,60 @@ def _instant_speed(card) -> bool:
     return card.printing.is_instant or "flash" in card.printing.keywords
 
 
+def _omniscience(state: "GameState", player_id: int) -> bool:
+    return any(
+        o.controller_id == player_id and o.printing.grants_free_casts_from_hand
+        for o in state.battlefield
+    )
+
+
+def _aluren_max_mv(state: "GameState") -> "int | None":
+    """The largest mana value an Aluren on the battlefield (any
+    controller: "any player may") lets creature spells be cast for free
+    with flash, or ``None``."""
+    caps = [
+        o.printing.free_flash_creature_casts_max_mv for o in state.battlefield
+        if o.printing.free_flash_creature_casts_max_mv is not None
+    ]
+    return max(caps) if caps else None
+
+
+def _aluren_allows(state: "GameState", card) -> bool:
+    cap = _aluren_max_mv(state)
+    return (
+        cap is not None and card.printing.is_creature
+        and card.printing.mana_cost.total <= cap
+    )
+
+
+def static_free_cast_permission(
+    state: "GameState", player_id: int, card,
+) -> bool:
+    """May ``player_id`` cast ``card`` (from their hand) without paying
+    its mana cost under a static permission: Omniscience ("spells from
+    your hand") or Aluren (creature spells with mana value N or less, any
+    player). Consulted by ``alt_casting.free_cast_permission``."""
+    from mtg_bot.game import Zone
+
+    if card.zone != Zone.HAND or card.printing.is_land:
+        return False
+    return _omniscience(state, player_id) or _aluren_allows(state, card)
+
+
+def _free_cast_tax_payable(state: "GameState", player_id: int, card) -> bool:
+    """Cost increases (Thalia) still apply to free casts (CR 601.2f)."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.creature_statics_wg import spell_cost_increase
+    from mtg_bot.legal import _spell_kinds_for_card
+
+    tax = spell_cost_increase(state, card.printing, player_id)
+    return tax == 0 or can_pay_cost(
+        state, player_id, ManaCost(generic=tax),
+        spell_kind=_spell_kinds_for_card(card), sac_for_mana=True,
+    )
+
+
 def permission_cast_actions(
     state: "GameState", player_id: int, existing: list, *,
     sorcery_timing: bool,
@@ -417,6 +471,26 @@ def permission_cast_actions(
             out.append(action)
 
     p = state.player_by_id(player_id)
+    # Omniscience / Aluren: free casts from hand (Aluren's "as though
+    # they had flash" lets its creatures in at any priority).
+    seen_free: set[str] = set()
+    omniscience = _omniscience(state, player_id)
+    aluren = _aluren_max_mv(state) is not None
+    for card in (p.hand if (omniscience or aluren) else ()):
+        if card.printing.is_land or card.printing.name in seen_free:
+            continue
+        timing_ok = sorcery_timing or _instant_speed(card) or (
+            _aluren_allows(state, card)
+        )
+        if not (
+            timing_ok
+            and static_free_cast_permission(state, player_id, card)
+            and _castable_now(state, player_id, card, free=True)
+            and _free_cast_tax_payable(state, player_id, card)
+        ):
+            continue
+        seen_free.add(card.printing.name)
+        _emit(CastSpell(card.id, cast_for_free=True))
     # Suspend (CR 702.62a): the special action from hand.
     seen_suspend: set[str] = set()
     for card in p.hand:

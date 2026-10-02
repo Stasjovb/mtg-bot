@@ -560,8 +560,11 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         if cond is not None and cond.matches(state, player_id):
             return True
         # Printed alternative costs (Force of Will, Daze, Snuff Out,
-        # Baleful Mastery, Overload, ...) share this action variant.
-        if card.printing.alternative_costs:
+        # Baleful Mastery, Overload, ...) and granted ones (Dream Halls)
+        # share this action variant.
+        from mtg_bot.cards.spell_costs import alternative_costs_for
+
+        if alternative_costs_for(state, player_id, card):
             from mtg_bot.cards.spell_costs import payable_alternative_costs
 
             if payable_alternative_costs(state, player_id, card):

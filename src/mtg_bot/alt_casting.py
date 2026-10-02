@@ -294,7 +294,12 @@ def free_cast_permission(state: "GameState", player_id: int, card: "GameObject")
     ):
         return True
     cond = card.printing.free_cast_condition
-    return cond is not None and cond.matches(state, player_id)
+    if cond is not None and cond.matches(state, player_id):
+        return True
+    # Vintage Roto P3 static permissions (Omniscience, Aluren).
+    from mtg_bot.effects.generic.roto_mana import static_free_cast_permission
+
+    return static_free_cast_permission(state, player_id, card)
 
 
 def pay_pitch_cost(state: "GameState", player_id: int, card: "GameObject") -> None:

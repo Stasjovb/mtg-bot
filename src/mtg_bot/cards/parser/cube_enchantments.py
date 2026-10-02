@@ -63,13 +63,16 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # Cards claimed through this builder. Explicit opt-in per name, like
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
+    "Aluren",
     "Animate Dead",
+    "Dream Halls",
     "Exploration",
     "Fastbond",
     "Goblin Bombardment",
     "Leyline Binding",
     "Necromancy",
     "Oath of Druids",
+    "Omniscience",
     "Parallax Wave",
     "Sneak Attack",
     "Squandered Resources",
@@ -245,6 +248,20 @@ def _reanimation_aura_lines(line: str, acc: _Accumulator) -> bool:
     return True
 
 
+def _roto_mana_lines(line: str, acc: _Accumulator) -> bool:
+    """Vintage Roto P3 enchantment statics (cast permissions, ...):
+    ``roto_mana.parse_roto_enchantment_line``."""
+    from mtg_bot.cards.parser.roto_mana import parse_roto_enchantment_line
+
+    parsed = parse_roto_enchantment_line(line)
+    if parsed is None:
+        return False
+    acc.printing_fields.update(parsed.fields)
+    acc.triggers.extend(parsed.triggered)
+    acc.activated.extend(parsed.activated)
+    return True
+
+
 _LINE_RECOGNIZERS = (
     _fading,
     _cost_reduction,
@@ -254,6 +271,7 @@ _LINE_RECOGNIZERS = (
     _enchant_graveyard_card,
     _enchanted_creature_gets,
     _reanimation_aura_lines,
+    _roto_mana_lines,
 )
 
 

@@ -2376,6 +2376,11 @@ def _cast_spell(
         card = yw_card
         cost = card.printing.mana_cost
         cast_from_outside_hand = True
+        # ``legal_actions`` never offers a free graveyard cast: a
+        # ``cast_for_free`` one comes from an effect's "cast it without
+        # paying its mana cost" (``cast_now``; Dreadhorde Arcanist), so no
+        # alternative or pitch cost is demanded.
+        free_by_permission = cast_for_free
         p.graveyard.remove(card)
         card.cast_via_warp = False
         card.cast_via_hand = False
@@ -2569,12 +2574,22 @@ def _cast_spell(
     # free-cast permission) is cast for one of them. Announced before
     # modes and targets (CR 601.2b) since Overload changes the targets.
     alt_cost_index: int | None = None
-    if cast_for_free and card.printing.alternative_costs:
+    from mtg_bot.cards.spell_costs import alternative_costs_for
+
+    # Printed alternative costs plus granted ones (Dream Halls).
+    alternative_costs = alternative_costs_for(state, player_id, card)
+    if cast_for_free and alternative_costs and not free_by_permission:
         from mtg_bot.alt_casting import free_cast_permission as _free_perm
         from mtg_bot.cards.spell_costs import select_alternative_cost
 
         if not _free_perm(state, player_id, card):
             alt_cost_index = select_alternative_cost(state, player_id, card)
+    # "If this spell's alternative cost was paid" (Baleful Mastery,
+    # Overload) means the card's own printed one, not a granted one.
+    printed_alt_cost_paid = (
+        alt_cost_index is not None
+        and alt_cost_index < len(card.printing.alternative_costs)
+    )
     chosen_modes: tuple[int, ...] = _choose_modes_at_cast(
         state, player_id, card, base_cost=cost,
     )
@@ -2606,7 +2621,7 @@ def _cast_spell(
             else early_x if early_x is not None
             else (0 if card.printing.mana_cost.x_pips == 0 else None)
         ),
-        kicked=kicked, alt_cost_paid=alt_cost_index is not None,
+        kicked=kicked, alt_cost_paid=printed_alt_cost_paid,
     )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
@@ -2732,6 +2747,7 @@ def _cast_spell(
         if (
             card.printing.alt_cost_exile_from_hand is not None
             and not free_by_permission
+            and alt_cost_index is None
             and not _free_permission(state, player_id, card)
         ):
             _pay_pitch(state, player_id, card)
@@ -2739,7 +2755,7 @@ def _cast_spell(
             # A printed alternative cost may itself cost mana (Baleful
             # Mastery's {1}{B}, Overload); its other parts are paid with
             # the additional costs below.
-            cost = card.printing.alternative_costs[alt_cost_index].mana_cost()
+            cost = alternative_costs[alt_cost_index].mana_cost()
         # Cost increases still apply to a spell cast without paying its
         # mana cost (CR 601.2f -- Thalia on a pitched Force of Will).
         from mtg_bot.creature_statics_wg import spell_cost_increase
@@ -2935,8 +2951,7 @@ def _cast_spell(
         from mtg_bot.cards.spell_costs import pay_alternative_cost_components
 
         pay_alternative_cost_components(
-            state, player_id, card,
-            card.printing.alternative_costs[alt_cost_index],
+            state, player_id, card, alternative_costs[alt_cost_index],
         )
     # Teamwork: optionally tap creatures with enough total power.
     card.optional_additional_cost_paid = False
@@ -3018,7 +3033,7 @@ def _cast_spell(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
-            alt_cost_paid=alt_cost_index is not None,
+            alt_cost_paid=printed_alt_cost_paid,
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
             cast_room_half=cast_room_half,

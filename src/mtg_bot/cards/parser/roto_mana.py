@@ -232,12 +232,55 @@ _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE = re.compile(
 
 
 @dataclass(frozen=True)
-class RotoLandLine:
-    """What one land line contributes: ``CardPrinting`` field updates
-    and/or activated abilities."""
+class RotoLine:
+    """What one permanent line contributes: ``CardPrinting`` field
+    updates, activated and/or triggered abilities."""
 
     fields: dict = field(default_factory=dict)
     activated: tuple = ()
+    triggered: tuple = ()
+
+
+RotoLandLine = RotoLine
+
+
+# Enchantment statics (``cube_enchantments`` hook).
+# "You may cast spells from your hand without paying their mana costs."
+# (Omniscience). A literal: the only card in the pools with this
+# permission; broader grammar deferred until a second example exists.
+_FREE_CASTS_FROM_HAND_LINE = (
+    "You may cast spells from your hand without paying their mana costs."
+)
+# "Any player may cast creature spells with mana value N or less without
+# paying their mana costs and as though they had flash." (Aluren).
+_ANY_PLAYER_FREE_FLASH_CREATURES_RE = re.compile(
+    r"^Any player may cast creature spells with mana value (?P<n>\d+) or "
+    r"less without paying their mana costs and as though they had flash\.$"
+)
+# "Rather than pay the mana cost for a spell, its controller may discard a
+# card that shares a color with that spell." (Dream Halls). A literal: the
+# only card in the pools with this granted cost; broader grammar deferred
+# until a second example exists.
+_DISCARD_SHARING_COLOR_ALT_COST_LINE = (
+    "Rather than pay the mana cost for a spell, its controller may discard "
+    "a card that shares a color with that spell."
+)
+
+
+def parse_roto_enchantment_line(line: str) -> RotoLine | None:
+    """An enchantment line of this bucket, or ``None``."""
+    if _disabled():
+        return None
+    if line == _FREE_CASTS_FROM_HAND_LINE:
+        return RotoLine(fields={"grants_free_casts_from_hand": True})
+    m = _ANY_PLAYER_FREE_FLASH_CREATURES_RE.match(line)
+    if m is not None:
+        return RotoLine(
+            fields={"free_flash_creature_casts_max_mv": int(m.group("n"))},
+        )
+    if line == _DISCARD_SHARING_COLOR_ALT_COST_LINE:
+        return RotoLine(fields={"grants_discard_alternative_cost": True})
+    return None
 
 
 def extra_land_supertypes() -> frozenset[str]:

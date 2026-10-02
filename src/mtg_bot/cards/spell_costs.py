@@ -90,6 +90,9 @@ class AlternativeCost:
     return_count: int = 1
     sacrifice_count: int = 1
     opponent_gains_life: int = 0
+    # "discard a card that shares a color with that spell" (Dream Halls'
+    # granted alternative cost, ``alternative_costs_for``).
+    discard_card_sharing_color: bool = False
     # Overload (CR 702.96): casting for this cost changes "target" in
     # the spell's text to "each". The printing's ``spell_effect`` is an
     # ``IfConditionElse(AlternativeCostWasPaid(), <each-version>,
@@ -128,6 +131,8 @@ class AlternativeCost:
             parts.append(f"sacrifice a {self.sacrifice_subtype}")
         if self.opponent_gains_life:
             parts.append(f"an opponent gains {self.opponent_gains_life} life")
+        if self.discard_card_sharing_color:
+            parts.append("discard a card that shares a color with this spell")
         text = " and ".join(parts)
         if self.overload:
             text += " (overload: \"target\" becomes \"each\")"
@@ -184,6 +189,10 @@ def alternative_cost_payable(
         return False
     if alt.opponent_gains_life and not _opponents(state, player_id):
         return False
+    if alt.discard_card_sharing_color and not _color_sharing_discards(
+        state, player_id, card,
+    ):
+        return False
     if alt.mana:
         cost = apply_cost_reductions(
             card.printing, state, player_id, alt.mana_cost(),
@@ -193,12 +202,49 @@ def alternative_cost_payable(
     return True
 
 
+# Dream Halls' alternative cost, granted to every spell while a permanent
+# with ``grants_discard_alternative_cost`` is on the battlefield.
+DREAM_HALLS_COST = AlternativeCost(discard_card_sharing_color=True)
+
+
+def alternative_costs_for(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> tuple:
+    """``card``'s printed alternative costs followed by the ones a
+    battlefield permanent grants (Dream Halls: "Rather than pay the mana
+    cost for a spell, its controller may discard a card that shares a
+    color with that spell." -- every player's spells)."""
+    printed = tuple(card.printing.alternative_costs)
+    if any(
+        o.printing.grants_discard_alternative_cost for o in state.battlefield
+    ):
+        return printed + (DREAM_HALLS_COST,)
+    return printed
+
+
+def _color_sharing_discards(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> list:
+    """Other cards in ``player_id``'s hand sharing a color with
+    ``card`` (a colorless spell shares a color with nothing)."""
+    from mtg_bot.game import effective_colors
+
+    colors = effective_colors(state, card)
+    if not colors:
+        return []
+    p = state.player_by_id(player_id)
+    return [
+        c for c in p.hand
+        if c is not card and colors & effective_colors(state, c)
+    ]
+
+
 def payable_alternative_costs(
     state: "GameState", player_id: int, card: "GameObject",
 ) -> list[int]:
-    """Indices into ``card.printing.alternative_costs`` payable now."""
+    """Indices into ``alternative_costs_for(card)`` payable now."""
     return [
-        i for i, alt in enumerate(card.printing.alternative_costs)
+        i for i, alt in enumerate(alternative_costs_for(state, player_id, card))
         if alternative_cost_payable(state, player_id, card, alt)
     ]
 
@@ -216,9 +262,9 @@ def select_alternative_cost(
     agent = state.player_by_id(player_id).agent
     if len(options) == 1 or agent is None:
         return options[0]
+    alts = alternative_costs_for(state, player_id, card)
     idx = agent.choose_mode(
-        state, player_id,
-        [card.printing.alternative_costs[i].describe() for i in options],
+        state, player_id, [alts[i].describe() for i in options],
     )
     return options[max(0, min(idx, len(options) - 1))]
 
@@ -276,6 +322,24 @@ def pay_alternative_cost_components(
             f"alternative cost: P{player_id} sacrifices {chosen.printing.name}"
         )
         sacrifice(state, chosen)
+    if alt.discard_card_sharing_color:
+        # Dream Halls: the discarded card is picked with ``choose_discard``.
+        from mtg_bot.turn import fire_opponent_discards_triggers
+
+        options = _color_sharing_discards(state, player_id, card)
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_discard(
+                state, player_id, [c.id for c in options],
+            )
+            chosen = next((c for c in options if c.id == pick), options[0])
+        p.hand.remove(chosen)
+        chosen.zone = Zone.GRAVEYARD
+        p.graveyard.append(chosen)
+        state.log.append(
+            f"alternative cost: P{player_id} discards {chosen.printing.name}"
+        )
+        fire_opponent_discards_triggers(state, player_id, card=chosen)
     if alt.opponent_gains_life:
         # "have an opponent gain N life" (Invigorate): the caster picks
         # the opponent (the only one in a two-player game).
@@ -418,7 +482,9 @@ def pay_additional_cost_option(
 __all__ = [
     "AdditionalCostOption",
     "AlternativeCost",
+    "DREAM_HALLS_COST",
     "additional_costs_payable",
+    "alternative_costs_for",
     "additional_option_payable",
     "alternative_cost_payable",
     "select_alternative_cost",

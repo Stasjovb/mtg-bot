@@ -1592,6 +1592,16 @@ class CardPrinting:
     # entries checked with the state-based actions ("When Dark Depths has
     # no ice counters on it, ...").
     state_triggers: tuple = ()
+    # Cast permissions (``effects.generic.roto_mana``): "You may cast
+    # spells from your hand without paying their mana costs."
+    # (Omniscience); "Any player may cast creature spells with mana value
+    # N or less without paying their mana costs and as though they had
+    # flash." (Aluren: N); "Rather than pay the mana cost for a spell, its
+    # controller may discard a card that shares a color with that
+    # spell." (Dream Halls, ``spell_costs.alternative_costs_for``).
+    grants_free_casts_from_hand: bool = False
+    free_flash_creature_casts_max_mv: "int | None" = None
+    grants_discard_alternative_cost: bool = False
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
