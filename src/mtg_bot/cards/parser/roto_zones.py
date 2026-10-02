@@ -667,6 +667,93 @@ def parse_roto_zones_cost_piece(piece: str):
 
 
 # ---------------------------------------------------------------------
+# Look at / reveal-until / library order (F11)
+# ---------------------------------------------------------------------
+
+_DEFENDING_REVEALS_TOP_PUT_IF_RE = re.compile(
+    r"^defending player reveals the top card of their library\. If it's "
+    r"(?P<desc>an? .+? card), that player puts it into their hand$"
+)
+_DEFENDING_EXILES_TOP_N_RE = re.compile(
+    r"^defending player exiles the top (?P<n>\w+) cards of their library$"
+)
+_EACH_OPPONENT_EXILES_UNTIL_TOTAL_MV_RE = re.compile(
+    r"^each opponent exiles cards from the top of their library until that "
+    r"player has exiled cards with total mana value (?P<n>\d+) or greater$"
+)
+_REVEAL_UNTIL_HAND_REST_GRAVEYARD_RE = re.compile(
+    r"^reveal cards from the top of your library until you reveal "
+    r"(?P<desc>an? .+? card)\. Put that card into your hand and all other "
+    r"cards revealed this way into your graveyard$"
+)
+_LOOK_TOP_PUT_UP_TO_ONTO_BATTLEFIELD_RE = re.compile(
+    r"^look at the top (?P<n>\w+) cards of your library\. Put up to "
+    r"(?P<k>\w+) (?P<desc>.+?) cards(?P<suffix> with mana value \d+ or less)? "
+    r"from among them onto the battlefield\. Put the rest on the bottom of "
+    r"your library in any order$"
+)
+_LOOK_TOP_PUT_MORE_IF_INSTANT_SORCERY_RE = re.compile(
+    r"^look at the top (?P<n>\w+) cards of your library\. Put (?P<k>\w+) of "
+    r"them into your hand and the rest on the bottom of your library in any "
+    r"order\. If there is an instant card and a sorcery card in your "
+    r"graveyard, instead put (?P<k2>\w+) of them into your hand and the rest "
+    r"on the bottom of your library in any order$"
+)
+_EXILE_TOP_MAY_TAKE_UNLESS_SAME_NAME_RE = re.compile(
+    r"^exile the top card of your library\. You may put that card into your "
+    r"hand unless it has the same name as another card exiled this way\. "
+    r"Repeat this process until you put a card into your hand or you exile "
+    r"two cards with the same name, whichever comes first$"
+)
+
+
+def _parse_library_lookat(phrase: str) -> Effect | None:
+    from mtg_bot.effects.generic import roto_zones as rz
+
+    m = _DEFENDING_REVEALS_TOP_PUT_IF_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        return None if f is None else rz.DefendingPlayerRevealsTopPutsIntoHandIf(
+            card_filter=f,
+        )
+    m = _DEFENDING_EXILES_TOP_N_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n"))
+        return None if n is None else rz.DefendingPlayerExilesTopN(count=n)
+    m = _EACH_OPPONENT_EXILES_UNTIL_TOTAL_MV_RE.match(phrase)
+    if m is not None:
+        return rz.EachOpponentExilesUntilTotalManaValue(total=int(m.group("n")))
+    m = _REVEAL_UNTIL_HAND_REST_GRAVEYARD_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        return None if f is None else rz.RevealUntilPutIntoHandRestIntoGraveyard(
+            card_filter=f,
+        )
+    m = _LOOK_TOP_PUT_UP_TO_ONTO_BATTLEFIELD_RE.match(phrase)
+    if m is not None:
+        n, k = _count(m.group("n")), _count(m.group("k"))
+        desc = m.group("desc")
+        f = parse_roto_descriptor(
+            f"{'an' if desc[0] in 'aeiou' else 'a'} {desc} card"
+            f"{m.group('suffix') or ''}"
+        )
+        if None in (n, k, f):
+            return None
+        return rz.LookAtTopPutUpToOntoBattlefield(count=n, take=k, card_filter=f)
+    m = _LOOK_TOP_PUT_MORE_IF_INSTANT_SORCERY_RE.match(phrase)
+    if m is not None:
+        n, k, k2 = (_count(m.group(g)) for g in ("n", "k", "k2"))
+        if None in (n, k, k2):
+            return None
+        return rz.LookAtTopPutIntoHandMoreIfInstantAndSorcery(
+            count=n, take=k, take_if=k2,
+        )
+    if _EXILE_TOP_MAY_TAKE_UNLESS_SAME_NAME_RE.match(phrase):
+        return rz.ExileTopMayTakeUnlessSameName()
+    return None
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
@@ -675,6 +762,7 @@ _EFFECT_PARSERS = (
     _parse_graveyard_hate,
     _parse_hand_disruption,
     _parse_recursion,
+    _parse_library_lookat,
 )
 
 

@@ -1538,3 +1538,280 @@ class DestroyEventCreature(Effect):
 
     def describe(self) -> str:
         return "destroy that creature"
+
+
+# ---------------------------------------------------------------------
+# Look at / reveal-until / library order (F11)
+# ---------------------------------------------------------------------
+
+
+def _defending_player(state, controller_id):
+    """"Defending player" of an attack trigger: the attacking controller's
+    opponent (two-player engine; the base's attack-trigger convention)."""
+    return next(
+        (p for p in state.players if p.id != controller_id and not p.has_lost),
+        None,
+    )
+
+
+def _exile_top(state, player) -> "GameObject | None":
+    from mtg_bot.game import Zone
+
+    if not player.library:
+        return None
+    card = player.library.pop(0)
+    card.zone = Zone.EXILE
+    player.exile.append(card)
+    return card
+
+
+@dataclass(frozen=True)
+class DefendingPlayerRevealsTopPutsIntoHandIf(Effect):
+    """"Defending player reveals the top card of their library. If it's a
+    <land> card, that player puts it into their hand." (Goblin Guide.)"""
+
+    card_filter: CardFilter = CardFilter()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = _defending_player(state, controller_id)
+        if p is None or not p.library:
+            return
+        top = p.library[0]
+        reveal_to_all(state, top)
+        state.log.append(f"P{p.id} reveals {top.printing.name}")
+        if self.card_filter.matches(top.printing):
+            p.library.pop(0)
+            top.zone = Zone.HAND
+            p.hand.append(top)
+            state.log.append(f"P{p.id} puts {top.printing.name} into their hand")
+
+    def describe(self) -> str:
+        return (
+            f"defending player reveals the top card of their library; if it's "
+            f"a {self.card_filter.describe()}, they put it into their hand"
+        )
+
+
+@dataclass(frozen=True)
+class DefendingPlayerExilesTopN(Effect):
+    """"Defending player exiles the top N cards of their library."
+    (Ulamog, the Ceaseless Hunger.)"""
+
+    count: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        p = _defending_player(state, controller_id)
+        if p is None:
+            return
+        n = 0
+        for _ in range(self.count):
+            if _exile_top(state, p) is None:
+                break
+            n += 1
+        state.log.append(f"P{p.id} exiles the top {n} card(s) of their library")
+
+    def describe(self) -> str:
+        return f"defending player exiles the top {self.count} cards of their library"
+
+
+@dataclass(frozen=True)
+class EachOpponentExilesUntilTotalManaValue(Effect):
+    """"Each opponent exiles cards from the top of their library until
+    that player has exiled cards with total mana value N or greater."
+    (Tasha's Hideous Laughter.) Stops early on an empty library."""
+
+    total: int = 20
+
+    def resolve(self, state, controller_id, targets=()):
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            mv = n = 0
+            while mv < self.total:
+                card = _exile_top(state, p)
+                if card is None:
+                    break
+                mv += card.printing.mana_cost.total
+                n += 1
+            state.log.append(
+                f"P{p.id} exiles {n} card(s) (total mana value {mv})"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"each opponent exiles cards from the top of their library until "
+            f"they've exiled cards with total mana value {self.total} or greater"
+        )
+
+
+@dataclass(frozen=True)
+class RevealUntilPutIntoHandRestIntoGraveyard(Effect):
+    """"Reveal cards from the top of your library until you reveal a
+    <basic land> card. Put that card into your hand and all other cards
+    revealed this way into your graveyard." (Hermit Druid.) With no such
+    card, every card is revealed and put into the graveyard."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        revealed = []
+        found = None
+        while p.library:
+            card = p.library.pop(0)
+            reveal_to_all(state, card)
+            if self.card_filter.matches(card.printing):
+                found = card
+                break
+            revealed.append(card)
+        if found is not None:
+            found.zone = Zone.HAND
+            p.hand.append(found)
+        for card in revealed:
+            put_into_graveyard(state, card)
+        state.log.append(
+            f"P{controller_id} reveals {len(revealed) + (found is not None)} "
+            f"card(s)" + (f", keeps {found.printing.name}" if found else "")
+        )
+
+    def describe(self) -> str:
+        return (
+            f"reveal cards from the top of your library until you reveal a "
+            f"{self.card_filter.describe()}; put it into your hand and the "
+            f"rest into your graveyard"
+        )
+
+
+@dataclass(frozen=True)
+class LookAtTopPutUpToOntoBattlefield(Effect):
+    """"Look at the top N cards of your library. Put up to K <creature
+    cards with mana value 3 or less> from among them onto the
+    battlefield. Put the rest on the bottom of your library in any
+    order." (Collected Company.) Picks go through
+    ``choose_card_from_library`` (``None`` stops); the rest keep their
+    library order on the bottom (the base's "any order" shortcut)."""
+
+    count: int = 6
+    take: int = 2
+    card_filter: CardFilter = CardFilter()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        looked = [p.library.pop(0) for _ in range(min(self.count, len(p.library)))]
+        for c in looked:
+            reveal_to(c, controller_id)
+        chosen = []
+        for _ in range(self.take):
+            options = [
+                c for c in looked
+                if c not in chosen and self.card_filter.matches(c.printing)
+            ]
+            pick = search_pick(state, p, options, may_fail=True)
+            if pick is None:
+                break
+            chosen.append(pick)
+        for c in looked:
+            if c not in chosen:
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+        for c in chosen:
+            put_into_battlefield(state, c, controller_id)
+        state.log.append(
+            f"P{controller_id} puts {len(chosen)} card(s) onto the battlefield"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.count} cards of your library; put up to "
+            f"{self.take} {self.card_filter.describe()}(s) from among them "
+            f"onto the battlefield; the rest on the bottom"
+        )
+
+
+@dataclass(frozen=True)
+class LookAtTopPutIntoHandMoreIfInstantAndSorcery(Effect):
+    """"Look at the top N cards of your library. Put K of them into your
+    hand and the rest on the bottom of your library in any order. If
+    there is an instant card and a sorcery card in your graveyard,
+    instead put K' of them into your hand ..." (Flow State.) The
+    graveyard condition is read on resolution."""
+
+    count: int = 3
+    take: int = 1
+    take_if: int = 2
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        gy_types = {t for c in p.graveyard for t in c.printing.card_types}
+        k = self.take_if if {"Instant", "Sorcery"} <= gy_types else self.take
+        looked = [p.library.pop(0) for _ in range(min(self.count, len(p.library)))]
+        for c in looked:
+            reveal_to(c, controller_id)
+        taken = []
+        for _ in range(min(k, len(looked))):
+            options = [c for c in looked if c not in taken]
+            taken.append(search_pick(state, p, options, may_fail=False))
+        for c in looked:
+            if c in taken:
+                c.zone = Zone.HAND
+                p.hand.append(c)
+            else:
+                c.zone = Zone.LIBRARY
+                p.library.append(c)
+        state.log.append(f"P{controller_id} puts {len(taken)} card(s) into hand")
+
+    def describe(self) -> str:
+        return (
+            f"look at the top {self.count} cards; put {self.take} into your "
+            f"hand ({self.take_if} if there is an instant and a sorcery card in "
+            f"your graveyard), the rest on the bottom"
+        )
+
+
+@dataclass(frozen=True)
+class ExileTopMayTakeUnlessSameName(Effect):
+    """"Exile the top card of your library. You may put that card into
+    your hand unless it has the same name as another card exiled this
+    way. Repeat this process until you put a card into your hand or you
+    exile two cards with the same name, whichever comes first." (Tainted
+    Pact.) Each "may" is a ``choose_yes_no``; an empty library ends the
+    process."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        names: set[str] = set()
+        while True:
+            card = _exile_top(state, p)
+            if card is None:
+                return
+            name = card.printing.name
+            if name in names:
+                state.log.append(f"P{controller_id} exiles a second {name}")
+                return
+            names.add(name)
+            if p.agent is None or p.agent.choose_yes_no(
+                state, controller_id, f"put {name} into your hand?",
+            ):
+                p.exile.remove(card)
+                card.zone = Zone.HAND
+                p.hand.append(card)
+                state.log.append(f"P{controller_id} puts {name} into hand")
+                return
+
+    def describe(self) -> str:
+        return (
+            "exile the top card of your library; you may put it into your "
+            "hand unless its name repeats; repeat until you do or a name "
+            "repeats"
+        )
