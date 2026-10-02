@@ -2113,6 +2113,12 @@ def _choose_replicate_times(
     return times, cost
 
 
+def _roto_top_of_library_cast_allowed(state, player_id, card) -> bool:
+    from mtg_bot.effects.generic.roto_mana import top_of_library_cast_allowed
+
+    return top_of_library_cast_allowed(state, player_id, card)
+
+
 def _cast_spell(
     state: GameState, player_id: int, card_id: int,
     use_warp: bool = False, kicked: bool = False,
@@ -2467,10 +2473,16 @@ def _cast_spell(
             elif (
                 p.library
                 and p.library[0].id == card_id
-                and any(
-                    o.printing.grants_cast_artifact_from_top_of_library
-                    for o in state.battlefield
-                    if o.controller_id == player_id
+                and (
+                    any(
+                        o.printing.grants_cast_artifact_from_top_of_library
+                        for o in state.battlefield
+                        if o.controller_id == player_id
+                    )
+                    # Vintage Roto P3 grants (Mystic Forge).
+                    or _roto_top_of_library_cast_allowed(
+                        state, player_id, p.library[0],
+                    )
                 )
             ):
                 card = p.library.pop(0)

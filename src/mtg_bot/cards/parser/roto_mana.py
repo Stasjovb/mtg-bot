@@ -94,6 +94,33 @@ _MAY_CAST_TARGET_GRAVEYARD_FREE_RE = re.compile(
     r"paying its mana cost\. If that spell would be put into your "
     r"graveyard, exile it instead$"
 )
+# "exile the top [N] card[s] of your library" (Mystic Forge), no play
+# permission attached.
+_EXILE_TOP_OF_YOUR_LIBRARY_RE = re.compile(
+    r"^exile the top (?:(?P<n>[a-z]+) )?cards? of your library$"
+)
+_COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+# "shuffle your library. Then exile the top card of your library. Until
+# end of turn, you may play that card without paying its mana cost"
+# (Mind's Desire) -- the same effect as Urza, Lord High Artificer's
+# comma-joined wording (``ShuffleThenExileTopMayPlayFree``). A literal:
+# the only card in the pools with this sentence split; broader grammar
+# deferred until a second example exists.
+_SHUFFLE_EXILE_TOP_PLAY_FREE_LINE = (
+    "shuffle your library. Then exile the top card of your library. Until "
+    "end of turn, you may play that card without paying its mana cost"
+)
+# "exile all the cards from your hand, then draw that many cards. Until
+# the end of your next turn, you may play cards exiled this way" (Hex
+# Magic). A literal: the only card in the pools with this shape; broader
+# grammar deferred until a second example exists.
+_EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE = (
+    "exile all the cards from your hand, then draw that many cards. Until "
+    "the end of your next turn, you may play cards exiled this way"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -152,6 +179,20 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         )
     if phrase == _CHOSEN_CREATURE_TYPE_MANA_LINE:
         return rm.AddAnyColorManaForChosenCreatureType()
+    if phrase == _SHUFFLE_EXILE_TOP_PLAY_FREE_LINE:
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ShuffleThenExileTopMayPlayFree,
+        )
+
+        return ShuffleThenExileTopMayPlayFree()
+    if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
+        return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _EXILE_TOP_OF_YOUR_LIBRARY_RE.match(phrase)
+    if m is not None:
+        n = _COUNT_WORDS.get(m.group("n") or "one")
+        if n is None:
+            return None
+        return rm.ExileTopCardsOfYourLibrary(count=n)
     m = _MAY_CAST_TARGET_GRAVEYARD_FREE_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
@@ -264,7 +305,47 @@ def rewrite_spell_clauses(clauses: list[str]) -> list[str]:
     ]
 
 
+def _parse_roto_artifact_line(line: str) -> dict | None:
+    """``CardPrinting`` field updates for one noncreature-artifact line
+    of this bucket, or ``None``."""
+    from mtg_bot.cards.parser.printing_keywords import (
+        parse_cast_from_top_kinds,
+    )
+
+    kinds = parse_cast_from_top_kinds(line)
+    if kinds is not None:
+        if kinds == ("artifact",):
+            return {"grants_cast_artifact_from_top_of_library": True}
+        return {"cast_from_top_of_library_kinds": kinds}
+    return None
+
+
+def extract_roto_artifact_lines(text: str, name: str):
+    """The artifact builder's hook: lift this bucket's lines out of a
+    noncreature artifact's oracle ``text``. Returns ``(remaining_text,
+    triggers, printing_fields)``, or ``None`` when a recognized block
+    doesn't parse (the card stays unclaimed)."""
+    extracted = extract_modal_trigger_blocks(text, name)
+    if extracted is None:
+        return None
+    text, triggers = extracted
+    if _disabled():
+        return text, triggers, {}
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+
+    kept: list[str] = []
+    fields: dict = {}
+    for raw in text.split("\n"):
+        parsed = _parse_roto_artifact_line(_strip_reminder_text(raw))
+        if parsed is None:
+            kept.append(raw)
+        else:
+            fields.update(parsed)
+    return "\n".join(kept), triggers, fields
+
+
 __all__ = [
+    "extract_roto_artifact_lines",
     "extract_modal_trigger_blocks",
     "parse_roto_land_line",
     "rewrite_spell_clauses",

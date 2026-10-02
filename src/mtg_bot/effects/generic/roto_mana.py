@@ -315,6 +315,12 @@ class MayCastTargetGraveyardCardFree(Effect):
             state, controller_id, f"Cast {card.printing.name} for free?",
         ):
             return
+        from mtg_bot.game import _CowList
+
+        if isinstance(p.graveyard, _CowList):
+            # The flags below mutate a graveyard card in place: isolate
+            # this state's graveyard from search clones first.
+            p.graveyard.fork()
         card.exile_if_put_into_graveyard_from_stack = True
         cast_now(state, controller_id, card, free=True)
 
@@ -330,8 +336,178 @@ class MayCastTargetGraveyardCardFree(Effect):
         )
 
 
+def _top_card_kind_matches(state: "GameState", card, kinds) -> bool:
+    from mtg_bot.game import effective_colors
+
+    if card.printing.is_land:
+        return False
+    if "artifact" in kinds and card.printing.is_artifact:
+        return True
+    return "colorless" in kinds and not effective_colors(state, card)
+
+
+def top_of_library_cast_allowed(
+    state: "GameState", player_id: int, card,
+) -> bool:
+    """"You may cast <kind> spells from the top of your library." (Mystic
+    Forge's ``cast_from_top_of_library_kinds``): ``card`` is the top of
+    ``player_id``'s library and a permanent they control grants its
+    kind."""
+    p = state.player_by_id(player_id)
+    if not p.library or p.library[0] is not card:
+        return False
+    return any(
+        o.controller_id == player_id
+        and o.printing.cast_from_top_of_library_kinds
+        and _top_card_kind_matches(
+            state, card, o.printing.cast_from_top_of_library_kinds,
+        )
+        for o in state.battlefield
+    )
+
+
+def _castable_now(state: "GameState", player_id: int, card, *, free: bool) -> bool:
+    """Targets, additional costs and (unless free) the mana cost of
+    casting ``card`` from outside the hand are all satisfiable."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.creature_casting_ub import casting_origin
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import (
+        _additional_costs_payable, _can_cast, _targets_are_satisfiable,
+    )
+
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        return False
+    if free:
+        return True
+    with casting_origin(
+        card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+    ):
+        cost = apply_cost_reductions(
+            card.printing, state, player_id, card.printing.mana_cost,
+        )
+    return _can_cast(state, player_id, card, cost)
+
+
+def _instant_speed(card) -> bool:
+    return card.printing.is_instant or "flash" in card.printing.keywords
+
+
+def permission_cast_actions(
+    state: "GameState", player_id: int, existing: list, *,
+    sorcery_timing: bool,
+) -> list:
+    """``CastSpell`` actions granted by this bucket's cast permissions
+    (the single ``legal._legal_actions_core`` hook, placed before the
+    instant-speed early return so every later restriction filter sees
+    them). At sorcery timing every permitted cast is offered; otherwise
+    only instants and flash cards. Actions already in ``existing`` are
+    not repeated."""
+    from mtg_bot.actions import CastSpell
+
+    out: list = []
+    seen = set(existing)
+
+    def _emit(action) -> None:
+        if action not in seen:
+            seen.add(action)
+            out.append(action)
+
+    p = state.player_by_id(player_id)
+    # Mystic Forge: the top card of the library.
+    if p.library:
+        top = p.library[0]
+        if (
+            (sorcery_timing or _instant_speed(top))
+            and top_of_library_cast_allowed(state, player_id, top)
+            and _castable_now(state, player_id, top, free=False)
+        ):
+            _emit(CastSpell(top.id))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Library effects
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ExileTopCardsOfYourLibrary(Effect):
+    """"Exile the top [N] card[s] of your library." (Mystic Forge's
+    ``{T}, Pay 1 life`` ability) -- face up, no play permission."""
+
+    count: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        for _ in range(min(self.count, len(p.library))):
+            card = p.library.pop(0)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            state.log.append(
+                f"P{controller_id} exiles {card.printing.name} from the top "
+                "of their library"
+            )
+
+    def describe(self) -> str:
+        return f"exile the top {self.count} card(s) of your library"
+
+
+@dataclass(frozen=True)
+class ExileHandDrawThatManyMayPlayThem(Effect):
+    """"Exile all the cards from your hand, then draw that many cards.
+    Until the end of your next turn, you may play cards exiled this way."
+    (Hex Magic): each exiled card carries an exile play permission
+    (``UNTIL_END_OF_YOUR_NEXT_TURN``, normal costs, lands playable with a
+    land drop)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            UNTIL_END_OF_YOUR_NEXT_TURN,
+            grant_exile_play,
+        )
+        from mtg_bot.game import Zone
+        from mtg_bot.turn import draw_card
+
+        p = state.player_by_id(controller_id)
+        exiled = list(p.hand)
+        for card in exiled:
+            p.hand.remove(card)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            grant_exile_play(
+                state, card, controller_id,
+                duration=UNTIL_END_OF_YOUR_NEXT_TURN,
+            )
+        state.log.append(
+            f"P{controller_id} exiles their hand ({len(exiled)} cards); may "
+            "play them until the end of their next turn"
+        )
+        for _ in range(len(exiled)):
+            draw_card(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "exile your hand, then draw that many; until the end of your "
+            "next turn, you may play the exiled cards"
+        )
+
+
 __all__ = [
     "AddAnyColorManaForChosenCreatureType",
+    "ExileHandDrawThatManyMayPlayThem",
+    "ExileTopCardsOfYourLibrary",
     "MayCastTargetGraveyardCardFree",
     "AddManaPerCardInTargetOpponentsHand",
     "CardsNamedInAllGraveyards",

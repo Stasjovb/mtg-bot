@@ -901,6 +901,15 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
             seen_bestow.add(pr.name)
             actions.append(CastSpell(card.id, use_bestow=True))
 
+    # Vintage Roto P3 cast permissions (Mystic Forge, ...): offered here,
+    # before the instant-speed return, so every restriction filter below
+    # sees them.
+    from mtg_bot.effects.generic.roto_mana import permission_cast_actions
+
+    actions.extend(permission_cast_actions(
+        state, player_id, actions, sorcery_timing=sorcery_timing,
+    ))
+
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
         # turn she entered). Every other activated ability in the pool

@@ -1567,6 +1567,11 @@ class CardPrinting:
     # the choice lands on ``GameObject.chosen_creature_type``
     # (``effects.generic.roto_mana.choose_creature_type_as_enters``).
     enters_choosing_creature_type: bool = False
+    # "You may cast artifact spells and colorless spells from the top of
+    # your library." (Mystic Forge): the spell kinds ("artifact",
+    # "colorless") castable from the top of the controller's library. The
+    # artifact-only grant keeps ``grants_cast_artifact_from_top_of_library``.
+    cast_from_top_of_library_kinds: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
