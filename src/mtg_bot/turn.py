@@ -1203,6 +1203,10 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
     from mtg_bot.designations import on_beginning_of_upkeep
 
     on_beginning_of_upkeep(state)
+    # Vintage Roto P3: suspend's "remove a time counter" upkeep trigger.
+    from mtg_bot.effects.generic.roto_mana import push_suspend_upkeep_triggers
+
+    push_suspend_upkeep_triggers(state)
     run_delayed_upkeep_triggers(state)
 
 

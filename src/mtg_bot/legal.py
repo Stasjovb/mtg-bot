@@ -229,7 +229,12 @@ def _can_cast(
     don't have to reconstruct those three arguments on every check.
     ``sac_for_mana`` is always ``True`` — every spell-cast site permits
     Treasure-style sacrifice during cost payment.
+
+    A card printed with no mana cost (Lotus Bloom) can't be cast by
+    paying a cost (CR 202.1b / 601.2f); its free casts don't come here.
     """
+    if card.printing.has_no_mana_cost:
+        return False
     return can_pay_cost(
         state, player_id, cost,
         spell_kind=_spell_kinds_for_card(card),

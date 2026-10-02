@@ -417,6 +417,16 @@ def permission_cast_actions(
             out.append(action)
 
     p = state.player_by_id(player_id)
+    # Suspend (CR 702.62a): the special action from hand.
+    seen_suspend: set[str] = set()
+    for card in p.hand:
+        if card.printing.name in seen_suspend:
+            continue
+        if suspend_castable(
+            state, player_id, card, sorcery_timing=sorcery_timing,
+        ):
+            seen_suspend.add(card.printing.name)
+            _emit(CastSpell(card.id, use_suspend=True))
     # Mystic Forge: the top card of the library.
     if p.library:
         top = p.library[0]
@@ -504,8 +514,195 @@ class ExileHandDrawThatManyMayPlayThem(Effect):
         )
 
 
+# ---------------------------------------------------------------------------
+# Suspend (CR 702.62)
+# ---------------------------------------------------------------------------
+
+
+def is_suspended(card) -> bool:
+    """CR 702.62b: a card is suspended if it's in exile, has suspend and
+    has a time counter on it."""
+    from mtg_bot.game import Zone
+
+    return (
+        card.zone == Zone.EXILE
+        and card.printing.suspend_count > 0
+        and card.time_counters > 0
+    )
+
+
+def suspend_castable(state: "GameState", player_id: int, card, *,
+                     sorcery_timing: bool) -> bool:
+    """Could ``player_id`` suspend ``card`` from their hand now: "If you
+    could begin to cast this card by putting it onto the stack from your
+    hand" (its normal timing permission) and the suspend cost is
+    payable."""
+    pr = card.printing
+    if pr.suspend_count <= 0 or pr.suspend_cost is None:
+        return False
+    if not (sorcery_timing or _instant_speed(card)):
+        return False
+    from mtg_bot.actions import can_pay_cost
+
+    return can_pay_cost(state, player_id, pr.suspend_cost, sac_for_mana=True)
+
+
+def suspend_card(state: "GameState", player_id: int, card_id: int) -> None:
+    """The suspend special action (CR 702.62a, CR 116.2f): pay the suspend
+    cost and exile the card from hand face up with N time counters. It
+    doesn't use the stack and isn't a cast."""
+    from mtg_bot.actions import (
+        _activate_sac_for_mana_for_cost,
+        auto_tap_for_cost,
+    )
+    from mtg_bot.game import Zone, reveal_to_all
+
+    p = state.player_by_id(player_id)
+    card = next((c for c in p.hand if c.id == card_id), None)
+    if card is None or card.printing.suspend_count <= 0:  # pragma: no cover - legal_actions gates
+        raise ValueError(f"card {card_id} can't be suspended by P{player_id}")
+    cost = _activate_sac_for_mana_for_cost(
+        state, player_id, card.printing.suspend_cost, frozenset({"spell"}),
+    )
+    auto_tap_for_cost(state, player_id, cost, spell_kind=frozenset({"spell"}))
+    p.hand.remove(card)
+    card.zone = Zone.EXILE
+    card.time_counters = card.printing.suspend_count
+    p.exile.append(card)
+    reveal_to_all(state, card)
+    state.log.append(
+        f"P{player_id} suspends {card.printing.name} with "
+        f"{card.time_counters} time counters ({card.printing.suspend_cost_str})"
+    )
+
+
+@dataclass(frozen=True)
+class RemoveTimeCounterFromSuspendedSource(Effect):
+    """Suspend's upkeep trigger: "At the beginning of your upkeep, if this
+    card is suspended, remove a time counter from it." (the intervening
+    "if" is re-checked on resolution). Removing the last counter triggers
+    ``CastSuspendedSourceFree``. Also the effect of Greater Gargadon's
+    "Remove a time counter from this card."."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        card = state.resolving_source
+        if card is None or not is_suspended(card):
+            return
+        remove_time_counter(state, card)
+
+    def describe(self) -> str:
+        return "remove a time counter from this suspended card"
+
+
+def _fork_exile_of(state: "GameState", card) -> None:
+    from mtg_bot.game import _CowList
+
+    exile = state.player_by_id(card.owner_id).exile
+    if isinstance(exile, _CowList):
+        exile.fork()
+
+
+def remove_time_counter(state: "GameState", card) -> None:
+    """Remove one time counter from a suspended ``card``; when it was the
+    last, its "When the last time counter is removed" trigger goes on the
+    stack (CR 702.62a)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always, Event
+
+    _fork_exile_of(state, card)
+    card.time_counters -= 1
+    state.log.append(
+        f"{card.printing.name}: a time counter is removed "
+        f"({card.time_counters} left)"
+    )
+    if card.time_counters == 0:
+        push_triggered_ability(
+            state,
+            source=card,
+            ability=TriggeredAbility(
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Always(),
+                effect=CastSuspendedSourceFree(),
+            ),
+            ability_index=-1,
+            controller_id=card.owner_id,
+            label="suspend (last time counter)",
+        )
+
+
+@dataclass(frozen=True)
+class CastSuspendedSourceFree(Effect):
+    """"When the last time counter is removed from this card, if it's
+    exiled, you may cast it without paying its mana cost if able. If you
+    don't, it remains exiled. If you cast a creature spell this way, it
+    gains haste until you lose control of the spell or the permanent it
+    becomes." (CR 702.62a). Cast during the resolution through
+    ``creature_casting_ub.cast_now`` (timing ignored, CR 608.2g)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.game import Zone
+
+        card = state.resolving_source
+        if card is None or card.zone != Zone.EXILE:
+            return
+        if card not in state.player_by_id(card.owner_id).exile:
+            return
+        if not can_cast_now(state, controller_id, card, free=True):
+            state.log.append(f"{card.printing.name} can't be cast; stays exiled")
+            return
+        p = state.player_by_id(controller_id)
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Cast suspended {card.printing.name} for free?",
+        ):
+            return
+        if card.printing.is_creature:
+            state.add_continuous_effect(
+                source_id=card.id, layer=6, kind="grant_keyword",
+                target_id=card.id, params=("haste",),
+                description=f"{card.printing.name} has haste (suspend)",
+            )
+        cast_now(state, controller_id, card, free=True)
+
+    def describe(self) -> str:
+        return "you may cast this suspended card without paying its mana cost"
+
+
+def push_suspend_upkeep_triggers(state: "GameState") -> None:
+    """At the beginning of the active player's upkeep, each card they own
+    that is suspended triggers (the single ``turn`` upkeep hook)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always, Event
+
+    ap = state.active_player()
+    for card in list(ap.exile):
+        if card.owner_id != ap.id or not is_suspended(card):
+            continue
+        push_triggered_ability(
+            state,
+            source=card,
+            ability=TriggeredAbility(
+                event=Event.BEGINNING_OF_UPKEEP, predicate=Always(),
+                effect=RemoveTimeCounterFromSuspendedSource(),
+            ),
+            ability_index=-1,
+            controller_id=ap.id,
+            label="suspend upkeep",
+        )
+
+
 __all__ = [
     "AddAnyColorManaForChosenCreatureType",
+    "CastSuspendedSourceFree",
+    "RemoveTimeCounterFromSuspendedSource",
     "ExileHandDrawThatManyMayPlayThem",
     "ExileTopCardsOfYourLibrary",
     "MayCastTargetGraveyardCardFree",

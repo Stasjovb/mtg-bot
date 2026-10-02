@@ -1572,6 +1572,16 @@ class CardPrinting:
     # "colorless") castable from the top of the controller's library. The
     # artifact-only grant keeps ``grants_cast_artifact_from_top_of_library``.
     cast_from_top_of_library_kinds: tuple = ()
+    # Suspend N--<cost> (CR 702.62): ``suspend_count`` time counters,
+    # ``suspend_cost`` paid by the special action
+    # (``CastSpell(id, use_suspend=True)``, ``roto_mana.suspend_card``).
+    suspend_count: int = 0
+    suspend_cost: "ManaCost | None" = None
+    suspend_cost_str: str = ""
+    # A nonland card printed with no mana cost (Lotus Bloom): it can't be
+    # cast by paying its mana cost (CR 202.1b / 601.2f), only through an
+    # alternative cost such as "without paying its mana cost".
+    has_no_mana_cost: bool = False
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

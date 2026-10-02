@@ -168,9 +168,15 @@ def build_card_record(card: dict) -> CardPrinting | None:
     ``None`` when the parser doesn't claim it (the source's single
     claim path; coverage diagnostics probe through it too)."""
     body, hand_abilities = _split_hand_abilities(card)
+    # Vintage Roto P3 card-level lines (Suspend) and the no-mana-cost rule.
+    from mtg_bot.cards.parser.roto_mana import split_roto_card_lines
+
+    body, roto_fields = split_roto_card_lines(body)
     built = _build_printing(body)
     if built is None:
         return None
+    if roto_fields:
+        built = replace(built, **roto_fields)
     return _with_hand_abilities(built, hand_abilities)
 
 

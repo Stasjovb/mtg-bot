@@ -137,6 +137,11 @@ class CastSpell(Action):
     # half of a split card (CR 709.3) or a modal DFC's castable back face
     # (CR 712.11). ``None`` casts the card's own (front) printing.
     cast_face: "str | None" = None
+    # Suspend (CR 702.62a): NOT a cast -- the special action (pay the
+    # suspend cost, exile the card from hand with N time counters;
+    # ``roto_mana.suspend_card``), encoded as a CastSpell variant like
+    # Plot.
+    use_suspend: bool = False
 
 
 @dataclass(frozen=True)
@@ -1450,6 +1455,11 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
         return
     if isinstance(action, CastSpell) and action.use_plot:
         _plot_card(state, player_id, action.card_id)
+        return
+    if isinstance(action, CastSpell) and action.use_suspend:
+        from mtg_bot.effects.generic.roto_mana import suspend_card
+
+        suspend_card(state, player_id, action.card_id)
         return
     if isinstance(action, CastSpell):
         _cast_spell(
@@ -4781,6 +4791,14 @@ def move_spell_off_stack(
     if card.is_spell_copy:
         state.log.append(f"copy of {card.printing.name} ceases to exist")
         return
+    if any(ce.target_id == card.id for ce in state.continuous_effects):
+        # CR 400.7: the card becomes a new object in its next zone, so
+        # effects on the spell end (a suspended creature spell's haste
+        # when it's countered, Arena of Glory's haste).
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects if ce.target_id != card.id
+        ]
+        state._invalidate_layered_cache()
     from mtg_bot.game import restore_mdfc_front
 
     # A split half / DFC face turns back to the card's front printing

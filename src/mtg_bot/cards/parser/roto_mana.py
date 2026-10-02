@@ -305,6 +305,47 @@ def rewrite_spell_clauses(clauses: list[str]) -> list[str]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Card-level lines (``source.build_card_record`` hook)
+# ---------------------------------------------------------------------------
+
+# "Suspend N—<cost>" (CR 702.62), reminder text stripped.
+_SUSPEND_RE = re.compile(r"^Suspend (?P<n>\d+)—(?P<cost>(?:\{[^}]+\})+)$")
+
+
+def split_roto_card_lines(card: dict) -> tuple[dict, dict]:
+    """Peel this bucket's card-level lines off a single-faced record
+    before the per-type builders run: ``Suspend N—<cost>`` (a keyword
+    that works from the hand and from exile, whatever the card's type).
+    Also flags a nonland card printed with no mana cost (Lotus Bloom),
+    which can't be cast by paying its mana cost (CR 202.1b).
+
+    Returns ``(record, CardPrinting field updates)``."""
+    if _disabled() or card.get("card_faces"):
+        return card, {}
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+
+    fields: dict = {}
+    if not card.get("mana_cost") and "Land" not in card.get("type_line", ""):
+        fields["has_no_mana_cost"] = True
+    text = card.get("oracle_text") or ""
+    kept: list[str] = []
+    for raw in text.split("\n"):
+        m = _SUSPEND_RE.match(_strip_reminder_text(raw).strip())
+        if m is None:
+            kept.append(raw)
+            continue
+        fields["suspend_count"] = int(m.group("n"))
+        fields["suspend_cost"] = parse_mana_cost(m.group("cost"))
+        fields["suspend_cost_str"] = m.group("cost")
+    if "suspend_count" not in fields:
+        return card, fields
+    stripped = dict(card)
+    stripped["oracle_text"] = "\n".join(kept)
+    return stripped, fields
+
+
 def _parse_roto_artifact_line(line: str) -> dict | None:
     """``CardPrinting`` field updates for one noncreature-artifact line
     of this bucket, or ``None``."""
