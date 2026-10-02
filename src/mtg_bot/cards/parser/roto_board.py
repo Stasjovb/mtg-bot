@@ -96,6 +96,10 @@ def permanent_phrase(np: str, *, plural: bool = False):
     )
 
     np = np.strip()
+    if ", " in np and " or " not in np and " and " not in np:
+        # "nonland, nontoken permanents": a comma-joined modifier list
+        # (conjunctive), not a list of alternatives.
+        np = np.replace(", ", " ")
     quals = []
     if np.endswith(" your opponents control"):
         np = np[: -len(" your opponents control")]
@@ -263,6 +267,24 @@ _TAP_OR_UNTAP_CHOSEN_TYPE = re.compile(
 )
 
 
+# "sacrifice this creature unless you discard a card[. When you discard
+# a card this way, <destroy|exile> target <np> with mana value less than
+# or equal to the mana value of the discarded card]" (Argentum Masticore).
+_SAC_UNLESS_DISCARD = re.compile(
+    r"^sacrifice this (?:creature|artifact|permanent) unless you discard a "
+    r"card(?:\. When you discard a card this way, (?P<verb>destroy|exile) "
+    r"target (?P<np>.+?) with mana value less than or equal to the mana "
+    r"value of the discarded card)?$"
+)
+# "return any number of target <np> you control to their owners' hands.
+# Draw a card for each card returned to your hand this way" (Paradoxical
+# Outcome).
+_RETURN_ANY_NUMBER_DRAW = re.compile(
+    r"^return any number of target (?P<np>.+?) you control to their owners' "
+    r"hands\. Draw a card for each card returned to your hand this way$"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -364,6 +386,24 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _SAC_UNLESS_DISCARD.match(phrase)
+    if m is not None:
+        if m.group("verb") is None:
+            return rb.SacrificeSourceUnlessDiscard()
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.SacrificeSourceUnlessDiscard(
+            reflexive_action=m.group("verb"), reflexive_filter=f,
+        )
+    m = _RETURN_ANY_NUMBER_DRAW.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.object_predicates import ControlledByYou
+
+        f = permanent_phrase(m.group("np"), plural=True)
+        if f is None:
+            return None
+        return rb.ReturnAnyNumberDrawPerOwned(target_filter=f & ControlledByYou())
     m = _RETURN_ONE_YOU_CONTROL.match(phrase)
     if m is not None:
         f = permanent_phrase(m.group("np"))

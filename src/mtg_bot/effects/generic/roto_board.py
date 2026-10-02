@@ -933,6 +933,147 @@ class TapOrUntapAllOfChosenType(Effect):
         )
 
 
+@dataclass(frozen=True)
+class SacrificeSourceUnlessDiscard(Effect):
+    """"sacrifice this creature unless you discard a card[. When you
+    discard a card this way, <destroy|exile> target <permanent> with
+    mana value less than or equal to the mana value of the discarded
+    card]" (Argentum Masticore).
+
+    The controller decides as it resolves (``choose_yes_no``, then the
+    card with ``choose_discard``); with an empty hand, or declining, the
+    source is sacrificed. A discard -- even with the source already gone
+    -- triggers the reflexive ability (CR 603.12), which goes on the
+    stack as a new triggered ability whose target is chosen then, among
+    permanents matching ``reflexive_filter`` with mana value at most the
+    discarded card's."""
+
+    reflexive_action: str = ""
+    reflexive_filter: "ObjectPredicate | None" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import push_triggered_ability
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.card_flow import discard_card
+        from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
+        from mtg_bot.effects.value_predicates import (
+            HasManaValueAtMost,
+            mana_value_of,
+        )
+        from mtg_bot.turn import sacrifice
+
+        source = state.resolving_source
+        p = state.player_by_id(controller_id)
+        name = source.printing.name if source is not None else "it"
+        discarded = None
+        if p.hand and (
+            p.agent is None
+            or p.agent.choose_yes_no(
+                state, controller_id, f"Discard a card to keep {name}?",
+            )
+        ):
+            pick_id = p.hand[0].id
+            if p.agent is not None:
+                pick_id = p.agent.choose_discard(
+                    state, controller_id, [c.id for c in p.hand],
+                )
+            card = next((c for c in p.hand if c.id == pick_id), p.hand[0])
+            discard_card(state, p, card)
+            if card in p.graveyard:
+                discarded = card
+        if discarded is None:
+            if source is not None and source in state.battlefield:
+                state.log.append(f"P{controller_id} sacrifices {name}")
+                sacrifice(state, source)
+            return
+        if not self.reflexive_action or self.reflexive_filter is None:
+            return
+        mv = mana_value_of(discarded)
+        reflexive = TriggeredAbility(effect=RemoveTargetPermanents(
+            action=self.reflexive_action,
+            target_filter=self.reflexive_filter & HasManaValueAtMost(mv),
+        ))
+        push_triggered_ability(
+            state, source=source, ability=reflexive, ability_index=-1,
+            controller_id=controller_id, label="reflexive",
+        )
+
+    def describe(self) -> str:
+        text = "sacrifice this creature unless you discard a card"
+        if self.reflexive_action:
+            text += (
+                f"; when you do, {self.reflexive_action} target permanent "
+                f"with mana value at most the discarded card's"
+            )
+        return text
+
+
+@dataclass(frozen=True)
+class ReturnAnyNumberDrawPerOwned(Effect):
+    """"Return any number of target <permanents> you control to their
+    owners' hands. Draw a card for each card returned to your hand this
+    way." (Paradoxical Outcome). Every still-legal target is returned;
+    the draw counts only cards that went to the caster's own hand (not a
+    permanent another player owns; tokens aren't cards)."""
+
+    target_filter: ObjectPredicate
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        # "Any number": a bound no game reaches (the target loop stops
+        # when the candidates run out or the caster declines).
+        object.__setattr__(self, "targets", (TargetSpec(
+            self.target_filter, count_min=0, count_max=ANY_NUMBER_OF_TARGETS,
+        ),))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _bounce_to_hand,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.turn import draw_n_cards
+
+        slot = self.targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = [
+                next(o for o in state.battlefield if o.id == t[1])
+                for t in targets
+                if _slot_target_still_legal(state, slot, t)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        returned_to_me = 0
+        for obj in legal:
+            if obj not in state.battlefield:
+                continue
+            mine = obj.owner_id == controller_id and not obj.printing.is_token
+            _bounce_to_hand(state, obj)
+            if mine and obj in state.player_by_id(controller_id).hand:
+                returned_to_me += 1
+        if returned_to_me:
+            draw_n_cards(state, controller_id, returned_to_me)
+
+    def describe(self) -> str:
+        return (
+            "return any number of target permanents you control to their "
+            "owners' hands; draw a card for each returned to your hand"
+        )
+
+
+# A target count no game reaches ("any number of target ...").
+ANY_NUMBER_OF_TARGETS = 10_000
+
+
 # ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
@@ -1017,6 +1158,9 @@ class PutMinusOneCounterOnSelfCost:
 
 
 __all__ = [
+    "ANY_NUMBER_OF_TARGETS",
+    "ReturnAnyNumberDrawPerOwned",
+    "SacrificeSourceUnlessDiscard",
     "CardsInYourGraveyard",
     "DestroyTargetsControllersGetTokens",
     "ExileEachUntilSourceLeaves",
