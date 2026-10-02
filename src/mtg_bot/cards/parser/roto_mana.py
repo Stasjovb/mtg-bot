@@ -84,6 +84,16 @@ _ADD_MANA_CANT_BE_SPENT_ON_RE = re.compile(
     r"^add (?P<mana>(?:\{[WUBRGC]\})+)\. This mana can't be spent to cast "
     r"(?P<kind>[a-z]+) spells$"
 )
+# "you may cast target <card descriptor>[ with mana value less than or
+# equal to this creature's power] from your graveyard without paying its
+# mana cost. If that spell would be put into your graveyard, exile it
+# instead" (Dreadhorde Arcanist).
+_MAY_CAST_TARGET_GRAVEYARD_FREE_RE = re.compile(
+    r"^you may cast target (?P<desc>.+? card)(?P<power> with mana value less "
+    r"than or equal to this creature's power)? from your graveyard without "
+    r"paying its mana cost\. If that spell would be put into your "
+    r"graveyard, exile it instead$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -142,6 +152,19 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         )
     if phrase == _CHOSEN_CREATURE_TYPE_MANA_LINE:
         return rm.AddAnyColorManaForChosenCreatureType()
+    m = _MAY_CAST_TARGET_GRAVEYARD_FREE_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        desc = m.group("desc")
+        article = "an" if desc[0] in "aeiou" else "a"
+        card_filter = parse_card_descriptor(f"{article} {desc}")
+        if card_filter is None:
+            return None
+        return rm.MayCastTargetGraveyardCardFree(
+            card_filter=card_filter,
+            mv_at_most_source_power=m.group("power") is not None,
+        )
     return None
 
 

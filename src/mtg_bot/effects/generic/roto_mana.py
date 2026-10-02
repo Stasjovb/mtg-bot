@@ -249,8 +249,90 @@ class AddAnyColorManaForChosenCreatureType(AddManaToPool):
         )
 
 
+# ---------------------------------------------------------------------------
+# Cast permissions
+# ---------------------------------------------------------------------------
+
+
+def _source_power(state: "GameState") -> int:
+    """The resolving source's power (last known information once it has
+    left the battlefield: the object keeps its counters and the
+    registry entries keyed to it until cleanup)."""
+    from mtg_bot.game import effective_power
+
+    src = state.resolving_source
+    return effective_power(state, src) if src is not None else 0
+
+
+@dataclass(frozen=True)
+class MayCastTargetGraveyardCardFree(Effect):
+    """"You may cast target <filter> card [with mana value less than or
+    equal to this creature's power] from your graveyard without paying
+    its mana cost. If that spell would be put into your graveyard, exile
+    it instead." (Dreadhorde Arcanist). The target is a card in the
+    controller's graveyard, re-checked (filter, mana value bound) on
+    resolution; the spell is cast during the resolution (CR 608.2g,
+    timing ignored) through ``creature_casting_ub.cast_now``."""
+
+    card_filter: object = None
+    mv_at_most_source_power: bool = False
+
+    def _ok(self, state: "GameState", card) -> bool:
+        if not self.card_filter.matches(card.printing):
+            return False
+        if self.mv_at_most_source_power:
+            return card.printing.mana_cost.total <= _source_power(state)
+        return True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return [
+            ("graveyard_card", c.id)
+            for c in state.player_by_id(controller_id).graveyard
+            if self._ok(state, c)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+
+        if not targets or targets[0][0] != "graveyard_card":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == targets[0][1]), None)
+        if card is None or not self._ok(state, card):
+            state.log.append("graveyard cast target is no longer legal")
+            return
+        if not can_cast_now(state, controller_id, card, free=True):
+            return
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, f"Cast {card.printing.name} for free?",
+        ):
+            return
+        card.exile_if_put_into_graveyard_from_stack = True
+        cast_now(state, controller_id, card, free=True)
+
+    def describe(self) -> str:
+        bound = (
+            " with mana value up to this creature's power"
+            if self.mv_at_most_source_power else ""
+        )
+        return (
+            f"you may cast target {self.card_filter.describe()}{bound} from "
+            "your graveyard free; exile it instead of putting it into your "
+            "graveyard"
+        )
+
+
 __all__ = [
     "AddAnyColorManaForChosenCreatureType",
+    "MayCastTargetGraveyardCardFree",
     "AddManaPerCardInTargetOpponentsHand",
     "CardsNamedInAllGraveyards",
     "EnteredThisTurn",
