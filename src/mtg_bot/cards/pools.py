@@ -13,6 +13,12 @@ Pool names (``MTG_BOT_CARD_POOL`` env var):
 - ``cube``: the PowerLSV cube + basic lands only. Use this for
   coverage measurement, cube deck-pool generation, and cube self-play.
 - ``eoe``: the legacy four EoE-era files only.
+- ``roto``: Retireddevil's Vintage Roto 1.1 (``data/cube_roto.json``,
+  860 Scryfall cards from the draft sheet's list + basic lands;
+  regenerate via ``scripts/fetch_cube.py --names
+  data/cube_roto.sheet.json``). Opt-in only: it is not part of ``all``,
+  so the default source and its claimed set are unchanged. Coverage
+  lives in ``docs/ROTO_POOL_COVERAGE.md``.
 
 Unknown values raise so a typo never silently becomes a different pool.
 """
@@ -27,6 +33,7 @@ POOL_ENV_VAR = "MTG_BOT_CARD_POOL"
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
 CUBE_POOL_FILES: tuple[str, ...] = ("cube_power_lsv.json",)
+ROTO_POOL_FILES: tuple[str, ...] = ("cube_roto.json",)
 EOE_POOL_FILES: tuple[str, ...] = (
     "edge_of_eternities.json",
     "stellar_sights.json",
@@ -37,6 +44,7 @@ POOLS: dict[str, tuple[str, ...]] = {
     "all": EOE_POOL_FILES + CUBE_POOL_FILES,
     "cube": CUBE_POOL_FILES,
     "eoe": EOE_POOL_FILES,
+    "roto": ROTO_POOL_FILES,
 }
 DEFAULT_POOL = "all"
 # The pool the modeling campaign, deck pool, and self-play target.
@@ -73,10 +81,12 @@ def load_pool_cards(pool: str | None = None, *, data_dir: Path = DATA_DIR) -> li
     seen: set[str] = set()
     for path in pool_data_paths(pool, data_dir=data_dir):
         if not path.exists():
-            hint = (
-                "scripts/fetch_cube.py" if path.name in CUBE_POOL_FILES
-                else "scripts/fetch_*.py"
-            )
+            if path.name in CUBE_POOL_FILES:
+                hint = "scripts/fetch_cube.py"
+            elif path.name in ROTO_POOL_FILES:
+                hint = "scripts/fetch_cube.py --names data/cube_roto.sheet.json"
+            else:
+                hint = "scripts/fetch_*.py"
             raise FileNotFoundError(
                 f"card pool file missing: {path} (regenerate via {hint})"
             )
@@ -93,3 +103,18 @@ def load_pool_cards(pool: str | None = None, *, data_dir: Path = DATA_DIR) -> li
 def pool_card_names(pool: str, *, data_dir: Path = DATA_DIR) -> frozenset[str]:
     """Names present in ``pool``'s raw dumps (claimed or not)."""
     return frozenset(c["name"] for c in load_pool_cards(pool, data_dir=data_dir))
+
+
+def pool_custom_cards(pool: str, *, data_dir: Path = DATA_DIR) -> list[dict]:
+    """Cards a pool's authority list names that have no Scryfall record
+    (recorded by ``scripts/fetch_cube.py --names`` in each dump's
+    ``.meta.json`` sidecar as ``custom_cards_without_scryfall``). They
+    are never in the dump itself; coverage reports list them apart."""
+    custom: list[dict] = []
+    for path in pool_data_paths(pool, data_dir=data_dir):
+        meta_path = path.with_suffix(".meta.json")
+        if not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        custom.extend(meta.get("custom_cards_without_scryfall") or ())
+    return custom

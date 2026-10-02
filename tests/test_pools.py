@@ -52,9 +52,20 @@ def test_active_pool_name_reads_env(monkeypatch):
 
 def test_registry_shape():
     assert pools.TARGET_POOL == "cube"
-    assert set(pools.POOLS) == {"all", "cube", "eoe"}
+    assert pools.DEFAULT_POOL == "all"
+    assert set(pools.POOLS) == {"all", "cube", "eoe", "roto"}
     assert pools.POOLS["all"] == pools.EOE_POOL_FILES + pools.CUBE_POOL_FILES
     assert pools.POOLS["cube"] == pools.CUBE_POOL_FILES
+    assert pools.POOLS["roto"] == pools.ROTO_POOL_FILES
+
+
+def test_roto_pool_is_opt_in():
+    """The Vintage Roto pool is selectable but never folded into the
+    default: ``all`` keeps meaning EoE-era dumps + PowerLSV cube."""
+    assert pools.resolve_pool_name(" Roto ") == "roto"
+    for fname in pools.ROTO_POOL_FILES:
+        assert fname not in pools.POOLS["all"]
+        assert fname not in pools.POOLS["cube"]
 
 
 # ------------------------------------------------------------------ paths
@@ -71,8 +82,9 @@ def test_pool_data_paths_explicit_and_env(monkeypatch, tmp_path):
 def test_real_pool_files_exist():
     """Every registered dump is committed — a fresh checkout must be
     able to build the default source without a fetch step."""
-    for path in pools.pool_data_paths("all"):
-        assert path.exists(), path
+    for name in pools.POOLS:
+        for path in pools.pool_data_paths(name):
+            assert path.exists(), path
 
 
 # ------------------------------------------------------------------ load
@@ -95,6 +107,8 @@ def test_load_pool_cards_cube_only(fake_data_dir):
 def test_load_pool_cards_missing_file_is_loud(tmp_path):
     with pytest.raises(FileNotFoundError, match="fetch_cube.py"):
         pools.load_pool_cards("cube", data_dir=tmp_path)
+    with pytest.raises(FileNotFoundError, match="--names data/cube_roto.sheet.json"):
+        pools.load_pool_cards("roto", data_dir=tmp_path)
     (tmp_path / pools.CUBE_POOL_FILES[0]).write_text("[]", encoding="utf-8")
     with pytest.raises(FileNotFoundError, match=r"fetch_\*\.py"):
         pools.load_pool_cards("all", data_dir=tmp_path)
@@ -126,3 +140,114 @@ def test_parser_source_default_pool_is_union(monkeypatch):
 def test_parser_source_rejects_unknown_pool():
     with pytest.raises(ValueError):
         OracleParserCardSource(pool="nope")
+
+
+def test_real_roto_pool_contents():
+    """The committed roto dump: the sheet's 860 Scryfall-backed cards +
+    the five basics, unique by name; the four custom conspiracies are
+    not faked into it."""
+    names = pools.pool_card_names("roto")
+    assert len(names) == 865
+    assert {"Plains", "Island", "Swamp", "Mountain", "Forest"} <= names
+    assert {"Black Lotus", "Smokestack", "Spectacular Spider-Man",
+            "Life // Death", "Regrowth"} <= names
+    assert "Meddling Wizard" not in names
+    assert "ANOTHER HEAD?!" not in names
+
+
+def test_default_source_unchanged_by_roto(monkeypatch):
+    """A roto-only card (in the roto dump, absent from every ``all``
+    file) stays out of the default source."""
+    monkeypatch.delenv(pools.POOL_ENV_VAR, raising=False)
+    roto_only = pools.pool_card_names("roto") - pools.pool_card_names("all")
+    assert "Smokestack" in roto_only
+    default_names = pools.pool_card_names(pools.DEFAULT_POOL)
+    assert not (roto_only & default_names)
+
+
+# ------------------------------------------------------- custom cards
+
+
+def test_pool_custom_cards_reads_sidecars(tmp_path):
+    _write(tmp_path / pools.ROTO_POOL_FILES[0], [])
+    (tmp_path / "cube_roto.meta.json").write_text(json.dumps({
+        "custom_cards_without_scryfall": [{"name": "X", "custom_text": "t"}],
+    }), encoding="utf-8")
+    assert pools.pool_custom_cards("roto", data_dir=tmp_path) == [
+        {"name": "X", "custom_text": "t"},
+    ]
+    # A pool whose dumps have no sidecar, or a sidecar without the key.
+    _write(tmp_path / pools.CUBE_POOL_FILES[0], [])
+    assert pools.pool_custom_cards("cube", data_dir=tmp_path) == []
+    (tmp_path / "cube_power_lsv.meta.json").write_text("{}", encoding="utf-8")
+    assert pools.pool_custom_cards("cube", data_dir=tmp_path) == []
+
+
+def test_real_roto_custom_cards():
+    assert [c["name"] for c in pools.pool_custom_cards("roto")] == [
+        "Meddling Wizard", "Quanitity Over Quality",
+        "I've Made a Huge Mistake", "ANOTHER HEAD?!",
+    ]
+    assert pools.pool_custom_cards("cube") == []
+
+
+# ------------------------------------------------- single-record builds
+
+
+def test_build_card_record_is_the_source_claim_path():
+    from mtg_bot.cards.parser.source import build_card_record
+
+    records = {c["name"]: c for c in pools.load_pool_cards("cube")}
+    built = build_card_record(records["Mox Sapphire"])
+    assert built is not None and built.name == "Mox Sapphire"
+    # Hand-activated abilities (cycling family) are re-attached.
+    cyclers = [c for c in records.values()
+               if "Cycling" in (c.get("oracle_text") or "")
+               and "Land" not in c.get("type_line", "")
+               and not c.get("card_faces")]
+    assert cyclers, "the cube has single-faced nonland cyclers"
+    claimed = set(OracleParserCardSource(pool="cube").claimed_names)
+    for rec in cyclers:
+        if rec["name"] in claimed:
+            assert build_card_record(rec).hand_activated_abilities
+            break
+    else:  # pragma: no cover - every cube card is claimed
+        raise AssertionError("no claimed cycler")
+    assert build_card_record({"name": "Nope", "type_line": "Instant",
+                              "oracle_text": "Zorble the frobnitz."}) is None
+
+
+def test_unrepresentable_mana_cost_declines_instead_of_crashing():
+    """Snow mana ``{S}`` isn't modeled: the card is unclaimed (and shows
+    up in the coverage report) rather than crashing pool construction or
+    claiming with a bogus cost."""
+    from mtg_bot.cards.parser.source import (
+        _printed_mana_costs_supported,
+        build_card_record,
+    )
+
+    astrolabe = next(c for c in pools.load_pool_cards("roto")
+                     if c["name"] == "Arcum's Astrolabe")
+    assert "{S}" in astrolabe["mana_cost"]
+    assert not _printed_mana_costs_supported(astrolabe)
+    assert build_card_record(astrolabe) is None
+    assert not _printed_mana_costs_supported({
+        "mana_cost": "", "card_faces": [{"mana_cost": "{1}"}, {"mana_cost": "{S}"}],
+    })
+    assert _printed_mana_costs_supported({
+        "mana_cost": "{1}{G} // {2}{U}",
+        "card_faces": [{"mana_cost": "{1}{G}"}, {}],
+    })
+    roto = OracleParserCardSource(pool="roto")
+    assert roto.pool_name == "roto"
+    assert "Arcum's Astrolabe" not in roto.claimed_names
+    assert "Black Lotus" in roto.claimed_names
+
+
+def test_roto_helpers_build_through_the_claim_path():
+    from tests._roto_helpers import printing, roto_card
+
+    assert roto_card("Smokestack")["name"] == "Smokestack"
+    assert printing("Black Lotus").name == "Black Lotus"
+    with pytest.raises(AssertionError, match="should be claimed"):
+        printing("Arcum's Astrolabe")

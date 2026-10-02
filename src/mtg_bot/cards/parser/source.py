@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from mtg_bot.cards.base import CardPrinting
+from mtg_bot.cards.base import CardPrinting, parse_mana_cost
 from mtg_bot.cards.parser.printing_keywords import _parse_cycling_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.pools import load_pool_cards, resolve_pool_name, active_pool_name
@@ -120,7 +120,25 @@ def _run_builders(card: dict) -> CardPrinting | None:
 _FACE_AWARE_LAYOUTS = frozenset({"split", "modal_dfc"})
 
 
+def _printed_mana_costs_supported(card: dict) -> bool:
+    """Whether every printed mana cost on the card (top level and each
+    face) uses symbols ``parse_mana_cost`` models. A cost the engine
+    cannot represent (snow ``{S}`` today) makes the card unclaimable,
+    exactly like an unrecognized oracle line -- it must not crash the
+    whole pool's construction, and it must not claim with a bogus cost."""
+    costs = [card.get("mana_cost") or ""]
+    costs += [f.get("mana_cost") or "" for f in card.get("card_faces") or ()]
+    for cost in costs:
+        try:
+            parse_mana_cost(cost)
+        except ValueError:
+            return False
+    return True
+
+
 def _build_printing_unpinned(card: dict) -> CardPrinting | None:
+    if not _printed_mana_costs_supported(card):
+        return None
     built = _build_layout_printing(card)
     if built is not None:
         return built
@@ -145,6 +163,17 @@ def _build_printing_unpinned(card: dict) -> CardPrinting | None:
     return None
 
 
+def build_card_record(card: dict) -> CardPrinting | None:
+    """The printing the source holds for one raw Scryfall record, or
+    ``None`` when the parser doesn't claim it (the source's single
+    claim path; coverage diagnostics probe through it too)."""
+    body, hand_abilities = _split_hand_abilities(card)
+    built = _build_printing(body)
+    if built is None:
+        return None
+    return _with_hand_abilities(built, hand_abilities)
+
+
 class OracleParserCardSource:
     def __init__(self, pool: str | None = None) -> None:
         self._pool_name = (
@@ -152,12 +181,9 @@ class OracleParserCardSource:
         )
         printings: dict[str, CardPrinting] = {}
         for card in _load_scryfall_data(self._pool_name):
-            body, hand_abilities = _split_hand_abilities(card)
-            built = _build_printing(body)
+            built = build_card_record(card)
             if built is not None:
-                printings[card["name"]] = _with_hand_abilities(
-                    built, hand_abilities,
-                )
+                printings[card["name"]] = built
         self._printings = printings
 
     @property
