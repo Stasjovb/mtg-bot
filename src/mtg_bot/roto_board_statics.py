@@ -286,6 +286,69 @@ def fire_granted_triggers(state, event, subjects, label, push) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Combat events
+# ---------------------------------------------------------------------------
+
+
+def _observed(state, event) -> bool:
+    for o in (*state.battlefield, *state.emblems):
+        for ab in o.printing.triggered_abilities:
+            if ab.event is event:
+                return True
+    return False
+
+
+def fire_combat_damage_dealt(state, events) -> None:
+    """``Event.DEALS_COMBAT_DAMAGE_ANY`` once per source that dealt
+    combat damage in this step (``events`` are ``(source_id, target_id,
+    amount)``; amounts summed). Skipped unless something observes it."""
+    from mtg_bot.effects.predicates import Event
+
+    if not events or not _observed(state, Event.DEALS_COMBAT_DAMAGE_ANY):
+        return
+    from mtg_bot.actions import dispatch_event
+
+    totals: dict[int, int] = {}
+    for source_id, _target, amount in events:
+        if amount > 0:
+            totals[source_id] = totals.get(source_id, 0) + amount
+    for source_id, amount in totals.items():
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        if source is None:
+            continue
+        dispatch_event(
+            state, Event.DEALS_COMBAT_DAMAGE_ANY,
+            label="deals combat damage", combat_damage_amount=amount,
+            source=source,
+        )
+
+
+def fire_becomes_blocked(state, assignments: dict) -> None:
+    """``Event.BECOMES_BLOCKED`` once for each attacker that this
+    declaration blocked (however many blockers it got)."""
+    from mtg_bot.effects.predicates import Event
+
+    if not assignments or not _observed(state, Event.BECOMES_BLOCKED):
+        return
+    from mtg_bot.actions import dispatch_event
+
+    seen: list[int] = []
+    for attacker_id in assignments.values():
+        if attacker_id in seen:
+            continue
+        seen.append(attacker_id)
+        attacker = next(
+            (o for o in state.battlefield if o.id == attacker_id), None,
+        )
+        if attacker is None or not attacker.blocked_by:
+            continue
+        dispatch_event(
+            state, Event.BECOMES_BLOCKED, label="becomes blocked",
+            attacker=attacker,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Untap step
 # ---------------------------------------------------------------------------
 
@@ -397,6 +460,8 @@ __all__ = [
     "any_rules",
     "filter_attackers",
     "filter_blockers",
+    "fire_becomes_blocked",
+    "fire_combat_damage_dealt",
     "fire_granted_triggers",
     "granted_triggers",
     "land_enters_without_rules_text",

@@ -123,6 +123,147 @@ class DamageEachPlayerPerControlled(Effect):
         )
 
 
+@dataclass(frozen=True)
+class DealDamageToEachTarget(Effect):
+    """"<This> deals N damage to each of one or two targets." (Prismari
+    Charm): one target slot with a count range; every chosen target that
+    is still legal takes the damage."""
+
+    amount: int = 1
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+
+        if not targets or not self.targets:
+            return
+        slot = self.targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = []
+            for chosen in targets:
+                if _slot_target_still_legal(state, slot, chosen):
+                    legal.append(chosen)
+                else:
+                    state.log.append(_fizzle_message(state, chosen))
+        finally:
+            state.resolving_controller_id = prior
+        for chosen in legal:
+            _apply_damage(state, chosen, self.amount)
+
+    def describe(self) -> str:
+        slot = self.targets[0] if self.targets else None
+        n = (
+            "one or two" if slot is not None and slot.count_min == 1
+            and slot.count_max == 2 else "the"
+        )
+        return f"deals {self.amount} damage to each of {n} targets"
+
+
+# ---------------------------------------------------------------------------
+# Keywords until end of turn
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LoseKeywordUEOT(Effect):
+    """"Target creature loses <keyword> until end of turn." (Emerald
+    Charm): a layer-6 ``lose_keyword`` entry, walked in timestamp order
+    with keyword grants by ``game.effective_keywords``."""
+
+    keyword: str
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+
+        if not targets or not self.targets:
+            return
+        slot = self.targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, slot, targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            state.log.append(_fizzle_message(state, targets[0], action="effect"))
+            return
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if obj is None:
+            return
+        src = state.resolving_source or state.resolving_spell
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else -1,
+            layer=6, kind="lose_keyword", target_id=obj.id,
+            params=(self.keyword,), expires_at="cleanup",
+            description=f"{obj.printing.name} loses {self.keyword} UEOT",
+        )
+        state.log.append(f"{obj.printing.name} loses {self.keyword}")
+
+    def describe(self) -> str:
+        return f"target creature loses {self.keyword} until end of turn"
+
+
+@dataclass(frozen=True)
+class GrantKeywordsToEachUEOT(Effect):
+    """"<Permanents> you control gain <keywords> until end of turn."
+    (Boros Charm: permanents gain indestructible): every matching
+    permanent at resolution (the set is locked in, CR 611.2c) gets a
+    layer-6 grant that expires at cleanup."""
+
+    permanent_filter: ObjectPredicate
+    keywords: frozenset = frozenset()
+    label: str = "permanents you control"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            matching = [
+                o for o in state.battlefield
+                if self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        src = state.resolving_source or state.resolving_spell
+        for obj in matching:
+            for kw in sorted(self.keywords):
+                state.add_continuous_effect(
+                    source_id=src.id if src is not None else -1,
+                    layer=6, kind="grant_keyword", target_id=obj.id,
+                    params=(kw,), expires_at="cleanup",
+                    description=f"{obj.printing.name} gains {kw} UEOT",
+                )
+        state.log.append(
+            f"{len(matching)} {self.label} gain "
+            f"{', '.join(sorted(self.keywords))} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{self.label} gain {', '.join(sorted(self.keywords))} until "
+            f"end of turn"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tap / untap all
 # ---------------------------------------------------------------------------
@@ -306,6 +447,94 @@ class DestroySourceUnlessPay(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Equipment
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PumpEquippedCreatureUEOT(Effect):
+    """"Equipped creature gets +P/+T until end of turn." (Umezawa's
+    Jitte's first mode): the creature the source Equipment is attached
+    to as the ability resolves; nothing if it's unattached."""
+
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        source = state.resolving_source
+        if source is None or source.attached_to is None:
+            state.log.append("no equipped creature -- pump does nothing")
+            return
+        host = next(
+            (o for o in state.battlefield if o.id == source.attached_to), None,
+        )
+        if host is None:
+            return
+        state.grant_pt_pump_ueot(
+            source_id=source.id, target_id=host.id,
+            power=self.power_bonus, toughness=self.toughness_bonus,
+            description=(
+                f"{source.printing.name}: equipped creature gets "
+                f"{self.power_bonus:+d}/{self.toughness_bonus:+d} UEOT"
+            ),
+        )
+        state.log.append(
+            f"{host.printing.name} gets {self.power_bonus:+d}/"
+            f"{self.toughness_bonus:+d} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"equipped creature gets {self.power_bonus:+d}/"
+            f"{self.toughness_bonus:+d} until end of turn"
+        )
+
+
+@dataclass(frozen=True)
+class EventSubjectDealsDamageToEachOpponent(Effect):
+    """"it deals N damage to each opponent" where "it" is the creature
+    the triggering event is about (Hawkeye's Bow: "Whenever equipped
+    creature becomes tapped, it deals 1 damage to each opponent." -- the
+    equipped creature deals the damage, not the Equipment). The creature
+    is bound as the trigger goes on the stack (``event_subject_id``)
+    and found wherever it is at resolution (last-known information);
+    "each opponent" is relative to the ability's controller."""
+
+    amount: int = 1
+    subject_slot: str = "obj"
+
+    def event_subject_id(self, subjects) -> int:
+        obj = subjects.get(self.subject_slot)
+        return getattr(obj, "id", -1) if obj is not None else -1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.turn import _find_object_by_id
+
+        creature = _find_object_by_id(state, state.resolving_event_subject_id)
+        if creature is None:
+            return
+        prior = state.resolving_source
+        state.resolving_source = creature
+        try:
+            for p in state.players:
+                if p.id == controller_id or p.has_lost:
+                    continue
+                _apply_damage(state, ("player", p.id), self.amount)
+        finally:
+            state.resolving_source = prior
+
+    def describe(self) -> str:
+        return f"it deals {self.amount} damage to each opponent"
+
+
+# ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
 
@@ -368,11 +597,16 @@ class RemoveCountersFromAmongPermanentsCost:
 
 __all__ = [
     "DamageEachPlayerPerControlled",
+    "DealDamageToEachTarget",
+    "GrantKeywordsToEachUEOT",
+    "LoseKeywordUEOT",
     "DestroySourceUnlessPay",
     "EventPlayerActsPerSourceCounter",
+    "EventSubjectDealsDamageToEachOpponent",
     "RemoveCountersFromAmongPermanentsCost",
     "HasManaValueEqualToSourceCounters",
     "IsLegendaryPermanent",
     "LacksSubtype",
+    "PumpEquippedCreatureUEOT",
     "TapAllMatching",
 ]

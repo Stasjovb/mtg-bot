@@ -1552,6 +1552,10 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
             kws.clear()
         elif ce.kind == "grant_keyword" and ce.params:
             kws.add(ce.params[0])
+        elif ce.kind == "lose_keyword" and ce.params:
+            # "Target creature loses flying until end of turn." (Emerald
+            # Charm; Vintage Roto P5).
+            kws.discard(ce.params[0])
     # ContinuousModifier contributions from StaticAbility declarations.
     # Walked after the registry-based layer-6 pass so the existing
     # grant_keyword / lose_all_abilities ordering is preserved. Only

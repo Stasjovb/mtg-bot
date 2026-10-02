@@ -164,6 +164,103 @@ _DESTROY_SELF_UNLESS_PAY = re.compile(
 )
 
 
+# "[un]tap [<count>] target <np>" over the extended permanent grammar
+# (Emerald Charm, Deceiver Exarch, Opposition, Earthcraft, Minamo).
+_TAP_UNTAP_TARGET = re.compile(r"^(?P<verb>tap|untap) (?P<rest>.*target .+)$")
+# "equipped creature gets +P/+T until end of turn" (Umezawa's Jitte).
+_EQUIPPED_GETS_UEOT = re.compile(
+    r"^equipped creature gets (?P<p>[+-]\d+)/(?P<t>[+-]\d+) until end of "
+    r"turn$"
+)
+# "target <np> gets +P/+T until end of turn" for noun phrases the base
+# pump grammar doesn't know (Pendelhaven's "target 1/1 creature").
+_TARGET_GETS_UEOT = re.compile(
+    r"^target (?P<np>.+?) gets (?P<p>[+-]\d+)/(?P<t>[+-]\d+) until end of "
+    r"turn$"
+)
+
+
+# "target <np> loses <keyword> until end of turn" (Emerald Charm).
+_LOSES_KEYWORD_UEOT = re.compile(
+    r"^target (?P<np>.+?) loses (?P<kw>[a-z]+(?: [a-z]+)?) until end of turn$"
+)
+# "<plural np> you control gain <keywords> until end of turn" for noun
+# phrases the base grammar doesn't cover (Boros Charm's "permanents").
+_EACH_GAINS_UEOT = re.compile(
+    r"^(?P<np>[a-z]+) you control gain (?P<kws>[a-z ,]+?) until end of turn$"
+)
+# "deals N damage to target <player-or-permanent list>" (Boros Charm's
+# "target player or planeswalker").
+_DAMAGE_TO_TARGET_LIST = re.compile(
+    r"^deals (?P<n>\d+) damage to target (?P<np>.+)$"
+)
+# "deals N damage to each of one or two targets" (Prismari Charm).
+_DAMAGE_EACH_OF_TARGETS = re.compile(
+    r"^deals (?P<n>\d+) damage to each of (?P<count>one or two|up to "
+    r"(?:two|three)) targets$"
+)
+# "destroy target <np>" over the extended permanent grammar (Emerald
+# Charm's "non-Aura enchantment").
+_DESTROY_TARGET = re.compile(r"^destroy target (?P<np>.+)$")
+
+
+def _keyword_list(text: str):
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+    words = [w.strip() for w in re.split(r", and |, | and ", text) if w.strip()]
+    out = set()
+    for w in words:
+        kws = _parse_keyword_line(w.capitalize())
+        if not kws or len(kws) != 1:
+            return None
+        out.add(kws[0])
+    return frozenset(out) if out else None
+
+
+def _player_or_permanent_filter(np: str):
+    """"player or planeswalker" / "opponent or creature" -- a target
+    list mixing players with the permanent grammar."""
+    from mtg_bot.effects.object_predicates import ControlledByOpponent, IsPlayer
+
+    arms = []
+    has_player = False
+    for item in np.split(" or "):
+        item = item.strip()
+        if item == "player":
+            arms.append(IsPlayer())
+            has_player = True
+        elif item == "opponent":
+            arms.append(IsPlayer() & ControlledByOpponent())
+            has_player = True
+        else:
+            f = permanent_phrase(item)
+            if f is None:
+                return None
+            arms.append(f)
+    if not has_player:
+        return None
+    out = arms[0]
+    for a in arms[1:]:
+        out = out | a
+    return out
+
+
+def _target_slot(rest: str):
+    from mtg_bot.cards.parser.target_phrases import parse_target_count
+    from mtg_bot.effects.targets import TargetSpec
+
+    counted = parse_target_count(rest)
+    if counted is None:
+        return None
+    lo, hi, np = counted
+    if hi == "X":
+        return None
+    f = permanent_phrase(np)
+    if f is None:
+        return None
+    return TargetSpec(f, count_min=lo, count_max=hi)
+
+
 def parse_roto_board_effect(phrase: str) -> Effect | None:
     """Effect phrases of the P5 package (normalized: lower-cased first
     letter, no trailing period, source subject stripped)."""
@@ -199,6 +296,84 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
         except ValueError:
             return None
         return rb.DestroySourceUnlessPay(cost=m.group("cost"))
+    m = _TAP_UNTAP_TARGET.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.tap import Tap, Untap
+
+        slot = _target_slot(m.group("rest"))
+        if slot is None:
+            return None
+        cls = Tap if m.group("verb") == "tap" else Untap
+        return cls(targets=(slot,))
+    m = _LOSES_KEYWORD_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        kws = _keyword_list(m.group("kw"))
+        if f is None or kws is None or len(kws) != 1:
+            return None
+        return rb.LoseKeywordUEOT(keyword=next(iter(kws)), targets=(TargetSpec(f),))
+    m = _EACH_GAINS_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.object_predicates import ControlledByYou
+
+        f = permanent_phrase(m.group("np"), plural=True)
+        kws = _keyword_list(m.group("kws"))
+        if f is None or kws is None:
+            return None
+        return rb.GrantKeywordsToEachUEOT(
+            permanent_filter=f & ControlledByYou(), keywords=kws,
+            label=f"{m.group('np')} you control",
+        )
+    m = _DAMAGE_EACH_OF_TARGETS.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec, any_target_filter
+
+        count = m.group("count")
+        lo, hi = (1, 2) if count == "one or two" else (
+            0, _NUMBER_WORDS[count.split()[-1]],
+        )
+        return rb.DealDamageToEachTarget(
+            amount=int(m.group("n")),
+            targets=(TargetSpec(any_target_filter(), count_min=lo, count_max=hi),),
+        )
+    m = _DAMAGE_TO_TARGET_LIST.match(phrase)
+    if m is not None and " or " in m.group("np"):
+        from mtg_bot.effects.generic.damage import DealDamage
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = _player_or_permanent_filter(m.group("np"))
+        if f is None:
+            return None
+        return DealDamage(amount=int(m.group("n")), targets=(TargetSpec(f),))
+    m = _DESTROY_TARGET.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.targeted_removal import (
+            RemoveTargetPermanents,
+        )
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return RemoveTargetPermanents(action="destroy", target_filter=f)
+    m = _EQUIPPED_GETS_UEOT.match(phrase)
+    if m is not None:
+        return rb.PumpEquippedCreatureUEOT(
+            power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
+        )
+    m = _TARGET_GETS_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.pump import Pump
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return Pump(
+            power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
+            targets=(TargetSpec(f),),
+        )
     m = _TAP_ALL.match(phrase)
     if m is not None:
         f = permanent_phrase(m.group("np"), plural=True)
@@ -230,6 +405,27 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
         return parse_destroy_all(
             f"{m.group('verb')} each {union}{m.group('rest') or ''}"
         )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Trigger conditions
+# ---------------------------------------------------------------------------
+
+
+def parse_roto_trigger_phrase(phrase: str):
+    """``(Event, Predicate)`` for the P5 package's trigger conditions:
+    "equipped creature deals combat damage" (any recipient, once per
+    damage step -- Umezawa's Jitte) and "this creature becomes blocked"
+    (Ichorclaw Myr)."""
+    if _disabled():
+        return None
+    from mtg_bot.effects.predicates import Event, IsHost, IsSelf
+
+    if phrase == "equipped creature deals combat damage":
+        return (Event.DEALS_COMBAT_DAMAGE_ANY, IsHost(subject="source"))
+    if phrase == "this creature becomes blocked":
+        return (Event.BECOMES_BLOCKED, IsSelf(subject="attacker"))
     return None
 
 
@@ -475,8 +671,45 @@ def _nonbasic_lands_are_mountains(line: str) -> BoardLine | None:
     return BoardLine(fields={"nonbasic_lands_are_mountains": True})
 
 
+# "Whenever equipped creature <condition>, it <body>." -- "it" is the
+# equipped creature, not the Equipment (Hawkeye's Bow). These conditions
+# stay out of the shared trigger tables, whose effect normalizer would
+# read "it" as the trigger's source.
+_EQUIPPED_IT_TRIGGER = re.compile(
+    r"^Whenever equipped creature (?P<cond>becomes tapped|attacks), it "
+    r"(?P<body>.+)\.$"
+)
+_HOST_DEALS_DAMAGE_EACH_OPPONENT = re.compile(
+    r"^deals (?P<n>\d+) damage to each opponent$"
+)
+
+
+def _equipped_it_trigger(line: str) -> BoardLine | None:
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import roto_board as rb
+    from mtg_bot.effects.predicates import Event, IsHost
+
+    m = _EQUIPPED_IT_TRIGGER.match(line)
+    if m is None:
+        return None
+    event, slot = {
+        "becomes tapped": (Event.BECOMES_TAPPED, "obj"),
+        "attacks": (Event.ATTACKS, "attacker"),
+    }[m.group("cond")]
+    body = _HOST_DEALS_DAMAGE_EACH_OPPONENT.match(m.group("body"))
+    if body is None:
+        return None
+    return BoardLine(triggers=(TriggeredAbility(
+        event=event, predicate=IsHost(subject=slot),
+        effect=rb.EventSubjectDealsDamageToEachOpponent(
+            amount=int(body.group("n")), subject_slot=slot,
+        ),
+    ),))
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _equipped_it_trigger,
     _each_land_is_type,
     _nonbasic_lands_are_mountains,
     _cant_attack_or_block,
@@ -515,6 +748,88 @@ def parse_roto_board_line_into(
         keywords=board.keywords, triggers=board.triggers,
         activated=board.activated, statics=board.statics,
     )
+
+
+# "<cost>: Choose one —" followed by "• <mode>" lines -- a modal
+# activated ability (Umezawa's Jitte).
+_MODAL_ACTIVATION_HEADER = re.compile(r"^(?P<cost>[^:]+): Choose one —$")
+# "Equipped creature gets +P/+T and has <keywords> and ward {N}." -- the
+# ward rider of a granted-keyword list (Lavaspur Boots).
+_EQUIPPED_WARD_RIDER = re.compile(
+    r"^(?P<head>Equipped creature (?:gets [+-]\d+/[+-]\d+ and )?has .+?),? "
+    r"and ward (?P<cost>(?:\{[^}]+\})+)\.$"
+)
+
+
+def _modal_activation(header: str, bullets: list[str], name: str):
+    from mtg_bot.cards.parser.activated import _parse_activation_cost
+    from mtg_bot.cards.parser.creature_builder import _parse_modal_mode_phrase
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+    from mtg_bot.effects.base import ActivatedAbility
+    from mtg_bot.effects.combinators import ModalChooseOne
+
+    m = _MODAL_ACTIVATION_HEADER.match(_substitute_self_name(header, name))
+    if m is None or len(bullets) < 2:
+        return None
+    cost = _parse_activation_cost(m.group("cost"))
+    if cost is None:
+        return None
+    modes = []
+    for bullet in bullets:
+        eff = _parse_modal_mode_phrase(
+            _substitute_self_name(bullet[len("• "):], name),
+        )
+        if eff is None:
+            return None
+        modes.append(eff)
+    return ActivatedAbility(cost=cost, effect=ModalChooseOne(modes=tuple(modes)))
+
+
+def claim_equipment_lines(card: dict):
+    """The equipment builder's pre-pass: claim the multi-line / compound
+    shapes its line loop can't see whole. Returns ``(remaining oracle
+    text, BoardLine)`` -- modal activated abilities in
+    ``BoardLine.activated``, a ward rider as the
+    ``attached_grants_ward_cost`` field with the rest of its line handed
+    back -- or ``None`` when a claimed block fails to parse."""
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+
+    text = card.get("oracle_text", "")
+    if _disabled():
+        return text, BoardLine()
+    lines = [_strip_reminder_text(raw).strip() for raw in text.split("\n")]
+    kept: list[str] = []
+    out = BoardLine()
+    activated: list = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if _MODAL_ACTIVATION_HEADER.match(line):
+            bullets = []
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("• "):
+                bullets.append(lines[j])
+                j += 1
+            ability = _modal_activation(line, bullets, card.get("name", ""))
+            if ability is None:
+                return None
+            activated.append(ability)
+            i = j
+            continue
+        m = _EQUIPPED_WARD_RIDER.match(line)
+        if m is not None:
+            out.fields["attached_grants_ward_cost"] = parse_mana_cost(
+                m.group("cost"),
+            )
+            out.fields["attached_grants_ward_str"] = m.group("cost")
+            kept.append(f"{m.group('head')}.")
+            i += 1
+            continue
+        kept.append(line)
+        i += 1
+    out.activated = tuple(activated)
+    return "\n".join(kept), out
 
 
 def apply_board_fields(printing, fields: dict):
@@ -563,6 +878,8 @@ def absorb_enchantment_line(line: str, card: dict, acc) -> bool:
 
 __all__ = [
     "BoardLine",
+    "claim_equipment_lines",
+    "parse_roto_trigger_phrase",
     "parse_roto_board_effect",
     "parse_roto_board_line",
     "parse_roto_cost_piece",
