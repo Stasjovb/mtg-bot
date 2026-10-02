@@ -74,6 +74,10 @@ _ADD_PER_CARD_NAMED_IN_GRAVEYARDS_RE = re.compile(
 _DESTROY_ALL_ENTERED_THIS_TURN_RE = re.compile(
     r"^destroy all (?P<np>.+?) that entered this turn$"
 )
+# "add {C} for each card in target opponent's hand" (Jeska's Will).
+_ADD_PER_CARD_IN_TARGET_OPPONENTS_HAND_RE = re.compile(
+    r"^add \{(?P<c>[WUBRGC])\} for each card in target opponent's hand$"
+)
 
 
 def parse_roto_mana_effect(phrase: str) -> Effect | None:
@@ -105,10 +109,40 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
             permanent_filter=base.permanent_filter & rm.EnteredThisTurn(),
             label=f"{base.label} that entered this turn",
         )
+    m = _ADD_PER_CARD_IN_TARGET_OPPONENTS_HAND_RE.match(phrase)
+    if m is not None:
+        return rm.AddManaPerCardInTargetOpponentsHand(color=m.group("c"))
     return None
 
 
+# ---------------------------------------------------------------------------
+# Spell clause rewrites (run before the spell builder splits sentences)
+# ---------------------------------------------------------------------------
+
+# "Choose one. If you control a commander as you cast this spell, you may
+# choose both instead." (Jeska's Will). The engine plays two-player games
+# with no commander (no player ever controls one, CR 903.3), so the
+# upgrade's condition is false in every game it simulates and the header
+# is exactly "Choose one —" (documented in SEARCH_LIMITATIONS).
+_COMMANDER_CHOOSE_BOTH_HEADER_RE = re.compile(
+    r"^Choose one\. If you control a commander as you cast this spell, you "
+    r"may choose both instead\.$"
+)
+
+
+def rewrite_spell_clauses(clauses: list[str]) -> list[str]:
+    """``clauses`` (a spell's oracle lines) with this bucket's header
+    shapes rewritten to the base grammar's equivalent."""
+    if _disabled():
+        return clauses
+    return [
+        "Choose one —" if _COMMANDER_CHOOSE_BOTH_HEADER_RE.match(c) else c
+        for c in clauses
+    ]
+
+
 __all__ = [
+    "rewrite_spell_clauses",
     "parse_activate_only_if_condition",
     "parse_roto_mana_effect",
 ]

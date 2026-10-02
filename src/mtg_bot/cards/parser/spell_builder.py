@@ -1184,6 +1184,10 @@ def _parse_spell_oracle_text_body(text: str, name: str) -> Effect | None:
     """Body of :func:`_parse_spell_oracle_text`, run under the
     Rust-parity pin for the legacy spells it applies to."""
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
+    # Vintage Roto P3 header shapes (Jeska's Will's commander clause).
+    from mtg_bot.cards.parser.roto_mana import rewrite_spell_clauses
+
+    clauses = rewrite_spell_clauses(clauses)
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
     # stripping. The preamble shape (``"Convoke (...)"``) is recognized
     # via the trailing parenthesized reminder, so we have to detect

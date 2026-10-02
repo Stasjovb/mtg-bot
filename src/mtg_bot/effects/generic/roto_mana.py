@@ -57,7 +57,57 @@ class EnteredThisTurn(ObjectPredicate):
         return turn is not None and turn == state.turn_number
 
 
+# ---------------------------------------------------------------------------
+# Mana effects
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AddManaPerCardInTargetOpponentsHand(Effect):
+    """"Add {C} for each card in target opponent's hand." (Jeska's Will).
+    A spell mode, not a mana ability: it targets and uses the stack. The
+    hand is counted as the spell resolves."""
+
+    color: str = "R"
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        if not targets or targets[0][0] != "player":
+            return
+        opp = next(
+            (p for p in state.players if p.id == targets[0][1]), None,
+        )
+        if opp is None or opp.id == controller_id:
+            return
+        n = len(opp.hand)
+        pool = state.player_by_id(controller_id).mana_pool
+        pool.extend(ManaCoin(color=self.color) for _ in range(n))
+        state.log.append(
+            f"P{controller_id} adds {{{self.color}}}x{n} (cards in "
+            f"P{opp.id}'s hand)"
+        )
+
+    def describe(self) -> str:
+        return f"add {{{self.color}}} for each card in target opponent's hand"
+
+
 __all__ = [
+    "AddManaPerCardInTargetOpponentsHand",
     "CardsNamedInAllGraveyards",
     "EnteredThisTurn",
 ]

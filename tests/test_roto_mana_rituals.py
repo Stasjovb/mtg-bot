@@ -20,7 +20,14 @@ from mtg_bot.effects.generic import roto_mana as rm
 from mtg_bot.game import ManaCoin, Zone
 from mtg_bot.legal import legal_actions
 
-from tests._roto_helpers import arena, printing, put, to_graveyard, to_hand
+from tests._roto_helpers import (
+    arena,
+    printing,
+    put,
+    to_graveyard,
+    to_hand,
+    to_library,
+)
 
 MOUNTAIN = make_basic_land("Mountain", "R")
 SWAMP = make_basic_land("Swamp", "B")
@@ -170,3 +177,55 @@ def test_entered_this_turn_grammar_requires_a_destroy_base():
     assert parse_roto_mana_effect(
         "destroy all frobnicators that entered this turn"
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Jeska's Will
+# ---------------------------------------------------------------------------
+
+
+def _jeska_arena(mode: int):
+    s = arena()
+    for _ in range(3):
+        put(s, MOUNTAIN, 0)
+    agent0 = s.players[0].agent
+    agent0.choose_mode = lambda state, pid, options: mode
+    return s
+
+
+def test_jeskas_will_is_choose_one_and_mode_one_counts_opponents_hand():
+    from mtg_bot.effects.combinators import ModalChooseOne
+
+    eff = printing("Jeska's Will").spell_effect
+    # The commander upgrade never applies in the engine's games.
+    assert isinstance(eff, ModalChooseOne) and not eff.or_both
+    s = _jeska_arena(0)
+    for _ in range(4):
+        to_hand(s, BEAR, 1)
+    card = to_hand(s, printing("Jeska's Will"), 0)
+    apply_action(s, 0, CastSpell(card.id))
+    assert s.stack[-1].targets == (("player", 1),)
+    resolve_top_of_stack(s)
+    assert _pool(s) == ["R"] * 4
+
+
+def test_jeskas_will_mode_two_exiles_three_playable_this_turn():
+    s = _jeska_arena(1)
+    lib = [to_library(s, BEAR, 0) for _ in range(4)]
+    card = to_hand(s, printing("Jeska's Will"), 0)
+    apply_action(s, 0, CastSpell(card.id))
+    resolve_top_of_stack(s)
+    exiled = [c for c in s.players[0].exile]
+    assert len(exiled) == 3 and lib[3] in s.players[0].library
+    for c in exiled:
+        assert c.playable_from_exile_this_turn or c.exile_play_permission
+
+
+def test_jeskas_will_mana_mode_fizzles_without_an_opponent_target():
+    eff = rm.AddManaPerCardInTargetOpponentsHand(color="R")
+    s = arena()
+    eff.resolve(s, 0, ())
+    eff.resolve(s, 0, (("player", 0),))  # never yourself
+    eff.resolve(s, 0, (("creature", 1),))
+    assert s.players[0].mana_pool == []
+    assert "target opponent" in eff.describe()
