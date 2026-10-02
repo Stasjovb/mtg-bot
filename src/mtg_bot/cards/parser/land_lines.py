@@ -228,6 +228,20 @@ def _multi_mana_kind(effect) -> str | None:
     return color
 
 
+def _mixed_mana_colors(effect) -> frozenset[str]:
+    """The colors of an unrestricted ``Add {X}{Y}...`` minting two or more
+    distinct colors (``{T}: Add {G}{U}.``), else an empty set."""
+    if not isinstance(effect, AddManaToPool) or (
+        effect.spend_restriction is not None
+        or effect.grants_haste_to_creature_spell
+    ):
+        return frozenset()
+    colors = frozenset(c for c, n in effect.produces if n > 0)
+    if len(colors) < 2 or "any" in colors:
+        return frozenset()
+    return colors
+
+
 _TAP_ONLY = ActivationCost(tap_self=True)
 _WUBRG = frozenset("WUBRG")
 # "{T}: Add {C}. If <this land> has a <kind> counter on it, instead add
@@ -420,6 +434,11 @@ def _try_build_line_composed_land(
             kind = _multi_mana_kind(ability.effect)
             if kind is not None and ability.cost == _TAP_ONLY:
                 free_colors.add(kind)
+            elif ability.cost == _TAP_ONLY:
+                # ``{T}: Add {G}{U}.`` (the karoos; Vintage Roto P3):
+                # like ``{C}{C}``, automatic payment may tap it for one of
+                # its colors; the explicit ability yields both.
+                free_colors |= _mixed_mana_colors(ability.effect)
         activated.append(ability)
     if chooses_type != is_chosen_type:
         return None

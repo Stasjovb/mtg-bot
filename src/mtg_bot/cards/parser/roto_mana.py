@@ -128,6 +128,14 @@ _REMOVE_COUNTERS_FROM_SELF_RE = re.compile(
     r"^remove (?P<n>an?|[a-z]+) (?P<kind>[a-z]+) counters? from this "
     r"(?:land|artifact|creature|enchantment|permanent)$"
 )
+# "return a[n] <permanent> you control to its owner's hand" -- untargeted
+# (Simic Growth Chamber's enters trigger).
+_RETURN_YOUR_PERMANENT_TO_HAND_RE = re.compile(
+    r"^return an? (?P<np>[a-z]+) you control to its owner's hand$"
+)
+# "add {G}{U}" -- two or more mana of different colors at once (the
+# karoos); the base grammar reads only one-color runs.
+_ADD_MIXED_MANA_RE = re.compile(r"^add (?P<mana>(?:\{[WUBRGC]\}){2,})$")
 # "destroy each <np>. Add {A} or {B} for each permanent destroyed this
 # way" (Culling Ritual).
 _DESTROY_THEN_MANA_PER_DESTROYED_RE = re.compile(
@@ -224,6 +232,24 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _RETURN_YOUR_PERMANENT_TO_HAND_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+
+        f = parse_permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rm.ReturnPermanentYouControlToHand(
+            permanent_filter=f, label=m.group("np"),
+        )
+    m = _ADD_MIXED_MANA_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        colors = re.findall(r"\{([WUBRGC])\}", m.group("mana"))
+        if len(set(colors)) < 2:
+            return None
+        return AddManaToPool(produces=tuple((c, 1) for c in colors))
     m = _DESTROY_THEN_MANA_PER_DESTROYED_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_effect

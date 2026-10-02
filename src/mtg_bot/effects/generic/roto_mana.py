@@ -138,6 +138,51 @@ class DestroyEachThenAddManaPerDestroyed(Effect):
         )
 
 
+@dataclass(frozen=True)
+class ReturnPermanentYouControlToHand(Effect):
+    """"Return a[n] <permanent> you control to its owner's hand."
+    (Simic Growth Chamber) -- not targeted: the permanent is chosen as the
+    ability resolves (``choose_sacrifice``, the engine's "which of my
+    permanents" hook); the source itself may be chosen."""
+
+    permanent_filter: ObjectPredicate = None
+    label: str = "permanent"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
+
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == controller_id
+                and self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        if not options:
+            state.log.append(f"no {self.label} to return")
+            return
+        chosen = options[0]
+        agent = state.player_by_id(controller_id).agent
+        if agent is not None and len(options) > 1:
+            pick = agent.choose_sacrifice(
+                state, controller_id, [o.id for o in options],
+            )
+            chosen = next((o for o in options if o.id == pick), options[0])
+        state.log.append(
+            f"P{controller_id} returns {chosen.printing.name} to hand"
+        )
+        _bounce_to_hand(state, chosen)
+
+    def describe(self) -> str:
+        return f"return a {self.label} you control to its owner's hand"
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -1012,6 +1057,7 @@ def after_mana_ability(
 
 __all__ = [
     "after_mana_ability",
+    "ReturnPermanentYouControlToHand",
     "DestroyEachThenAddManaPerDestroyed",
     "AddFormulaManaInAnyCombination",
     "SourcePower",
