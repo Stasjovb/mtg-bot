@@ -974,6 +974,11 @@ class GameObject:
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()
+    # "if this is the first / second / third time this ability has
+    # resolved this turn" (Omnath, Locus of Creation): ``(turn_number,
+    # etb_timestamp, count)`` of the last counted resolution -- a new
+    # object (fresh timestamp) or a new turn starts over (Vintage Roto P5).
+    ability_resolutions: tuple = (-1, -1, 0)
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

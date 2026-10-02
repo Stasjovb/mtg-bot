@@ -410,6 +410,91 @@ def filter_cast_timing(state: "GameState", player_id: int, actions: list) -> lis
 
 
 # ---------------------------------------------------------------------------
+# State triggers (CR 603.8) and Role uniqueness (CR 704.5y)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoCreaturesOnBattlefield:
+    """"there are no creatures on the battlefield" (Drop of Honey)."""
+
+    def holds(self, state, source) -> bool:
+        from mtg_bot.game import is_creature_now
+
+        return not any(is_creature_now(o) for o in state.battlefield)
+
+    def describe(self) -> str:
+        return "there are no creatures on the battlefield"
+
+
+@dataclass(frozen=True)
+class StateTrigger:
+    """"When <condition>, <effect>." -- a state-triggered ability (CR
+    603.8): it triggers whenever the condition holds and won't trigger
+    again while it is on the stack (checked against the stack itself)."""
+
+    condition: object
+    ability: object
+
+    def describe(self) -> str:
+        return f"When {self.condition.describe()}, {self.ability.effect.describe()}."
+
+
+def _pending(state, source, ability) -> bool:
+    return any(
+        item.source is source and item.ability is ability
+        for item in state.stack
+    )
+
+
+def apply_board_state_checks(state: "GameState") -> bool:
+    """``turn.state_based_actions``' hook: put each Role but the newest
+    a player controls on one permanent into its owner's graveyard (CR
+    704.5y), then put state triggers whose condition holds on the stack.
+    Returns True when a Role was removed."""
+    changed = _apply_role_uniqueness(state)
+    if not any_rules(state):
+        return changed
+    from mtg_bot.actions import push_triggered_ability
+
+    for source, rule in list(rules_in_play(state, StateTrigger)):
+        if source not in state.battlefield:
+            continue
+        if _pending(state, source, rule.ability):
+            continue
+        if not rule.condition.holds(state, source):
+            continue
+        push_triggered_ability(
+            state, source=source, ability=rule.ability, ability_index=-1,
+            controller_id=source.controller_id, label="state trigger",
+        )
+    return changed
+
+
+def _apply_role_uniqueness(state: "GameState") -> bool:
+    from mtg_bot.turn import move_off_battlefield
+
+    roles: dict = {}
+    for o in state.battlefield:
+        if o.attached_to is None or "Role" not in o.printing.subtypes:
+            continue
+        roles.setdefault((o.attached_to, o.controller_id), []).append(o)
+    changed = False
+    for group in roles.values():
+        if len(group) < 2:
+            continue
+        newest = max(group, key=lambda o: o.etb_timestamp)
+        for o in group:
+            if o is not newest and o in state.battlefield:
+                state.log.append(
+                    f"{o.printing.name} is put into the graveyard (CR 704.5y)"
+                )
+                move_off_battlefield(state, o, destination="graveyard")
+                changed = True
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # Untap step
 # ---------------------------------------------------------------------------
 
@@ -510,6 +595,9 @@ def untap_step_held(
 
 
 __all__ = [
+    "NoCreaturesOnBattlefield",
+    "StateTrigger",
+    "apply_board_state_checks",
     "CastOnlyBeforeStep",
     "filter_cast_timing",
     "untargetable_by",

@@ -1789,6 +1789,12 @@ def state_based_actions(state: GameState) -> bool:
     from mtg_bot.creature_statics_wg import apply_ascend
 
     apply_ascend(state)
+    # Role uniqueness (CR 704.5y) and state triggers (CR 603.8) --
+    # Vintage Roto P5 (``mtg_bot.roto_board_statics``).
+    from mtg_bot.roto_board_statics import apply_board_state_checks
+
+    if apply_board_state_checks(state):
+        any_changed = True
     return any_changed
 
 

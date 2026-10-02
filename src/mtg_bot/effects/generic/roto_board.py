@@ -1399,6 +1399,297 @@ class DestroySourceIfAttackedThisTurn(Effect):
         return "destroy that creature if it attacked this turn"
 
 
+@dataclass(frozen=True)
+class ByResolutionCountThisTurn(Effect):
+    """"<first> if this is the first time this ability has resolved this
+    turn. If it's the second time, <second>. If it's the third time,
+    <third>." (Omnath, Locus of Creation). The count lives on the source
+    object (``GameObject.ability_resolutions``), restarting each turn and
+    for a new object; a fourth resolution does nothing."""
+
+    by_count: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_source
+        if src is None:
+            return
+        turn, stamp, count = src.ability_resolutions
+        if (turn, stamp) != (state.turn_number, src.etb_timestamp):
+            count = 0
+        count += 1
+        src.ability_resolutions = (state.turn_number, src.etb_timestamp, count)
+        state.log.append(f"{src.printing.name}'s ability resolves (#{count} this turn)")
+        if count <= len(self.by_count):
+            self.by_count[count - 1].resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        names = ("first", "second", "third", "fourth")
+        return "; ".join(
+            f"{names[i]} time this turn: {e.describe()}"
+            for i, e in enumerate(self.by_count)
+        )
+
+
+@dataclass(frozen=True)
+class DealDamageToEachOpponentAndTheirPlaneswalkers(Effect):
+    """"<This> deals N damage to each opponent and each planeswalker you
+    don't control." (Omnath's third landfall)."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+
+        victims: list = [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+        victims += [
+            ("planeswalker", o.id) for o in state.battlefield
+            if o.printing.is_planeswalker and o.controller_id != controller_id
+        ]
+        for v in victims:
+            _apply_damage(state, v, self.amount)
+
+    def describe(self) -> str:
+        return (
+            f"deals {self.amount} damage to each opponent and each "
+            f"planeswalker you don't control"
+        )
+
+
+@dataclass(frozen=True)
+class DestroyLeastPowerCreature(Effect):
+    """"destroy the creature with the least power. It can't be
+    regenerated. If two or more creatures are tied for least power, you
+    choose one of them." (Drop of Honey). Ties are broken by the
+    controller (``choose_target`` over the tied creatures)."""
+
+    can_be_regenerated: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+        from mtg_bot.game import effective_power, is_creature_now
+
+        creatures = [o for o in state.battlefield if is_creature_now(o)]
+        if not creatures:
+            return
+        least = min(effective_power(state, o) for o in creatures)
+        tied = [o for o in creatures if effective_power(state, o) == least]
+        pick = tied[0]
+        agent = state.player_by_id(controller_id).agent
+        if agent is not None and len(tied) > 1:
+            choice = agent.choose_target(
+                state, controller_id, [("creature", o.id) for o in tied],
+            )
+            pick = next((o for o in tied if choice == ("creature", o.id)), pick)
+        destroy_permanent(state, pick, can_be_regenerated=self.can_be_regenerated)
+
+    def describe(self) -> str:
+        tail = "" if self.can_be_regenerated else "; it can't be regenerated"
+        return f"destroy the creature with the least power{tail}"
+
+
+@dataclass(frozen=True)
+class HasManaValueAtLeast(ObjectPredicate):
+    """"with mana value N or greater" (Zoyowa's Justice)."""
+
+    n: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.effects.value_predicates import mana_value_of
+
+        return mana_value_of(obj) >= self.n
+
+
+def discover(state: "GameState", player_id: int, x: int) -> None:
+    """Discover X (CR 701.57a): exile cards from the top of your library
+    until you exile a nonland card with mana value X or less. You may
+    cast it without paying its mana cost; if you don't, put it into your
+    hand. Put the rest on the bottom of your library in a random order
+    (``state.rng``, like cascade)."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        cast_card_from_exile_for_free,
+        exile_card,
+    )
+    from mtg_bot.game import Zone
+
+    p = state.player_by_id(player_id)
+    exiled: list = []
+    hit = None
+    while p.library:
+        card = p.library.pop(0)
+        exile_card(state, card)
+        exiled.append(card)
+        if not card.printing.is_land and card.printing.mana_cost.total <= x:
+            hit = card
+            break
+    state.log.append(
+        f"P{player_id} discovers {x}: "
+        f"{hit.printing.name if hit else 'nothing'} ({len(exiled)} exiled)"
+    )
+    cast = False
+    if hit is not None:
+        wants = p.agent is None or p.agent.choose_yes_no(
+            state, player_id,
+            f"Discover: cast {hit.printing.name} without paying its mana cost?",
+        )
+        if wants:
+            cast = cast_card_from_exile_for_free(state, player_id, hit)
+        if not cast and hit in p.exile:
+            p.exile.remove(hit)
+            hit.exile_play_permission = None
+            hit.zone = Zone.HAND
+            p.hand.append(hit)
+            state.log.append(f"P{player_id} puts {hit.printing.name} into hand")
+    rest = [c for c in exiled if c is not hit]
+    state.rng.shuffle(rest)
+    for c in rest:
+        state.player_by_id(c.owner_id).exile.remove(c)
+        c.exile_play_permission = None
+        c.zone = Zone.LIBRARY
+        p.library.append(c)
+
+
+@dataclass(frozen=True)
+class OwnerShufflesTargetThenDiscovers(Effect):
+    """"The owner of target <permanent> shuffles it into their library.
+    Then that player discovers X, where X is its mana value." (Zoyowa's
+    Justice). X is the permanent's mana value as it last existed."""
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.value_predicates import mana_value_of
+        from mtg_bot.game import shuffle_library
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        x = mana_value_of(obj)
+        owner = obj.owner_id
+        state.log.append(f"P{owner} shuffles {obj.printing.name} into their library")
+        move_off_battlefield(state, obj, destination="library")
+        shuffle_library(state, owner)
+        discover(state, owner, x)
+
+    def describe(self) -> str:
+        return (
+            "the owner of target permanent shuffles it into their library, "
+            "then discovers X (its mana value)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Role tokens (CR 111.10j: Aura tokens with the Role subtype)
+# ---------------------------------------------------------------------------
+
+
+def _role_printing(name: str, power: int, toughness: int, keywords=()):
+    from dataclasses import replace
+
+    from mtg_bot.cards.base import make_aura
+
+    aura = make_aura(
+        f"{name} Role", "", power_bonus=power, toughness_bonus=toughness,
+        granted_keywords=frozenset(keywords),
+    )
+    return replace(
+        aura, type_line="Token Enchantment — Aura Role",
+        supertypes=("Token",), subtypes=("Aura", "Role"),
+    )
+
+
+# Role name -> token printing. "Monster" (Monstrous Rage): "Enchanted
+# creature gets +1/+1 and has trample." Adding a Role is one entry.
+ROLE_TOKENS: dict = {
+    "Monster": _role_printing("Monster", 1, 1, ("trample",)),
+}
+
+
+@dataclass(frozen=True)
+class PumpThenCreateRoleAttached(Effect):
+    """"Target creature gets +P/+T until end of turn. Create a <Name>
+    Role token attached to it." (Monstrous Rage). The Role enters
+    attached to the (still legal) target; Role uniqueness (CR 704.5y) is
+    the state-based check in ``roto_board_statics``."""
+
+    role: str = "Monster"
+    power_bonus: int = 0
+    toughness_bonus: int = 0
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            ok = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not ok:
+            return
+        obj = next(o for o in state.battlefield if o.id == targets[0][1])
+        src = state.resolving_source or state.resolving_spell
+        state.grant_pt_pump_ueot(
+            source_id=src.id if src is not None else -1, target_id=obj.id,
+            power=self.power_bonus, toughness=self.toughness_bonus,
+            description=f"{obj.printing.name} pump UEOT",
+        )
+        token = state.new_object(
+            ROLE_TOKENS[self.role], owner_id=controller_id, zone=Zone.BATTLEFIELD,
+        )
+        token.attached_to = obj.id
+        put_into_battlefield(state, token, controller_id)
+        token.attached_to = obj.id
+        state.log.append(
+            f"P{controller_id} creates a {self.role} Role attached to "
+            f"{obj.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"target creature gets +{self.power_bonus}/+{self.toughness_bonus} "
+            f"until end of turn; create a {self.role} Role token attached to it"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
@@ -1484,6 +1775,14 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "PumpThenCreateRoleAttached",
+    "ROLE_TOKENS",
+    "ByResolutionCountThisTurn",
+    "DealDamageToEachOpponentAndTheirPlaneswalkers",
+    "DestroyLeastPowerCreature",
+    "HasManaValueAtLeast",
+    "OwnerShufflesTargetThenDiscovers",
+    "discover",
     "DestroySourceIfAttackedThisTurn",
     "PowerPumpThenDestroyIfAttacked",
     "UNTARGETABLE_BY_OPPONENTS_OF",

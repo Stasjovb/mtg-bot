@@ -321,6 +321,44 @@ _POWER_PUMP_DESTROY_IF_ATTACKED = re.compile(
 )
 
 
+# "<e1> if this is the first time this ability has resolved this turn.
+# If it's the second time, <e2>. If it's the third time, <e3>" (Omnath).
+_BY_RESOLUTION_COUNT = re.compile(
+    r"^(?P<e1>.+?) if this is the first time this ability has resolved this "
+    r"turn\. If it's the second time, (?P<e2>.+?)\. If it's the third time, "
+    r"(?P<e3>.+)$"
+)
+# "deals N damage to each opponent and each planeswalker you don't
+# control" (Omnath).
+_DAMAGE_OPPONENTS_AND_WALKERS = re.compile(
+    r"^(?:this creature )?deals (?P<n>\d+) damage to each opponent and each "
+    r"planeswalker you don't control$"
+)
+# "destroy the creature with the least power. It can't be regenerated.
+# If two or more creatures are tied for least power, you choose one of
+# them" (Drop of Honey).
+_DESTROY_LEAST_POWER = re.compile(
+    r"^destroy the creature with the least power(?P<noregen>\. It can't be "
+    r"regenerated)?\. If two or more creatures are tied for least power, you "
+    r"choose one of them$"
+)
+# "the owner of target <np> shuffles it into their library. Then that
+# player discovers X, where X is its mana value" (Zoyowa's Justice).
+_SHUFFLE_THEN_DISCOVER = re.compile(
+    r"^the owner of target (?P<np>.+?) shuffles it into their library\. Then "
+    r"that player discovers X, where X is its mana value$"
+)
+_MV_AT_LEAST_SUFFIX = re.compile(r" with mana value (?P<n>\d+) or greater$")
+
+
+# "target <np> gets +P/+T until end of turn. Create a <Name> Role token
+# attached to it" (Monstrous Rage).
+_PUMP_THEN_ROLE = re.compile(
+    r"^target (?P<np>.+?) gets \+(?P<p>\d+)/\+(?P<t>\d+) until end of turn\. "
+    r"Create an? (?P<role>[A-Z][a-z]+) Role token attached to it$"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -422,6 +460,51 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _PUMP_THEN_ROLE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None or m.group("role") not in rb.ROLE_TOKENS:
+            return None
+        return rb.PumpThenCreateRoleAttached(
+            role=m.group("role"), power_bonus=int(m.group("p")),
+            toughness_bonus=int(m.group("t")), targets=(TargetSpec(f),),
+        )
+    m = _BY_RESOLUTION_COUNT.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        parts = [_parse_effect(m.group(k)) for k in ("e1", "e2", "e3")]
+        if any(p is None for p in parts):
+            return None
+        return rb.ByResolutionCountThisTurn(by_count=tuple(parts))
+    m = _DAMAGE_OPPONENTS_AND_WALKERS.match(phrase)
+    if m is not None:
+        return rb.DealDamageToEachOpponentAndTheirPlaneswalkers(
+            amount=int(m.group("n")),
+        )
+    m = _DESTROY_LEAST_POWER.match(phrase)
+    if m is not None:
+        return rb.DestroyLeastPowerCreature(
+            can_be_regenerated=m.group("noregen") is None,
+        )
+    m = _SHUFFLE_THEN_DISCOVER.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        np = m.group("np")
+        mv = _MV_AT_LEAST_SUFFIX.search(np)
+        quals = []
+        if mv is not None:
+            quals.append(rb.HasManaValueAtLeast(int(mv.group("n"))))
+            np = np[: mv.start()]
+        f = permanent_phrase(np)
+        if f is None:
+            return None
+        for q in quals:
+            f = f & q
+        return rb.OwnerShufflesTargetThenDiscovers(targets=(TargetSpec(f),))
     m = _UNTARGETABLE_BY_OPPONENTS.match(phrase)
     if m is not None:
         from mtg_bot.effects.targets import TargetSpec
@@ -1116,8 +1199,34 @@ def _escape_card_types(line: str) -> BoardLine | None:
     })
 
 
+# "When there are no creatures on the battlefield, <effect>." -- a
+# state trigger (Drop of Honey).
+_STATE_TRIGGER = re.compile(
+    r"^When there are no creatures on the battlefield, (?P<eff>.+)\.$"
+)
+
+
+def _state_trigger(line: str) -> BoardLine | None:
+    from mtg_bot import roto_board_statics as rs
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.base import TriggeredAbility
+
+    m = _STATE_TRIGGER.match(line)
+    if m is None:
+        return None
+    body = m.group("eff")
+    effect = _parse_effect(body[0].lower() + body[1:])
+    if effect is None:
+        return None
+    return BoardLine(fields={"board_rules": (rs.StateTrigger(
+        condition=rs.NoCreaturesOnBattlefield(),
+        ability=TriggeredAbility(effect=effect),
+    ),)})
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _state_trigger,
     _escape_card_types,
     _graveyard_pt_static,
     _other_subtype_list_anthem,
