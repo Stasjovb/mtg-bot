@@ -82,9 +82,15 @@ def _drain(state):
 # ---------------------------------------------------------------------------
 
 
-def test_every_bucket_card_is_claimed(cube):
+@pytest.fixture(scope="module")
+def roto():
+    return OracleParserCardSource(pool="roto").get_printings()
+
+
+def test_every_bucket_card_is_claimed(cube, roto):
+    # The gate also opts in roto-pool enchantments (claimed in that pool).
     for name in CUBE_ENCHANTMENT_NAMES:
-        assert name in cube, name
+        assert name in cube or name in roto, name
 
 
 def test_builder_gates():
