@@ -138,3 +138,129 @@ def test_committed_doc_is_fresh(script):
         load_pool_cards("cube"), OracleParserCardSource(pool="cube").claimed_names, pool_name="cube",
     )
     assert pc.render_markdown(summary) == doc
+
+
+# ------------------------------------------- per-line diagnoses + customs
+
+
+def _diag(name, kind, failing):
+    from mtg_bot.cards.unclaimed_lines import LineDiagnosis, Unit
+
+    return LineDiagnosis(name, kind, [Unit(None, t, t) for t in failing], [],
+                         kind == "lines")
+
+
+def test_summarize_coverage_carries_diagnoses_and_failing_shapes():
+    diagnoses = {
+        "Storm Crow": _diag("Storm Crow", "lines", ["Flying"]),
+        "Wind Drake": _diag("Wind Drake", "lines", ["Flying"]),
+        "Bolt": _diag("Bolt", "mixed", ["Bolt deals 3 damage to any target."]),
+        "Jace": _diag("Jace", "structure", []),
+    }
+    s = pc.summarize_coverage(CARDS, ["Grizzly Bears"], line_diagnoses=diagnoses,
+                              custom_cards=[{"name": "Custom", "custom_text": "x"}])
+    assert s.diagnosis_kinds == {"lines": 2, "mixed": 1, "structure": 1}
+    assert s.failing_shapes == [("Flying", 2, "Storm Crow")]  # n >= 2 only
+    by_name = {c["name"]: c for c in s.unclaimed_cards}
+    assert by_name["Bolt"]["failing_lines"] == ["Bolt deals 3 damage to any target."]
+    assert by_name["Bolt"]["diagnosis"] == "mixed"
+    assert "diagnosis" not in by_name["Witch // Meadow"]  # no diagnosis supplied
+    assert s.custom_cards == [{"name": "Custom", "custom_text": "x"}]
+
+
+def test_render_markdown_diagnosis_and_custom_sections():
+    diagnoses = {
+        "Storm Crow": _diag("Storm Crow", "lines", ["Flying"]),
+        "Wind Drake": _diag("Wind Drake", "lines", ["Fly | ing"]),
+        "Jace": _diag("Jace", "unconfirmed", ["+1: Draw a card."]),
+    }
+    s = pc.summarize_coverage(
+        CARDS, ["Grizzly Bears"], line_diagnoses=diagnoses,
+        custom_cards=[{"name": "Meddling Wizard", "custom_text": "Reveal."},
+                      {"name": "Mystery"}],
+    )
+    md = pc.render_markdown(s)
+    assert "## Why cards are unclaimed (per-line probe)" in md
+    assert "| lines | 2 |" in md and "| unconfirmed | 1 |" in md
+    assert "  - fails: Flying" in md
+    assert "  - fails: Fly \\| ing" in md
+    assert "  - diagnosis: unconfirmed (" in md
+    assert "## Custom cards without a Scryfall record" in md
+    assert "- **Meddling Wizard** - Reveal." in md
+    assert "- **Mystery** - (no text available)" in md
+    # Shapes seen once don't get a failing-shape table.
+    assert "## Most common failing-line shapes" not in md
+
+
+def test_render_markdown_failing_shape_table():
+    diagnoses = {n: _diag(n, "lines", ["Flying"]) for n in ("Storm Crow", "Wind Drake")}
+    md = pc.render_markdown(pc.summarize_coverage(CARDS, [], line_diagnoses=diagnoses))
+    assert "## Most common failing-line shapes" in md
+    assert "| 2 | Flying | Storm Crow |" in md
+
+
+def test_render_markdown_without_diagnoses_is_unchanged():
+    """No diagnoses / customs supplied -> none of the new sections, so
+    reports for fully-claimed pools stay byte-identical."""
+    md = pc.render_markdown(pc.summarize_coverage(CARDS, ["Grizzly Bears"]))
+    assert "per-line probe" not in md
+    assert "Custom cards" not in md
+    assert "  - fails:" not in md
+
+
+# ------------------------------------------------------- script extras
+
+
+def test_script_default_out_follows_pool(script):
+    assert script.default_out("cube") == script.DEFAULT_OUT
+    assert script.default_out("roto").name == "ROTO_POOL_COVERAGE.md"
+
+
+def test_script_name_gate_opens_and_restores(script):
+    from mtg_bot.cards.parser import cube_enchantments as ce
+
+    before = ce.CUBE_ENCHANTMENT_NAMES
+    with script.name_gate_opened("Moat"):
+        assert "Moat" in ce.CUBE_ENCHANTMENT_NAMES
+    assert ce.CUBE_ENCHANTMENT_NAMES is before
+    try:
+        with script.name_gate_opened("Moat"):
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert ce.CUBE_ENCHANTMENT_NAMES is before
+
+
+def test_script_diagnose_card_gate_kind(script, monkeypatch):
+    monkeypatch.setattr(script, "probe_claims", lambda card: True)
+    d = script.diagnose_card({"name": "Gated", "type_line": "Enchantment",
+                              "oracle_text": "A.\nB."})
+    assert d.kind == "gate" and d.confirmed and d.failing == []
+    assert [u.text for u in d.passing] == ["A.", "B."]
+
+
+def test_script_diagnose_card_real_probe(script):
+    from mtg_bot.cards.pools import load_pool_cards
+
+    moat = next(c for c in load_pool_cards("roto") if c["name"] == "Moat")
+    d = script.diagnose_card(moat)
+    assert d.kind == "lines" and d.confirmed
+    assert d.failing_text == ["Creatures without flying can't attack."]
+
+
+def test_script_roto_headline(script, tmp_path, capsys):
+    out = tmp_path / "roto.md"
+    assert script.main(["--pool", "roto", "--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "roto:" in printed and "unclaimed by diagnosis" in printed
+    assert "custom cards without a Scryfall record: 4" in printed
+    text = out.read_text(encoding="utf-8")
+    assert "## Custom cards without a Scryfall record" in text
+
+
+def test_committed_roto_doc_is_fresh(script):
+    """``docs/ROTO_POOL_COVERAGE.md`` must match the parser's current
+    claims and diagnoses -- regenerate it (``--pool roto``) when grammar
+    lands; on a merge conflict, re-run the script instead of hand-merging."""
+    doc = script.default_out("roto").read_text(encoding="utf-8")
+    assert pc.render_markdown(script.build_summary("roto")) == doc

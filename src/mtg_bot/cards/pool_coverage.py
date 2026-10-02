@@ -15,7 +15,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable, Mapping
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from mtg_bot.cards.unclaimed_lines import LineDiagnosis
 
 PRIMARY_TYPES: tuple[str, ...] = (
     "Planeswalker", "Battle", "Creature", "Instant", "Sorcery",
@@ -82,6 +85,13 @@ class CoverageSummary:
     unclaimed_shapes: list[tuple[str, int, str]]  # shape, count, example card
     unclaimed_cards: list[dict] = field(default_factory=list)
     claimed_names: list[str] = field(default_factory=list)
+    # Present only when per-line diagnoses were supplied
+    # (``mtg_bot.cards.unclaimed_lines``): shapes of the lines that
+    # actually fail, and the count of unclaimed cards per diagnosis kind.
+    failing_shapes: list[tuple[str, int, str]] = field(default_factory=list)
+    diagnosis_kinds: dict[str, int] = field(default_factory=dict)
+    # Authority-list cards with no Scryfall record (not in the pool).
+    custom_cards: list[dict] = field(default_factory=list)
 
     @property
     def pct(self) -> float:
@@ -95,8 +105,14 @@ def summarize_coverage(
     pool_name: str = "cube",
     top_keywords: int = 40,
     top_shapes: int = 60,
+    line_diagnoses: Mapping[str, "LineDiagnosis"] | None = None,
+    custom_cards: Iterable[dict] = (),
 ) -> CoverageSummary:
     cards = list(cards)
+    diagnoses = line_diagnoses or {}
+    failing_counter: Counter[str] = Counter()
+    failing_example: dict[str, str] = {}
+    kinds: Counter[str] = Counter()
     claimed = set(claimed_names)
     by_type: dict[str, list[int]] = {}
     by_layout: dict[str, list[int]] = {}
@@ -123,16 +139,31 @@ def summarize_coverage(
             shape = line_shape(line, name)
             shape_counter[shape] += 1
             shape_example.setdefault(shape, name)
-        unclaimed.append({
+        entry = {
             "name": name,
             "type_line": card.get("type_line", ""),
             "mana_cost": card.get("mana_cost", ""),
             "layout": layout,
             "oracle_lines": lines,
-        })
+        }
+        diag = diagnoses.get(name)
+        if diag is not None:
+            entry["diagnosis"] = diag.kind
+            entry["failing_lines"] = diag.failing_text
+            kinds[diag.kind] += 1
+            for text in diag.failing_text:
+                shape = line_shape(text, name)
+                failing_counter[shape] += 1
+                failing_example.setdefault(shape, name)
+        unclaimed.append(entry)
     shapes = [
         (shape, n, shape_example[shape])
         for shape, n in shape_counter.most_common()
+        if n >= 2
+    ][:top_shapes]
+    failing_shapes = [
+        (shape, n, failing_example[shape])
+        for shape, n in failing_counter.most_common()
         if n >= 2
     ][:top_shapes]
     return CoverageSummary(
@@ -147,6 +178,9 @@ def summarize_coverage(
             unclaimed, key=lambda c: (primary_type(c), c["name"]),
         ),
         claimed_names=sorted(claimed & {c["name"] for c in cards}),
+        failing_shapes=failing_shapes,
+        diagnosis_kinds=dict(sorted(kinds.items())),
+        custom_cards=list(custom_cards),
     )
 
 
@@ -211,6 +245,8 @@ def render_markdown(
         safe = shape.replace("|", "\\|")
         lines.append(f"| {n} | {safe} | {example} |")
     lines.append("")
+    if s.diagnosis_kinds:
+        lines.extend(_render_diagnosis_sections(s))
     lines.append("## Unclaimed cards")
     lines.append("")
     current = None
@@ -226,9 +262,87 @@ def render_markdown(
             f"- **{card['name']}** `{card['mana_cost']}` - "
             f"{card['type_line']} - {text}"
         )
+        if "diagnosis" in card:
+            lines.extend(_render_card_diagnosis(card))
     lines.append("")
+    if s.custom_cards:
+        lines.extend(_render_custom_cards(s.custom_cards))
     lines.append("## Claimed cards")
     lines.append("")
     lines.append(", ".join(s.claimed_names))
     lines.append("")
     return "\n".join(lines)
+
+
+_KIND_NOTES = {
+    "lines": "the failing lines are the whole blocker",
+    "unconfirmed": "no line parses and the card's frame (layout, type) "
+                   "couldn't be built to check it doesn't block too",
+    "mixed": "lines fail and the rest don't build together either",
+    "structure": "every line parses; the card as a whole doesn't build",
+    "gate": "every line parses; the name must be opted into a per-name "
+            "builder allowlist (cube_enchantments.CUBE_ENCHANTMENT_NAMES)",
+}
+
+
+def _md_escape(text: str) -> str:
+    return text.replace("|", "\\|")
+
+
+def _render_diagnosis_sections(s: CoverageSummary) -> list[str]:
+    lines: list[str] = []
+    lines.append("## Why cards are unclaimed (per-line probe)")
+    lines.append("")
+    lines.append(
+        "Each unclaimed card's oracle lines were probed one at a time "
+        "through the parser's own builder chain "
+        "(`mtg_bot.cards.unclaimed_lines`): a line that builds alone, or "
+        "that builds next to every other passing line (riders such as "
+        "additional costs), passes. Under each card below, **fails** "
+        "lists the lines that don't. The probe is a planning aid, never "
+        "a claim."
+    )
+    lines.append("")
+    lines.append("| Diagnosis | Cards | Meaning |")
+    lines.append("|---|---:|---|")
+    for kind, n in s.diagnosis_kinds.items():
+        lines.append(f"| {kind} | {n} | {_KIND_NOTES.get(kind, '')} |")
+    lines.append("")
+    if s.failing_shapes:
+        lines.append("## Most common failing-line shapes")
+        lines.append("")
+        lines.append(
+            "Like the shape table above, but counting only lines the "
+            "probe found failing."
+        )
+        lines.append("")
+        lines.append("| Lines | Shape | Example |")
+        lines.append("|---:|---|---|")
+        for shape, n, example in s.failing_shapes:
+            lines.append(f"| {n} | {_md_escape(shape)} | {example} |")
+        lines.append("")
+    return lines
+
+
+def _render_card_diagnosis(card: dict) -> list[str]:
+    out = [f"  - fails: {_md_escape(text)}"
+           for text in card.get("failing_lines", ())]
+    if card["diagnosis"] != "lines":
+        out.append(f"  - diagnosis: {card['diagnosis']} "
+                   f"({_KIND_NOTES[card['diagnosis']]})")
+    return out
+
+
+def _render_custom_cards(custom: list[dict]) -> list[str]:
+    lines = ["## Custom cards without a Scryfall record", ""]
+    lines.append(
+        "Named by the pool's authority list but absent from Scryfall, so "
+        "they are not in the dump and not counted above. Their text is "
+        "the draft group's own."
+    )
+    lines.append("")
+    for card in custom:
+        text = card.get("custom_text") or "(no text available)"
+        lines.append(f"- **{card['name']}** - {text}")
+    lines.append("")
+    return lines
