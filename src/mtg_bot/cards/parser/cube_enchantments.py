@@ -64,10 +64,10 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Animate Dead",
+    "Chains of Mephistopheles",
     "Fastbond",
     "Goblin Bombardment",
     "Leyline Binding",
-    "Leyline of the Void",
     "Necromancy",
     "Oath of Druids",
     "Parallax Wave",

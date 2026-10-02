@@ -257,6 +257,12 @@ def draw_card(state: GameState, player_id: int) -> None:
             f"P{player_id} can't draw more than one card this turn"
         )
         return
+    # Roto P2 draw replacements (dredge, Chains of Mephistopheles): they
+    # apply to the draw even from an empty library.
+    from mtg_bot.effects.generic.roto_zones import replace_draw
+
+    if replace_draw(state, p):
+        return
     if not p.library:
         if _draw_from_empty_library_wins(state, player_id):
             win_the_game(

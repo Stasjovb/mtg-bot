@@ -1324,3 +1324,217 @@ class CopyIfCastFromGraveyard(Effect):
             f"{self.inner.describe()}; if this spell was cast from a graveyard, "
             f"you may copy it and choose a new target for the copy"
         )
+
+
+# ---------------------------------------------------------------------
+# Draw replacements: dredge and Chains of Mephistopheles (F15)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Dredge:
+    """A ``CardPrinting.zone_abilities`` spec: "Dredge N" (CR 702.52): "If
+    you would draw a card, you may mill N cards instead. If you do,
+    return this card from your graveyard to your hand." Functions only
+    while the card is in its owner's graveyard, and only with at least N
+    cards in their library."""
+
+    n: int = 1
+
+    def describe(self) -> str:
+        return f"dredge {self.n}"
+
+
+@dataclass(frozen=True)
+class DiscardInsteadOfDraw:
+    """A ``CardPrinting.zone_abilities`` spec (Chains of Mephistopheles):
+    "If <a player> would draw a card[ except the first one they draw in
+    each of their draw steps], that player discards a card instead. If
+    the player discards a card this way, they draw a card. If the player
+    doesn't discard a card this way, they mill a card."
+
+    ``affects`` is ``"any"`` / ``"opponents"`` / ``"you"`` relative to
+    the source's controller. The replacement draw is a new draw that
+    this same source doesn't replace again (CR 614.5) but every other
+    replacement may (a second Chains, dredge)."""
+
+    affects: str = "any"
+    except_first_in_draw_step: bool = True
+
+    def applies_to(self, source, player_id: int) -> bool:
+        if self.affects == "opponents":
+            return player_id != source.controller_id
+        if self.affects == "you":
+            return player_id == source.controller_id
+        return True
+
+    def describe(self) -> str:
+        who = {"any": "a player", "opponents": "an opponent", "you": "you"}[
+            self.affects
+        ]
+        return f"if {who} would draw a card, they discard a card instead"
+
+
+#: Per game state, per player: the ``DiscardInsteadOfDraw`` sources that
+#: already replaced the draw being performed (CR 614.5). Set only for the
+#: duration of a nested replacement draw.
+_APPLIED_DRAW_REPLACEMENTS: dict = {}
+
+#: The non-dredge option when no mandatory replacement applies.
+DRAW_NORMALLY = "draw the card"
+#: The option for applying the mandatory discard-instead replacement.
+APPLY_CHAINS = "discard instead (Chains)"
+
+
+def _discard_instead_sources(state, player, applied, first_in_draw_step):
+    from mtg_bot.game import _source_layer6_wiped
+
+    out = []
+    for o in state.battlefield:
+        if o.id in applied:
+            continue
+        for spec in o.printing.zone_abilities:
+            if not isinstance(spec, DiscardInsteadOfDraw):
+                continue
+            if spec.except_first_in_draw_step and first_in_draw_step:
+                continue
+            if not spec.applies_to(o, player.id):
+                continue
+            if state.continuous_effects and _source_layer6_wiped(state, o):
+                continue
+            out.append(o)
+            break
+    return out
+
+
+def _dredgers(player):
+    out = []
+    for c in player.graveyard:
+        for spec in c.printing.zone_abilities:
+            if isinstance(spec, Dredge) and len(player.library) >= spec.n:
+                out.append((c, spec))
+                break
+    return out
+
+
+def replace_draw(state, player) -> bool:
+    """``turn.draw_card`` hook: offer the P2 replacements for the draw
+    ``player`` is about to make; returns ``True`` when the draw was
+    replaced (the caller then performs no draw).
+
+    The affected player orders the replacements (CR 616.1) through one
+    ``choose_mode``: dredge one of their dredge cards, or (when a
+    discard-instead source applies, which is mandatory) apply it, else
+    draw normally. Dredge replaces the whole draw, so nothing else
+    applies afterwards."""
+    if not any(
+        isinstance(s, DiscardInsteadOfDraw)
+        for o in state.battlefield for s in o.printing.zone_abilities
+    ) and not any(c.printing.zone_abilities for c in player.graveyard):
+        return False
+    applied = _APPLIED_DRAW_REPLACEMENTS.get((id(state), player.id), frozenset())
+    first = player.draw_step_first_draw_pending
+    chains = _discard_instead_sources(state, player, applied, first)
+    dredgers = _dredgers(player)
+    if not chains and not dredgers:
+        return False
+    options = [f"dredge {c.printing.name} ({s.n})" for c, s in dredgers]
+    options.append(APPLY_CHAINS if chains else DRAW_NORMALLY)
+    idx = len(options) - 1
+    if player.agent is not None and len(options) > 1:
+        picked = player.agent.choose_mode(state, player.id, options)
+        if isinstance(picked, int) and 0 <= picked < len(options):
+            idx = picked
+    if idx < len(dredgers):
+        card, spec = dredgers[idx]
+        player.draw_step_first_draw_pending = False
+        _dredge(state, player, card, spec.n)
+        return True
+    if not chains:
+        return False
+    player.draw_step_first_draw_pending = False
+    _discard_instead(state, player, chains[0], applied)
+    return True
+
+
+def _dredge(state, player, card, n: int) -> None:
+    from mtg_bot.game import Zone
+
+    state.log.append(f"P{player.id} dredges {card.printing.name} ({n})")
+    for _ in range(n):
+        if not player.library:
+            break
+        put_into_graveyard(state, player.library.pop(0))
+    if card in player.graveyard:
+        player.graveyard.remove(card)
+        card.zone = Zone.HAND
+        player.hand.append(card)
+
+
+def _discard_instead(state, player, source, applied) -> None:
+    from mtg_bot.turn import draw_card
+
+    state.log.append(
+        f"{source.printing.name}: P{player.id} discards instead of drawing"
+    )
+    if _discard_chosen_unprotected(state, player):
+        key = (id(state), player.id)
+        _APPLIED_DRAW_REPLACEMENTS[key] = applied | {source.id}
+        try:
+            draw_card(state, player.id)
+        finally:
+            if applied:
+                _APPLIED_DRAW_REPLACEMENTS[key] = applied
+            else:
+                _APPLIED_DRAW_REPLACEMENTS.pop(key, None)
+        return
+    if player.library:
+        state.log.append(f"P{player.id} mills a card instead")
+        put_into_graveyard(state, player.library.pop(0))
+
+
+def _discard_chosen_unprotected(state, player) -> bool:
+    """``player`` discards a card of their choice (a replacement's own
+    discard: no "opponent's spell or ability" protection applies)."""
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import fire_opponent_discards_triggers
+
+    if not player.hand:
+        return False
+    ids = [c.id for c in player.hand]
+    pick = ids[0]
+    if player.agent is not None:
+        pick = player.agent.choose_discard(state, player.id, ids)
+    card = next((c for c in player.hand if c.id == pick), player.hand[0])
+    player.hand.remove(card)
+    card.zone = Zone.GRAVEYARD
+    if graveyard_exile_instead_applies(state, card):
+        exile_instead_of_graveyard(state, card)
+    else:
+        player.graveyard.append(card)
+    state.log.append(f"P{player.id} discards {card.printing.name}")
+    fire_opponent_discards_triggers(state, player.id, card=card)
+    return True
+
+
+@dataclass(frozen=True)
+class DestroyEventCreature(Effect):
+    """"Destroy that creature." where "that creature" is the creature the
+    trigger's event names, delivered as its fixed target (Stinkweed Imp's
+    "Whenever this creature deals combat damage to a creature"). No-op if
+    it already left the battlefield; indestructible and regeneration
+    apply (CR 701.8)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+
+        obj = next(
+            (o for t in targets for o in state.battlefield if o.id == t[1]),
+            None,
+        )
+        if obj is None:
+            return
+        destroy_permanent(state, obj)
+
+    def describe(self) -> str:
+        return "destroy that creature"

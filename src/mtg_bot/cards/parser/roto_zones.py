@@ -267,6 +267,18 @@ _GRAVEYARD_EXILE_INSTEAD_LINE_RE = re.compile(
 )
 
 
+# "Dredge N" (CR 702.52).
+_DREDGE_LINE_RE = re.compile(r"^Dredge (?P<n>\d+)$")
+# Chains of Mephistopheles' discard-instead draw replacement.
+_DISCARD_INSTEAD_OF_DRAW_LINE_RE = re.compile(
+    r"^If (?P<who>a player|an opponent|you) would draw a card(?P<except> "
+    r"except the first one (?:they|you) draws? in each of (?:their|your) "
+    r"draw steps)?, (?:that player discards|you discard) a card instead\. "
+    r"If the player discards a card this way, they draw a card\. If the "
+    r"player doesn't discard a card this way, they mill a card\.$"
+)
+
+
 def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
     """Printing fields for a P2 static line (``zone_abilities`` /
     ``opening_hand_action``), or ``None``. Shared by the enchantment
@@ -284,6 +296,20 @@ def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
             colors=_colors(m.group("colors")) if m.group("colors") else frozenset(),
         )
         return {"zone_abilities": (spec,)}
+    m = _DREDGE_LINE_RE.match(line)
+    if m is not None:
+        from mtg_bot.effects.generic.roto_zones import Dredge
+
+        return {"zone_abilities": (Dredge(n=int(m.group("n"))),)}
+    m = _DISCARD_INSTEAD_OF_DRAW_LINE_RE.match(line)
+    if m is not None:
+        from mtg_bot.effects.generic.roto_zones import DiscardInsteadOfDraw
+
+        return {"zone_abilities": (DiscardInsteadOfDraw(
+            affects={"a player": "any", "an opponent": "opponents",
+                     "you": "you"}[m.group("who")],
+            except_first_in_draw_step=m.group("except") is not None,
+        ),)}
     from mtg_bot.cards.parser.opening_hand_lines import parse_opening_hand_line
 
     action = parse_opening_hand_line(line, name)
@@ -314,15 +340,41 @@ def roto_zones_enchantment_line(line: str, acc) -> bool:
     return _merge_fields(acc.printing_fields, fields)
 
 
+# "Whenever this creature deals combat damage to a creature, destroy
+# that creature." (Stinkweed Imp): "that creature" is the damaged
+# creature, the event's fixed target -- only meaningful with this exact
+# trigger condition, so the line is recognized whole.
+_COMBAT_DAMAGE_DESTROY_THAT_CREATURE_RE = re.compile(
+    r"^Whenever this creature deals combat damage to a creature, destroy "
+    r"that creature\.$"
+)
+
+
 def parse_roto_zones_creature_line(line: str, card: dict):
-    """``creature_builder`` fallback hook: a ``WGLine`` carrying the
-    printing fields of a P2 static line, or ``None``."""
-    fields = parse_roto_zones_static_line(line, card["name"])
-    if fields is None:
-        return None
+    """``creature_builder`` fallback hook: a ``WGLine`` for a P2 creature
+    line (static fields or the damaged-creature trigger), or ``None``."""
     from mtg_bot.cards.parser.creature_wg_lines import WGLine
 
-    return WGLine(fields=fields)
+    fields = parse_roto_zones_static_line(line, card["name"])
+    if fields is not None:
+        return WGLine(fields=fields)
+    if _disabled():
+        return None
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    if _COMBAT_DAMAGE_DESTROY_THAT_CREATURE_RE.match(
+        _substitute_self_name(line, card["name"])
+    ):
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.roto_zones import DestroyEventCreature
+        from mtg_bot.effects.predicates import Event, IsSelf
+
+        return WGLine(triggers=(TriggeredAbility(
+            event=Event.DEALS_COMBAT_DAMAGE_TO_CREATURE,
+            predicate=IsSelf(subject="source"),
+            effect=DestroyEventCreature(),
+        ),))
+    return None
 
 
 # ---------------------------------------------------------------------
@@ -457,6 +509,11 @@ def roto_zones_casting_keyword_fields(clause: str) -> dict | None:
     ``None``."""
     if _disabled():
         return None
+    m = _DREDGE_LINE_RE.match(clause)
+    if m is not None:
+        from mtg_bot.effects.generic.roto_zones import Dredge
+
+        return {"zone_abilities": (Dredge(n=int(m.group("n"))),)}
     m = _FLASHBACK_SACRIFICE_LINE_RE.match(clause)
     if m is None:
         return None

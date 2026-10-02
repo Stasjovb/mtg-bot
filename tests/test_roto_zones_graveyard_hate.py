@@ -319,7 +319,13 @@ def test_leyline_of_the_void_lines_build_and_play(monkeypatch):
 
     from tests._roto_helpers import roto_card
 
+    import mtg_bot.cards.parser.cube_enchantments as enchantments
+
     monkeypatch.setattr(grammar, "_disabled", lambda: False)
+    monkeypatch.setattr(
+        enchantments, "CUBE_ENCHANTMENT_NAMES",
+        enchantments.CUBE_ENCHANTMENT_NAMES | {"Leyline of the Void"},
+    )
     pr = build_cube_enchantment(roto_card("Leyline of the Void"))
     assert pr is not None
     assert pr.zone_abilities == (GraveyardExileInstead(opponents_only=True),)
