@@ -2216,14 +2216,27 @@ def effective_land_produces(
         for s in eff_subtypes
         if s in _BASIC_LAND_TYPE_TO_COLOR
     }
-    if produced:
-        return frozenset(produced) | _granted_tap_mana(state, land_obj)
     base = land_obj.printing.produces
     gated = land_obj.printing.produces_with_counter
     if gated is not None and counter_count(land_obj, gated[0]) > 0:
         # "If <this> has a <kind> counter on it, instead add ..."
         # (Gemstone Caverns' luck counter).
         base = gated[1]
+    if produced:
+        # Rules-text mana (anything the printed basic land types don't
+        # explain) survives a type ADDED "in addition to its other
+        # types" (Urborg / Yavimaya / Dryad: Wasteland keeps {C} and
+        # gains {B}); a type SET by Blood Moon / Magus removes it (CR
+        # 305.7). Basic lands and typed duals have no such mana, so the
+        # set-effect scan is skipped for them.
+        rules_text = base - {
+            _BASIC_LAND_TYPE_TO_COLOR[s]
+            for s in land_obj.printing.subtypes
+            if s in _BASIC_LAND_TYPE_TO_COLOR
+        }
+        if rules_text and not _has_basic_land_type_set_effect(state, land_obj):
+            produced |= rules_text
+        return frozenset(produced) | _granted_tap_mana(state, land_obj)
     return base | _granted_tap_mana(state, land_obj)
 
 
@@ -2383,6 +2396,11 @@ def effective_triggered_abilities(
     re-adds the granted trigger; a newer lose-all-abilities wipes
     everything that came before within layer 6.
     """
+    # CR 305.7: a land whose basic land type is SET (Blood Moon / Magus)
+    # loses its rules-text triggered abilities too (the activated ones
+    # are dropped in ``effective_activated_abilities``).
+    if obj.printing.is_land and _has_basic_land_type_set_effect(state, obj):
+        return ()
     # DSK Rooms: filter out triggered abilities whose ``room_half``
     # is not in ``obj.unlocked_halves`` — those halves are locked,
     # so their abilities are inert. Non-Room abilities (room_half ==

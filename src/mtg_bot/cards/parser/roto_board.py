@@ -443,8 +443,42 @@ def _untap_rules(line: str) -> BoardLine | None:
     return None
 
 
+# "Each land is a <basic land type> in addition to its other land types."
+# (Urborg, Tomb of Yawgmoth; Yavimaya, Cradle of Growth) -- the engine's
+# layer-4 ``grants_basic_land_type_to_all_lands`` synthesis (CR 613.7
+# dependency on Blood Moon included).
+_EACH_LAND_IS_TYPE = re.compile(
+    r"^Each land is an? (?P<type>Plains|Island|Swamp|Mountain|Forest) in "
+    r"addition to its other land types\.$"
+)
+
+
+def _each_land_is_type(line: str) -> BoardLine | None:
+    m = _EACH_LAND_IS_TYPE.match(line)
+    if m is None:
+        return None
+    return BoardLine(fields={
+        "grants_basic_land_type_to_all_lands": m.group("type"),
+    })
+
+
+def _nonbasic_lands_are_mountains(line: str) -> BoardLine | None:
+    """"Nonbasic lands are Mountains." on a noncreature permanent (Blood
+    Moon) -- the printing flag Magus of the Moon's creature grammar
+    already sets (``printing_keywords``)."""
+    from mtg_bot.cards.parser.printing_keywords import (
+        _parse_nonbasic_lands_are_mountains_line,
+    )
+
+    if not _parse_nonbasic_lands_are_mountains_line(line):
+        return None
+    return BoardLine(fields={"nonbasic_lands_are_mountains": True})
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _each_land_is_type,
+    _nonbasic_lands_are_mountains,
     _cant_attack_or_block,
     _fading,
     _all_creatures_have_trigger,

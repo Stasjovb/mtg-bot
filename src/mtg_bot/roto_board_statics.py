@@ -54,6 +54,40 @@ def abilities_suppressed(state: "GameState", source: "GameObject") -> bool:
     return False
 
 
+def lands_without_rules_text(state: "GameState") -> frozenset:
+    """Ids of battlefield lands whose basic land type is SET by a Blood
+    Moon-style effect (CR 305.7: they lose every ability from their
+    rules text). Empty -- after one battlefield scan -- when no such
+    effect exists."""
+    from mtg_bot.game import _has_basic_land_type_set_effect
+
+    moon = any(
+        o.printing.nonbasic_lands_are_mountains for o in state.battlefield
+    ) or any(
+        ce.layer == 4 and ce.kind == "set_basic_land_subtype"
+        for ce in state.continuous_effects
+    )
+    if not moon:
+        return frozenset()
+    return frozenset(
+        o.id for o in state.battlefield
+        if o.printing.is_land and _has_basic_land_type_set_effect(state, o)
+    )
+
+
+def land_enters_without_rules_text(state: "GameState", card) -> bool:
+    """Whether a land about to enter the battlefield will be one of
+    :func:`lands_without_rules_text` -- a nonbasic land while Blood Moon
+    / Magus of the Moon is out. Its own "enters tapped" / "as this
+    enters" replacement effects are then gone before they can apply
+    (CR 614.12; the Blood Moon rulings)."""
+    if not card.printing.is_land or card.printing.is_basic_land:
+        return False
+    return any(
+        o.printing.nonbasic_lands_are_mountains for o in state.battlefield
+    )
+
+
 def rules_in_play(state: "GameState", kind: type) -> Iterator[tuple]:
     """``(source, rule)`` for every active board rule of type ``kind``
     on the battlefield."""
@@ -365,6 +399,8 @@ __all__ = [
     "filter_blockers",
     "fire_granted_triggers",
     "granted_triggers",
+    "land_enters_without_rules_text",
+    "lands_without_rules_text",
     "rules_in_play",
     "untap_step_held",
 ]

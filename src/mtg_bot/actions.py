@@ -1639,6 +1639,17 @@ def apply_land_etb_replacements(
     tapped" grants (Lightstall Inquisitor's exile-play rider).
     """
     p = state.player_by_id(player_id)
+    from mtg_bot.creature_statics_wg import forced_to_enter_tapped
+    from mtg_bot.roto_board_statics import land_enters_without_rules_text
+
+    if land_enters_without_rules_text(state, card):
+        # A nonbasic land entering under Blood Moon / Magus has already
+        # lost its own "as/enters" replacements (Vintage Roto P5): only
+        # external ones apply.
+        card.tapped = force_tapped or forced_to_enter_tapped(
+            state, card, player_id,
+        )
+        return
     # "Enters tapped" covers Planets + most non-basic utility lands.
     card.tapped = bool(card.printing.enters_tapped)
     # Lightstall Inquisitor: lands played from exile via this grant
@@ -1711,8 +1722,6 @@ def apply_land_etb_replacements(
         _offer_echoing_deeps_copy(state, player_id, card)
     # "Nonbasic lands your opponents control enter tapped." (Archon of
     # Emeria; ``mtg_bot.creature_statics_wg``).
-    from mtg_bot.creature_statics_wg import forced_to_enter_tapped
-
     if forced_to_enter_tapped(state, card, player_id):
         card.tapped = True
 
@@ -5937,7 +5946,11 @@ def dispatch_event(
                 permanents.append(extra)
                 seen_ids.add(extra.id)
     from mtg_bot.game import _source_layer6_wiped
+    # Lands under Blood Moon / Magus have no rules-text abilities (CR
+    # 305.7; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import lands_without_rules_text
 
+    moon_lands = lands_without_rules_text(state)
     for source in permanents:
         # "Loses all abilities" (layer 6 -- Oko's +1, Lignify-style
         # Auras): the permanent's PRINTED triggered abilities no longer
@@ -5948,7 +5961,7 @@ def dispatch_event(
         ) or (
             source.left_without_abilities
             and source.zone != Zone.BATTLEFIELD
-        ):
+        ) or source.id in moon_lands:
             continue
         for ability_index, ability in enumerate(
             source.printing.triggered_abilities
