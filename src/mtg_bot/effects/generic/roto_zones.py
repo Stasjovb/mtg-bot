@@ -514,3 +514,472 @@ class ExileGraveyardCardsOfColors(Effect):
             "exile all cards that are " + " or ".join(sorted(self.colors))
             + " from all graveyards"
         )
+
+
+# ---------------------------------------------------------------------
+# Hand disruption & symmetric attrition (F16)
+# ---------------------------------------------------------------------
+
+
+def _player_target(state, targets) -> "Player | None":
+    p = next(
+        (state.player_by_id(t[1]) for t in targets if t[0] == "player"), None,
+    )
+    if p is None or p.has_lost:
+        return None
+    return p
+
+
+def _pick_from_hand(state, chooser_id: int, options: list):
+    """The ``chooser_id`` player's pick among ``options`` (cards in a
+    hand they can see), through ``choose_card_from_opponent_hand``; an
+    answer outside the options falls back to the first."""
+    chooser = state.player_by_id(chooser_id)
+    pick = options[0].id
+    if chooser.agent is not None:
+        pick = chooser.agent.choose_card_from_opponent_hand(
+            state, chooser_id, [c.id for c in options],
+        )
+    return next((c for c in options if c.id == pick), options[0])
+
+
+@dataclass(frozen=True)
+class RevealHandChooseExileUntilSourceLeaves(Effect):
+    """"Target opponent reveals their hand. You choose a <noncreature,
+    nonland> card from it. Exile that card until this creature leaves
+    the battlefield." (Kitesail Freebooter.) The pick is mandatory when
+    one exists. If the source already left the battlefield when this
+    resolves, the hand is still revealed but nothing is exiled (CR
+    610.3c). The card returns to its owner's hand through the base's
+    until-leaves release (``exiled_until_leaves_from_hand``)."""
+
+    card_filter: CardFilter = CardFilter()
+    opponent_only: bool = True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and not (self.opponent_only and p.id == controller_id)
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = _player_target(state, targets)
+        if p is None:
+            return
+        for c in p.hand:
+            reveal_to_all(state, c)
+        src = state.resolving_source
+        if src is None or not any(o.id == src.id for o in state.battlefield):
+            return
+        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        if not options:
+            return
+        card = _pick_from_hand(state, controller_id, options)
+        p.hand.remove(card)
+        card.zone = Zone.EXILE
+        card.exiled_by_source = src.id
+        card.exiled_until_leaves_from_hand = True
+        p.exile.append(card)
+        state.log.append(
+            f"P{controller_id} exiles {card.printing.name} from P{p.id}'s hand "
+            f"until {src.printing.name} leaves the battlefield"
+        )
+
+    def describe(self) -> str:
+        who = "opponent" if self.opponent_only else "player"
+        return (
+            f"target {who} reveals their hand; you choose a "
+            f"{self.card_filter.describe()} from it; exile it until this "
+            f"creature leaves the battlefield"
+        )
+
+
+@dataclass(frozen=True)
+class LookAtHandMayBottomCardThenDraw(Effect):
+    """"Look at target player's hand. You may choose a <nonland> card
+    from it. If you do, that player reveals the chosen card, puts it on
+    the bottom of their library, then draws a card." (Vendilion Clique.)
+    Declining is ``choose_yes_no``."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to, reveal_to_all
+        from mtg_bot.turn import draw_n_cards, note_cards_put_into_library
+
+        p = _player_target(state, targets)
+        if p is None:
+            return
+        for c in p.hand:
+            reveal_to(c, controller_id)
+        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        if not options:
+            return
+        me = state.player_by_id(controller_id)
+        if me.agent is not None and not me.agent.choose_yes_no(
+            state, controller_id,
+            f"choose a {self.card_filter.describe()} from P{p.id}'s hand?",
+        ):
+            return
+        card = _pick_from_hand(state, controller_id, options)
+        reveal_to_all(state, card)
+        p.hand.remove(card)
+        card.zone = Zone.LIBRARY
+        p.library.append(card)
+        note_cards_put_into_library(state, p.id)
+        state.log.append(
+            f"P{p.id} puts {card.printing.name} on the bottom of their library"
+        )
+        draw_n_cards(state, p.id, 1)
+
+    def describe(self) -> str:
+        return (
+            f"look at target player's hand; you may choose a "
+            f"{self.card_filter.describe()} from it; if you do, that player "
+            f"puts it on the bottom of their library, then draws a card"
+        )
+
+
+#: ``EachPlayerSequence`` step kinds.
+ATTRITION_STEPS = ("lose_life", "discard", "sacrifice_creature", "sacrifice_land")
+#: The "a third of ..., rounded up" amount (Pox).
+A_THIRD = "third"
+
+
+def _amount_of(amount, total: int) -> int:
+    if amount == A_THIRD:
+        return -(-total // 3)
+    return amount
+
+
+def _is_creature(obj) -> bool:
+    from mtg_bot.game import is_creature_now
+
+    return is_creature_now(obj)
+
+
+def _discard_chosen(state, p) -> bool:
+    """``p`` discards a card of their choice; ``False`` when nothing was
+    discarded (empty hand, or protected from an opponent's discard)."""
+    from mtg_bot.effects.generic.card_flow import discard_card
+
+    if not p.hand:
+        return False
+    ids = [c.id for c in p.hand]
+    pick = ids[0]
+    if p.agent is not None:
+        pick = p.agent.choose_discard(state, p.id, ids)
+    card = next((c for c in p.hand if c.id == pick), p.hand[0])
+    discard_card(state, p, card)
+    return card not in p.hand
+
+
+def _sacrifice_chosen(state, p, options: list) -> bool:
+    """``p`` sacrifices one of ``options``; ``False`` when it didn't
+    happen (protected from an opponent's sacrifice)."""
+    from mtg_bot.turn import sacrifice
+
+    pick = options[0].id
+    if p.agent is not None:
+        pick = p.agent.choose_sacrifice(state, p.id, [o.id for o in options])
+    obj = next((o for o in options if o.id == pick), options[0])
+    sacrifice(state, obj)
+    return obj not in state.battlefield
+
+
+@dataclass(frozen=True)
+class EachPlayerSequence(Effect):
+    """"Each player loses 1 life, discards a card, sacrifices a creature
+    of their choice, then sacrifices a land of their choice." (Smallpox;
+    Pox with ``A_THIRD`` amounts: "a third of their life / of the cards
+    in their hand / of the creatures / lands they control ... Round up
+    each time.")
+
+    Each ``(kind, amount)`` step (kinds in ``ATTRITION_STEPS``) is
+    performed by every player, in turn order from the active player,
+    before the next step starts; a third is counted when its step
+    begins. Discards are chosen with ``choose_discard`` and sacrifices
+    with ``choose_sacrifice``."""
+
+    steps: tuple = ()
+
+    def resolve(self, state, controller_id, targets=()):
+        n = len(state.players)
+        order = [
+            state.players[(state.active_player_idx + i) % n] for i in range(n)
+        ]
+        for kind, amount in self.steps:
+            for p in order:
+                if p.has_lost:
+                    continue
+                if kind == "lose_life":
+                    k = _amount_of(amount, max(0, p.life))
+                    p.life -= k
+                    state.log.append(f"P{p.id} loses {k} life")
+                elif kind == "discard":
+                    for _ in range(_amount_of(amount, len(p.hand))):
+                        if not _discard_chosen(state, p):
+                            break
+                else:
+                    want_land = kind == "sacrifice_land"
+                    mine = [
+                        o for o in state.battlefield
+                        if o.controller_id == p.id and (
+                            o.printing.is_land if want_land else _is_creature(o)
+                        )
+                    ]
+                    for _ in range(_amount_of(amount, len(mine))):
+                        mine = [o for o in mine if o in state.battlefield]
+                        if not mine or not _sacrifice_chosen(state, p, mine):
+                            break
+
+    def describe(self) -> str:
+        words = {
+            "lose_life": "loses {} life", "discard": "discards {} card(s)",
+            "sacrifice_creature": "sacrifices {} creature(s)",
+            "sacrifice_land": "sacrifices {} land(s)",
+        }
+        parts = [
+            words[k].format("a third of" if a == A_THIRD else a)
+            for k, a in self.steps
+        ]
+        return "each player " + ", then ".join(parts)
+
+
+@dataclass(frozen=True)
+class EachOpponentDiscardsLoseLifeUnlessNonland(Effect):
+    """"Each opponent discards a card, then each opponent who didn't
+    discard a nonland card this way loses N life." (Kroxa, Titan of
+    Death's Hunger.) An opponent with an empty hand (or whose discard was
+    prevented) discarded no nonland card, so loses the life."""
+
+    life: int = 3
+
+    def resolve(self, state, controller_id, targets=()):
+        losers = []
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            before = {c.id for c in p.graveyard} | {c.id for c in p.exile}
+            if not _discard_chosen(state, p):
+                losers.append(p)
+                continue
+            # The card just discarded (it may have been exiled instead).
+            gone = [
+                c for c in list(p.graveyard) + list(p.exile)
+                if c.id not in before
+            ]
+            if not any(not c.printing.is_land for c in gone):
+                losers.append(p)
+        for p in losers:
+            p.life -= self.life
+            state.log.append(f"P{p.id} loses {self.life} life")
+
+    def describe(self) -> str:
+        return (
+            f"each opponent discards a card, then each opponent who didn't "
+            f"discard a nonland card this way loses {self.life} life"
+        )
+
+
+@dataclass(frozen=True)
+class RevealHandChooseFromHandAndGraveyardExile(Effect):
+    """"Target opponent reveals their hand. You choose an <artifact or
+    creature> card from it, then choose an <artifact or creature> card
+    from their graveyard. Exile the chosen cards." (Dreams of Steel and
+    Oil.) Each pick is mandatory when one exists; the graveyard pick
+    uses ``choose_card_from_library`` (an id among cards in a public
+    zone)."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = _player_target(state, targets)
+        if p is None:
+            return
+        for c in p.hand:
+            reveal_to_all(state, c)
+        chosen = []
+        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        if options:
+            chosen.append((p.hand, _pick_from_hand(state, controller_id, options)))
+        gy = [c for c in p.graveyard if self.card_filter.matches(c.printing)]
+        if gy:
+            me = state.player_by_id(controller_id)
+            pick = gy[0].id
+            if me.agent is not None:
+                pick = me.agent.choose_card_from_library(
+                    state, controller_id, [c.id for c in gy],
+                )
+            chosen.append(
+                (p.graveyard, next((c for c in gy if c.id == pick), gy[0])),
+            )
+        for zone, card in chosen:
+            zone.remove(card)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            state.log.append(f"{card.printing.name} is exiled")
+
+    def describe(self) -> str:
+        d = self.card_filter.describe()
+        return (
+            f"target opponent reveals their hand; you choose a {d} from it "
+            f"and a {d} from their graveyard; exile the chosen cards"
+        )
+
+
+# ---------------------------------------------------------------------
+# Named discard (Cabal Therapy) and flashback paid by sacrifice
+# ---------------------------------------------------------------------
+
+
+def candidate_card_names(state, player, card_filter: CardFilter) -> list[str]:
+    """The card names a "choose a <nonland> card name" choice aimed at
+    ``player`` is offered: the distinct names of the matching cards that
+    player owns, in every zone. CR 201.3 allows any name; names outside
+    their cards can never hit, so they are dominated (the narrowing is in
+    ``docs/SEARCH_LIMITATIONS.md``). Sorted, so the option list doesn't
+    depend on hidden-zone order."""
+    names = set()
+    zones = (
+        list(player.hand) + list(player.library) + list(player.graveyard)
+        + list(player.exile)
+        + [o for o in state.battlefield if o.owner_id == player.id]
+        + [it.source for it in state.stack if it.source.owner_id == player.id]
+    )
+    for c in zones:
+        if c.printing.is_token or getattr(c, "is_spell_copy", False):
+            continue
+        if card_filter.matches(c.printing):
+            names.add(c.printing.name)
+    return sorted(names)
+
+
+@dataclass(frozen=True)
+class ChooseNameTargetDiscardsAllWithName(Effect):
+    """"Choose a <nonland> card name. Target player reveals their hand
+    and discards all cards with that name." (Cabal Therapy; Cabal
+    Therapist's reflexive trigger.) The name is chosen on resolution
+    through ``choose_mode`` over :func:`candidate_card_names`."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.card_flow import discard_card
+        from mtg_bot.game import reveal_to_all
+
+        p = _player_target(state, targets)
+        if p is None:
+            return
+        names = candidate_card_names(state, p, self.card_filter)
+        me = state.player_by_id(controller_id)
+        name = None
+        if names:
+            idx = 0
+            if me.agent is not None and len(names) > 1:
+                picked = me.agent.choose_mode(state, controller_id, names)
+                if isinstance(picked, int) and 0 <= picked < len(names):
+                    idx = picked
+            name = names[idx]
+            state.log.append(f"P{controller_id} names {name}")
+        for c in p.hand:
+            reveal_to_all(state, c)
+        for c in [c for c in p.hand if c.printing.name == name]:
+            discard_card(state, p, c)
+
+    def describe(self) -> str:
+        return (
+            f"choose a {self.card_filter.describe()} name; target player "
+            f"reveals their hand and discards all cards with that name"
+        )
+
+
+@dataclass(frozen=True)
+class FlashbackSacrificeCost:
+    """A ``CardPrinting.zone_abilities`` spec: "Flashback—Sacrifice <N>
+    <creatures>." (Cabal Therapy, Dread Return; CR 702.34a with a
+    non-mana cost.) The printing's ``flashback_cost`` is the empty mana
+    cost; this spec is the rest of the flashback cost, checked by
+    ``legal.py``'s flashback offer and paid by the cast pipeline."""
+
+    count: int = 1
+    card_filter: CardFilter = CardFilter()
+
+    def options(self, state, player_id: int) -> list:
+        from mtg_bot.alt_casting import permanent_matches_filter
+
+        return [
+            o for o in state.battlefield
+            if o.controller_id == player_id
+            and permanent_matches_filter(state, o, self.card_filter)
+        ]
+
+    def describe(self) -> str:
+        return f"flashback: sacrifice {self.count} {self.card_filter.describe()}(s)"
+
+
+def _flashback_sacrifice_specs(card) -> list:
+    return [
+        s for s in card.printing.zone_abilities
+        if isinstance(s, FlashbackSacrificeCost)
+    ]
+
+
+def flashback_extra_costs_payable(state, player_id: int, card) -> bool:
+    """Can ``player_id`` pay the non-mana part of ``card``'s flashback
+    cost right now?"""
+    return all(
+        len(spec.options(state, player_id)) >= spec.count
+        for spec in _flashback_sacrifice_specs(card)
+    )
+
+
+def pay_flashback_extra_costs(state, player_id: int, card) -> None:
+    """Pay the non-mana part of ``card``'s flashback cost: sacrifice the
+    printed permanents, each picked with ``choose_sacrifice``."""
+    from mtg_bot.turn import sacrifice
+
+    p = state.player_by_id(player_id)
+    for spec in _flashback_sacrifice_specs(card):
+        for _ in range(spec.count):
+            options = spec.options(state, player_id)
+            if not options:
+                return
+            pick = options[0].id
+            if p.agent is not None:
+                pick = p.agent.choose_sacrifice(
+                    state, player_id, [o.id for o in options],
+                )
+            chosen = next((o for o in options if o.id == pick), options[0])
+            state.log.append(
+                f"flashback cost: P{player_id} sacrifices {chosen.printing.name}"
+            )
+            sacrifice(state, chosen)

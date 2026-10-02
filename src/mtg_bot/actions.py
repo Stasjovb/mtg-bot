@@ -2855,6 +2855,11 @@ def _cast_spell(
         )
 
         _pay_additional_sacrifice(state, player_id, card)
+    if use_flashback and card.printing.zone_abilities:
+        # Roto P2: the non-mana part of a flashback cost (Cabal Therapy).
+        from mtg_bot.effects.generic.roto_zones import pay_flashback_extra_costs
+
+        pay_flashback_extra_costs(state, player_id, card)
     if use_escape and escape_exile_n:
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 

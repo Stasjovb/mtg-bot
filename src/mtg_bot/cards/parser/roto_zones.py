@@ -326,12 +326,168 @@ def parse_roto_zones_creature_line(line: str, card: dict):
 
 
 # ---------------------------------------------------------------------
+# Hand disruption & symmetric attrition (F16)
+# ---------------------------------------------------------------------
+
+_REVEAL_CHOOSE_EXILE_UNTIL_LEAVES_RE = re.compile(
+    r"^target (?P<who>player|opponent) reveals their hand\. You choose "
+    r"(?P<desc>an? .+? card) from it\. Exile that card until this "
+    r"creature leaves the battlefield$"
+)
+_LOOK_HAND_MAY_BOTTOM_THEN_DRAW_RE = re.compile(
+    r"^look at target player's hand\. You may choose (?P<desc>an? .+? card) "
+    r"from it\. If you do, that player reveals the chosen card, puts it on "
+    r"the bottom of their library, then draws a card$"
+)
+_EACH_PLAYER_RE = re.compile(
+    r"^each player (?P<body>(?:loses|discards|sacrifices) .+?)"
+    r"(?P<round>\. Round up each time)?$"
+)
+# One step of an "each player ..." attrition list (Smallpox / Pox).
+_ATTRITION_STEP_RES = (
+    ("lose_life", re.compile(
+        r"^loses (?:(?P<n>\d+) life|(?P<third>a third) of their life)$")),
+    ("discard", re.compile(
+        r"^discards (?:(?P<n>a) card|(?P<third>a third) of the cards in "
+        r"their hand)$")),
+    ("sacrifice_creature", re.compile(
+        r"^sacrifices (?:(?P<n>a) creature|(?P<third>a third) of the "
+        r"creatures they control) of their choice$")),
+    ("sacrifice_land", re.compile(
+        r"^sacrifices (?:(?P<n>a) land|(?P<third>a third) of the lands they "
+        r"control) of their choice$")),
+)
+_KROXA_DISCARD_RE = re.compile(
+    r"^each opponent discards a card, then each opponent who didn't discard "
+    r"a nonland card this way loses (?P<n>\d+) life$"
+)
+_REVEAL_CHOOSE_HAND_AND_GRAVEYARD_EXILE_RE = re.compile(
+    r"^target opponent reveals their hand\. You choose (?P<desc>an? .+? card) "
+    r"from it, then choose (?P<desc2>an? .+? card) from their graveyard\. "
+    r"Exile the chosen cards$"
+)
+_EACH_PLAYER_DISCARDS_HAND_RE = re.compile(r"^each player discards their hand$")
+# "Choose a <nonland> card name[. T|, then t]arget player reveals their
+# hand and discards all cards with that name" (Cabal Therapy, Cabal
+# Therapist's reflexive trigger).
+_NAME_DISCARD_RE = re.compile(
+    r"^choose a (?P<desc>(?:[a-z]+ )*?)card name(?:\. T|, then t)arget player "
+    r"reveals their hand and discards all cards with that name$"
+)
+
+
+def _attrition_steps(body: str) -> tuple | None:
+    from mtg_bot.effects.generic.roto_zones import A_THIRD
+
+    steps = []
+    for piece in re.split(r", (?:then )?", body):
+        for kind, rx in _ATTRITION_STEP_RES:
+            m = rx.match(piece)
+            if m is not None:
+                if m.group("third"):
+                    amount = A_THIRD
+                else:
+                    amount = 1 if m.group("n") == "a" else int(m.group("n"))
+                steps.append((kind, amount))
+                break
+        else:
+            return None
+    return tuple(steps)
+
+
+def _parse_hand_disruption(phrase: str) -> Effect | None:
+    from mtg_bot.effects.generic import roto_zones as rz
+
+    m = _REVEAL_CHOOSE_EXILE_UNTIL_LEAVES_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return rz.RevealHandChooseExileUntilSourceLeaves(
+            card_filter=f, opponent_only=m.group("who") == "opponent",
+        )
+    m = _LOOK_HAND_MAY_BOTTOM_THEN_DRAW_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return rz.LookAtHandMayBottomCardThenDraw(card_filter=f)
+    m = _EACH_PLAYER_RE.match(phrase)
+    steps = _attrition_steps(m.group("body")) if m is not None else None
+    if steps is not None:
+        thirds = any(a == rz.A_THIRD for _, a in steps)
+        # "Round up each time." is printed exactly when thirds are.
+        if thirds != (m.group("round") is not None):
+            return None
+        return rz.EachPlayerSequence(steps=steps)
+    m = _KROXA_DISCARD_RE.match(phrase)
+    if m is not None:
+        return rz.EachOpponentDiscardsLoseLifeUnlessNonland(life=int(m.group("n")))
+    m = _REVEAL_CHOOSE_HAND_AND_GRAVEYARD_EXILE_RE.match(phrase)
+    if m is not None:
+        if m.group("desc") != m.group("desc2"):
+            return None
+        f = parse_roto_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return rz.RevealHandChooseFromHandAndGraveyardExile(card_filter=f)
+    if _EACH_PLAYER_DISCARDS_HAND_RE.match(phrase):
+        from mtg_bot.effects.generic.card_flow import EachPlayerDiscardsHand
+
+        return EachPlayerDiscardsHand()
+    m = _NAME_DISCARD_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(f"a {m.group('desc')}card")
+        if f is None:
+            return None
+        return rz.ChooseNameTargetDiscardsAllWithName(card_filter=f)
+    return None
+
+
+# "Flashback—Sacrifice <N> <permanents>." (CR 702.34a with a non-mana
+# cost: Cabal Therapy, Dread Return).
+_FLASHBACK_SACRIFICE_LINE_RE = re.compile(
+    r"^Flashback—Sacrifice (?P<n>a|an|two|three|four|five) (?P<desc>.+?)\.$"
+)
+
+
+def roto_zones_casting_keyword_fields(clause: str) -> dict | None:
+    """``spell_builder._casting_keyword_fields`` hook: printing fields
+    for a P2 casting-keyword line (flashback paid by sacrifice), or
+    ``None``."""
+    if _disabled():
+        return None
+    m = _FLASHBACK_SACRIFICE_LINE_RE.match(clause)
+    if m is None:
+        return None
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.cards.parser.card_flow_grammar import parse_permanent_descriptor
+    from mtg_bot.effects.generic.roto_zones import FlashbackSacrificeCost
+
+    n = _count(m.group("n"))
+    desc = m.group("desc")
+    if n > 1:
+        if not desc.endswith("s"):
+            return None
+        desc = desc[:-1]
+    f = parse_permanent_descriptor(f"a {desc}")
+    if f is None:
+        return None
+    return {
+        "flashback_cost": parse_mana_cost(""),
+        "flashback_cost_str": "",
+        "zone_abilities": (FlashbackSacrificeCost(count=n, card_filter=f),),
+    }
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
 _EFFECT_PARSERS = (
     _parse_tutors,
     _parse_graveyard_hate,
+    _parse_hand_disruption,
 )
 
 
