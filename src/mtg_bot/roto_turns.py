@@ -1,5 +1,12 @@
 """Turn structure for the Vintage Roto P4 package (draw-step skips,
-ending the turn, "your next end step" delayed triggers).
+ending the turn, extra-turn riders) plus the sideboard ("outside the
+game") helpers Wish effects read.
+
+The sideboard model is the user's decision (2026-10-02): "a card you own
+from outside the game" is fetched from the player's sideboard, which
+``simulate.setup_game(sideboards=...)`` takes as an explicit input
+(empty by default). In a roto draft the sideboard is the drafter's
+picks that didn't make the main deck.
 
 Both turn loops (``simulate.run_turn`` and the search adapter's
 ``_advance_to_next_step``) pick the next step through
@@ -14,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mtg_bot.game import GameState
+    from mtg_bot.game import GameObject, GameState
     from mtg_bot.turn import Step
 
 
@@ -122,3 +129,51 @@ def end_the_turn(state: "GameState") -> None:
     clear_combat_state(state)
     state.turn_ending = True
     state.log.append("the turn is ended")
+
+
+
+# ---------------------------------------------------------------------------
+# Outside the game: the sideboard (CR 400.11)
+# ---------------------------------------------------------------------------
+
+
+def sideboard_printings(player_id: int, names: list[str]) -> tuple:
+    """The printings for a player's sideboard card names (one entry per
+    copy), validated against the active card source like a decklist."""
+    from mtg_bot.cards.source import get_active_source
+
+    printings = get_active_source().get_printings()
+    unknown = sorted({n for n in names if n not in printings})
+    if unknown:
+        raise ValueError(
+            f"sideboard for player {player_id} contains unknown cards: "
+            f"{unknown}"
+        )
+    return tuple(printings[n] for n in names)
+
+
+def take_from_outside_the_game(
+    state: "GameState", player_id: int, printing,
+) -> "GameObject":
+    """Bring one copy of ``printing`` from ``player_id``'s sideboard into
+    their hand, revealed (CR 400.11b: it becomes a new object in the
+    game). Raises ``ValueError`` if the sideboard holds no such card."""
+    from mtg_bot.game import Zone, reveal_to_all
+
+    p = state.player_by_id(player_id)
+    entries = list(p.sideboard)
+    try:
+        entries.remove(printing)
+    except ValueError:
+        raise ValueError(
+            f"P{player_id} owns no {printing.name} outside the game"
+        ) from None
+    p.sideboard = tuple(entries)
+    card = state.new_object(printing, owner_id=player_id, zone=Zone.HAND)
+    p.hand.append(card)
+    reveal_to_all(state, card)
+    state.log.append(
+        f"P{player_id} reveals {printing.name} from outside the game and "
+        "puts it into their hand"
+    )
+    return card

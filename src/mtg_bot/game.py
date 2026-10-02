@@ -3157,6 +3157,13 @@ class Player:
     # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
     # first, second, or third turn of the game".
     turns_started: int = 0
+    # Roto P4: the cards this player owns outside the game (CR 400.11 --
+    # a sideboard; in a roto draft, the drafter's unused picks), as
+    # printings: they aren't game objects until an effect brings one in
+    # ("a card you own from outside the game" -- Burning Wish, Karn, the
+    # Great Creator; ``mtg_bot.roto_turns.take_from_outside_the_game``).
+    # Set once by ``simulate.setup_game(sideboards=...)``; empty by default.
+    sideboard: tuple = ()
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

@@ -79,6 +79,14 @@ _EXTRA_TURN_THEN_END_STEP_RE = re.compile(
 )
 
 
+# "you may reveal <a card descriptor> you own from outside the game and
+# put it into your hand" (Burning Wish; the wishes).
+_WISH_RE = re.compile(
+    r"^you may reveal (?P<desc>an? .+? card) you own from outside the game "
+    r"and put it into your hand$"
+)
+
+
 def parse_roto_effect(phrase: str):
     """``Effect`` for a normalized phrase every older grammar declined,
     or ``None``."""
@@ -107,6 +115,14 @@ def parse_roto_effect(phrase: str):
         if inner is None or inner.requires_target():
             return None
         return rw.TakeExtraTurnWithEndStepTrigger(inner=inner)
+    m = _WISH_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        card_filter = parse_card_descriptor(m.group("desc"))
+        if card_filter is None:
+            return None
+        return rw.PutCardFromOutsideTheGameIntoHand(card_filter=card_filter)
     m = _EXILE_TOP_TO_HAND_AT_NEXT_END_STEP_RE.match(phrase)
     if m is not None:
         return rw.ExileTopCardsToHandAtYourNextEndStep(

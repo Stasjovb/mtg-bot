@@ -184,3 +184,59 @@ class TakeExtraTurnWithEndStepTrigger(Effect):
             "take an extra turn after this one; at the beginning of that "
             f"turn's end step, {self.inner.describe()}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Wish: "a card you own from outside the game" (CR 400.11)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PutCardFromOutsideTheGameIntoHand(Effect):
+    """"You may reveal a <filter> card you own from outside the game and
+    put it into your hand." (Burning Wish).
+
+    The cards a player owns outside the game are their sideboard
+    (``Player.sideboard``; the user's decision, 2026-10-02 -- in a roto
+    draft, the drafter's unused picks). The controller picks one of the
+    matching names (or nothing -- the reveal is optional) through the
+    generic ``choose_mode`` hook; the chosen copy becomes a new object
+    in their hand (``roto_turns.take_from_outside_the_game``)."""
+
+    card_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.roto_turns import take_from_outside_the_game
+
+        p = state.player_by_id(controller_id)
+        by_name: dict = {}
+        for printing in p.sideboard:
+            if self.card_filter is None or self.card_filter.matches(printing):
+                by_name.setdefault(printing.name, printing)
+        if not by_name or p.agent is None:
+            state.log.append(
+                f"P{controller_id} reveals nothing from outside the game"
+            )
+            return
+        names = sorted(by_name)
+        options = [f"reveal {n}" for n in names] + ["reveal nothing"]
+        pick = p.agent.choose_mode(state, controller_id, options)
+        if not 0 <= pick < len(names):
+            state.log.append(
+                f"P{controller_id} reveals nothing from outside the game"
+            )
+            return
+        take_from_outside_the_game(state, controller_id, by_name[names[pick]])
+
+    def describe(self) -> str:
+        what = (
+            self.card_filter.describe() if self.card_filter is not None
+            else "card"
+        )
+        return (
+            f"you may reveal a {what} you own from outside the game and put "
+            "it into your hand"
+        )

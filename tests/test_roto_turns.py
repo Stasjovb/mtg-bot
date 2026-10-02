@@ -426,3 +426,149 @@ def test_lose_the_game_is_idempotent():
     LoseTheGame().resolve(s, 1, ())
     assert s.players[1].has_lost
     assert LoseTheGame().describe() == "you lose the game"
+
+
+# ---------------------------------------------------------------------------
+# Outside the game: sideboards (user's decision, 2026-10-02) + Burning Wish
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModeAgent(PassAgent):
+    """Answers ``choose_mode`` with a fixed index (records the options)."""
+
+    mode: int = 0
+    seen: list = None
+
+    def choose_mode(self, state, player_id, mode_descriptions):
+        self.seen = list(mode_descriptions)
+        return self.mode
+
+
+def _setup(sideboards=None):
+    from mtg_bot.simulate import setup_game
+
+    decks = [["Island"] * 20, ["Island"] * 20]
+    return setup_game(
+        [PassAgent(), PassAgent()], decks=decks, seed=1,
+        enable_mulligans=False, sideboards=sideboards,
+    )
+
+
+def test_setup_game_sideboards_default_empty():
+    s = _setup()
+    assert [p.sideboard for p in s.players] == [(), ()]
+
+
+def test_setup_game_sideboards_are_printings_outside_the_game():
+    s = _setup([["Demonic Tutor", "Time Walk", "Black Lotus"], []])
+    names = [pr.name for pr in s.players[0].sideboard]
+    assert names == ["Demonic Tutor", "Time Walk", "Black Lotus"]
+    assert s.players[1].sideboard == ()
+    # Not game objects: no zone holds them.
+    assert all(
+        o.printing.name == "Island"
+        for p in s.players for o in (*p.library, *p.hand)
+    )
+    assert s.clone().players[0].sideboard == s.players[0].sideboard
+
+
+def test_setup_game_sideboards_validated():
+    import pytest
+
+    with pytest.raises(ValueError, match="sideboards length"):
+        _setup([["Time Walk"]])
+    with pytest.raises(ValueError, match="unknown cards"):
+        _setup([["Not A Real Card"], []])
+
+
+def test_take_from_outside_the_game():
+    import pytest
+
+    from mtg_bot.roto_turns import take_from_outside_the_game
+
+    s = _setup([["Time Walk", "Time Walk"], []])
+    walk = s.players[0].sideboard[0]
+    card = take_from_outside_the_game(s, 0, walk)
+    assert card in s.players[0].hand and card.owner_id == 0
+    assert card.zone == Zone.HAND
+    assert len(s.players[0].sideboard) == 1
+    assert 1 in card.publicly_known_to
+    with pytest.raises(ValueError, match="owns no Time Walk"):
+        take_from_outside_the_game(s, 1, walk)
+
+
+def _wish_arena(sideboard_names, mode=0):
+    from mtg_bot.cards.source import get_active_source
+
+    s = passing_arena(active=0)
+    printings = get_active_source().get_printings()
+    s.players[0].sideboard = tuple(printings[n] for n in sideboard_names)
+    s.players[0].agent = ModeAgent(mode=mode)
+    return s
+
+
+def test_burning_wish_parse_shape():
+    from mtg_bot.effects.generic.card_flow import ExileThisSpell
+    from mtg_bot.effects.generic.roto_walkers import (
+        PutCardFromOutsideTheGameIntoHand,
+    )
+
+    eff = printing("Burning Wish").spell_effect
+    wish, exile_self = eff.effects
+    assert isinstance(wish, PutCardFromOutsideTheGameIntoHand)
+    assert wish.card_filter.any_types == ("Sorcery",)
+    assert isinstance(exile_self, ExileThisSpell)
+    assert wish.describe() == (
+        "you may reveal a sorcery card you own from outside the game and "
+        "put it into your hand"
+    )
+
+
+def test_burning_wish_fetches_a_sorcery_and_exiles_itself():
+    s = _wish_arena(["Lightning Bolt", "Time Walk", "Demonic Tutor"], mode=1)
+    wish = _cast_on_stack(s, printing("Burning Wish"), 0)
+    resolve_top_of_stack(s)
+    agent0 = s.players[0].agent
+    # Only sorceries are offered, sorted, plus "nothing".
+    assert agent0.seen == [
+        "reveal Demonic Tutor", "reveal Time Walk", "reveal nothing",
+    ]
+    (fetched,) = s.players[0].hand
+    assert fetched.printing.name == "Time Walk"
+    assert [pr.name for pr in s.players[0].sideboard] == [
+        "Lightning Bolt", "Demonic Tutor",
+    ]
+    assert wish in s.players[0].exile and wish not in s.players[0].graveyard
+
+
+def test_burning_wish_may_reveal_nothing():
+    s = _wish_arena(["Time Walk"], mode=1)
+    _cast_on_stack(s, printing("Burning Wish"), 0)
+    resolve_top_of_stack(s)
+    assert s.players[0].hand == []
+    assert len(s.players[0].sideboard) == 1
+
+
+def test_burning_wish_with_no_sorcery_outside_the_game():
+    s = _wish_arena(["Lightning Bolt"])
+    wish = _cast_on_stack(s, printing("Burning Wish"), 0)
+    resolve_top_of_stack(s)
+    assert s.players[0].hand == [] and s.players[0].agent.seen is None
+    assert wish in s.players[0].exile
+
+
+def test_wish_without_filter_or_agent():
+    from mtg_bot.effects.generic.roto_walkers import (
+        PutCardFromOutsideTheGameIntoHand,
+    )
+
+    s = _wish_arena(["Lightning Bolt"])
+    eff = PutCardFromOutsideTheGameIntoHand()
+    assert "a card you own" in eff.describe()
+    s.players[0].agent = None
+    eff.resolve(s, 0, ())
+    assert s.players[0].hand == []
+    s.players[0].agent = ModeAgent(mode=0)
+    eff.resolve(s, 0, ())
+    assert [c.printing.name for c in s.players[0].hand] == ["Lightning Bolt"]
