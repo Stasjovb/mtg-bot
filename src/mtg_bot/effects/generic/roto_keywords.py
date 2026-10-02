@@ -219,7 +219,49 @@ def blocked_by_landwalk(state: "GameState", attacker, blocker) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class FewerMinusOneCountersOnYourCreatures:
+    """Printed static (``CardPrinting.replacement_statics``): "If one or
+    more -1/-1 counters would be put on a creature you control, that
+    many -1/-1 counters minus <reduction> are put on it instead."
+    (Vizier of Remedies.)"""
+
+    reduction: int = 1
+
+    def describe(self) -> str:
+        return (
+            "if one or more -1/-1 counters would be put on a creature you "
+            f"control, that many minus {self.reduction} are put on it instead"
+        )
+
+
+def adjust_minus_one_counters(state: "GameState", obj, amount: int) -> int:
+    """The number of -1/-1 counters actually put on ``obj`` when
+    ``amount`` would be: each ``FewerMinusOneCountersOnYourCreatures``
+    permanent controlled by the creature's controller takes its
+    reduction off (never below 0). Called by
+    ``game.add_minus_one_counters``, the engine's single -1/-1 counter
+    writer."""
+    from mtg_bot.game import is_creature_now
+
+    if amount <= 0 or not is_creature_now(obj):
+        return amount
+    for source in state.battlefield:
+        if source.controller_id != obj.controller_id:
+            continue
+        for rule in source.printing.replacement_statics:
+            if isinstance(rule, FewerMinusOneCountersOnYourCreatures):
+                amount = max(0, amount - rule.reduction)
+                state.log.append(
+                    f"{source.printing.name}: {amount} -1/-1 counter(s) are "
+                    f"put on {obj.printing.name} instead"
+                )
+    return amount
+
+
 __all__ = [
+    "FewerMinusOneCountersOnYourCreatures",
+    "adjust_minus_one_counters",
     "LANDWALK_KEYWORDS",
     "PayLifeCost",
     "blocked_by_landwalk",

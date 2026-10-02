@@ -2548,10 +2548,14 @@ def add_minus_one_counters(
     not here.
 
     No doubling applied (no in-pool doublers target -1/-1
-    counters). Safe when amount <= 0.
+    counters). "That many minus one" replacements (Vizier of Remedies,
+    roto P6) apply here. Safe when amount <= 0.
     """
     if amount <= 0:
         return 0
+    from mtg_bot.effects.generic.roto_keywords import adjust_minus_one_counters
+
+    amount = adjust_minus_one_counters(state, obj, amount)
     obj.minus_one_counters += amount
     return amount
 
@@ -2651,6 +2655,8 @@ def add_counters(
         return add_plus_one_counters(state, obj, amount)
     if kind == "charge":
         return add_charge_counters(state, obj, amount)
+    if kind == "-1/-1":
+        return add_minus_one_counters(state, obj, amount)
     if kind == "lore" and obj.printing.is_saga:
         # Lore counters on a Saga trigger its chapters (CR 714.2b).
         from mtg_bot.layouts import add_lore_counters

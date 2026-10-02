@@ -327,3 +327,67 @@ def test_combat_router_is_a_no_op_without_p6_effects():
     s = arena()
     events = [("player", 1, 2, 99, frozenset(), 0)]
     assert route_combat_damage_events(s, events) is events
+
+
+# ------------------------------------------------------ Vizier of Remedies
+
+VIZIER = "Vizier of Remedies"
+
+
+def test_vizier_of_remedies_parse():
+    from mtg_bot.effects.generic.roto_keywords import (
+        FewerMinusOneCountersOnYourCreatures,
+    )
+
+    p = printing(VIZIER)
+    assert p.replacement_statics == (FewerMinusOneCountersOnYourCreatures(1),)
+    assert "minus 1" in p.replacement_statics[0].describe()
+    assert parse_replacement_static_line(
+        "If one or more -1/-1 counters would be put on a creature you "
+        "control, that many -1/-1 counters minus lots are put on it instead.",
+        "X",
+    ) is None
+
+
+def test_vizier_takes_one_off_each_minus_one_placement():
+    from mtg_bot.game import add_counters, add_minus_one_counters
+
+    s = arena()
+    vizier = put(s, printing(VIZIER), 0)
+    mine = put(s, OGRE, 0)
+    theirs = put(s, OGRE, 1)
+    assert add_counters(s, mine, "-1/-1", 2) == 1
+    assert mine.minus_one_counters == 1
+    assert add_minus_one_counters(s, mine, 1) == 0
+    assert add_counters(s, vizier, "-1/-1", 1) == 0  # itself too
+    assert add_counters(s, theirs, "-1/-1", 2) == 2  # not an opponent's
+    # Two Viziers: two off.
+    put(s, printing(VIZIER), 0)
+    assert add_counters(s, mine, "-1/-1", 3) == 1
+
+
+def test_vizier_ignores_noncreatures_and_other_counters():
+    from mtg_bot.game import add_counters
+
+    s = arena()
+    put(s, printing(VIZIER), 0)
+    rock = put(s, printing("Serum Powder"), 0)
+    assert add_counters(s, rock, "-1/-1", 1) == 1
+    bear = put(s, BEAR, 0)
+    assert add_counters(s, bear, "+1/+1", 1) == 1
+
+
+def test_vizier_with_persist_returns_the_creature_counterless():
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.turn import move_off_battlefield
+
+    s = arena()
+    put(s, printing(VIZIER), 0)
+    finks = put(s, make_creature("Test Finks", "{3}", 3, 2, keywords={"persist"}), 0)
+    move_off_battlefield(s, finks, destination="graveyard")
+    drain_stack(s)
+    assert finks in s.battlefield and finks.minus_one_counters == 0
+    # ...so it persists again.
+    move_off_battlefield(s, finks, destination="graveyard")
+    drain_stack(s)
+    assert finks in s.battlefield

@@ -17,8 +17,9 @@ Entry points, each called from one hook:
   built printing -- pregame actions (``opening_hand_action``: Chancellor
   of the Tangle's opening-hand reveal, Serum Powder's mulligan-window
   exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
-  prevention statics ("Prevent all damage that would be dealt to <self>.")
-  and Plot on a permanent card.
+  prevention / replacement statics ("Prevent all damage that would be
+  dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one") and
+  Plot on a permanent card.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -322,6 +323,11 @@ def parse_hand_keyword_line(line: str, card: dict):
 _PREVENT_ALL_DAMAGE_TO_SELF_RE = re.compile(
     r"^Prevent all damage that would be dealt to (?P<self>.+)\.$"
 )
+_FEWER_MINUS_ONE_COUNTERS_RE = re.compile(
+    r"^If one or more -1/-1 counters would be put on a creature you "
+    r"control, that many -1/-1 counters minus (?P<n>\w+) are put on it "
+    r"instead\.$"
+)
 
 
 def is_self_reference(text: str, card_name: str) -> bool:
@@ -337,10 +343,17 @@ def is_self_reference(text: str, card_name: str) -> bool:
 def parse_replacement_static_line(line: str, card_name: str):
     """A printed prevention / replacement static, or ``None``."""
     from mtg_bot.effects.generic.roto_damage import PreventAllDamageToSelf
+    from mtg_bot.effects.generic.roto_keywords import (
+        FewerMinusOneCountersOnYourCreatures,
+    )
 
     m = _PREVENT_ALL_DAMAGE_TO_SELF_RE.match(line.strip())
     if m is not None and is_self_reference(m.group("self"), card_name):
         return PreventAllDamageToSelf()
+    m = _FEWER_MINUS_ONE_COUNTERS_RE.match(line.strip())
+    if m is not None:
+        n = number_word(m.group("n"))
+        return None if n is None else FewerMinusOneCountersOnYourCreatures(n)
     return None
 
 
