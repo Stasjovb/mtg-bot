@@ -612,9 +612,10 @@ def _parse_harness_phrase(phrase: str) -> Effect | None:
     return None
 
 
-# Currency Converter's two bodies.
+# Currency Converter's two bodies. The discard-trigger body is optional
+# for Currency Converter ("you may") and mandatory for Necropotence.
 _MAY_EXILE_THAT_CARD_FROM_YOUR_GRAVEYARD = re.compile(
-    r"^you may exile that card from your graveyard$"
+    r"^(?P<may>you may )?exile that card from your graveyard$"
 )
 _RETURN_EXILED_WITH_SELF_THEN_TOKEN = re.compile(
     rf"^put a card exiled with {_SELF_NOUN} into its owner's graveyard\. "
@@ -629,8 +630,11 @@ def _parse_exiled_with_phrase(phrase: str) -> Effect | None:
         ReturnExiledWithSourceToGraveyardThenToken,
     )
 
-    if _MAY_EXILE_THAT_CARD_FROM_YOUR_GRAVEYARD.match(phrase):
-        return MayExileThatCardFromYourGraveyard()
+    m = _MAY_EXILE_THAT_CARD_FROM_YOUR_GRAVEYARD.match(phrase)
+    if m is not None:
+        if m.group("may"):
+            return MayExileThatCardFromYourGraveyard()
+        return MayExileThatCardFromYourGraveyard(optional=False)
     m = _RETURN_EXILED_WITH_SELF_THEN_TOKEN.match(phrase)
     if m is not None:
         land = _parse_effect(m.group(1))

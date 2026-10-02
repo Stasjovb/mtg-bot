@@ -3587,7 +3587,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Cube glue bucket shapes -- after every other bucket.
     from mtg_bot.cards.parser.cube_glue_grammar import parse_glue_effect
 
-    return parse_glue_effect(phrase)
+    eff = parse_glue_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P4 shapes (walkers, copies, control, turns) -- after the cube.
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
+
+    return parse_roto_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

@@ -64,6 +64,12 @@ def next_step(state: GameState, current: Step) -> "Step | None":
     search adapter so both turn loops take the same path."""
     if current == Step.CLEANUP:
         return None
+    # Roto P4 turn structure: "Skip your draw step." and "End the turn."
+    from mtg_bot.roto_turns import turn_structure_next_step
+
+    replaced = turn_structure_next_step(state, current)
+    if replaced is not None:
+        return replaced
     if current == Step.END_OF_COMBAT and state.extra_combat_phases > 0:
         state.extra_combat_phases -= 1
         state.log.append("an additional combat phase begins")
@@ -1298,8 +1304,18 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
         # ``any_player_end_step`` entries ("at the beginning of the
         # next end step") fire on whichever player's end step comes
         # first; the rest fire on their controller's end step.
+        # ``own_next_end_step`` entries ("at the beginning of your next
+        # end step", ``roto_turns.schedule_at_your_next_end_step``) fire
+        # at their controller's first end step from ``fire_at_turn`` on,
+        # however many extra turns intervene.
         fires_now = (
-            entry["fire_at_turn"] == state.turn_number
+            (
+                entry["fire_at_turn"] == state.turn_number
+                or (
+                    entry.get("own_next_end_step", False)
+                    and entry["fire_at_turn"] <= state.turn_number
+                )
+            )
             and (
                 entry.get("any_player_end_step", False)
                 or entry["controller_id"] == ap_id

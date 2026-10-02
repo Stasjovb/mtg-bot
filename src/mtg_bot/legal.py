@@ -475,6 +475,9 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
 
     if not _has_priority(state, player_id):
         return actions
+    # Roto P4: the turn is being ended (CR 723.1d) -- nobody acts.
+    if state.turn_ending:
+        return actions
 
     p = state.player_by_id(player_id)
 

@@ -3539,6 +3539,11 @@ class GameState:
     # COUNTS deaths from any player — the printed clause doesn't
     # specify "you control", so a dies on either side suffices.
     creatures_died_this_turn: int = 0
+    # Roto P4 turn structure (``mtg_bot.roto_turns``). ``turn_ending``
+    # is raised by "End the turn." (CR 723.1: the stack was exiled and
+    # no player gets priority); while set only passing is legal, and
+    # ``turn.next_step`` skips straight to the cleanup step, lowering it.
+    turn_ending: bool = False
     # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
     # whenever ``continuous_effects`` mutates. Cache entries store
     # ``(version_at_compute, result)``; on lookup, an entry whose
@@ -4202,6 +4207,7 @@ class GameState:
             list(self.extra_turn_queue) if self.extra_turn_queue else []
         )
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
+        new_state.turn_ending = self.turn_ending
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

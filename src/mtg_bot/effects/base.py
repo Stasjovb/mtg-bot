@@ -917,6 +917,10 @@ class StaticAbility:
     # flat. Read by ``game._static_bonuses``. Karn, Scion of Urza's
     # Construct token.
     bonus_per_condition_count: bool = False
+    # "Skip your draw step." (Necropotence, Yawgmoth's Bargain): the
+    # source's controller skips their draw step while this is active
+    # (``roto_turns.skips_draw_step``, consulted by ``turn.next_step``).
+    skips_your_draw_step: bool = False
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
