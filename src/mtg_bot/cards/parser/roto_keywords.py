@@ -18,8 +18,8 @@ Entry points, each called from one hook:
   of the Tangle's opening-hand reveal, Serum Powder's mulligan-window
   exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
   prevention / replacement statics ("Prevent all damage that would be
-  dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one") and
-  Plot on a permanent card.
+  dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one"),
+  Plot on a permanent card and Toxic N.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -176,16 +176,43 @@ _COUNTERS_ON_EACH_CREATURE_TARGET_PLAYER_CONTROLS_RE = re.compile(
 )
 
 
+_DAMAGE_THAT_PLAYER_HAND_SIZE_RE = re.compile(
+    r"^(?:this creature |it )?deals damage to that player equal to the "
+    r"number of cards in their hand$",
+    re.IGNORECASE,
+)
+_TARGET_OPPONENT_GETS_POISON_RE = re.compile(
+    r"^target opponent gets (?P<n>a|an|\w+) poison counters?$", re.IGNORECASE,
+)
+
+
 def _parse_keyword_action_phrase(phrase: str):
     from mtg_bot.effects.generic.roto_keywords import (
         PutPlusOneCountersOnEachCreatureTargetPlayerControls,
         RegenerateSource,
+        TargetOpponentGetsPoisonCounters,
     )
-    from mtg_bot.effects.object_predicates import IsPlayer
+    from mtg_bot.effects.object_predicates import ControlledByOpponent, IsPlayer
     from mtg_bot.effects.targets import TargetSpec
 
     if _REGENERATE_SELF_RE.match(phrase):
         return RegenerateSource()
+    if _DAMAGE_THAT_PLAYER_HAND_SIZE_RE.match(phrase):
+        # "that player" is the triggering event's player.
+        from mtg_bot.effects.generic.cube_creatures_ub import BindEventPlayer
+        from mtg_bot.effects.generic.roto_keywords import (
+            DealDamageToPlayerEqualToTheirHandSize,
+        )
+
+        return BindEventPlayer(DealDamageToPlayerEqualToTheirHandSize())
+    m = _TARGET_OPPONENT_GETS_POISON_RE.match(phrase)
+    if m is not None:
+        n = number_word(m.group("n"))
+        if n is None:
+            return None
+        return TargetOpponentGetsPoisonCounters(
+            amount=n, targets=(TargetSpec(IsPlayer() & ControlledByOpponent()),),
+        )
     m = _COUNTERS_ON_EACH_CREATURE_TARGET_PLAYER_CONTROLS_RE.match(phrase)
     if m is not None:
         n = number_word(m.group("n"))
@@ -248,18 +275,65 @@ def parse_p6_effect(phrase: str):
 # ── Trigger conditions (hooked last into ``triggers``) ─────────────────
 
 
+_BECOMES_TARGET_RE = re.compile(
+    r"^(?P<who>this creature|a player or permanent|a creature you control) "
+    r"becomes the target of (?P<what>a spell or ability|a spell|an ability)"
+    r"(?: (?P<ctl>you control|an opponent controls))?$"
+)
+
+
+
+
 def parse_p6_trigger_phrase(phrase: str):
     """``(Event, Predicate)`` for a trigger condition (the text between
     "Whenever" and the comma) the P6 grammar models, else ``None``.
 
-    * "this creature becomes the target of a spell or ability" --
-      ``BECOMES_TARGET`` of the source itself (Cephalid Illusionist).
-    """
-    from mtg_bot.effects.predicates import Event, IsSelf
+    "<who> becomes the target of <a spell or ability | a spell | an
+    ability>[ you control | an opponent controls]" -> ``BECOMES_TARGET``:
+    who = this creature (Cephalid Illusionist) / a player or permanent
+    (Loki, God of Mischief) / a creature you control (Venerated
+    Rotpriest); the spell-vs-ability and controller qualifiers read the
+    event's ``targeting`` / ``controller`` subjects.
 
-    if phrase == "this creature becomes the target of a spell or ability":
-        return (Event.BECOMES_TARGET, IsSelf(subject="target"))
-    return None
+    "an opponent attacks you" -> the opponent's ``YOU_ATTACK``
+    (Emberwilde Captain).
+    """
+    from mtg_bot.effects.generic.roto_keywords import (
+        TargetIsPlayerOrPermanent,
+        TargetingIs,
+    )
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.predicates import (
+        OPPONENT, YOU, Controlled, Event, IsSelf, Subject,
+    )
+
+    if phrase == "an opponent attacks you":
+        # The engine's attackers always attack the defending player
+        # (no planeswalker / battle attacks), so an opponent's attack is
+        # an attack on you: their ``YOU_ATTACK`` event. ("while you're
+        # the monarch" is a ``triggers`` while-gate.)
+        return (Event.YOU_ATTACK, Controlled(OPPONENT, subject="player"))
+    m = _BECOMES_TARGET_RE.match(phrase)
+    if m is None:
+        return None
+    who = m.group("who")
+    if who == "this creature":
+        pred = IsSelf(subject="target")
+    elif who == "a player or permanent":
+        pred = TargetIsPlayerOrPermanent()
+    else:
+        pred = Subject("target", IsCreature()) & Controlled(YOU, subject="target")
+    what = m.group("what")
+    if what == "a spell":
+        pred = pred & TargetingIs("spell")
+    elif what == "an ability":
+        pred = pred & TargetingIs("ability")
+    ctl = m.group("ctl")
+    if ctl == "you control":
+        pred = pred & Controlled(YOU, subject="controller")
+    elif ctl == "an opponent controls":
+        pred = pred & Controlled(OPPONENT, subject="controller")
+    return (Event.BECOMES_TARGET, pred)
 
 
 # ── Hand keyword lines (abilities that work from the hand) ─────────────
@@ -375,6 +449,11 @@ def _attach_hand_ability(printing, ability):
 
 
 _PLOT_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
+_TOXIC_RE = re.compile(r"^Toxic (?P<n>\d+)$")
+
+
+def _attach_keyword(printing, keyword: str):
+    return replace(printing, keywords=frozenset(printing.keywords) | {keyword})
 
 
 def _attach_plot(printing, cost: str):
@@ -411,6 +490,11 @@ def _line_patch(line: str, card: dict):
         # instants' and sorceries' Plot lines.
         cost = m.group("cost")
         return lambda p: _attach_plot(p, cost)
+    m = _TOXIC_RE.match(line.strip())
+    if m is not None:
+        # Toxic N (CR 702.164): ``effects.generic.roto_keywords.apply_toxic``.
+        keyword = f"toxic {int(m.group('n'))}"
+        return lambda p: _attach_keyword(p, keyword)
     return None
 
 

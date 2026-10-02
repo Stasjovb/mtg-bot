@@ -270,8 +270,9 @@ def test_unknown_trigger_phrase_in_line_returns_none():
     # End-to-end: a malformed/unsupported condition inside an
     # otherwise well-shaped triggered-ability line still propagates
     # as ``None`` from ``_parse_triggered_ability_line``.
+    # ("becomes the target of a spell" is modeled since roto P6.)
     assert _parse_triggered_ability_line(
-        "Whenever this creature becomes the target of a spell, "
+        "Whenever this creature becomes the target of a Goblin, "
         "draw a card."
     ) is None
 

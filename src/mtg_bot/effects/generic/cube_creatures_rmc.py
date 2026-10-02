@@ -2123,6 +2123,13 @@ def fire_becomes_target(
     if not targets:
         return
     caster = state.player_by_id(controller_id)
+    # The targeting stack object (pushed just before this call): its
+    # spell-vs-ability kind is the ``targeting`` subject ("becomes the
+    # target of a spell", "of an ability you control"; roto P6).
+    targeting = (
+        state.stack[-1]
+        if state.stack and state.stack[-1].source is source_obj else None
+    )
     seen: set = set()
     for kind, tid in targets:
         if (kind, tid) in seen:
@@ -2140,13 +2147,14 @@ def fire_becomes_target(
                 dispatch_event(
                     state, Event.BECOMES_TARGET, label="becomes-target",
                     target_spell=spell, controller=caster,
+                    targeting=targeting,
                 )
             continue
         else:  # graveyard / exile / card targets aren't permanents
             continue
         dispatch_event(
             state, Event.BECOMES_TARGET, label="becomes-target",
-            target=subject, controller=caster,
+            target=subject, controller=caster, targeting=targeting,
         )
         if kind != "player":
             _fire_granted_becomes_target_triggers(state, subject)

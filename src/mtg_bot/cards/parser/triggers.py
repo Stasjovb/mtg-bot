@@ -1601,6 +1601,8 @@ _INTERVENING_WHILE_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
         StateBound(Delirium())
     ),
+    # Emberwilde Captain (roto P6).
+    "you're the monarch": StateBound(IsMonarch()),
 }
 
 

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.predicates import TriggerPredicate
 from mtg_bot.effects.generic.card_flow import CardFilter
 
 if TYPE_CHECKING:
@@ -259,7 +260,142 @@ def adjust_minus_one_counters(state: "GameState", obj, amount: int) -> int:
     return amount
 
 
+# ---------------------------------------------------- becomes the target
+
+
+@dataclass(frozen=True)
+class TargetingIs(TriggerPredicate):
+    """``BECOMES_TARGET``: the targeting stack object (the ``targeting``
+    subject ``cube_creatures_rmc.fire_becomes_target`` passes) is a
+    spell (``kind="spell"``, copies included) or an ability
+    (``kind="ability"``)."""
+
+    kind: str = "spell"
+
+    def matches(self, state, subjects, source):
+        item = subjects.get("targeting")
+        if item is None:
+            return False
+        is_spell = item.ability is None
+        return is_spell if self.kind == "spell" else not is_spell
+
+
+@dataclass(frozen=True)
+class TargetIsPlayerOrPermanent(TriggerPredicate):
+    """``BECOMES_TARGET`` of a player or a permanent (not a spell on the
+    stack, which arrives as ``target_spell``)."""
+
+    def matches(self, state, subjects, source):
+        return subjects.get("target") is not None
+
+
+@dataclass(frozen=True)
+class TargetOpponentGetsPoisonCounters(Effect):
+    """"Target opponent gets N poison counter(s)." (Venerated
+    Rotpriest.)"""
+
+    amount: int = 1
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import _slot_target_still_legal
+
+        if not targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(state, self.targets[0], targets[0]):
+                return
+        finally:
+            state.resolving_controller_id = prior
+        player = state.player_by_id(targets[0][1])
+        player.poison_counters += self.amount
+        state.log.append(
+            f"P{player.id} gets {self.amount} poison counter(s) "
+            f"(now {player.poison_counters})"
+        )
+
+    def describe(self) -> str:
+        return f"target opponent gets {self.amount} poison counter(s)"
+
+
+@dataclass(frozen=True)
+class DealDamageToPlayerEqualToTheirHandSize(Effect):
+    """"<this creature> deals damage to that player equal to the number of
+    cards in their hand." -- the player arrives as ``targets[0]``, bound
+    from the triggering event by ``BindEventPlayer`` (Emberwilde
+    Captain)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+
+        if not targets or targets[0][0] != "player":
+            return
+        player = state.player_by_id(targets[0][1])
+        amount = len(player.hand)
+        if amount > 0:
+            _apply_damage(state, ("player", player.id), amount)
+
+    def describe(self) -> str:
+        return (
+            "this creature deals damage to that player equal to the number "
+            "of cards in their hand"
+        )
+
+
+# ------------------------------------------------------------------ toxic
+
+TOXIC_PREFIX = "toxic "
+
+
+def toxic_amount(state: "GameState", obj) -> int:
+    """Total toxic of ``obj`` (CR 702.164c: instances are cumulative);
+    the keyword is spelled ``"toxic N"``."""
+    from mtg_bot.game import effective_keywords
+
+    return sum(
+        int(kw[len(TOXIC_PREFIX):])
+        for kw in effective_keywords(state, obj)
+        if kw.startswith(TOXIC_PREFIX) and kw[len(TOXIC_PREFIX):].isdigit()
+    )
+
+
+def apply_toxic(state: "GameState", sources_hit_player) -> None:
+    """Toxic N (CR 702.164): a player dealt combat damage by a creature
+    with toxic also gets N poison counters. ``sources_hit_player`` is the
+    combat step's ``(source_id, player_id, amount)`` list of damage
+    actually dealt (``combat._resolve_damage_step``)."""
+    for source_id, player_id, amount in sources_hit_player:
+        if amount <= 0:
+            continue
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        if source is None:
+            continue
+        n = toxic_amount(state, source)
+        if n:
+            player = state.player_by_id(player_id)
+            player.poison_counters += n
+            state.log.append(
+                f"P{player_id} gets {n} poison counter(s) from toxic "
+                f"(now {player.poison_counters})"
+            )
+
+
 __all__ = [
+    "DealDamageToPlayerEqualToTheirHandSize",
+    "TOXIC_PREFIX",
+    "TargetIsPlayerOrPermanent",
+    "TargetOpponentGetsPoisonCounters",
+    "TargetingIs",
+    "apply_toxic",
+    "toxic_amount",
     "FewerMinusOneCountersOnYourCreatures",
     "adjust_minus_one_counters",
     "LANDWALK_KEYWORDS",
