@@ -16,8 +16,9 @@ Entry points, each called from one hook:
   per-type builders run (like the cycling family) and attached to the
   built printing -- pregame actions (``opening_hand_action``: Chancellor
   of the Tangle's opening-hand reveal, Serum Powder's mulligan-window
-  exchange), hand keyword abilities (Transmute) and prevention statics
-  ("Prevent all damage that would be dealt to <self>.").
+  exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
+  prevention statics ("Prevent all damage that would be dealt to <self>.")
+  and Plot on a permanent card.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -166,6 +167,35 @@ def target_noun_filter(np: str):
     return base & IsAttacking() if attacking else base
 
 
+_REGENERATE_SELF_RE = re.compile(r"^regenerate this creature$", re.IGNORECASE)
+_COUNTERS_ON_EACH_CREATURE_TARGET_PLAYER_CONTROLS_RE = re.compile(
+    r"^put (?P<n>a|an|\w+) \+1/\+1 counters? on each creature target player "
+    r"controls$",
+    re.IGNORECASE,
+)
+
+
+def _parse_keyword_action_phrase(phrase: str):
+    from mtg_bot.effects.generic.roto_keywords import (
+        PutPlusOneCountersOnEachCreatureTargetPlayerControls,
+        RegenerateSource,
+    )
+    from mtg_bot.effects.object_predicates import IsPlayer
+    from mtg_bot.effects.targets import TargetSpec
+
+    if _REGENERATE_SELF_RE.match(phrase):
+        return RegenerateSource()
+    m = _COUNTERS_ON_EACH_CREATURE_TARGET_PLAYER_CONTROLS_RE.match(phrase)
+    if m is not None:
+        n = number_word(m.group("n"))
+        if n is None:
+            return None
+        return PutPlusOneCountersOnEachCreatureTargetPlayerControls(
+            amount=n, targets=(TargetSpec(IsPlayer()),),
+        )
+    return None
+
+
 def _parse_damage_phrase(phrase: str):
     from mtg_bot.effects.generic.roto_damage import (
         PreventCombatDamageToAndByTarget,
@@ -211,7 +241,7 @@ def parse_p6_effect(phrase: str):
         return LookAtTopMayRevealIfMatches(
             card_filter=CardFilter(any_types=types), then=then,
         )
-    return _parse_damage_phrase(phrase)
+    return _parse_damage_phrase(phrase) or _parse_keyword_action_phrase(phrase)
 
 
 # ── Trigger conditions (hooked last into ``triggers``) ─────────────────
@@ -234,11 +264,15 @@ def parse_p6_trigger_phrase(phrase: str):
 # ── Hand keyword lines (abilities that work from the hand) ─────────────
 
 _TRANSMUTE_RE = re.compile(r"^Transmute (?P<cost>(?:\{[^}]+\})+)$")
+_CYCLING_PAY_LIFE_RE = re.compile(r"^Cycling—Pay (?P<n>\w+) life\.?$")
 
 
 def parse_hand_keyword_line(line: str, card: dict):
     """The hand-activated ``ActivatedAbility`` a keyword line states, or
     ``None``.
+
+    Cycling—Pay N life. (Street Wraith; mana-cost cycling is parsed by
+    ``printing_keywords._parse_cycling_line``.)
 
     Transmute {cost} (CR 702.53): "{cost}, Discard this card: Search
     your library for a card with the same mana value as the discarded
@@ -249,6 +283,20 @@ def parse_hand_keyword_line(line: str, card: dict):
     from mtg_bot.effects.generic.card_flow import SearchLibrary
     from mtg_bot.effects.generic.roto_keywords import ManaValueCardFilter
 
+    m = _CYCLING_PAY_LIFE_RE.match(line.strip())
+    if m is not None:
+        # Cycling with a non-mana cost (CR 702.29): "Pay N life, Discard
+        # this card: Draw a card."
+        from mtg_bot.effects.generic.draw_mill import DrawCards
+        from mtg_bot.effects.generic.roto_keywords import PayLifeCost
+
+        n = number_word(m.group("n"))
+        if n is None:
+            return None
+        return ActivatedAbility(
+            cost=ActivationCost(discard_self=True, extra_costs=(PayLifeCost(n),)),
+            effect=DrawCards(amount=1),
+        )
     m = _TRANSMUTE_RE.match(line.strip())
     if m is not None:
         cost_str = m.group("cost")
@@ -313,6 +361,17 @@ def _attach_hand_ability(printing, ability):
     )
 
 
+_PLOT_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def _attach_plot(printing, cost: str):
+    from mtg_bot.cards.base import parse_mana_cost
+
+    if printing.plot_cost is not None:
+        return None
+    return replace(printing, plot_cost=parse_mana_cost(cost), plot_cost_str=cost)
+
+
 def _attach_replacement_static(printing, rule):
     return replace(
         printing,
@@ -332,6 +391,13 @@ def _line_patch(line: str, card: dict):
     rule = parse_replacement_static_line(line, card["name"])
     if rule is not None:
         return lambda p: _attach_replacement_static(p, rule)
+    m = _PLOT_RE.match(line.strip())
+    type_line = card.get("type_line", "")
+    if m is not None and "Instant" not in type_line and "Sorcery" not in type_line:
+        # Plot (CR 702.170) on a permanent card; the spell builder owns
+        # instants' and sorceries' Plot lines.
+        cost = m.group("cost")
+        return lambda p: _attach_plot(p, cost)
     return None
 
 

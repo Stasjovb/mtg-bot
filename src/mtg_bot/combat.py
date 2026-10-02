@@ -102,6 +102,11 @@ def can_block(
 
     if blocked_by_protection(state, attacker, blocker):
         return False
+    # Landwalk (CR 702.14; roto P6).
+    from mtg_bot.effects.generic.roto_keywords import blocked_by_landwalk
+
+    if blocked_by_landwalk(state, attacker, blocker):
+        return False
     return True
 
 
