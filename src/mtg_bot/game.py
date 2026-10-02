@@ -893,6 +893,10 @@ class GameObject:
     # Number of times the spell this permanent resolved from was kicked
     # (multikicker; Batroc the Leaper).
     kick_count: int = 0
+    # Roto P2: this spell was cast with its bargain cost paid ("If this
+    # spell was bargained", Beseech the Mirror). Set on every cast of a
+    # card with a ``Bargain`` zone ability (``roto_zones.pay_zone_cast_costs``).
+    cast_bargained: bool = False
     # ── Cube W/G creature bucket ─────────────────────────────────────
     # Evoke (CR 702.74): set when this object was cast for its evoke
     # cost; read by the evoke sacrifice trigger's intervening-if at

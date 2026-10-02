@@ -514,6 +514,10 @@ def roto_zones_casting_keyword_fields(clause: str) -> dict | None:
         from mtg_bot.effects.generic.roto_zones import Dredge
 
         return {"zone_abilities": (Dredge(n=int(m.group("n"))),)}
+    if _BARGAIN_LINE_RE.match(clause):
+        from mtg_bot.effects.generic.roto_zones import Bargain
+
+        return {"zone_abilities": (Bargain(),)}
     m = _FLASHBACK_SACRIFICE_LINE_RE.match(clause)
     if m is None:
         return None
@@ -663,6 +667,12 @@ def parse_roto_zones_cost_piece(piece: str):
         from mtg_bot.effects.generic.roto_zones import ReturnSelfToOwnersHandCost
 
         return ReturnSelfToOwnersHandCost()
+    m = _DISCARD_CARD_COST_RE.match(piece)
+    if m is not None and m.group("desc") not in ("a card", "an card"):
+        from mtg_bot.effects.generic.roto_zones import DiscardCardCost
+
+        f = parse_roto_descriptor(m.group("desc"))
+        return None if f is None else DiscardCardCost(card_filter=f)
     return None
 
 
@@ -754,6 +764,124 @@ def _parse_library_lookat(phrase: str) -> Effect | None:
 
 
 # ---------------------------------------------------------------------
+# More tutors (F10) and put-from-hand (F17)
+# ---------------------------------------------------------------------
+
+# Beseech the Mirror -- the only bargain tutor in the pool; the mana value
+# cap is the parameter.
+_SEARCH_EXILE_FACE_DOWN_BARGAIN_RE = re.compile(
+    r"^search your library for a card, exile it face down, then shuffle\. "
+    r"If this spell was bargained, you may cast the exiled card without "
+    r"paying its mana cost if that spell's mana value is (?P<n>\d+) or "
+    r"less\. Put the exiled card into your hand if it wasn't cast this way$"
+)
+# Birthing Pod / Oswald Fiddlebender.
+_SEARCH_MV_PLUS_SACRIFICED_RE = re.compile(
+    r"^search your library for (?P<desc>an? .+? card) with mana value equal "
+    r"to (?P<n>\w+) plus the sacrificed (?P<what>[a-z]+)'s mana value, put "
+    r"(?:it|that card) onto the battlefield, then shuffle$"
+)
+# Scapeshift -- the only "sacrifice any number of <permanents>. Search
+# ... up to that many" card; the permanent type is the parameter.
+_SACRIFICE_ANY_LANDS_SEARCH_THAT_MANY_RE = re.compile(
+    r"^sacrifice any number of lands\. Search your library for up to that "
+    r"many land cards, put them onto the battlefield tapped, then shuffle$"
+)
+_SEARCH_LIBRARY_AND_OR_GRAVEYARD_X_PUMP_RE = re.compile(
+    r"^search your library and/or graveyard for (?P<desc>an? .+? card) with "
+    r"mana value X or less and put it onto the battlefield\. If you search "
+    r"your library this way, shuffle\. If X is (?P<n>\d+) or more, creatures "
+    r"you control get \+X/\+X and gain haste until end of turn$"
+)
+_SEARCH_DIFFERENT_NAMES_OPPONENT_SPLITS_RE = re.compile(
+    r"^search your library for up to (?P<n>\w+) cards with different names "
+    r"and reveal them\. Target opponent chooses (?P<k>\w+) of those cards\. "
+    r"Put the chosen cards into your graveyard and the rest into your hand\. "
+    r"Then shuffle$"
+)
+_DOOMSDAY_RE = re.compile(
+    r"^search your library and graveyard for (?P<n>\w+) cards and exile the "
+    r"rest\. Put the chosen cards on top of your library in any order\. You "
+    r"lose half your life, rounded up$"
+)
+_EACH_PLAYER_MAY_PUT_FROM_HAND_RE = re.compile(
+    r"^each player may put an? (?P<types>(?:[a-z]+, )+or [a-z]+|[a-z]+) card "
+    r"from their hand onto the battlefield$"
+)
+_EUREKA_RE = re.compile(
+    r"^starting with you, each player may put a permanent card from their "
+    r"hand onto the battlefield\. Repeat this process until no one puts a "
+    r"card onto the battlefield$"
+)
+_STRONGHOLD_GAMBIT_RE = re.compile(
+    r"^each player chooses a card in their hand\. Then each player reveals "
+    r"their chosen card\. The owner of each creature card revealed this way "
+    r"with the lowest mana value puts it onto the battlefield$"
+)
+
+
+def _type_list_filter(text: str):
+    """``artifact, creature, enchantment, or land`` -> any-of filter."""
+    from mtg_bot.cards.parser.card_flow_grammar import _TYPE_WORDS
+    from mtg_bot.effects.generic.roto_zones import RotoCardFilter
+
+    words = [w.removeprefix("or ") for w in text.split(", ")]
+    types = [_TYPE_WORDS.get(w) for w in words]
+    if None in types:
+        return None
+    return RotoCardFilter(any_types=tuple(types))
+
+
+def _parse_more_tutors(phrase: str) -> Effect | None:
+    from mtg_bot.effects.generic import roto_zones as rz
+
+    m = _SEARCH_EXILE_FACE_DOWN_BARGAIN_RE.match(phrase)
+    if m is not None:
+        return rz.SearchExileFaceDownCastFreeIfBargained(max_mv=int(m.group("n")))
+    m = _SEARCH_MV_PLUS_SACRIFICED_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        n = _count(m.group("n"))
+        if f is None or n is None or f.any_types != (m.group("what").capitalize(),):
+            return None
+        return rz.SearchManaValueOnePlusSacrificed(card_filter=f, plus=n)
+    if _SACRIFICE_ANY_LANDS_SEARCH_THAT_MANY_RE.match(phrase):
+        return rz.SacrificeLandsSearchThatMany()
+    m = _SEARCH_LIBRARY_AND_OR_GRAVEYARD_X_PUMP_RE.match(phrase)
+    if m is not None:
+        f = parse_roto_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return rz.SearchLibraryAndOrGraveyardXThenPump(
+            card_filter=f, pump_threshold=int(m.group("n")),
+        )
+    m = _SEARCH_DIFFERENT_NAMES_OPPONENT_SPLITS_RE.match(phrase)
+    if m is not None:
+        n, k = _count(m.group("n")), _count(m.group("k"))
+        if n is None or k is None:
+            return None
+        return rz.SearchDifferentNamesOpponentSplits(count=n, opponent_picks=k)
+    m = _DOOMSDAY_RE.match(phrase)
+    if m is not None:
+        n = _count(m.group("n"))
+        return None if n is None else rz.DoomsdayPile(count=n)
+    m = _EACH_PLAYER_MAY_PUT_FROM_HAND_RE.match(phrase)
+    if m is not None:
+        f = _type_list_filter(m.group("types"))
+        return None if f is None else rz.EachPlayerMayPutFromHand(card_filter=f)
+    if _EUREKA_RE.match(phrase):
+        return rz.EurekaLoop()
+    if _STRONGHOLD_GAMBIT_RE.match(phrase):
+        return rz.EachPlayerChoosesLowestCreatureEnters()
+    return None
+
+
+# "Discard a <creature> card" -- a cost piece (Survival of the Fittest).
+_DISCARD_CARD_COST_RE = re.compile(r"^[Dd]iscard (?P<desc>an? .+? card)$")
+_BARGAIN_LINE_RE = re.compile(r"^Bargain$")
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
@@ -763,6 +891,7 @@ _EFFECT_PARSERS = (
     _parse_hand_disruption,
     _parse_recursion,
     _parse_library_lookat,
+    _parse_more_tutors,
 )
 
 

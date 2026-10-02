@@ -75,6 +75,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Rest in Peace",
     "Sneak Attack",
     "Squandered Resources",
+    "Survival of the Fittest",
     "Touch the Spirit Realm",
     "Underworld Breach",
 })

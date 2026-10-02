@@ -1815,3 +1815,525 @@ class ExileTopMayTakeUnlessSameName(Effect):
             "hand unless its name repeats; repeat until you do or a name "
             "repeats"
         )
+
+
+# ---------------------------------------------------------------------
+# More tutors (F10): bargain, sacrifice-scaled, multi-zone, opponent-split
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Bargain:
+    """A ``CardPrinting.zone_abilities`` spec: "Bargain" (CR 702.166): "As
+    an additional cost to cast this spell, you may sacrifice an
+    artifact, enchantment, or token." Offered while casting (one
+    ``choose_yes_no`` when such a permanent exists, then
+    ``choose_sacrifice``); recorded on the spell as
+    ``GameObject.cast_bargained``."""
+
+    def options(self, state, player_id: int) -> list:
+        return [
+            o for o in state.battlefield
+            if o.controller_id == player_id and (
+                o.printing.is_token or o.printing.is_artifact
+                or "Enchantment" in o.printing.card_types
+            )
+        ]
+
+    def describe(self) -> str:
+        return "bargain"
+
+
+def pay_zone_cast_costs(state, player_id: int, card, *, use_flashback: bool) -> None:
+    """Cast-pipeline hook (``actions._cast_spell``, with the other
+    additional costs): the non-mana part of a flashback cost and the
+    optional bargain cost."""
+    if use_flashback:
+        pay_flashback_extra_costs(state, player_id, card)
+    card.cast_bargained = False
+    for spec in card.printing.zone_abilities:
+        if not isinstance(spec, Bargain):
+            continue
+        options = spec.options(state, player_id)
+        p = state.player_by_id(player_id)
+        if not options or (p.agent is not None and not p.agent.choose_yes_no(
+            state, player_id, f"bargain {card.printing.name}?",
+        )):
+            return
+        _sacrifice_chosen(state, p, options)
+        card.cast_bargained = True
+        state.log.append(f"P{player_id} bargains {card.printing.name}")
+
+
+@dataclass(frozen=True)
+class SearchExileFaceDownCastFreeIfBargained(Effect):
+    """"Search your library for a card, exile it face down, then shuffle.
+    If this spell was bargained, you may cast the exiled card without
+    paying its mana cost if that spell's mana value is N or less. Put
+    the exiled card into your hand if it wasn't cast this way." (Beseech
+    the Mirror.) Face down = known only to its owner. The free cast goes
+    through the base's ``cast_now`` (the spell lands above this one on
+    the stack)."""
+
+    max_mv: int = 4
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.game import Zone, reveal_to, shuffle_library
+
+        p = state.player_by_id(controller_id)
+        found = search_pick(state, p, list(p.library), may_fail=False)
+        if found is not None:
+            p.library.remove(found)
+            found.zone = Zone.EXILE
+            p.exile.append(found)
+            reveal_to(found, controller_id)
+            state.log.append(f"P{controller_id} exiles a card face down")
+        shuffle_library(state, controller_id)
+        if found is None:
+            return
+        spell = state.resolving_spell
+        if (
+            spell is not None and getattr(spell, "cast_bargained", False)
+            and not found.printing.is_land
+            and found.printing.mana_cost.total <= self.max_mv
+            and can_cast_now(state, controller_id, found, free=True)
+            and (p.agent is None or p.agent.choose_yes_no(
+                state, controller_id, f"cast {found.printing.name} free?",
+            ))
+            and cast_now(state, controller_id, found, free=True)
+        ):
+            return
+        if found in p.exile:
+            p.exile.remove(found)
+            found.zone = Zone.HAND
+            p.hand.append(found)
+
+    def describe(self) -> str:
+        return (
+            f"search your library for a card, exile it face down, then "
+            f"shuffle; if bargained, you may cast it free if its mana value "
+            f"is {self.max_mv} or less; otherwise put it into your hand"
+        )
+
+
+@dataclass(frozen=True)
+class SearchManaValueOnePlusSacrificed(Effect):
+    """"Search your library for a <creature> card with mana value equal to
+    1 plus the sacrificed <creature>'s mana value, put that card onto the
+    battlefield, then shuffle." (Birthing Pod, Oswald Fiddlebender.) The
+    sacrificed permanent is the ability's cost-paid object (last-known
+    mana value; an {X} in its cost counts as 0)."""
+
+    card_filter: CardFilter = CardFilter()
+    plus: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+        from mtg_bot.game import shuffle_library
+
+        mv = MVOfCostPaidObjectPlus(constant=self.plus).value(state, controller_id)
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.library
+            if self.card_filter.matches(c.printing)
+            and c.printing.mana_cost.total == mv
+        ]
+        found = search_pick(state, p, options, may_fail=True)
+        if found is not None:
+            p.library.remove(found)
+            state.log.append(
+                f"P{controller_id} puts {found.printing.name} onto the battlefield"
+            )
+            put_into_battlefield(state, found, controller_id)
+        shuffle_library(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"search your library for a {self.card_filter.describe()} with "
+            f"mana value {self.plus} plus the sacrificed permanent's, put it "
+            f"onto the battlefield, then shuffle"
+        )
+
+
+@dataclass(frozen=True)
+class DiscardCardCost:
+    """``ActivationCost.extra_costs`` atom: "Discard a <creature> card"
+    (Survival of the Fittest). The card is picked with ``choose_discard``
+    among the matching cards in hand."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def _options(self, state, player_id: int) -> list:
+        return [
+            c for c in state.player_by_id(player_id).hand
+            if self.card_filter.matches(c.printing)
+        ]
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return bool(self._options(state, player_id))
+
+    def pay(self, state, player_id: int, source) -> list:
+        from mtg_bot.effects.generic.card_flow import discard_card
+
+        p = state.player_by_id(player_id)
+        options = self._options(state, player_id)
+        pick = options[0].id
+        if p.agent is not None:
+            pick = p.agent.choose_discard(state, player_id, [c.id for c in options])
+        card = next((c for c in options if c.id == pick), options[0])
+        discard_card(state, p, card)
+        return [card]
+
+    def describe(self) -> str:
+        return f"Discard a {self.card_filter.describe()}"
+
+
+@dataclass(frozen=True)
+class SacrificeLandsSearchThatMany(Effect):
+    """"Sacrifice any number of lands. Search your library for up to that
+    many land cards, put them onto the battlefield tapped, then shuffle."
+    (Scapeshift.) How many is ``choose_x`` (0 to the lands you control),
+    which ones ``choose_sacrifice``; the search picks one land at a time
+    (``None`` stops)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+
+        def lands():
+            return [
+                o for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_land
+            ]
+
+        n = len(lands())
+        if p.agent is not None and n:
+            n = max(0, min(n, p.agent.choose_x(
+                state, controller_id, "lands to sacrifice", n,
+            )))
+        sacrificed = 0
+        for _ in range(n):
+            options = lands()
+            if not options or not _sacrifice_chosen(state, p, options):
+                break
+            sacrificed += 1
+        found = []
+        for _ in range(sacrificed):
+            options = [c for c in p.library if c.printing.is_land]
+            pick = search_pick(state, p, options, may_fail=True)
+            if pick is None:
+                break
+            p.library.remove(pick)
+            found.append(pick)
+        for card in found:
+            put_into_battlefield(state, card, controller_id)
+            if card in state.battlefield:
+                card.tapped = True
+        shuffle_library(state, controller_id)
+        state.log.append(
+            f"P{controller_id} sacrifices {sacrificed} land(s), fetches "
+            f"{len(found)}"
+        )
+
+    def describe(self) -> str:
+        return (
+            "sacrifice any number of lands; search your library for up to "
+            "that many land cards, put them onto the battlefield tapped, then "
+            "shuffle"
+        )
+
+
+@dataclass(frozen=True)
+class SearchLibraryAndOrGraveyardXThenPump(Effect):
+    """"Search your library and/or graveyard for a <creature> card with
+    mana value X or less and put it onto the battlefield. If you search
+    your library this way, shuffle. If X is N or more, creatures you
+    control get +X/+X and gain haste until end of turn." (Finale of
+    Devastation.) Whether to search the library is a ``choose_yes_no``;
+    the card is picked among the graveyard (and library) matches."""
+
+    card_filter: CardFilter = CardFilter()
+    pump_threshold: int = 10
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.generic.pump import PumpCreaturesYouControlUntilEOT
+        from mtg_bot.game import shuffle_library
+
+        x = state.resolving_x_value
+        p = state.player_by_id(controller_id)
+        search_library = p.agent is None or p.agent.choose_yes_no(
+            state, controller_id, "search your library too?",
+        )
+        pool = list(p.graveyard) + (list(p.library) if search_library else [])
+        options = [
+            c for c in pool
+            if self.card_filter.matches(c.printing)
+            and c.printing.mana_cost.total <= x
+        ]
+        found = search_pick(state, p, options, may_fail=True)
+        if found is not None:
+            (p.library if found in p.library else p.graveyard).remove(found)
+            put_into_battlefield(state, found, controller_id)
+        if search_library:
+            shuffle_library(state, controller_id)
+        if x >= self.pump_threshold:
+            PumpCreaturesYouControlUntilEOT(
+                power_bonus=x, toughness_bonus=x,
+                granted_keywords=frozenset({"haste"}),
+            ).resolve(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"search your library and/or graveyard for a "
+            f"{self.card_filter.describe()} with mana value X or less and put "
+            f"it onto the battlefield; if X is {self.pump_threshold} or more, "
+            f"creatures you control get +X/+X and gain haste until end of turn"
+        )
+
+
+@dataclass(frozen=True)
+class SearchDifferentNamesOpponentSplits(Effect):
+    """"Search your library for up to N cards with different names and
+    reveal them. Target opponent chooses K of those cards. Put the
+    chosen cards into your graveyard and the rest into your hand. Then
+    shuffle." (Gifts Ungiven.) Your picks: one at a time
+    (``choose_card_from_library``, ``None`` stops); the opponent's: K
+    picks with their own ``choose_card_from_library`` (all of them when
+    K or fewer were found)."""
+
+    count: int = 4
+    opponent_picks: int = 2
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to_all, shuffle_library
+
+        opp = _player_target(state, targets)
+        p = state.player_by_id(controller_id)
+        found = []
+        for _ in range(self.count):
+            names = {c.printing.name for c in found}
+            options = [c for c in p.library if c.printing.name not in names]
+            pick = search_pick(state, p, options, may_fail=True)
+            if pick is None:
+                break
+            p.library.remove(pick)
+            reveal_to_all(state, pick)
+            found.append(pick)
+        to_graveyard = []
+        if len(found) <= self.opponent_picks or opp is None:
+            to_graveyard = list(found) if opp is not None else []
+        else:
+            for _ in range(self.opponent_picks):
+                options = [c for c in found if c not in to_graveyard]
+                pick = options[0].id
+                if opp.agent is not None:
+                    pick = opp.agent.choose_card_from_library(
+                        state, opp.id, [c.id for c in options],
+                    )
+                to_graveyard.append(
+                    next((c for c in options if c.id == pick), options[0]),
+                )
+        for card in found:
+            if card in to_graveyard:
+                put_into_graveyard(state, card)
+            else:
+                card.zone = Zone.HAND
+                p.hand.append(card)
+        shuffle_library(state, controller_id)
+        state.log.append(
+            f"P{controller_id} finds {len(found)}; {len(to_graveyard)} to the "
+            f"graveyard"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"search your library for up to {self.count} cards with different "
+            f"names; target opponent chooses {self.opponent_picks} of them to "
+            f"go to your graveyard, the rest to your hand"
+        )
+
+
+@dataclass(frozen=True)
+class DoomsdayPile(Effect):
+    """"Search your library and graveyard for N cards and exile the rest.
+    Put the chosen cards on top of your library in any order. You lose
+    half your life, rounded up." (Doomsday.) The N picks are mandatory
+    when available (all of them with fewer, per its ruling) and go
+    through ``choose_card_from_library``; the pick order is the top-down
+    order of the new library."""
+
+    count: int = 5
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, reveal_to
+
+        p = state.player_by_id(controller_id)
+        pool = list(p.library) + list(p.graveyard)
+        chosen = []
+        for _ in range(min(self.count, len(pool))):
+            options = [c for c in pool if c not in chosen]
+            chosen.append(search_pick(state, p, options, may_fail=False))
+        for c in pool:
+            (p.library if c in p.library else p.graveyard).remove(c)
+            if c not in chosen:
+                c.zone = Zone.EXILE
+                p.exile.append(c)
+        for c in reversed(chosen):
+            c.zone = Zone.LIBRARY
+            p.library.insert(0, c)
+            reveal_to(c, controller_id)
+        loss = -(-max(0, p.life) // 2)
+        p.life -= loss
+        state.log.append(
+            f"P{controller_id} builds a {len(chosen)}-card library and loses "
+            f"{loss} life"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"search your library and graveyard for {self.count} cards and "
+            f"exile the rest; put them on top in any order; you lose half "
+            f"your life, rounded up"
+        )
+
+
+# ---------------------------------------------------------------------
+# Put permanents from hand (F17)
+# ---------------------------------------------------------------------
+
+
+def _turn_order_from(state, first_id: int) -> list:
+    n = len(state.players)
+    start = next(i for i, p in enumerate(state.players) if p.id == first_id)
+    return [state.players[(start + i) % n] for i in range(n)]
+
+
+def _hand_pick(state, p, options) -> "GameObject | None":
+    if not options:
+        return None
+    if p.agent is None:
+        return options[0]
+    pick = p.agent.choose_card_from_hand(state, p.id, [c.id for c in options])
+    return next((c for c in options if c.id == pick), None)
+
+
+@dataclass(frozen=True)
+class EachPlayerMayPutFromHand(Effect):
+    """"Each player may put an <artifact, creature, enchantment, or land>
+    card from their hand onto the battlefield." (Show and Tell.) Players
+    choose in turn order from the active player
+    (``choose_card_from_hand``, ``None`` declines); then the chosen cards
+    are put onto the battlefield."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+
+        active = state.players[state.active_player_idx].id
+        chosen = []
+        for p in _turn_order_from(state, active):
+            if p.has_lost:
+                continue
+            options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+            card = _hand_pick(state, p, options)
+            if card is not None:
+                chosen.append((p, card))
+        for p, card in chosen:
+            p.hand.remove(card)
+            state.log.append(f"P{p.id} puts {card.printing.name} onto the battlefield")
+            put_into_battlefield(state, card, p.id)
+
+    def describe(self) -> str:
+        return (
+            f"each player may put a {self.card_filter.describe()} from their "
+            f"hand onto the battlefield"
+        )
+
+
+@dataclass(frozen=True)
+class EurekaLoop(Effect):
+    """"Starting with you, each player may put a permanent card from their
+    hand onto the battlefield. Repeat this process until no one puts a
+    card onto the battlefield." (Eureka.) Rounds go in turn order from
+    the controller; the process ends after a full round in which nobody
+    puts a card (a player who declined may put one in a later round)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+
+        while True:
+            put_any = False
+            for p in _turn_order_from(state, controller_id):
+                if p.has_lost:
+                    continue
+                options = [c for c in p.hand if c.printing.is_permanent]
+                card = _hand_pick(state, p, options)
+                if card is None:
+                    continue
+                p.hand.remove(card)
+                state.log.append(
+                    f"P{p.id} puts {card.printing.name} onto the battlefield"
+                )
+                put_into_battlefield(state, card, p.id)
+                put_any = True
+            if not put_any:
+                return
+
+    def describe(self) -> str:
+        return (
+            "starting with you, each player may put a permanent card from "
+            "their hand onto the battlefield; repeat until no one does"
+        )
+
+
+@dataclass(frozen=True)
+class EachPlayerChoosesLowestCreatureEnters(Effect):
+    """"Each player chooses a card in their hand. Then each player
+    reveals their chosen card. The owner of each creature card revealed
+    this way with the lowest mana value puts it onto the battlefield."
+    (Stronghold Gambit.) Choices go through ``choose_card_from_hand`` in
+    turn order (a player with cards must choose one); every creature
+    card tied for the lowest mana value enters."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import reveal_to_all
+
+        active = state.players[state.active_player_idx].id
+        chosen = []
+        for p in _turn_order_from(state, active):
+            if p.has_lost or not p.hand:
+                continue
+            card = _hand_pick(state, p, list(p.hand)) or p.hand[0]
+            chosen.append((p, card))
+        for _, card in chosen:
+            reveal_to_all(state, card)
+        creatures = [(p, c) for p, c in chosen if c.printing.is_creature]
+        if not creatures:
+            return
+        low = min(c.printing.mana_cost.total for _, c in creatures)
+        for p, card in creatures:
+            if card.printing.mana_cost.total == low and card in p.hand:
+                p.hand.remove(card)
+                put_into_battlefield(state, card, p.id)
+
+    def describe(self) -> str:
+        return (
+            "each player chooses a card in their hand and reveals it; each "
+            "revealed creature card with the lowest mana value enters"
+        )
