@@ -560,6 +560,23 @@ class CardsInYourGraveyard(Condition):
         return self._count(state, viewer_id)
 
 
+@dataclass(frozen=True)
+class CardTypesInYourGraveyardPT:
+    """``dynamic_pt_formula`` for "<This>'s power is equal to the number
+    of card types among cards in your graveyard and its toughness is
+    equal to that number plus K." (Nethergoyf): "your" is the creature's
+    controller; card types counted by the shared
+    ``effects.card_types`` helper (CR 205.2a)."""
+
+    plus: int = 1
+
+    def base_pt(self, state, obj):
+        from mtg_bot.effects.card_types import count_card_types
+
+        n = count_card_types(state.player_by_id(obj.controller_id).graveyard)
+        return n, n + self.plus
+
+
 # ---------------------------------------------------------------------------
 # One-off resolutions
 # ---------------------------------------------------------------------------
@@ -1159,6 +1176,7 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "CardTypesInYourGraveyardPT",
     "ReturnAnyNumberDrawPerOwned",
     "SacrificeSourceUnlessDiscard",
     "CardsInYourGraveyard",

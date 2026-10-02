@@ -590,6 +590,29 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
 
 
 # ---------------------------------------------------------------------------
+# Characteristic-defining P/T
+# ---------------------------------------------------------------------------
+
+_GOYF_YOUR_GRAVEYARD = re.compile(
+    r"^.+?'s power is equal to the number of card types among cards in your "
+    r"graveyard and its toughness is equal to that number plus (?P<k>\d+)\.$"
+)
+
+
+def parse_roto_dynamic_pt_line(line: str):
+    """``dynamic_pt_formula`` for the P5 package's characteristic-
+    defining P/T lines (Nethergoyf), or ``None``."""
+    if _disabled():
+        return None
+    from mtg_bot.effects.generic import roto_board as rb
+
+    m = _GOYF_YOUR_GRAVEYARD.match(line)
+    if m is not None:
+        return rb.CardTypesInYourGraveyardPT(plus=int(m.group("k")))
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Trigger conditions
 # ---------------------------------------------------------------------------
 
@@ -982,8 +1005,33 @@ def _other_subtype_list_anthem(line: str) -> BoardLine | None:
     return BoardLine(statics=tuple(statics))
 
 
+# "Escape—<cost>, Exile any number of other cards from your graveyard
+# with N or more card types among them." (Nethergoyf).
+_ESCAPE_CARD_TYPES = re.compile(
+    r"^Escape—(?P<cost>(?:\{[^}]+\})+), [Ee]xile any number of other cards "
+    r"from your graveyard with (?P<n>\w+) or more card types among them\.$"
+)
+
+
+def _escape_card_types(line: str) -> BoardLine | None:
+    from mtg_bot.cards.base import parse_mana_cost
+
+    m = _ESCAPE_CARD_TYPES.match(line)
+    if m is None:
+        return None
+    n = m.group("n")
+    if not (n.isdigit() or n in _NUMBER_WORDS):
+        return None
+    return BoardLine(fields={
+        "escape_cost": parse_mana_cost(m.group("cost")),
+        "escape_cost_str": m.group("cost"),
+        "escape_exile_card_types": _n(n),
+    })
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _escape_card_types,
     _graveyard_pt_static,
     _other_subtype_list_anthem,
     _equipped_it_trigger,
@@ -1155,6 +1203,7 @@ def absorb_enchantment_line(line: str, card: dict, acc) -> bool:
 
 __all__ = [
     "BoardLine",
+    "parse_roto_dynamic_pt_line",
     "claim_equipment_lines",
     "parse_roto_trigger_phrase",
     "parse_roto_board_effect",

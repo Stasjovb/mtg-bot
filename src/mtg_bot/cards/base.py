@@ -1568,6 +1568,11 @@ class CardPrinting:
     # ``mtg_bot.roto_board_statics`` (which honors "loses all
     # abilities" and Blood Moon's ability loss for the source).
     board_rules: tuple = ()
+    # Escape whose exile part is "Exile any number of other cards from
+    # your graveyard with N or more card types among them." (Nethergoyf):
+    # N; 0 = the plain "Exile <count> other cards" form
+    # (``escape_exile_count``). Read by ``alt_casting``'s escape helpers.
+    escape_exile_card_types: int = 0
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

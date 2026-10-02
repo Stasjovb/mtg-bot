@@ -395,9 +395,16 @@ def escape_terms(
     (Underworld Breach) grants escape to each nonland card in that
     player's graveyard for its mana cost plus exiling N other cards. A
     card without a mana cost can't be cast this way (its escape cost
-    would include an unpayable mana cost)."""
+    would include an unpayable mana cost). A negative second element is
+    the card-type form of the exile part -- "with N or more card types
+    among them" (Nethergoyf; ``CardPrinting.escape_exile_card_types``) --
+    understood by ``escape_payable`` / ``pay_escape_exile``."""
     pr = card.printing
     if pr.escape_cost is not None:
+        if pr.escape_exile_card_types:
+            # "... with N or more card types among them": a nonzero
+            # marker so the cast pipeline pays the exile part.
+            return pr.escape_cost, -pr.escape_exile_card_types
         return pr.escape_cost, pr.escape_exile_count
     if pr.is_land or not pr.mana_cost_str:
         return None
@@ -416,6 +423,13 @@ def escape_payable(state: "GameState", player_id: int, card: "GameObject") -> bo
     if terms is None:
         return False
     p = state.player_by_id(player_id)
+    if terms[1] < 0:
+        # Nethergoyf: other cards with -terms[1] or more card types.
+        from mtg_bot.effects.card_types import count_card_types
+
+        return count_card_types(
+            c for c in p.graveyard if c.id != card.id
+        ) >= -terms[1]
     others = sum(1 for c in p.graveyard if c.id != card.id)
     return others >= terms[1]
 
@@ -427,7 +441,9 @@ def pay_escape_exile(
     """Exile ``count`` (default ``escape_exile_count``) other graveyard
     cards (cards without flashback / escape first, oldest first — which
     cards is not offered as a choice, like delve;
-    ``docs/SEARCH_LIMITATIONS.md``)."""
+    ``docs/SEARCH_LIMITATIONS.md``). A negative ``count`` is the
+    card-type form: exile the fewest other cards with ``-count`` or
+    more card types among them."""
     from mtg_bot.game import Zone
 
     if count is None:
@@ -437,6 +453,23 @@ def pay_escape_exile(
     pool.sort(key=lambda c: (
         c.printing.flashback_cost is not None or c.printing.escape_cost is not None
     ))
+    if count < 0:
+        # "Exile any number of other cards from your graveyard with N or
+        # more card types among them" (Nethergoyf): the fewest cards,
+        # greedily, that bring in a new card type each.
+        from mtg_bot.effects.card_types import card_types_of
+
+        need, seen, picked = -count, set(), []
+        while len(seen) < need:
+            best = max(
+                (c for c in pool if c not in picked),
+                key=lambda c: len(card_types_of(c) - seen), default=None,
+            )
+            if best is None or not (card_types_of(best) - seen):
+                break
+            picked.append(best)
+            seen |= card_types_of(best)
+        pool, count = picked, len(picked)
     for c in pool[:count]:
         p.graveyard.remove(c)
         c.zone = Zone.EXILE

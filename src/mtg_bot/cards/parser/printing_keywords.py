@@ -601,7 +601,14 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
         return rmc
     from mtg_bot.cards.parser.creature_wg_lines import parse_wg_dynamic_pt_line
 
-    return parse_wg_dynamic_pt_line(line.strip())
+    wg = parse_wg_dynamic_pt_line(line.strip())
+    if wg is not None:
+        return wg
+    # Vintage Roto P5 (Nethergoyf: "card types among cards in your
+    # graveyard").
+    from mtg_bot.cards.parser.roto_board import parse_roto_dynamic_pt_line
+
+    return parse_roto_dynamic_pt_line(line.strip())
 
 
 def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
