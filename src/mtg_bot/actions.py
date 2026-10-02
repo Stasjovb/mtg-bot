@@ -247,6 +247,12 @@ def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
         o for o in state.battlefield
         if o.controller_id == player_id and o.printing.is_land and not o.tapped
     ]
+    # "Activated abilities of artifacts can't be activated." (Null Rod,
+    # Clarion Conqueror) locks an artifact land's mana ability too.
+    if any(o.printing.locks_activated_abilities_of for o in state.battlefield):
+        from mtg_bot.creature_statics_wg import activation_locked
+
+        lands = [o for o in lands if not activation_locked(state, o)]
     # Hot path (search rollouts): legacy printings skip both refinements.
     if not any(
         o.printing.mana_only_from_produces or o.printing.produces_life_cost
@@ -2605,14 +2611,17 @@ def _cast_spell(
         cost = offer_creature_additional_costs(state, player_id, card, cost)
     # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
     # one mana of its color before the rest of the payment.
+    phyrexian_life_units = 0
     if cost.phyrexian:
         _spell_kinds_for_phyrexian: set[str] = {"spell"}
         if cast_from_outside_hand:
             _spell_kinds_for_phyrexian.add("cast_from_outside_hand")
+        _total_before_settle = cost.total
         cost = _settle_phyrexian_pips(
             state, player_id, card.printing.name, cost,
             frozenset(_spell_kinds_for_phyrexian),
         )
+        phyrexian_life_units = _total_before_settle - cost.total
     # Buyback (CR 702.27): the optional additional cost joins the total
     # cost before X is resolved.
     if use_buyback and card.printing.buyback_cost is not None:
@@ -2694,6 +2703,15 @@ def _cast_spell(
             from mtg_bot.alt_casting import cost_plus as _cost_plus
 
             cost = _cost_plus(cost, ManaCost(generic=free_tax))
+    # Trinisphere (roto P1): a floor on the final total cost, applied
+    # after every other cost change; Phyrexian pips paid with life are
+    # part of that total.
+    from mtg_bot.roto_restrictions import apply_minimum_spell_cost
+
+    cost = apply_minimum_spell_cost(
+        state, cost, already_paid=0 if cast_for_free else phyrexian_life_units,
+        log=True,
+    )
     # Evoke's "Exile a <filter> card from your hand" cost (CR 702.74).
     if use_evoke:
         from mtg_bot.evoke import pay_evoke_exile as _pay_evoke_exile

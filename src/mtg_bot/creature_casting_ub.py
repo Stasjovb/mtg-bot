@@ -460,7 +460,13 @@ def can_cast_now(
     ):
         return False
     if free:
-        return True
+        # A Trinisphere floor (roto P1) still costs mana.
+        from mtg_bot.cards.base import ManaCost
+        from mtg_bot.roto_restrictions import minimum_spell_cost
+
+        return not minimum_spell_cost(state) or _can_cast(
+            state, player_id, card, ManaCost(),
+        )
     with casting_origin(
         card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
     ):

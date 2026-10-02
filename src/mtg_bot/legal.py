@@ -217,6 +217,7 @@ def unblocked_attackers(state: GameState, player_id: int) -> list:
 
 def _can_cast(
     state: GameState, player_id: int, card: GameObject, cost: ManaCost,
+    *, spell_cost: bool = True,
 ) -> bool:
     """Check whether ``player_id`` can pay ``cost`` to cast ``card``.
 
@@ -224,8 +225,14 @@ def _can_cast(
     zone), convoke eligibility, and sac-for-mana eligibility so call sites
     don't have to reconstruct those three arguments on every check.
     ``sac_for_mana`` is always ``True`` — every spell-cast site permits
-    Treasure-style sacrifice during cost payment.
+    Treasure-style sacrifice during cost payment. ``spell_cost`` (default)
+    marks ``cost`` as a spell's total cost, so a Trinisphere floor
+    (``roto_restrictions``) applies; the plot special action passes False.
     """
+    if spell_cost:
+        from mtg_bot.roto_restrictions import apply_minimum_spell_cost
+
+        cost = apply_minimum_spell_cost(state, cost)
     return can_pay_cost(
         state, player_id, cost,
         spell_kind=_spell_kinds_for_card(card),
@@ -544,7 +551,11 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         from mtg_bot.creature_statics_wg import spell_cost_increase
 
         tax = spell_cost_increase(state, card.printing, player_id)
-        return tax == 0 or _can_cast(state, player_id, card, ManaCost(generic=tax))
+        from mtg_bot.roto_restrictions import minimum_spell_cost
+
+        return (tax == 0 and not minimum_spell_cost(state)) or _can_cast(
+            state, player_id, card, ManaCost(generic=tax),
+        )
 
     def _own_free_cast(card) -> bool:
         cond = card.printing.free_cast_condition
@@ -926,7 +937,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         pc = card.printing.plot_cost
         if pc is None or card.printing.name in seen_plot:
             continue
-        if _can_cast(state, player_id, card, pc):
+        if _can_cast(state, player_id, card, pc, spell_cost=False):
             seen_plot.add(card.printing.name)
             actions.append(CastSpell(card.id, use_plot=True))
     for card in p.exile:
@@ -1750,7 +1761,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
 
     actions = filter_cast_restrictions(state, player_id, actions)
     actions = filter_unusable_abilities(state, actions)
-    return filter_activation_locks(state, actions)
+    actions = filter_activation_locks(state, actions)
+    # Roto P1 prohibitions (named locks, "can't cast ... this turn").
+    from mtg_bot.roto_restrictions import filter_actions as _roto_filter
+
+    return _roto_filter(state, player_id, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

@@ -97,7 +97,10 @@ def spell_cost_increase(
             and caster_id != o.controller_id
         ):
             total += o.printing.named_spell_cost_increase
-    return total
+    # Roto P1 taxes (Defense Grid, Disruptor Flute, ...).
+    from mtg_bot.roto_restrictions import roto_spell_tax
+
+    return total + roto_spell_tax(state, printing, caster_id)
 
 
 def ability_cost_increase(state: "GameState", source, ability) -> int:

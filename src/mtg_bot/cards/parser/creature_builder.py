@@ -912,7 +912,20 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 
                 wg = parse_face_creature_line(line, card)
             if wg is None:
-                return None
+                # Roto P1 (stack & restrictions) lines.
+                from mtg_bot.cards.parser.roto_stack import (
+                    merge_fields, parse_roto_stack_line,
+                )
+
+                wg = parse_roto_stack_line(line, card)
+                if wg is None:
+                    return None
+                merge_fields(wg_fields, wg.fields)
+                keywords.update(wg.keywords)
+                triggers.extend(wg.triggers)
+                activated.extend(wg.activated)
+                statics.extend(wg.statics)
+                continue
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)
             triggers.extend(wg.triggers)
