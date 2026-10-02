@@ -3157,6 +3157,11 @@ class Player:
     # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
     # first, second, or third turn of the game".
     turns_started: int = 0
+    # Conspiracy cards (CR 313) this player started the game with, face
+    # up in the command zone (``mtg_bot.conspiracies``). They never
+    # leave it (CR 313.2) and never change, so the immutable tuple is
+    # safely shared by every clone.
+    conspiracies: tuple = ()
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

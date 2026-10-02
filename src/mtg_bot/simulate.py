@@ -23,9 +23,13 @@ from mtg_bot.combat import (
     eligible_blockers,
     resolve_combat_damage,
 )
+from mtg_bot.conspiracies import begin_game_with_conspiracies
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
-from mtg_bot.opening_hand import apply_opening_hand_actions
+from mtg_bot.opening_hand import (
+    apply_mulligan_window_actions,
+    apply_opening_hand_actions,
+)
 from mtg_bot.turn import (
     STEP_ORDER,
     STEPS_WITH_PRIORITY,
@@ -84,6 +88,7 @@ def setup_game(
     enable_mulligans: bool = True,
     max_mulligans: int = 7,
     starting_player_idx: int = 0,
+    minimum_deck_size: Optional[int] = None,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -136,6 +141,19 @@ def setup_game(
     Callers that alternate the starting seat must pass it here rather
     than patch ``active_player_idx`` afterwards, or those actions would
     be offered to the wrong player.
+
+    Conspiracies
+    ------------
+    A conspiracy card in a decklist starts the game face up in the
+    command zone instead of in the library (CR 313.2,
+    ``mtg_bot.conspiracies``). Its rules apply before anything else:
+    "You are the starting player" (Power Play) overrides
+    ``starting_player_idx``, and "Your minimum deck size is reduced by
+    five" (Advantageous Proclamation) moves the player's minimum when
+    ``minimum_deck_size`` (the format's minimum, e.g.
+    ``conspiracies.LIMITED_MINIMUM_DECK_SIZE``) is given -- a deck below
+    its adjusted minimum raises ``ValueError``. ``None`` (the default)
+    checks no deck size.
     """
     if len(decks) != len(agents):
         raise ValueError(
@@ -160,6 +178,10 @@ def setup_game(
         p = _build_player_from_names(state, i, list(deck), agent)
         state.players.append(p)
 
+    starting_player_idx = begin_game_with_conspiracies(
+        state, starting_player_idx, rng, minimum_deck_size,
+    )
+
     for p in state.players:
         rng.shuffle(p.library)
         for _ in range(7):
@@ -180,6 +202,9 @@ def setup_game(
                     # before bottoming so we don't run the agent for
                     # a no-op decision when there's nothing to choose.
                     break
+                # "Any time you could mulligan" (Serum Powder).
+                apply_mulligan_window_actions(state, p)
+                hand = list(p.hand)
                 if not agent.choose_mulligan(
                     state, p.id, hand, mulls_taken,
                 ):

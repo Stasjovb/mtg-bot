@@ -32,6 +32,7 @@ from mtg_bot.cards.parser.planeswalker_builder import (
 )
 from mtg_bot.cards.parser.spell_builder import _build_spell_printing
 from mtg_bot.cards.parser.layout_builder import _build_layout_printing
+from mtg_bot.cards.parser.conspiracy_builder import _build_conspiracy_printing
 
 
 def _load_scryfall_data(pool: str | None = None) -> list[dict]:
@@ -156,6 +157,7 @@ def _build_printing_unpinned(card: dict) -> CardPrinting | None:
         _build_equipment_printing,
         _build_spacecraft_printing,
         _build_artifact_printing,
+        _build_conspiracy_printing,
     ):
         built = builder(card)
         if built is not None:
@@ -167,8 +169,10 @@ def build_card_record(card: dict) -> CardPrinting | None:
     """The printing the source holds for one raw Scryfall record, or
     ``None`` when the parser doesn't claim it (the source's single
     claim path; coverage diagnostics probe through it too)."""
+    from mtg_bot.cards.parser.roto_keywords import build_with_p6_lines
+
     body, hand_abilities = _split_hand_abilities(card)
-    built = _build_printing(body)
+    built = build_with_p6_lines(body, _build_printing)
     if built is None:
         return None
     return _with_hand_abilities(built, hand_abilities)

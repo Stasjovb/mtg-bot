@@ -1562,6 +1562,13 @@ class CardPrinting:
     # N or more." Optional; recorded on the spell object as
     # ``GameObject.optional_additional_cost_paid``.
     teamwork_power: int = 0
+    # --- Conspiracies (CR 313; roto P6) ----------------------------
+    # The static abilities of a conspiracy card (``card_types ==
+    # ("Conspiracy",)``), which function from the command zone, where
+    # the card starts the game face up (CR 313.2): tuple of
+    # ``mtg_bot.conspiracies`` rules (``YouAreTheStartingPlayer``,
+    # ``MinimumDeckSizeChange``) applied by ``simulate.setup_game``.
+    conspiracy_rules: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
@@ -1637,6 +1644,12 @@ class CardPrinting:
     def is_room(self) -> bool:
         """A Duskmourn Room (Enchantment — Room) — has two halves."""
         return bool(self.room_halves)
+
+    @property
+    def is_conspiracy(self) -> bool:
+        """A conspiracy card (CR 313): never a permanent, never cast;
+        it starts the game in the command zone."""
+        return "Conspiracy" in self.card_types
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}

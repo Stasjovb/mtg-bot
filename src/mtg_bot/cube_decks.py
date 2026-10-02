@@ -64,16 +64,24 @@ def colored_pips(mana_cost: str) -> Counter:
     return pips
 
 
+def is_conspiracy(card: dict) -> bool:
+    """A conspiracy (CR 313) is never part of a deck: it starts the game
+    in the command zone (``mtg_bot.conspiracies``)."""
+    return card.get("type_line", "").split(" // ")[0].strip() == "Conspiracy"
+
+
 def eligible_spells(
     cards: Iterable[dict], colors: str, claimed: Iterable[str],
 ) -> list[dict]:
-    """Claimed, nonland cube cards whose color identity fits ``colors``."""
+    """Claimed, nonland, non-conspiracy cube cards whose color identity
+    fits ``colors``."""
     claimed_set = set(claimed)
     allowed = frozenset(colors)
     return [
         c for c in cards
         if c["name"] in claimed_set
         and not is_land(c)
+        and not is_conspiracy(c)
         and color_identity(c) <= allowed
     ]
 
