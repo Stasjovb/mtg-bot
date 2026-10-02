@@ -128,6 +128,36 @@ _REMOVE_COUNTERS_FROM_SELF_RE = re.compile(
     r"^remove (?P<n>an?|[a-z]+) (?P<kind>[a-z]+) counters? from this "
     r"(?:land|artifact|creature|enchantment|permanent)$"
 )
+# "destroy each <np>. Add {A} or {B} for each permanent destroyed this
+# way" (Culling Ritual).
+_DESTROY_THEN_MANA_PER_DESTROYED_RE = re.compile(
+    r"^(?P<destroy>destroy (?:each|all) .+?)\. Add \{(?P<a>[WUBRG])\} or "
+    r"\{(?P<b>[WUBRG])\} for each permanent destroyed this way$"
+)
+# "<effect with X>, where X is <amount>" -- the X-scaled mana productions
+# of Burnt Offering / Vivi Ornitier.
+_WHERE_X_IS_RE = re.compile(r"^(?P<base>.+), where X is (?P<x>.+)$")
+# "the sacrificed creature's mana value" / "<self>'s power".
+_SACRIFICED_MV_PHRASE = re.compile(
+    r"^the sacrificed (?:creature|artifact|permanent)'s mana value$"
+)
+_SOURCE_POWER_PHRASE = re.compile(r"^(?P<self>.+)'s power$")
+
+
+def _parse_x_formula(phrase: str):
+    from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    if _SACRIFICED_MV_PHRASE.match(phrase):
+        return MVOfCostPaidObjectPlus(constant=0)
+    m = _SOURCE_POWER_PHRASE.match(phrase)
+    if m is not None and (
+        m.group("self").startswith("this ") or m.group("self")[:1].isupper()
+    ):
+        return rm.SourcePower()
+    return None
+
+
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -194,6 +224,34 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _DESTROY_THEN_MANA_PER_DESTROYED_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
+
+        base = _parse_effect(m.group("destroy"))
+        if not isinstance(base, RemoveAllMatching) or base.action != "destroy":
+            return None
+        return rm.DestroyEachThenAddManaPerDestroyed(
+            destroy=base, options=(m.group("a"), m.group("b")),
+        )
+    m = _WHERE_X_IS_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.artifact_mechanics import (
+            AddManaInAnyCombination,
+        )
+
+        base = _parse_effect(m.group("base"))
+        formula = _parse_x_formula(m.group("x"))
+        if (
+            isinstance(base, AddManaInAnyCombination) and base.amount_is_x
+            and formula is not None
+        ):
+            return rm.AddFormulaManaInAnyCombination(
+                amount=formula, options=tuple(base.options),
+            )
+        return None
     m = _REMOVE_COUNTERS_FROM_SELF_RE.match(phrase)
     if m is not None:
         n = 1 if m.group("n") in ("a", "an") else _COUNT_WORDS.get(m.group("n"))

@@ -229,3 +229,89 @@ def test_jeskas_will_mana_mode_fizzles_without_an_opponent_target():
     eff.resolve(s, 0, (("creature", 1),))
     assert s.players[0].mana_pool == []
     assert "target opponent" in eff.describe()
+
+
+# ---------------------------------------------------------------------------
+# Burnt Offering
+# ---------------------------------------------------------------------------
+
+
+def test_burnt_offering_adds_the_sacrificed_creatures_mana_value():
+    s = arena()
+    put(s, SWAMP, 0)
+    ogre = put(s, make_creature("Ogre", "{3}{R}", 4, 4), 0)
+    offering = to_hand(s, printing("Burnt Offering"), 0)
+    s.players[0].agent.colors = ["B", "R", "R", "B"]
+    apply_action(s, 0, CastSpell(offering.id))
+    assert ogre in s.players[0].graveyard
+    resolve_top_of_stack(s)
+    assert _pool(s) == ["B", "B", "R", "R"]
+
+
+def test_x_formula_grammar_paths():
+    from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+
+    eff = parse_roto_mana_effect(
+        "add X mana in any combination of {U} and/or {R}, where X is this "
+        "creature's power"
+    )
+    assert isinstance(eff.amount, rm.SourcePower)
+    assert "any combination" in eff.describe()
+    eff = parse_roto_mana_effect(
+        "add X mana in any combination of {B} and/or {R}, where X is the "
+        "sacrificed creature's mana value"
+    )
+    assert eff.amount == MVOfCostPaidObjectPlus(constant=0)
+    assert parse_roto_mana_effect(
+        "add X mana in any combination of {B} and/or {R}, where X is the "
+        "number of frobs"
+    ) is None
+    assert parse_roto_mana_effect(
+        "draw X cards, where X is the sacrificed creature's mana value"
+    ) is None
+
+
+def test_source_power_formula_reads_the_resolving_source():
+    s = arena()
+    s.resolving_source = put(s, make_creature("Bear", "{1}{G}", 2, 2), 0)
+    assert rm.SourcePower().value(s, 0) == 2
+    s.resolving_source = None
+    assert rm.SourcePower().value(s, 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# Culling Ritual
+# ---------------------------------------------------------------------------
+
+
+def test_culling_ritual_adds_mana_per_permanent_actually_destroyed():
+    from dataclasses import replace
+
+    s = arena()
+    for _ in range(2):
+        put(s, SWAMP, 0)
+    for _ in range(2):
+        put(s, make_basic_land("Forest", "G"), 0)
+    elf = put(s, make_creature("Elf", "{G}", 1, 1), 0)
+    rock = put(s, make_artifact("Rock", "{2}"), 1)
+    ogre = put(s, make_creature("Ogre", "{2}{R}", 3, 3), 1)
+    wall = put(
+        s, replace(make_creature("Wall", "{1}", 0, 4),
+                   keywords=frozenset({"indestructible"})), 1,
+    )
+    ritual = to_hand(s, printing("Culling Ritual"), 0)
+    s.players[0].agent.colors = ["G", "B"]
+    apply_action(s, 0, CastSpell(ritual.id))
+    resolve_top_of_stack(s)
+    assert elf not in s.battlefield and rock not in s.battlefield
+    assert ogre in s.battlefield and wall in s.battlefield
+    assert _pool(s) == ["B", "G"]
+    eff = printing("Culling Ritual").spell_effect
+    assert "destroyed this way" in eff.describe()
+
+
+def test_culling_ritual_grammar_needs_a_destroy_sweep():
+    assert parse_roto_mana_effect(
+        "exile each creature. Add {B} or {G} for each permanent destroyed "
+        "this way"
+    ) is None

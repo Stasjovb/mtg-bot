@@ -2921,6 +2921,7 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
+    spell_cost_paid_objects: list = []
     # Additional cost: sacrifice a permanent matching the printing's
     # ``additional_cost_sacrifice_filter`` (Tinker / Natural Order /
     # Crop Rotation).
@@ -2929,7 +2930,11 @@ def _cast_spell(
             pay_additional_sacrifice as _pay_additional_sacrifice,
         )
 
-        _pay_additional_sacrifice(state, player_id, card)
+        sacrificed = _pay_additional_sacrifice(state, player_id, card)
+        if sacrificed is not None:
+            # "the sacrificed creature's mana value" (Burnt Offering)
+            # reads it from ``state.resolving_cost_paid_objects``.
+            spell_cost_paid_objects.append(sacrificed)
     if use_escape and escape_exile_n:
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 
@@ -3034,6 +3039,7 @@ def _cast_spell(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
             alt_cost_paid=printed_alt_cost_paid,
+            cost_paid_objects=tuple(spell_cost_paid_objects),
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
             cast_room_half=cast_room_half,
@@ -5045,6 +5051,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
     state.resolving_alt_cost_paid = item.alt_cost_paid
     state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
     state.resolving_modes = item.chosen_modes
+    state.resolving_cost_paid_objects = item.cost_paid_objects
     state.resolving_spell = card
     try:
         if card.printing.is_permanent and not (
@@ -5227,6 +5234,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
         state.resolving_alt_cost_paid = False
         state.resolving_additional_cost_choice_id = None
         state.resolving_modes = ()
+        state.resolving_cost_paid_objects = ()
 
 
 def apply_aura_static_grants_on_attach(

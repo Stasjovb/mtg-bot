@@ -41,6 +41,103 @@ class CardsNamedInAllGraveyards(Formula):
         )
 
 
+@dataclass(frozen=True)
+class SourcePower(Formula):
+    """The resolving source's power ("where X is Vivi Ornitier's
+    power")."""
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        return max(0, _source_power(state))
+
+
+@dataclass(frozen=True)
+class AddFormulaManaInAnyCombination(Effect):
+    """"Add X mana in any combination of <colors>, where X is <formula>."
+    (Burnt Offering: the sacrificed creature's mana value). Each coin's
+    color is asked of ``Agent.choose_mana_color``."""
+
+    amount: Formula = None
+    options: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        n = self.amount.value(state, controller_id)
+        p = state.player_by_id(controller_id)
+        minted = []
+        for _ in range(max(0, n)):
+            chosen = self.options[0]
+            if p.agent is not None:
+                picked = p.agent.choose_mana_color(
+                    state, controller_id, list(self.options),
+                )
+                if picked in self.options:
+                    chosen = picked
+            p.mana_pool.append(ManaCoin(color=chosen))
+            minted.append(chosen)
+        state.log.append(
+            f"P{controller_id} adds {'+'.join(minted) or 'no mana'}"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"add X mana in any combination of {'/'.join(self.options)} "
+            f"({self.amount!r})"
+        )
+
+
+@dataclass(frozen=True)
+class DestroyEachThenAddManaPerDestroyed(Effect):
+    """"Destroy each <np>. Add {B} or {G} for each permanent destroyed
+    this way." (Culling Ritual): ``destroy`` runs, then one coin per
+    victim that actually left the battlefield (an indestructible or
+    regenerated one wasn't destroyed), each of a color from ``options``
+    chosen with ``Agent.choose_mana_color``."""
+
+    destroy: Effect = None
+    options: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            victims = [
+                o for o in state.battlefield
+                if self.destroy.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        self.destroy.resolve(state, controller_id, targets)
+        n = sum(1 for o in victims if o not in state.battlefield)
+        p = state.player_by_id(controller_id)
+        for _ in range(n):
+            chosen = self.options[0]
+            if p.agent is not None:
+                picked = p.agent.choose_mana_color(
+                    state, controller_id, list(self.options),
+                )
+                if picked in self.options:
+                    chosen = picked
+            p.mana_pool.append(ManaCoin(color=chosen))
+        state.log.append(
+            f"P{controller_id} adds {n} mana ({'/'.join(self.options)})"
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{self.destroy.describe()}; add {'/'.join(self.options)} for "
+            "each permanent destroyed this way"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -915,6 +1012,9 @@ def after_mana_ability(
 
 __all__ = [
     "after_mana_ability",
+    "DestroyEachThenAddManaPerDestroyed",
+    "AddFormulaManaInAnyCombination",
+    "SourcePower",
     "AddAnyColorManaForChosenCreatureType",
     "HasNoCountersOfKind",
     "RemoveCountersFromSource",
