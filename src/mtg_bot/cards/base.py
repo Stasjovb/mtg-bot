@@ -1562,6 +1562,12 @@ class CardPrinting:
     # N or more." Optional; recorded on the spell object as
     # ``GameObject.optional_additional_cost_paid``.
     teamwork_power: int = 0
+    # Vintage Roto P5 (board-state prison & layers): static abilities
+    # that change the board's rules -- attack / block restrictions,
+    # untap-step limits, ... -- as rule objects read through
+    # ``mtg_bot.roto_board_statics`` (which honors "loses all
+    # abilities" and Blood Moon's ability loss for the source).
+    board_rules: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

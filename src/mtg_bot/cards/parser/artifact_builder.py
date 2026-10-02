@@ -418,7 +418,10 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         if clause is None:
             # Vintage Roto P5 lines (printing-level statics, ...) --
             # consulted only for lines the grammar above declined.
-            from mtg_bot.cards.parser.roto_board import parse_roto_board_line
+            from mtg_bot.cards.parser.roto_board import (
+                merge_board_fields,
+                parse_roto_board_line,
+            )
 
             board = parse_roto_board_line(line, card)
             if board is not None:
@@ -426,7 +429,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
                 triggers.extend(board.triggers)
                 activated.extend(board.activated)
                 statics.extend(board.statics)
-                roto_fields.update(board.fields)
+                merge_board_fields(roto_fields, board.fields)
                 continue
             # Anything the unified parser doesn't recognize - composite
             # triggers, zone-change triggers, custom effects - falls

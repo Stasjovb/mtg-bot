@@ -67,6 +67,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Fastbond",
     "Goblin Bombardment",
     "Leyline Binding",
+    "Moat",
     "Necromancy",
     "Oath of Druids",
     "Parallax Wave",
@@ -269,6 +270,11 @@ def build_cube_enchantment(card: dict) -> CardPrinting | None:
             continue
         clause = _parse_clause(line, name=name)
         if clause is None:
+            # Vintage Roto P5 lines (board rules, ...).
+            from mtg_bot.cards.parser.roto_board import absorb_enchantment_line
+
+            if absorb_enchantment_line(line, card, acc):
+                continue
             return None
         if clause.keywords:
             acc.keywords.update(clause.keywords)

@@ -242,10 +242,15 @@ def test_script_diagnose_card_gate_kind(script, monkeypatch):
 def test_script_diagnose_card_real_probe(script):
     from mtg_bot.cards.pools import load_pool_cards
 
-    moat = next(c for c in load_pool_cards("roto") if c["name"] == "Moat")
-    d = script.diagnose_card(moat)
+    wall = next(
+        c for c in load_pool_cards("roto") if c["name"] == "Tinder Wall"
+    )
+    d = script.diagnose_card(wall)
     assert d.kind == "lines" and d.confirmed
-    assert d.failing_text == ["Creatures without flying can't attack."]
+    assert d.failing_text == [
+        "{R}, Sacrifice this creature: It deals 2 damage to target "
+        "creature it's blocking."
+    ]
 
 
 def test_script_roto_headline(script, tmp_path, capsys):

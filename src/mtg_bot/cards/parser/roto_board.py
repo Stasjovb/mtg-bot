@@ -45,6 +45,20 @@ class BoardLine:
     statics: tuple = ()
 
 
+# Printing fields several lines of one card may each contribute to
+# (concatenated rather than overwritten).
+_ACCUMULATED_FIELDS = frozenset({"board_rules"})
+
+
+def merge_board_fields(into: dict, fields: dict) -> None:
+    """Fold one line's printing fields into the builder's accumulator."""
+    for name, value in fields.items():
+        if name in _ACCUMULATED_FIELDS:
+            into[name] = tuple(into.get(name, ())) + tuple(value)
+        else:
+            into[name] = value
+
+
 _NUMBER_WORDS = {
     "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -254,8 +268,55 @@ def _activated_with_and_joined_sacrifice(line: str) -> BoardLine | None:
     return BoardLine(activated=(ability,))
 
 
+# "Creatures [<condition>] can't attack." / "This creature can't block."
+# (Moat, Ensnaring Bridge, Carrion Feeder).
+_CANT_ATTACK_OR_BLOCK = re.compile(
+    r"^(?P<who>Creatures|[Tt]his creature)(?: (?P<cond>.+?))? "
+    r"can't (?P<verb>attack|block)\.$"
+)
+_WITHOUT_KEYWORD = re.compile(r"^without (?P<kw>[a-z]+(?: [a-z]+)?)$")
+_POWER_GREATER_THAN_HAND = (
+    "with power greater than the number of cards in your hand"
+)
+
+
+def _combat_condition(text: str | None):
+    from mtg_bot import roto_board_statics as rs
+
+    if text is None:
+        return None
+    m = _WITHOUT_KEYWORD.match(text)
+    if m is not None:
+        from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+        kws = _parse_keyword_line(m.group("kw").capitalize())
+        if not kws or len(kws) != 1:
+            return False
+        return rs.WithoutKeyword(kws[0])
+    if text == _POWER_GREATER_THAN_HAND:
+        return rs.PowerGreaterThanControllersHandSize()
+    return False
+
+
+def _cant_attack_or_block(line: str) -> BoardLine | None:
+    from mtg_bot import roto_board_statics as rs
+
+    m = _CANT_ATTACK_OR_BLOCK.match(line)
+    if m is None:
+        return None
+    self_only = m.group("who") != "Creatures"
+    cond = _combat_condition(m.group("cond"))
+    if cond is False or (self_only and cond is not None):
+        return None
+    rule_cls = rs.CantAttack if m.group("verb") == "attack" else rs.CantBlock
+    return BoardLine(fields={
+        "board_rules": (rule_cls(condition=cond, self_only=self_only),),
+    })
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _cant_attack_or_block,
 )
 
 
@@ -272,6 +333,36 @@ def parse_roto_board_line(line: str, card: dict) -> BoardLine | None:
         if parsed is not None:
             return parsed
     return None
+
+
+def parse_roto_board_line_into(
+    line: str, card: dict, fields: dict,
+) -> BoardLine | None:
+    """:func:`parse_roto_board_line`, folding the line's printing fields
+    into the builder's ``fields`` accumulator (so several lines may each
+    add board rules); the returned line carries no fields of its own."""
+    board = parse_roto_board_line(line, card)
+    if board is None:
+        return None
+    merge_board_fields(fields, board.fields)
+    return BoardLine(
+        keywords=board.keywords, triggers=board.triggers,
+        activated=board.activated, statics=board.statics,
+    )
+
+
+def absorb_enchantment_line(line: str, card: dict, acc) -> bool:
+    """The cube enchantment builder's fallback for a line its grammar
+    declined: fold a recognized P5 line into its ``_Accumulator``."""
+    board = parse_roto_board_line(line, card)
+    if board is None:
+        return False
+    acc.keywords.update(board.keywords)
+    acc.triggers.extend(board.triggers)
+    acc.activated.extend(board.activated)
+    acc.statics.extend(board.statics)
+    merge_board_fields(acc.printing_fields, board.fields)
+    return True
 
 
 __all__ = [

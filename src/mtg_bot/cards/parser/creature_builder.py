@@ -912,6 +912,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 
                 wg = parse_face_creature_line(line, card)
             if wg is None:
+                # Vintage Roto P5 lines (board rules, ...).
+                from mtg_bot.cards.parser.roto_board import (
+                    parse_roto_board_line_into,
+                )
+
+                wg = parse_roto_board_line_into(line, card, wg_fields)
+            if wg is None:
                 return None
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)

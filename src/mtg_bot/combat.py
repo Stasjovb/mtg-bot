@@ -13,14 +13,17 @@ from mtg_bot.game import (
 
 
 def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    from mtg_bot.roto_board_statics import filter_attackers
+
+    # "... can't attack." board rules (Moat, Ensnaring Bridge).
+    return filter_attackers(state, [
         o for o in state.battlefield
         if o.controller_id == player_id
         and is_creature_now(o)
         and not o.tapped
         and (not o.summoning_sick or "haste" in effective_keywords(state, o))
         and "defender" not in effective_keywords(state, o)
-    ]
+    ])
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
@@ -38,7 +41,10 @@ def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
         )
 
         blockers = [o for o in blockers if not creature_cant_block(state, o)]
-    return blockers
+    # "This creature can't block." board rules (Carrion Feeder).
+    from mtg_bot.roto_board_statics import filter_blockers
+
+    return filter_blockers(state, blockers)
 
 
 def can_block(
