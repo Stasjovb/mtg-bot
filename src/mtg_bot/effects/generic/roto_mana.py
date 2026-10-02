@@ -245,6 +245,64 @@ class LookAtTopMayPutOntoBattlefieldRestBottom(Effect):
         )
 
 
+@dataclass(frozen=True)
+class SacrificeSourceUnlessSacrificeTotalPower(Effect):
+    """"Sacrifice it unless you sacrifice any number of creatures with
+    total power N or greater." (Phyrexian Dreadnought). When the
+    creatures its controller controls (the source included) reach N
+    power, ``choose_yes_no`` decides whether to pay; the creatures are
+    then picked one at a time (``choose_sacrifice``) until their total
+    power reaches N. Otherwise the source is sacrificed."""
+
+    total_power: int = 0
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power, is_creature_now
+        from mtg_bot.turn import sacrifice
+
+        src = state.resolving_source
+        pool = [
+            o for o in state.battlefield
+            if o.controller_id == controller_id and is_creature_now(o)
+        ]
+        agent = state.player_by_id(controller_id).agent
+        can_pay = (
+            sum(max(0, effective_power(state, o)) for o in pool)
+            >= self.total_power
+        )
+        if can_pay and (agent is None or agent.choose_yes_no(
+            state, controller_id,
+            f"Sacrifice creatures with total power {self.total_power}?",
+        )):
+            paid = 0
+            chosen: list = []
+            while paid < self.total_power:
+                options = [o for o in pool if o not in chosen]
+                pick = options[0]
+                if agent is not None:
+                    pid = agent.choose_sacrifice(
+                        state, controller_id, [o.id for o in options],
+                    )
+                    pick = next((o for o in options if o.id == pid), pick)
+                chosen.append(pick)
+                paid += max(0, effective_power(state, pick))
+            for o in chosen:
+                if o in state.battlefield:
+                    sacrifice(state, o)
+            return
+        if src is not None and src in state.battlefield:
+            sacrifice(state, src)
+
+    def describe(self) -> str:
+        return (
+            "sacrifice it unless you sacrifice creatures with total power "
+            f"{self.total_power} or greater"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -1217,6 +1275,7 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "SacrificeSourceUnlessSacrificeTotalPower",
     "LookAtTopMayPutOntoBattlefieldRestBottom",
     "GrantExtraManaOnLandTapUntilEndOfTurn",
     "push_tapped_for_mana_triggers",

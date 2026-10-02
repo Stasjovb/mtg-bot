@@ -175,6 +175,12 @@ _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE = re.compile(
     r"them onto the battlefield\. Put the rest on the bottom of your "
     r"library in a random order$"
 )
+# "sacrifice it unless you sacrifice any number of creatures with total
+# power N or greater" (Phyrexian Dreadnought).
+_SAC_UNLESS_TOTAL_POWER_RE = re.compile(
+    r"^sacrifice (?:it|this creature) unless you sacrifice any number of "
+    r"creatures with total power (?P<n>\d+) or greater$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -267,6 +273,11 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _SAC_UNLESS_TOTAL_POWER_RE.match(phrase)
+    if m is not None:
+        return rm.SacrificeSourceUnlessSacrificeTotalPower(
+            total_power=int(m.group("n")),
+        )
     m = _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
