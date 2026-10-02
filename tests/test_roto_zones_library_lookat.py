@@ -65,8 +65,10 @@ def test_goblin_guide_gives_the_defender_a_land():
     assert _names(p1.library) == ["Test Bear"] and len(p1.hand) == 1
     state = arena()
     _attack_trigger(state, printing("Goblin Guide"))     # empty library
-    assert "land card" in DefendingPlayerRevealsTopPutsIntoHandIf().describe() \
-        or True
+    assert state.players[1].hand == []
+    eff = printing("Goblin Guide").triggered_abilities[-1].effect
+    assert isinstance(eff, DefendingPlayerRevealsTopPutsIntoHandIf)
+    assert "land card" in eff.describe()
 
 
 def test_ulamog_attack_exiles_twenty():
