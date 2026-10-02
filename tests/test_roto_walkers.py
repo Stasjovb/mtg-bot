@@ -1491,3 +1491,43 @@ def test_exile_top_cast_one_with_a_short_library():
     ).resolve(s, 0, ())
     (card,) = s.players[0].exile
     assert card.exile_play_permission.group_ids == (card.id,)
+
+
+# ---------------------------------------------------------------------------
+# Professor Dellian Fel
+# ---------------------------------------------------------------------------
+
+
+def test_dellian_fel_emblem_drains_on_every_life_gain():
+    from mtg_bot.game import gain_life
+
+    s = arena()
+    fel = _walker(s, "Professor Dellian Fel", loyalty=6)
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, fel.id, _ability_index(fel, loyalty=6))
+    drain_stack(s)
+    assert len(s.emblems) == 1
+    gain_life(s, 0, 4)
+    drain_stack(s)
+    assert s.players[1].life == 16 and s.players[0].life == 24
+    # The opponent gaining life doesn't trigger it.
+    gain_life(s, 1, 2)
+    drain_stack(s)
+    assert s.players[1].life == 18
+
+
+def test_life_gain_event_without_listeners_and_zero_amount():
+    from mtg_bot.effects.generic.roto_walkers import (
+        TargetOpponentLosesThatMuchLife,
+    )
+    from mtg_bot.game import gain_life
+
+    s = arena()
+    gain_life(s, 0, 3)
+    assert s.stack == [] and s.players[0].life == 23
+    eff = TargetOpponentLosesThatMuchLife()
+    assert eff.legal_targets(s, 0) == [("player", 1)]
+    eff.resolve(s, 0, (("player", 1),))
+    assert s.players[1].life == 20 and "no amount" in s.log[-1]
+    eff.resolve(s, 0, ())
+    assert eff.describe() == "target opponent loses that much life"

@@ -1754,3 +1754,44 @@ class ExileTopMayCastOneFromAmongUntilEndOfNextTurn(Effect):
             f"exile the top {self.count} cards; until the end of your next "
             f"turn, you may cast a {self.card_filter.describe()} from among them"
         )
+
+
+# ---------------------------------------------------------------------------
+# "Whenever you gain life, target opponent loses that much life."
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TargetOpponentLosesThatMuchLife(Effect):
+    """"Target opponent loses that much life." -- "that much" is the
+    amount of the triggering event (``state.resolving_counter_amount``;
+    ``Event.GAINS_LIFE`` carries the life gained -- Professor Dellian
+    Fel's emblem, the only printing of the phrase in any pool, always
+    after "Whenever you gain life")."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        n = state.resolving_counter_amount
+        pid = next((t[1] for t in targets if t[0] == "player"), None)
+        if pid is None:
+            return
+        if n <= 0:
+            state.log.append("no amount: the opponent loses no life")
+            return
+        opp = state.player_by_id(pid)
+        opp.life -= n
+        state.log.append(f"P{pid} loses {n} life")
+
+    def describe(self) -> str:
+        return "target opponent loses that much life"

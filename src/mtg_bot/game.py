@@ -1761,6 +1761,15 @@ def gain_life(state: "GameState", player_id: int, amount: int) -> int:
         return 0
     p.life += amount
     p.life_gained_this_turn += amount
+    # Roto P4: "Whenever you gain life" observers (the amount is the
+    # trigger's ``counter_amount`` -- "that much").
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(
+        state, Event.GAINS_LIFE, label="gains-life", counter_amount=amount,
+        player=p,
+    )
     return amount
 
 

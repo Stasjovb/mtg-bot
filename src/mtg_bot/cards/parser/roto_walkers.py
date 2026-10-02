@@ -413,6 +413,8 @@ _LITERAL_PHRASES = {
     "end the turn": "EndTheTurn",
     # CR 104.3d (Final Fortune's delayed trigger).
     "you lose the game": "LoseTheGame",
+    # "that much" is the triggering event's amount (Dellian Fel's emblem).
+    "target opponent loses that much life": "TargetOpponentLosesThatMuchLife",
     # Enter the Infinite (a "no maximum hand size" emblem until your turn).
     "you have no maximum hand size until your next turn": (
         "NoMaximumHandSizeUntilYourNextTurn"
@@ -556,7 +558,9 @@ def parse_roto_trigger_phrase(phrase: str):
 
     * "this creature becomes the target of a spell or ability" -- the
       source as the targeted object (Phantasmal Image's granted
-      trigger), dispatched by ``cube_creatures_rmc.fire_becomes_target``.
+      trigger), dispatched by ``cube_creatures_rmc.fire_becomes_target``;
+    * "you gain life" -- ``Event.GAINS_LIFE`` from ``game.gain_life``
+      (Professor Dellian Fel's emblem).
     """
     if _disabled():
         return None
@@ -564,6 +568,10 @@ def parse_roto_trigger_phrase(phrase: str):
 
     if phrase == "this creature becomes the target of a spell or ability":
         return (Event.BECOMES_TARGET, IsSelf(subject="target"))
+    if phrase == "you gain life":
+        from mtg_bot.effects.predicates import YOU, Controlled
+
+        return (Event.GAINS_LIFE, Controlled(YOU, subject="player"))
     return None
 
 

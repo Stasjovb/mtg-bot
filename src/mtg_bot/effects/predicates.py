@@ -255,6 +255,11 @@ class Event(str, Enum):
     # actually drawn (post-replacement). "Whenever you draw a card" --
     # Teferi, Hero of Dominaria's emblem.
     DRAWS_CARD = "draws_card"
+    # Subject ``(player,)``; the amount rides ``counter_amount``. Fired by
+    # ``game.gain_life`` once per life-gain event (roto P4: Professor
+    # Dellian Fel's "Whenever you gain life, target opponent loses that
+    # much life." emblem).
+    GAINS_LIFE = "gains_life"
     # Subject ``(player,)``; payload starts empty. Fired by
     # ``turn.draw_card`` once per card about to be drawn (CR 121.6 --
     # a replacement can apply to each card individually). Models
@@ -322,6 +327,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.WOULD_GO_TO_GRAVEYARD: ("card",),
     Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
     Event.DRAWS_CARD: ("player",),
+    Event.GAINS_LIFE: ("player",),
     Event.WOULD_DRAW_A_CARD: ("player",),
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
     Event.TRANSFORMS: ("obj",),
