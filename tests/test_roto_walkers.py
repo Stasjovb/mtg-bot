@@ -17,10 +17,14 @@ from mtg_bot.effects.generic.roto_walkers import (
     ExileTopCardsToHandAtYourNextEndStep,
 )
 from mtg_bot.effects.predicates import Event
+from mtg_bot.game import StackItem, Zone
 from mtg_bot.simulate import run_step
 from mtg_bot.turn import Step
+from mtg_bot.cards.base import make_instant
+from mtg_bot.effects.generic import DrawCards
 
 from tests._roto_helpers import (
+    ScriptedAgent,
     agent,
     arena,
     printing,
@@ -155,3 +159,774 @@ def test_roto_grammar_is_off_for_eoe_only_printings():
             "exile the top card of your library face down. Put that card "
             "into your hand at the beginning of your next end step"
         ) is None
+
+
+# ---------------------------------------------------------------------------
+# Planeswalker infrastructure: "-X" loyalty costs, Compleated
+# ---------------------------------------------------------------------------
+
+from mtg_bot.actions import CastSpell, apply_action  # noqa: E402
+from mtg_bot.cards.base import make_artifact, make_creature  # noqa: E402
+from mtg_bot.effects.generic.roto_walkers import (  # noqa: E402
+    AnyGraveyardHasAtLeast,
+    EachPlayerDiscards,
+    MillTargetPlayerTimesX,
+    PutUpToNCardsFromHandOntoBattlefield,
+    SeparatePermanentsIntoPilesSacrificeChosen,
+    apply_compleated,
+    choose_and_pay_loyalty_x,
+)
+from mtg_bot.legal import legal_actions  # noqa: E402
+
+_BEAR = make_creature("Bear", "{1}{G}", 2, 2)
+_RED_BEAR = make_creature("Red Bear", "{R}", 2, 2)
+_ROCK = make_artifact("Rock", "{3}")
+
+
+def _walker(s, name, pid=0, loyalty=None):
+    w = put(s, printing(name), pid)
+    w.loyalty_counters = printing(name).loyalty if loyalty is None else loyalty
+    return w
+
+
+def _ability_index(walker, *, x=False, loyalty=None):
+    for i, ab in enumerate(walker.printing.activated_abilities):
+        if x and ab.cost.loyalty_x:
+            return i
+        if not x and ab.cost.loyalty == loyalty and not ab.cost.loyalty_x:
+            return i
+    raise AssertionError("no such ability")
+
+
+def test_loyalty_x_choice_is_capped_by_loyalty():
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind", loyalty=4)
+    agent(s, 0).x_value = 9
+    assert choose_and_pay_loyalty_x(s, 0, jace) == 4
+    assert jace.loyalty_counters == 0
+    s.players[0].agent = None
+    jace.loyalty_counters = 3
+    assert choose_and_pay_loyalty_x(s, 0, jace) == 0
+    assert jace.loyalty_counters == 3
+
+
+def test_jace_minus_x_mills_three_times_x():
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind", loyalty=5)
+    _library(s, pid=1, n=10)
+    agent(s, 0).x_value = 2
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, jace.id, _ability_index(jace, x=True))
+    assert jace.loyalty_counters == 3
+    drain_stack(s)
+    assert len(s.players[1].graveyard) == 6
+    assert MillTargetPlayerTimesX(per_x=3).describe() == (
+        "target player mills 3 times X cards"
+    )
+    assert MillTargetPlayerTimesX().describe() == "target player mills X cards"
+
+
+def test_minus_x_ability_offered_even_at_zero_loyalty():
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind", loyalty=0)
+    idx = _ability_index(jace, x=True)
+    acts = legal_actions(s, 0)
+    assert any(
+        getattr(a, "source_id", None) == jace.id
+        and getattr(a, "ability_index", None) == idx
+        for a in acts
+    )
+
+
+def test_jace_parse_shape_and_compleated_keyword():
+    p = printing("Jace, the Perfected Mind")
+    assert "compleated" in p.keywords
+    plus, minus2, minus_x = p.activated_abilities
+    assert plus.cost.loyalty == -1 and plus.effect.power == -3
+    assert plus.effect.target_count_range() == (0, 1)
+    assert minus_x.cost.loyalty_x and minus_x.sorcery_speed
+    assert minus_x.effect == MillTargetPlayerTimesX(per_x=3)
+    first, branch = minus2.effect.effects
+    assert branch.condition == AnyGraveyardHasAtLeast(n=20)
+
+
+def test_jace_plus_one_shrinks_until_your_next_turn():
+    from mtg_bot.game import effective_power
+
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind")
+    bear = put(s, _BEAR, 1)
+    agent(s, 0).targets = [("creature", bear.id)]
+    _activate_ability(s, 0, jace.id, _ability_index(jace, loyalty=-1))
+    drain_stack(s)
+    assert jace.loyalty_counters == 6
+    assert effective_power(s, bear) == -1
+    s.expire_continuous_effects("cleanup")
+    assert effective_power(s, bear) == -1  # survives the end of turn
+    s.expire_continuous_effects("controller_untap", player_id=0)
+    assert effective_power(s, bear) == 2
+
+
+def test_jace_minus_two_draws_three_when_a_graveyard_is_big():
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind")
+    _library(s, pid=0, n=5)
+    _library(s, pid=1, n=5)
+    for _ in range(18):
+        s.players[1].graveyard.append(
+            s.new_object(BASIC_LANDS["Swamp"], owner_id=1, zone=Zone.GRAVEYARD)
+        )
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, jace.id, _ability_index(jace, loyalty=2))
+    drain_stack(s)
+    assert len(s.players[1].graveyard) == 21
+    assert len(s.players[0].hand) == 3
+
+
+def test_jace_minus_two_draws_one_otherwise():
+    s = arena()
+    jace = _walker(s, "Jace, the Perfected Mind")
+    _library(s, pid=0, n=5)
+    _library(s, pid=1, n=5)
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, jace.id, _ability_index(jace, loyalty=2))
+    drain_stack(s)
+    assert len(s.players[0].hand) == 1
+    assert not AnyGraveyardHasAtLeast(n=20).matches(s, 0)
+
+
+def _cast_jace(yes: bool, islands: int):
+    s = arena()
+    for _ in range(islands):
+        put(s, BASIC_LANDS["Island"], 0)
+    jace = to_hand(s, printing("Jace, the Perfected Mind"), 0)
+    agent(s, 0).yes = yes
+    apply_action(s, 0, CastSpell(jace.id))
+    drain_stack(s)
+    return s, jace
+
+
+def test_compleated_paying_life_enters_with_two_fewer_loyalty():
+    s, jace = _cast_jace(yes=True, islands=4)
+    assert jace in s.battlefield
+    assert s.players[0].life == 18
+    assert jace.loyalty_counters == 3
+    assert jace.phyrexian_life_pips == 0
+
+
+def test_compleated_paying_mana_keeps_full_loyalty():
+    s, jace = _cast_jace(yes=False, islands=4)
+    assert s.players[0].life == 20
+    assert jace.loyalty_counters == 5
+
+
+def test_apply_compleated_ignores_noncompleated_permanents():
+    s = arena()
+    ugin = _walker(s, "Ugin, the Spirit Dragon")
+    ugin.phyrexian_life_pips = 1
+    apply_compleated(s, ugin)
+    assert ugin.loyalty_counters == 7 and ugin.phyrexian_life_pips == 0
+
+
+# ---------------------------------------------------------------------------
+# Liliana of the Veil
+# ---------------------------------------------------------------------------
+
+
+def test_liliana_plus_one_each_player_discards():
+    s = arena()
+    lili = _walker(s, "Liliana of the Veil")
+    mine = to_hand(s, BASIC_LANDS["Swamp"], 0)
+    theirs = to_hand(s, BASIC_LANDS["Island"], 1)
+    _activate_ability(s, 0, lili.id, _ability_index(lili, loyalty=-1))
+    drain_stack(s)
+    assert lili.loyalty_counters == 4
+    assert mine in s.players[0].graveyard and theirs in s.players[1].graveyard
+    assert EachPlayerDiscards(count=2).describe() == (
+        "each player discards 2 cards"
+    )
+
+
+def test_each_player_discards_with_empty_hand_and_no_agent():
+    s = arena()
+    card = to_hand(s, BASIC_LANDS["Island"], 1)
+    s.players[1].agent = None
+    EachPlayerDiscards(count=2).resolve(s, 0, ())
+    assert card in s.players[1].graveyard
+
+
+def test_liliana_minus_six_piles():
+    from dataclasses import dataclass as _dc
+
+    @_dc
+    class PileAgent(ScriptedAgent):
+        answers: list = None
+
+        def choose_yes_no(self, state, player_id, prompt):
+            return self.answers.pop(0)
+
+    s = arena()
+    lili = _walker(s, "Liliana of the Veil", loyalty=6)
+    a = put(s, _BEAR, 1)
+    b = put(s, BASIC_LANDS["Island"], 1)
+    c = put(s, _ROCK, 1)
+    mine = put(s, _BEAR, 0)
+    s.players[0].agent = PileAgent(answers=[True, False, False])
+    s.players[0].agent.targets = [("player", 1)]
+
+    @_dc
+    class Chooser(ScriptedAgent):
+        def choose_mode(self, state, player_id, mode_descriptions):
+            self.seen = list(mode_descriptions)
+            return 1  # sacrifice pile 2 (Island, Rock)
+
+    s.players[1].agent = Chooser()
+    _activate_ability(s, 0, lili.id, _ability_index(lili, loyalty=6))
+    drain_stack(s)
+    assert s.players[1].agent.seen == [
+        "sacrifice pile 1: Bear", "sacrifice pile 2: Island, Rock",
+    ]
+    assert a in s.battlefield and mine in s.battlefield
+    assert b not in s.battlefield and c not in s.battlefield
+    assert "two piles" in SeparatePermanentsIntoPilesSacrificeChosen().describe()
+
+
+def test_piles_without_agents_or_targets():
+    s = arena()
+    a = put(s, _BEAR, 1)
+    eff = SeparatePermanentsIntoPilesSacrificeChosen()
+    eff.resolve(s, 0, ())  # no target: nothing happens
+    assert a in s.battlefield
+    for p in s.players:
+        p.agent = None
+    eff.resolve(s, 0, (("player", 1),))
+    assert a not in s.battlefield  # everything in pile 1, pile 1 chosen
+    s.players[1].has_lost = True
+    eff.resolve(s, 0, (("player", 1),))
+
+
+# ---------------------------------------------------------------------------
+# Ugin, the Spirit Dragon
+# ---------------------------------------------------------------------------
+
+
+def test_ugin_minus_x_exiles_colored_permanents_up_to_x():
+    s = arena()
+    ugin = _walker(s, "Ugin, the Spirit Dragon")
+    small = put(s, _RED_BEAR, 1)
+    mid = put(s, _BEAR, 1)
+    rock = put(s, _ROCK, 1)
+    land = put(s, BASIC_LANDS["Island"], 1)
+    agent(s, 0).x_value = 1
+    _activate_ability(s, 0, ugin.id, _ability_index(ugin, x=True))
+    drain_stack(s)
+    assert ugin.loyalty_counters == 6
+    assert small in s.players[1].exile
+    assert mid in s.battlefield and rock in s.battlefield and land in s.battlefield
+
+
+def test_ugin_minus_ten_gains_draws_and_deploys():
+    s = arena()
+    ugin = _walker(s, "Ugin, the Spirit Dragon", loyalty=10)
+    for _ in range(7):
+        to_library(s, _BEAR, 0)
+    bolt_like = to_hand(s, make_instant("Shock", "{R}", DrawCards(amount=1)), 0)
+    _activate_ability(s, 0, ugin.id, _ability_index(ugin, loyalty=10))
+    drain_stack(s)
+    assert s.players[0].life == 27
+    # Every permanent card went in; the instant stayed.
+    assert s.players[0].hand == [bolt_like]
+    assert sum(o.printing.name == "Bear" for o in s.battlefield) == 7
+
+
+def test_put_up_to_n_stops_when_declined():
+    from mtg_bot.effects.generic.card_flow import CardFilter
+
+    s = arena()
+    to_hand(s, _BEAR, 0)
+    agent(s, 0).library_pick = None
+    eff = PutUpToNCardsFromHandOntoBattlefield(
+        count=2, card_filter=CardFilter(any_types=("Permanent",)),
+    )
+    eff.resolve(s, 0, ())
+    assert len(s.players[0].hand) == 1
+    assert eff.describe() == (
+        "put up to 2 permanent cards from your hand onto the battlefield"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kiora, Behemoth Beckoner
+# ---------------------------------------------------------------------------
+
+
+def test_kiora_untaps_any_permanent():
+    s = arena()
+    kiora = _walker(s, "Kiora, Behemoth Beckoner")
+    land = put(s, BASIC_LANDS["Forest"], 0, tapped=True)
+    agent(s, 0).targets = [("permanent", land.id)]
+    _activate_ability(s, 0, kiora.id, 0)
+    drain_stack(s)
+    assert not land.tapped and kiora.loyalty_counters == 6
+
+
+# ---------------------------------------------------------------------------
+# Sentence-composed loyalty bodies
+# ---------------------------------------------------------------------------
+
+
+def test_loyalty_body_sentences_compose_unless_anaphoric():
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_loyalty_body
+    from mtg_bot.effects.combinators import Sequence
+
+    eff = parse_roto_loyalty_body(
+        "Scry 1. Saheeli Rai deals 1 damage to each opponent.", "Saheeli Rai",
+    )
+    assert isinstance(eff, Sequence) and len(eff.effects) == 2
+    assert parse_roto_loyalty_body("Draw a card.", "X") is None
+    assert parse_roto_loyalty_body(
+        "Draw a card. It gains haste.", "X",
+    ) is None
+    assert parse_roto_loyalty_body(
+        "Draw a card. Frobnicate the widget.", "X",
+    ) is None
+    # Two targeted sentences can't share one target choice.
+    assert parse_roto_loyalty_body(
+        "Target player draws a card. Target player draws a card.", "X",
+    ) is None
+
+
+def test_roto_walker_line_declines_unknown_shapes():
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_walker_line
+
+    assert parse_roto_walker_line("Hexproof from everything", "X") is None
+    assert parse_roto_walker_line("−X: Frobnicate X widgets.", "X") is None
+
+
+# ---------------------------------------------------------------------------
+# Phantasmal Image
+# ---------------------------------------------------------------------------
+
+
+def _cast(s, name_or_printing, pid=0, islands=2):
+    pr = printing(name_or_printing) if isinstance(name_or_printing, str) else (
+        name_or_printing
+    )
+    for _ in range(islands):
+        put(s, BASIC_LANDS["Island"], pid)
+    card = to_hand(s, pr, pid)
+    apply_action(s, pid, CastSpell(card.id))
+    drain_stack(s)
+    return card
+
+
+def test_phantasmal_image_parse_shape():
+    p = printing("Phantasmal Image")
+    assert p.enters_as_copy_types == ("Creature",)
+    assert p.enters_as_copy_add_subtypes == ("Illusion",)
+    (trig,) = p.enters_as_copy_add_triggers
+    assert trig.event == Event.BECOMES_TARGET
+    from mtg_bot.effects.generic import SacrificeSelf
+
+    assert trig.effect == SacrificeSelf()
+
+
+def test_phantasmal_image_copies_and_dies_when_targeted():
+    from mtg_bot.effects.generic.cube_creatures_rmc import fire_becomes_target
+
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    agent(s, 0).targets = [("permanent", bear.id)]
+    image = _cast(s, "Phantasmal Image")
+    assert image in s.battlefield
+    assert image.printing.name == "Bear"
+    assert image.printing.subtypes[-1] == "Illusion"
+    assert (image.printing.power, image.printing.toughness) == (2, 2)
+    # The opponent targets it: the granted trigger sacrifices it.
+    fire_becomes_target(s, (("creature", image.id),), bear, 1)
+    drain_stack(s)
+    assert image not in s.battlefield
+    assert image in s.players[0].graveyard
+    # Targeting the original does nothing to the original.
+    fire_becomes_target(s, (("creature", bear.id),), bear, 0)
+    drain_stack(s)
+    assert bear in s.battlefield
+
+
+def test_phantasmal_image_without_a_copy_is_a_0_0():
+    from mtg_bot.turn import state_based_actions
+
+    s = arena()
+    agent(s, 0).targets = []
+    image = _cast(s, "Phantasmal Image")
+    state_based_actions(s)
+    assert image not in s.battlefield
+
+
+def test_copy_exception_grammar_variants():
+    from mtg_bot.cards.parser.roto_walkers import (
+        parse_copy_exception,
+        parse_roto_trigger_phrase,
+    )
+
+    assert parse_copy_exception(
+        "it's a Bird in addition to its other types and it has flying"
+    ) == {
+        "enters_as_copy_add_subtypes": ("Bird",),
+        "enters_as_copy_add_keywords": frozenset({"flying"}),
+    }
+    assert parse_copy_exception(
+        "it's a Bird in addition to its other types"
+    ) == {"enters_as_copy_add_subtypes": ("Bird",)}
+    assert parse_copy_exception("it isn't legendary") is None
+    assert parse_copy_exception(
+        "it's a Bird in addition to its other types and it has frobnication"
+    ) is None
+    assert parse_copy_exception(
+        'it\'s a Bird in addition to its other types and it has "Frob."'
+    ) is None
+    assert parse_copy_exception(
+        "it's a Bird in addition to its other types and it has "
+        '"When this creature frobs, sacrifice it."'
+    ) is None
+    assert parse_roto_trigger_phrase("this creature frobs") is None
+
+
+def test_copy_rider_adds_keywords_to_the_copy():
+    import dataclasses
+
+    from mtg_bot.creature_casting_ub import apply_copy_on_entry
+    from mtg_bot.game import Zone as _Z
+
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    clone_pr = dataclasses.replace(
+        printing("Phantasmal Image"),
+        enters_as_copy_add_keywords=frozenset({"flying"}),
+    )
+    clone = s.new_object(clone_pr, owner_id=0, zone=_Z.BATTLEFIELD)
+    agent(s, 0).targets = [("permanent", bear.id)]
+    apply_copy_on_entry(s, clone, 0)
+    assert "flying" in clone.printing.keywords
+
+
+# ---------------------------------------------------------------------------
+# Gilded Drake
+# ---------------------------------------------------------------------------
+
+
+def test_gilded_drake_parse_shape():
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExchangeControlOfSourceAndTarget,
+    )
+
+    (trig,) = printing("Gilded Drake").triggered_abilities
+    assert isinstance(trig.effect, ExchangeControlOfSourceAndTarget)
+    assert trig.effect.still_resolves_if_targets_illegal
+    assert trig.effect.target_count_range() == (0, 1)
+    assert "exchange control" in trig.effect.describe()
+
+
+def test_gilded_drake_exchanges_with_an_opponents_creature():
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    agent(s, 0).targets = [("creature", bear.id)]
+    drake = _cast(s, "Gilded Drake")
+    assert drake in s.battlefield
+    assert drake.controller_id == 1 and bear.controller_id == 0
+    assert bear.summoning_sick
+
+
+def test_gilded_drake_sacrificed_without_a_target():
+    s = arena()
+    drake = _cast(s, "Gilded Drake")
+    assert drake not in s.battlefield
+    assert drake in s.players[0].graveyard
+
+
+def _drake_trigger(s, target_id):
+    drake = put(s, printing("Gilded Drake"), 0)
+    (trig,) = drake.printing.triggered_abilities
+    s.stack.append(StackItem(
+        source=drake, controller_id=0, ability=trig,
+        targets=(("creature", target_id),),
+    ))
+    return drake
+
+
+def test_gilded_drake_still_resolves_if_its_target_became_illegal():
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards.base import make_creature as _mc
+
+    s = arena()
+    shy = put(s, _mc("Shy Bear", "{1}{G}", 2, 2, keywords=frozenset({"hexproof"})), 1)
+    drake = _drake_trigger(s, shy.id)
+    resolve_top_of_stack(s)
+    assert drake not in s.battlefield and shy.controller_id == 1
+
+
+def test_gilded_drake_target_now_yours_means_sacrifice():
+    from mtg_bot.actions import resolve_top_of_stack
+
+    s = arena()
+    bear = put(s, _BEAR, 1)
+    drake = _drake_trigger(s, bear.id)
+    bear.controller_id = 0
+    resolve_top_of_stack(s)
+    assert drake not in s.battlefield and bear.controller_id == 0
+
+
+def test_exchange_without_source_on_battlefield_is_noop():
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExchangeControlOfSourceAndTarget,
+    )
+
+    s = arena()
+    ExchangeControlOfSourceAndTarget().resolve(s, 0, ())
+    assert s.log == [] or "exchange" not in " ".join(s.log)
+
+
+# ---------------------------------------------------------------------------
+# Zealous Conscripts (threaten any permanent)
+# ---------------------------------------------------------------------------
+
+
+def test_zealous_conscripts_steals_any_permanent_until_end_of_turn():
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import run_cleanup_step
+
+    s = arena()
+    rock = put(s, _ROCK, 1, tapped=True)
+    agent(s, 0).targets = [("permanent", rock.id)]
+    _cast(s, "Zealous Conscripts", islands=5)
+    assert rock.controller_id == 0 and not rock.tapped
+    assert "haste" in effective_keywords(s, rock)
+    run_cleanup_step(s)
+    assert rock.controller_id == 1
+    assert "haste" not in effective_keywords(s, rock)
+
+
+def test_threaten_fizzles_on_an_illegal_target():
+    from mtg_bot.effects.generic.roto_walkers import GainControlUntapHasteUEOT
+
+    s = arena()
+    eff = printing("Zealous Conscripts").triggered_abilities[0].effect
+    assert isinstance(eff, GainControlUntapHasteUEOT)
+    assert "gain control" in eff.describe()
+    eff.resolve(s, 0, (("permanent", 999),))
+    eff.resolve(s, 0, ())
+    assert all("controls" not in line for line in s.log)
+
+
+# ---------------------------------------------------------------------------
+# Felidar Guardian / Ephemerate (flicker) and Rebound
+# ---------------------------------------------------------------------------
+
+
+def test_felidar_guardian_flickers_another_permanent_you_control():
+    s = arena()
+    rock = put(s, _ROCK, 0, tapped=True)
+    rock.plus_one_counters = 2
+    agent(s, 0).targets = [("permanent", rock.id)]
+    guardian = _cast(s, "Felidar Guardian", islands=4)
+    assert guardian in s.battlefield
+    assert rock in s.battlefield and not rock.tapped
+    assert rock.plus_one_counters == 0
+
+
+def test_felidar_guardian_may_decline_and_cant_target_itself():
+    s = arena()
+    rock = put(s, _ROCK, 0, tapped=True)
+    agent(s, 0).targets = [("permanent", rock.id)]
+    agent(s, 0).yes = False
+    _cast(s, "Felidar Guardian", islands=4)
+    assert rock.tapped  # declined: not flickered
+    eff = printing("Felidar Guardian").triggered_abilities[0].effect
+    s2 = arena()
+    g = put(s2, printing("Felidar Guardian"), 0)
+    s2.resolving_source = g
+    assert all(t[1] != g.id for t in eff.legal_targets(s2, 0))
+    assert eff.describe().startswith("you may exile")
+
+
+def test_flicker_token_ceases_to_exist():
+    from mtg_bot.cards.base import make_creature as _mc
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExileTargetThenReturnUnderOwnersControl,
+    )
+
+    s = arena()
+    token_pr = _mc("Spirit", "", 1, 1)
+    import dataclasses as _dc
+
+    token_pr = _dc.replace(token_pr, supertypes=("Token",))
+    tok = put(s, token_pr, 0)
+    eff = printing("Ephemerate").spell_effect
+    assert isinstance(eff, ExileTargetThenReturnUnderOwnersControl)
+    eff.resolve(s, 0, (("creature", tok.id),))
+    assert tok not in s.battlefield
+    eff.resolve(s, 0, ())  # no target
+
+
+def test_ephemerate_flickers_and_rebounds():
+    from mtg_bot.simulate import run_step
+
+    s = arena()
+    bear = put(s, _BEAR, 0, tapped=True)
+    agent(s, 0).targets = [("creature", bear.id)]
+    eph = _cast(s, "Ephemerate", islands=1)
+    assert not bear.tapped and bear in s.battlefield
+    # Cast from hand: exiled with a rebound trigger, not in the graveyard.
+    assert eph in s.players[0].exile
+    (entry,) = s.delayed_triggers
+    assert entry["own_upkeep"] and entry["step"] == "upkeep"
+    # The opponent's upkeep doesn't fire it ...
+    s.turn_number, s.active_player_idx = 2, 1
+    run_step(s, Step.UPKEEP)
+    assert eph in s.players[0].exile
+    # ... its owner's next upkeep casts it again for free.
+    s.turn_number, s.active_player_idx = 3, 0
+    s.priority_player_idx = 0
+    bear.tapped = True
+    agent(s, 0).targets = [("creature", bear.id)]
+    run_step(s, Step.UPKEEP)
+    drain_stack(s)
+    assert not bear.tapped
+    # Cast from exile this time: it goes to the graveyard.
+    assert eph in s.players[0].graveyard
+    assert s.delayed_triggers == []
+
+
+def test_rebound_cast_declined_or_without_target_stays_exiled():
+    from mtg_bot.effects.generic.roto_walkers import (
+        MayCastExiledSourceFree,
+        exile_with_rebound,
+    )
+
+    s = arena()
+    card = s.new_object(printing("Ephemerate"), owner_id=0, zone=Zone.STACK)
+    exile_with_rebound(s, card, 0)
+    s.resolving_source = card
+    # No creature to target: can't be cast.
+    MayCastExiledSourceFree().resolve(s, 0, ())
+    assert card in s.players[0].exile
+    put(s, _BEAR, 0)
+    agent(s, 0).yes = False
+    MayCastExiledSourceFree().resolve(s, 0, ())
+    assert card in s.players[0].exile and s.stack == []
+    s.players[0].exile.remove(card)
+    MayCastExiledSourceFree().resolve(s, 0, ())
+    s.resolving_source = None
+    MayCastExiledSourceFree().resolve(s, 0, ())
+    assert "cast this card from exile" in MayCastExiledSourceFree().describe()
+
+
+def test_ephemerate_parse_has_rebound():
+    p = printing("Ephemerate")
+    assert p.rebound
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_casting_keyword
+
+    assert parse_roto_casting_keyword("Cascade") is None
+
+
+# ---------------------------------------------------------------------------
+# Nicol Bolas, God-Pharaoh
+# ---------------------------------------------------------------------------
+
+
+def test_bolas_plus_two_exiles_to_a_nonland_and_casts_it_free():
+    from mtg_bot.actions import CastSpell as _Cast
+
+    s = arena()
+    bolas = _walker(s, "Nicol Bolas, God-Pharaoh")
+    land1 = to_library(s, BASIC_LANDS["Island"], 1)
+    spell = to_library(s, _RED_BEAR, 1)
+    rest = to_library(s, BASIC_LANDS["Island"], 1)
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, bolas.id, _ability_index(bolas, loyalty=-2))
+    drain_stack(s)
+    assert land1 in s.players[1].exile and spell in s.players[1].exile
+    assert rest in s.players[1].library
+    perm = spell.exile_play_permission
+    assert perm.player_id == 0 and perm.free and perm.cast_only
+    acts = legal_actions(s, 0)
+    assert any(isinstance(a, _Cast) and a.card_id == spell.id for a in acts)
+
+
+def test_bolas_plus_two_on_an_all_land_library():
+    from mtg_bot.effects.generic.roto_walkers import (
+        TargetOpponentExilesUntilNonlandCastFree,
+    )
+
+    s = arena()
+    to_library(s, BASIC_LANDS["Island"], 1)
+    eff = TargetOpponentExilesUntilNonlandCastFree()
+    assert eff.legal_targets(s, 0) == [("player", 1)]
+    eff.resolve(s, 0, (("player", 1),))
+    assert s.players[1].library == [] and len(s.players[1].exile) == 1
+    eff.resolve(s, 0, ())
+    assert "nonland" in eff.describe()
+
+
+def test_bolas_plus_one_each_opponent_exiles_two_from_hand():
+    from mtg_bot.effects.generic.roto_walkers import (
+        EachOpponentExilesCardsFromHand,
+    )
+
+    s = arena()
+    bolas = _walker(s, "Nicol Bolas, God-Pharaoh")
+    a = to_hand(s, BASIC_LANDS["Island"], 1)
+    b = to_hand(s, _BEAR, 1)
+    c = to_hand(s, _ROCK, 1)
+    mine = to_hand(s, _BEAR, 0)
+    agent(s, 1).discards = [c.id, a.id]
+    _activate_ability(s, 0, bolas.id, _ability_index(bolas, loyalty=-1))
+    drain_stack(s)
+    assert c in s.players[1].exile and a in s.players[1].exile
+    assert b in s.players[1].hand and mine in s.players[0].hand
+    s.players[1].agent = None
+    EachOpponentExilesCardsFromHand(count=3).resolve(s, 0, ())
+    assert s.players[1].hand == []
+    assert EachOpponentExilesCardsFromHand(count=2).describe() == (
+        "each opponent exiles 2 cards from their hand"
+    )
+    assert EachOpponentExilesCardsFromHand().describe().endswith(
+        "a card from their hand"
+    )
+
+
+def test_bolas_minus_four_targets_only_opponents_things():
+    s = arena()
+    bolas = _walker(s, "Nicol Bolas, God-Pharaoh")
+    theirs = put(s, _BEAR, 1)
+    mine = put(s, _BEAR, 0)
+    eff = bolas.printing.activated_abilities[2].effect
+    s.resolving_source = bolas
+    legal = eff.legal_targets(s, 0)
+    s.resolving_source = None
+    assert ("creature", theirs.id) in legal and ("player", 1) in legal
+    assert ("creature", mine.id) not in legal and ("player", 0) not in legal
+    agent(s, 0).targets = [("player", 1)]
+    _activate_ability(s, 0, bolas.id, _ability_index(bolas, loyalty=4))
+    drain_stack(s)
+    assert s.players[1].life == 13
+
+
+def test_bolas_minus_twelve_exiles_opponents_nonland_permanents():
+    s = arena()
+    bolas = _walker(s, "Nicol Bolas, God-Pharaoh", loyalty=12)
+    theirs = put(s, _BEAR, 1)
+    land = put(s, BASIC_LANDS["Island"], 1)
+    mine = put(s, _BEAR, 0)
+    _activate_ability(s, 0, bolas.id, _ability_index(bolas, loyalty=12))
+    drain_stack(s)
+    assert theirs in s.players[1].exile
+    assert land in s.battlefield and mine in s.battlefield
+
+
+def test_damage_to_target_list_declines_unknown_items():
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
+
+    assert parse_roto_effect(
+        "deals 2 damage to target player, frobnicator, or creature"
+    ) is None

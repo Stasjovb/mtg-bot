@@ -909,6 +909,10 @@ _COPY_TYPE_WORDS = {"artifact": "Artifact", "creature": "Creature",
 
 def _parse_enter_as_copy_line(line: str) -> UBLine | None:
     m = _ENTER_AS_COPY.match(line)
+    if m is None and line.endswith('."'):
+        # A quoted granted ability closes the sentence ("... and it has
+        # "<ability>."" -- Phantasmal Image): its period is the line's.
+        m = _ENTER_AS_COPY.match(line[:-2] + '".')
     if m is None:
         return None
     words = re.split(r" or |, ", m.group("what"))
@@ -933,7 +937,13 @@ def _parse_enter_as_copy_line(line: str) -> UBLine | None:
             fields["enters_as_copy_base_pt"] = (int(b.group(1)), int(b.group(2)))
             fields["enters_as_copy_add_subtypes"] = tuple(b.group(3).split(" "))
         else:
-            return None
+            # Roto P4: added subtype + granted keywords / abilities.
+            from mtg_bot.cards.parser.roto_walkers import parse_copy_exception
+
+            extra = parse_copy_exception(exc)
+            if extra is None:
+                return None
+            fields.update(extra)
     if m.group("exile"):
         if not m.group("gy"):
             return None

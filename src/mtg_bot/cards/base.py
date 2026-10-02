@@ -1528,6 +1528,14 @@ class CardPrinting:
     enters_as_copy_base_pt: "tuple[int, int] | None" = None
     enters_as_copy_add_subtypes: tuple[str, ...] = ()
     enters_as_copy_exiles_card: bool = False
+    # Roto P4: "... except ... and it has <keywords> / "<ability>""
+    # riders (Phantasmal Image's granted becomes-the-target trigger).
+    enters_as_copy_add_triggers: tuple = ()
+    enters_as_copy_add_keywords: frozenset = frozenset()
+    # Roto P4: Rebound (CR 702.88) -- cast from hand, the spell is exiled
+    # as it resolves and may be cast free at its owner's next upkeep
+    # (``roto_walkers.exile_with_rebound``).
+    rebound: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast

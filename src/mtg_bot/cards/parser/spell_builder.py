@@ -728,7 +728,10 @@ def _casting_keyword_fields(clause: str) -> dict | None:
         return {"free_cast_condition": cond}
     m = _SPELL_CASTING_KEYWORD_LINE_RE.match(clause.strip())
     if m is None:
-        return None
+        # Roto P4 casting keywords (Rebound).
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_casting_keyword
+
+        return parse_roto_casting_keyword(clause.strip())
     if m.group("fb"):
         cost = m.group("fb_cost")
         return {

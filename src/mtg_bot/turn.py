@@ -1340,10 +1340,17 @@ def run_delayed_upkeep_triggers(state: GameState) -> None:
 
     remaining: list[dict] = []
     to_push: list[dict] = []
+    ap_id = state.active_player().id
     for entry in state.delayed_triggers:
         if (
             entry.get("step") == "upkeep"
             and entry["fire_at_turn"] <= state.turn_number
+            # ``own_upkeep`` ("your next upkeep" -- Rebound) waits for
+            # its controller's upkeep.
+            and (
+                not entry.get("own_upkeep", False)
+                or entry["controller_id"] == ap_id
+            )
         ):
             to_push.append(entry)
         else:

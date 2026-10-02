@@ -1769,7 +1769,13 @@ def _parse_predicate_trigger_phrase(
             parse_layout_trigger_phrase,
         )
 
-        return parse_layout_trigger_phrase(phrase.strip())
+        layout = parse_layout_trigger_phrase(phrase.strip())
+        if layout is not None:
+            return layout
+        # Roto P4 conditions ("this creature becomes the target of ...").
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_trigger_phrase
+
+        return parse_roto_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 

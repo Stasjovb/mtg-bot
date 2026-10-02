@@ -272,6 +272,13 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
             cost_token, effect_body = loyalty_match.groups()
             effect = _parse_loyalty_effect(effect_body, name)
             if effect is None:
+                # Roto P4: bodies of independent sentences.
+                from mtg_bot.cards.parser.roto_walkers import (
+                    parse_roto_loyalty_body,
+                )
+
+                effect = parse_roto_loyalty_body(effect_body, name)
+            if effect is None:
                 # "Roll a six-sided die." followed by result-table lines
                 # (Comet, Stellar Pup; cube glue bucket): the table is
                 # assembled after the loop.
@@ -356,6 +363,14 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
         glue_fields = parse_glue_walker_line(line, name)
         if glue_fields is not None:
             printing_fields.update(glue_fields)
+            continue
+        # Roto P4: "−X" loyalty abilities and Compleated.
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_walker_line
+
+        roto = parse_roto_walker_line(line, name)
+        if roto is not None:
+            activated.extend(roto.activated)
+            keywords.update(roto.keywords)
             continue
         parsed = _parse_triggered_ability_line(line, name=name)
         if parsed is None:

@@ -974,6 +974,10 @@ class GameObject:
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()
+    # Roto P4: Phyrexian mana symbols paid with life when this card was
+    # last cast (set by the cast pipeline, consumed as it enters --
+    # Compleated, CR 702.150a).
+    phyrexian_life_pips: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

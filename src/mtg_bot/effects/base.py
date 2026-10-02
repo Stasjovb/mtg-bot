@@ -535,6 +535,12 @@ class ActivationCost:
     # ``state.loyalty_activated_this_turn``. The loyalty-at-0 SBA
     # (``turn.py`` 704.5i) catches a walker that drops to 0.
     loyalty: int = 0
+    # "-X" loyalty cost (Ugin, the Spirit Dragon; Jace, the Perfected
+    # Mind): X is chosen as the ability is activated (0 .. the walker's
+    # loyalty), that many loyalty counters are removed, and X rides the
+    # stack item as ``state.resolving_x_value``
+    # (``roto_walkers.choose_and_pay_loyalty_x``).
+    loyalty_x: bool = False
     # "Discard this card" — the hand-activated cost atom of Cycling
     # (CR 702.29a: "[Cost], Discard this card: Draw a card.") and
     # Channel (CR 702.140 ability word over the same shape). Only
