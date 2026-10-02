@@ -321,7 +321,7 @@ class ControllerMaySearchOntoBattlefield(RemovalRider):
 
 @dataclass(frozen=True)
 class GraveyardExileInstead:
-    """A ``CardPrinting.zone_replacements`` spec: "If <what> would be put
+    """A ``CardPrinting.zone_abilities`` spec: "If <what> would be put
     into <whose> graveyard[ from anywhere], exile it instead."
 
     * ``opponents_only`` -- "an opponent's graveyard" (Leyline of the
@@ -372,7 +372,7 @@ def _exile_instead_sources(state):
 
     out = []
     for o in state.battlefield:
-        for spec in o.printing.zone_replacements:
+        for spec in o.printing.zone_abilities:
             if isinstance(spec, GraveyardExileInstead) and not (
                 state.continuous_effects and _source_layer6_wiped(state, o)
             ):
@@ -420,7 +420,7 @@ def note_exile_instead_source_entered(state, obj) -> None:
     """An exile-instead source entered the battlefield: the cards
     already in the graveyards it affects stay (the replacement applies
     only from now on); snapshot them for the SBA catch-all."""
-    for spec in obj.printing.zone_replacements:
+    for spec in obj.printing.zone_abilities:
         if not isinstance(spec, GraveyardExileInstead):
             continue
         for p in state.players:

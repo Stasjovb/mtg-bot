@@ -67,7 +67,7 @@ def _leyline_like(opponents_only=True, tokens=False, colors=frozenset()):
 def _with_spec(pr, spec):
     import dataclasses
 
-    return dataclasses.replace(pr, zone_replacements=(spec,))
+    return dataclasses.replace(pr, zone_abilities=(spec,))
 
 
 # --- grammar --------------------------------------------------------------------
@@ -76,17 +76,17 @@ def test_static_line_grammar():
     rip = parse_roto_zones_static_line(
         "If a card or token would be put into a graveyard from anywhere, "
         "exile it instead.", "",
-    )["zone_replacements"][0]
+    )["zone_abilities"][0]
     assert rip == GraveyardExileInstead(tokens=True)
     leyline = parse_roto_zones_static_line(
         "If a card would be put into an opponent's graveyard from anywhere, "
         "exile it instead.", "",
-    )["zone_replacements"][0]
+    )["zone_abilities"][0]
     assert leyline == GraveyardExileInstead(opponents_only=True)
     sanct = parse_roto_zones_static_line(
         "If a black or red permanent, spell, or card not on the battlefield "
         "would be put into a graveyard, exile it instead.", "",
-    )["zone_replacements"][0]
+    )["zone_abilities"][0]
     assert sanct.colors == frozenset({"B", "R"}) and sanct.tokens
     assert "opponent's" in leyline.describe() and "B or R" in sanct.describe()
     assert "card or token" in rip.describe()
@@ -106,9 +106,9 @@ def test_enchantment_line_merges_fields():
     from mtg_bot.cards.parser.roto_zones import _merge_fields
 
     into = {}
-    assert _merge_fields(into, {"zone_replacements": (1,)})
-    assert _merge_fields(into, {"zone_replacements": (2,)})
-    assert into["zone_replacements"] == (1, 2)
+    assert _merge_fields(into, {"zone_abilities": (1,)})
+    assert _merge_fields(into, {"zone_abilities": (2,)})
+    assert into["zone_abilities"] == (1, 2)
     assert _merge_fields(into, {"opening_hand_action": 1})
     assert not _merge_fields(into, {"opening_hand_action": 2})
 
@@ -248,7 +248,7 @@ def test_opponents_only_replacement_spares_own_cards_and_tokens():
 
 def test_sanctifier_parses_protection_and_replacement():
     pr = printing("Sanctifier en-Vec")
-    spec = pr.zone_replacements[0]
+    spec = pr.zone_abilities[0]
     assert spec.colors == frozenset({"B", "R"})
     assert pr.triggered_abilities[0].effect == ExileGraveyardCardsOfColors(
         colors=frozenset({"B", "R"}))
@@ -322,7 +322,7 @@ def test_leyline_of_the_void_lines_build_and_play(monkeypatch):
     monkeypatch.setattr(grammar, "_disabled", lambda: False)
     pr = build_cube_enchantment(roto_card("Leyline of the Void"))
     assert pr is not None
-    assert pr.zone_replacements == (GraveyardExileInstead(opponents_only=True),)
+    assert pr.zone_abilities == (GraveyardExileInstead(opponents_only=True),)
     state = arena()
     leyline = to_hand(state, pr)
     apply_opening_hand_actions(state, 0)

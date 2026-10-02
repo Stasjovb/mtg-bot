@@ -5440,7 +5440,7 @@ def put_into_battlefield(
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
     obj.cast_via_hand = False
-    if obj.printing.zone_replacements:
+    if obj.printing.zone_abilities:
         # Roto P2 exile-instead sources apply only from now on.
         from mtg_bot.effects.generic.roto_zones import (
             note_exile_instead_source_entered,

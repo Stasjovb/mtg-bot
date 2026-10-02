@@ -268,7 +268,7 @@ _GRAVEYARD_EXILE_INSTEAD_LINE_RE = re.compile(
 
 
 def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
-    """Printing fields for a P2 static line (``zone_replacements`` /
+    """Printing fields for a P2 static line (``zone_abilities`` /
     ``opening_hand_action``), or ``None``. Shared by the enchantment
     and creature builders' hooks."""
     if _disabled():
@@ -283,7 +283,7 @@ def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
             tokens=what != "a card",
             colors=_colors(m.group("colors")) if m.group("colors") else frozenset(),
         )
-        return {"zone_replacements": (spec,)}
+        return {"zone_abilities": (spec,)}
     from mtg_bot.cards.parser.opening_hand_lines import parse_opening_hand_line
 
     action = parse_opening_hand_line(line, name)
@@ -296,7 +296,7 @@ def _merge_fields(into: dict, fields: dict) -> bool:
     """Fold one line's printing fields into ``into``; ``zone_
     replacements`` accumulate, any other field may be set once."""
     for key, value in fields.items():
-        if key == "zone_replacements":
+        if key == "zone_abilities":
             into[key] = tuple(into.get(key, ())) + tuple(value)
         elif key in into:
             return False
