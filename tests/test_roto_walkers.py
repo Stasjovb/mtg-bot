@@ -1438,9 +1438,6 @@ def test_copy_triggering_spell_when_the_spell_is_gone():
 
 def test_chandra_plus_one_may_cast_one_instant_or_sorcery_from_among_them():
     from mtg_bot.actions import CastSpell as _Cast
-    from mtg_bot.effects.generic.cube_creatures_rmc import (
-        expire_exile_play_permissions,
-    )
 
     s = arena()
     chandra = _walker(s, "Chandra, Hope's Beacon")
@@ -1461,9 +1458,29 @@ def test_chandra_plus_one_may_cast_one_instant_or_sorcery_from_among_them():
     drain_stack(s)
     casts = {x.card_id for x in legal_actions(s, 0) if isinstance(x, _Cast)}
     assert b.id not in casts  # one spell from among them
-    # The permission outlives this turn's cleanup ...
     eff = chandra.printing.activated_abilities[1].effect
     assert "from among them" in eff.describe()
+
+
+def test_chandra_plus_one_permission_lasts_until_end_of_next_turn():
+    from mtg_bot.effects.generic.card_flow import CardFilter
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        expire_exile_play_permissions,
+    )
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExileTopMayCastOneFromAmongUntilEndOfNextTurn,
+    )
+
+    s = arena()
+    spell = to_library(s, _GROWTH, 0)
+    ExileTopMayCastOneFromAmongUntilEndOfNextTurn(
+        count=1, card_filter=CardFilter(any_types=("Instant",)),
+    ).resolve(s, 0, ())
+    expire_exile_play_permissions(s)  # this turn's cleanup
+    assert spell.exile_play_permission is not None
+    s.players[0].turns_started += 1  # the controller's next turn ...
+    expire_exile_play_permissions(s)  # ... ends
+    assert spell.exile_play_permission is None
 
 
 def test_chandra_minus_x_hits_up_to_two_targets():
