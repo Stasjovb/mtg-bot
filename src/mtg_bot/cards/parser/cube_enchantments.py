@@ -67,9 +67,11 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Fastbond",
     "Goblin Bombardment",
     "Leyline Binding",
+    "Leyline of the Void",
     "Necromancy",
     "Oath of Druids",
     "Parallax Wave",
+    "Rest in Peace",
     "Sneak Attack",
     "Squandered Resources",
     "Touch the Spirit Realm",
@@ -233,6 +235,14 @@ def _reanimation_aura_lines(line: str, acc: _Accumulator) -> bool:
     return True
 
 
+def _roto_zones_line(line: str, acc: _Accumulator) -> bool:
+    """Roto P2 static lines (graveyard exile-instead replacements, the
+    Leylines' opening-hand line): ``cards.parser.roto_zones``."""
+    from mtg_bot.cards.parser.roto_zones import roto_zones_enchantment_line
+
+    return roto_zones_enchantment_line(line, acc)
+
+
 _LINE_RECOGNIZERS = (
     _fading,
     _cost_reduction,
@@ -242,6 +252,7 @@ _LINE_RECOGNIZERS = (
     _enchant_graveyard_card,
     _enchanted_creature_gets,
     _reanimation_aura_lines,
+    _roto_zones_line,
 )
 
 

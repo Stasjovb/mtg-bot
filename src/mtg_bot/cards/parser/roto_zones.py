@@ -217,11 +217,121 @@ def _parse_tutors(phrase: str) -> Effect | None:
 
 
 # ---------------------------------------------------------------------
+# Graveyard hate (F12)
+# ---------------------------------------------------------------------
+
+_COLOR_WORDS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+_COLOR_LIST = r"(?:white|blue|black|red|green)(?: or (?:white|blue|black|red|green))*"
+_EXILE_TARGET_PLAYERS_GRAVEYARD_RE = re.compile(
+    r"^exile target player's graveyard$"
+)
+_EXILE_ALL_GRAVEYARDS_RE = re.compile(r"^exile all graveyards$")
+_EXILE_COLORED_FROM_ALL_GRAVEYARDS_RE = re.compile(
+    rf"^exile all cards that are (?P<colors>{_COLOR_LIST}) from all "
+    r"graveyards$"
+)
+
+
+def _colors(text: str) -> frozenset:
+    return frozenset(_COLOR_WORDS[w] for w in text.split(" or "))
+
+
+def _parse_graveyard_hate(phrase: str) -> Effect | None:
+    from mtg_bot.effects.generic.roto_zones import (
+        ExileGraveyardCardsOfColors,
+        ExileTargetPlayersGraveyard,
+    )
+
+    if _EXILE_TARGET_PLAYERS_GRAVEYARD_RE.match(phrase):
+        return ExileTargetPlayersGraveyard()
+    if _EXILE_ALL_GRAVEYARDS_RE.match(phrase):
+        from mtg_bot.effects.generic.exile import ExileAllGraveyards
+
+        return ExileAllGraveyards()
+    m = _EXILE_COLORED_FROM_ALL_GRAVEYARDS_RE.match(phrase)
+    if m is not None:
+        return ExileGraveyardCardsOfColors(colors=_colors(m.group("colors")))
+    return None
+
+
+# "If <what> would be put into <whose> graveyard[ from anywhere], exile
+# it instead." (Rest in Peace, Leyline of the Void, Sanctifier en-Vec.)
+_GRAVEYARD_EXILE_INSTEAD_LINE_RE = re.compile(
+    r"^If (?P<what>a card or token|a card|an? (?P<colors>"
+    + _COLOR_LIST
+    + r") permanent, spell, or card not on the battlefield) would be put "
+    r"into (?P<whose>a|an opponent's) graveyard(?: from anywhere)?, exile "
+    r"it instead\.$"
+)
+
+
+def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
+    """Printing fields for a P2 static line (``zone_replacements`` /
+    ``opening_hand_action``), or ``None``. Shared by the enchantment
+    and creature builders' hooks."""
+    if _disabled():
+        return None
+    from mtg_bot.effects.generic.roto_zones import GraveyardExileInstead
+
+    m = _GRAVEYARD_EXILE_INSTEAD_LINE_RE.match(line)
+    if m is not None:
+        what = m.group("what")
+        spec = GraveyardExileInstead(
+            opponents_only=m.group("whose") == "an opponent's",
+            tokens=what != "a card",
+            colors=_colors(m.group("colors")) if m.group("colors") else frozenset(),
+        )
+        return {"zone_replacements": (spec,)}
+    from mtg_bot.cards.parser.opening_hand_lines import parse_opening_hand_line
+
+    action = parse_opening_hand_line(line, name)
+    if action is not None:
+        return {"opening_hand_action": action}
+    return None
+
+
+def _merge_fields(into: dict, fields: dict) -> bool:
+    """Fold one line's printing fields into ``into``; ``zone_
+    replacements`` accumulate, any other field may be set once."""
+    for key, value in fields.items():
+        if key == "zone_replacements":
+            into[key] = tuple(into.get(key, ())) + tuple(value)
+        elif key in into:
+            return False
+        else:
+            into[key] = value
+    return True
+
+
+def roto_zones_enchantment_line(line: str, acc) -> bool:
+    """``cube_enchantments`` line-recognizer hook: claim a P2 static
+    line into the accumulator's printing fields."""
+    fields = parse_roto_zones_static_line(line, "")
+    if fields is None:
+        return False
+    return _merge_fields(acc.printing_fields, fields)
+
+
+def parse_roto_zones_creature_line(line: str, card: dict):
+    """``creature_builder`` fallback hook: a ``WGLine`` carrying the
+    printing fields of a P2 static line, or ``None``."""
+    fields = parse_roto_zones_static_line(line, card["name"])
+    if fields is None:
+        return None
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+
+    return WGLine(fields=fields)
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
 _EFFECT_PARSERS = (
     _parse_tutors,
+    _parse_graveyard_hate,
 )
 
 

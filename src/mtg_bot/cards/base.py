@@ -1487,6 +1487,11 @@ class CardPrinting:
     # anywhere, instead exile it with a void counter on it." (Dauthi
     # Voidwalker). See ``game.void_exile_replacement_active``.
     void_exile_replacement: bool = False
+    # Roto P2 zone replacements and graveyard abilities: frozen specs
+    # from ``effects.generic.roto_zones`` (``GraveyardExileInstead`` --
+    # Rest in Peace / Leyline of the Void / Sanctifier en-Vec, ...),
+    # read by that module's hooks.
+    zone_replacements: tuple = ()
     # "Emerge [from artifact] {cost}" (CR 702.119): alternative cost --
     # sacrifice a creature (or artifact) and pay the emerge cost reduced
     # by that permanent's mana value.

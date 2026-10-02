@@ -472,6 +472,15 @@ def move_off_battlefield(
             # A permanent with a finality counter that would be put into
             # a graveyard from the battlefield is exiled instead.
             destination = "exile"
+    if destination == "graveyard":
+        # Roto P2 exile-instead replacements (Rest in Peace, Leyline of
+        # the Void): exiled instead, so it never dies.
+        from mtg_bot.effects.generic.roto_zones import (
+            graveyard_exile_instead_applies,
+        )
+
+        if graveyard_exile_instead_applies(state, obj):
+            destination = "exile"
     void_redirect = False
     if destination == "graveyard" and not obj.printing.is_token:
         from mtg_bot.game import void_exile_replacement_active
@@ -1768,6 +1777,12 @@ def state_based_actions(state: GameState) -> bool:
         sweep_library_graveyard_exile_watch,
     )
 
+    # Roto P2 exile-instead catch-all: before any graveyard watcher, so
+    # an exiled-instead card never looks like a graveyard arrival.
+    from mtg_bot.effects.generic.roto_zones import apply_graveyard_exile_instead
+
+    if apply_graveyard_exile_instead(state):
+        any_changed = True
     if sweep_graveyard_watch(state):
         any_changed = True
     if sweep_library_graveyard_exile_watch(state):

@@ -912,6 +912,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
 
                 wg = parse_face_creature_line(line, card)
             if wg is None:
+                # Roto P2 static lines (graveyard exile-instead, ...).
+                from mtg_bot.cards.parser.roto_zones import (
+                    parse_roto_zones_creature_line,
+                )
+
+                wg = parse_roto_zones_creature_line(line, card)
+            if wg is None:
                 return None
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)

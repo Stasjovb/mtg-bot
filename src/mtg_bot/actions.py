@@ -4674,6 +4674,15 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
         owner.exile.append(card)
         state.log.append(f"{card.printing.name} is exiled instead")
         return
+    from mtg_bot.effects.generic.roto_zones import (
+        exile_instead_of_graveyard,
+        graveyard_exile_instead_applies,
+    )
+
+    if graveyard_exile_instead_applies(state, card):
+        # Roto P2 exile-instead replacements (Rest in Peace, ...).
+        exile_instead_of_graveyard(state, card)
+        return
     from mtg_bot.game import exile_with_void_counter, void_exile_replacement_active
 
     if not card.is_spell_copy and void_exile_replacement_active(
@@ -5431,6 +5440,13 @@ def put_into_battlefield(
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
     obj.cast_via_hand = False
+    if obj.printing.zone_replacements:
+        # Roto P2 exile-instead sources apply only from now on.
+        from mtg_bot.effects.generic.roto_zones import (
+            note_exile_instead_source_entered,
+        )
+
+        note_exile_instead_source_entered(state, obj)
     # A "void" graveyard replacement source (Dauthi Voidwalker) applies
     # only to cards put into its opponents' graveyards from now on.
     if obj.printing.void_exile_replacement:

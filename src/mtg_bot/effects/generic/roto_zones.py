@@ -312,3 +312,205 @@ class ControllerMaySearchOntoBattlefield(RemovalRider):
             f"{self.card_filter.describe()}, put it onto the battlefield"
             f"{tapped}, then shuffle"
         )
+
+
+# ---------------------------------------------------------------------
+# Graveyard hate & exile-instead replacement (F12)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GraveyardExileInstead:
+    """A ``CardPrinting.zone_replacements`` spec: "If <what> would be put
+    into <whose> graveyard[ from anywhere], exile it instead."
+
+    * ``opponents_only`` -- "an opponent's graveyard" (Leyline of the
+      Void): only cards owned by the source's controller's opponents.
+    * ``tokens`` -- tokens are affected too ("a card or token", Rest in
+      Peace; "a ... permanent", Sanctifier en-Vec). A token exiled this
+      way never dies; it then ceases to exist.
+    * ``colors`` -- only objects of one of these colors ("a black or red
+      permanent, spell, or card not on the battlefield"); empty = any.
+
+    Copies of spells are neither cards nor tokens and are never
+    affected (they cease to exist anyway, CR 707.10a).
+    """
+
+    opponents_only: bool = False
+    tokens: bool = False
+    colors: frozenset = frozenset()
+
+    def affects(self, state, source, obj) -> bool:
+        from mtg_bot.game import effective_colors
+
+        if getattr(obj, "is_spell_copy", False):
+            return False
+        if obj.printing.is_token and not self.tokens:
+            return False
+        if self.opponents_only and obj.owner_id == source.controller_id:
+            return False
+        if self.colors and not (effective_colors(state, obj) & self.colors):
+            return False
+        return True
+
+    def affects_player(self, source, player_id: int) -> bool:
+        return not (self.opponents_only and player_id == source.controller_id)
+
+    def describe(self) -> str:
+        what = "a card or token" if self.tokens else "a card"
+        if self.colors:
+            what = "a " + " or ".join(sorted(self.colors)) + " object"
+        whose = "an opponent's" if self.opponents_only else "a"
+        return f"if {what} would be put into {whose} graveyard, exile it instead"
+
+
+def _exile_instead_sources(state):
+    """``(source, spec)`` for every battlefield permanent with an active
+    exile-instead replacement (a source that lost all abilities has
+    none)."""
+    from mtg_bot.game import _source_layer6_wiped
+
+    out = []
+    for o in state.battlefield:
+        for spec in o.printing.zone_replacements:
+            if isinstance(spec, GraveyardExileInstead) and not (
+                state.continuous_effects and _source_layer6_wiped(state, o)
+            ):
+                out.append((o, spec))
+    return out
+
+
+def graveyard_exile_instead_applies(state, obj) -> bool:
+    """Would ``obj`` (a card or token about to be put into a graveyard)
+    be exiled instead? Consulted by ``turn.move_off_battlefield`` (so an
+    affected creature never dies), ``actions._send_to_graveyard_or_
+    library`` (spells leaving the stack) and this module's own
+    graveyard moves; :func:`apply_graveyard_exile_instead` catches every
+    other path."""
+    return any(
+        spec.affects(state, src, obj) for src, spec in _exile_instead_sources(state)
+    )
+
+
+def exile_instead_of_graveyard(state, card) -> None:
+    """Put ``card`` (already out of its previous zone) into its owner's
+    exile, replacing a move to the graveyard."""
+    from mtg_bot.game import Zone
+
+    card.zone = Zone.EXILE
+    state.player_by_id(card.owner_id).exile.append(card)
+    state.log.append(f"{card.printing.name} is exiled instead of going to a graveyard")
+
+
+def put_into_graveyard(state, card) -> None:
+    """Move ``card`` (already out of its previous zone) to its owner's
+    graveyard, or into exile if an exile-instead replacement applies.
+    Used by this module's effects so their own graveyard moves honor the
+    replacement immediately."""
+    from mtg_bot.game import Zone
+
+    if graveyard_exile_instead_applies(state, card):
+        exile_instead_of_graveyard(state, card)
+        return
+    card.zone = Zone.GRAVEYARD
+    state.player_by_id(card.owner_id).graveyard.append(card)
+
+
+def note_exile_instead_source_entered(state, obj) -> None:
+    """An exile-instead source entered the battlefield: the cards
+    already in the graveyards it affects stay (the replacement applies
+    only from now on); snapshot them for the SBA catch-all."""
+    for spec in obj.printing.zone_replacements:
+        if not isinstance(spec, GraveyardExileInstead):
+            continue
+        for p in state.players:
+            if spec.affects_player(obj, p.id):
+                p.graveyard_exile_instead_snapshot = frozenset(
+                    c.id for c in p.graveyard
+                )
+
+
+def apply_graveyard_exile_instead(state) -> bool:
+    """State-based catch-all for the exile-instead replacements: an
+    affected card that reached a graveyard through a path that doesn't
+    consult the replacement directly (discard, mill, ...) is exiled.
+    Cards that were already there when the replacement began applying
+    (``Player.graveyard_exile_instead_snapshot``) stay; the snapshot is
+    pruned to the current graveyard so a card that leaves and comes back
+    is caught."""
+    sources = _exile_instead_sources(state)
+    if not sources:
+        return False
+    changed = False
+    for p in state.players:
+        snap = p.graveyard_exile_instead_snapshot
+        movers = [
+            c for c in p.graveyard
+            if c.id not in snap
+            and any(spec.affects(state, src, c) for src, spec in sources)
+        ]
+        for c in movers:
+            p.graveyard.remove(c)
+            exile_instead_of_graveyard(state, c)
+            changed = True
+        p.graveyard_exile_instead_snapshot = frozenset(
+            c.id for c in p.graveyard if c.id in snap
+        )
+    return changed
+
+
+@dataclass(frozen=True)
+class ExileTargetPlayersGraveyard(Effect):
+    """"Exile target player's graveyard." (Bojuka Bog.)"""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        p = next(
+            (state.player_by_id(t[1]) for t in targets if t[0] == "player"),
+            None,
+        )
+        if p is None or p.has_lost:
+            return
+        n = len(p.graveyard)
+        for c in list(p.graveyard):
+            p.graveyard.remove(c)
+            c.zone = Zone.EXILE
+            p.exile.append(c)
+        state.log.append(f"P{p.id}'s graveyard is exiled ({n} cards)")
+
+    def describe(self) -> str:
+        return "exile target player's graveyard"
+
+
+@dataclass(frozen=True)
+class ExileGraveyardCardsOfColors(Effect):
+    """"Exile all cards that are <black or red> from all graveyards."
+    (Sanctifier en-Vec.)"""
+
+    colors: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, effective_colors
+
+        n = 0
+        for p in state.players:
+            for c in list(p.graveyard):
+                if effective_colors(state, c) & self.colors:
+                    p.graveyard.remove(c)
+                    c.zone = Zone.EXILE
+                    p.exile.append(c)
+                    n += 1
+        state.log.append(f"{n} card(s) exiled from all graveyards")
+
+    def describe(self) -> str:
+        return (
+            "exile all cards that are " + " or ".join(sorted(self.colors))
+            + " from all graveyards"
+        )

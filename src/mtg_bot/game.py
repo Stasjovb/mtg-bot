@@ -3044,6 +3044,12 @@ class Player:
     # void source last started applying. The SBA catch-all exiles only
     # cards that arrived later (see ``turn.apply_void_exile_replacement``).
     void_graveyard_snapshot: frozenset = frozenset()
+    # Roto P2 exile-instead replacements (``CardPrinting.zone_
+    # replacements``, Rest in Peace / Leyline of the Void): ids of cards
+    # already in this player's graveyard when such a source last started
+    # applying to it; the SBA catch-all leaves them (see
+    # ``roto_zones.apply_graveyard_exile_instead``).
+    graveyard_exile_instead_snapshot: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions
