@@ -152,3 +152,63 @@ def test_a_countered_suspended_creature_loses_its_haste_grant():
     move_spell_off_stack(s, item.source)  # countered
     assert card in s.players[0].graveyard
     assert not any(ce.target_id == card.id for ce in s.continuous_effects)
+
+
+# ---------------------------------------------------------------------------
+# Greater Gargadon
+# ---------------------------------------------------------------------------
+
+
+def test_gargadon_sacrifices_permanents_to_speed_up_its_suspend():
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.cards.base import make_basic_land
+    from mtg_bot.game import effective_keywords, set_named_counters
+
+    s = arena()
+    mountain = put(s, make_basic_land("Mountain", "R"), 0)
+    garg = to_hand(s, printing("Greater Gargadon"), 0)
+    apply_action(s, 0, CastSpell(garg.id, use_suspend=True))
+    assert garg.time_counters == 10 and mountain.tapped
+    fodder = [put(s, make_creature("Thrull", "{B}", 1, 1), 0) for _ in range(2)]
+    act = ActivateAbility(source_id=garg.id, ability_index=0)
+    assert act in legal_actions(s, 0)
+    s.players[0].agent.sacrifices = [fodder[0].id]
+    apply_action(s, 0, act)
+    assert fodder[0] not in s.battlefield
+    drain_stack(s)
+    assert garg.time_counters == 9
+    garg.time_counters = 1
+    s.players[0].agent.sacrifices = [fodder[1].id]
+    apply_action(s, 0, act)
+    drain_stack(s)  # last counter -> the free cast -> it resolves
+    assert garg in s.battlefield
+    assert "haste" in effective_keywords(s, garg)
+
+
+def test_gargadon_ability_needs_it_suspended_and_fodder():
+    from mtg_bot.actions import ActivateAbility
+
+    s = arena()
+    garg = s.new_object(printing("Greater Gargadon"), owner_id=0, zone=Zone.EXILE)
+    s.players[0].exile.append(garg)  # exiled, but no time counters
+    put(s, make_creature("Thrull", "{B}", 1, 1), 0)
+    act = ActivateAbility(source_id=garg.id, ability_index=0)
+    assert act not in legal_actions(s, 0)
+    garg.time_counters = 3
+    assert act in legal_actions(s, 0)
+    s2 = arena()
+    g2 = s2.new_object(printing("Greater Gargadon"), owner_id=0, zone=Zone.EXILE)
+    s2.players[0].exile.append(g2)
+    g2.time_counters = 3
+    assert ActivateAbility(source_id=g2.id, ability_index=0) not in (
+        legal_actions(s2, 0)
+    )  # nothing to sacrifice
+
+
+def test_exile_activation_guards():
+    s = arena()
+    rm.activate_exile_ability(s, 0, 999, 0)  # no such card
+    garg = s.new_object(printing("Greater Gargadon"), owner_id=0, zone=Zone.EXILE)
+    s.players[0].exile.append(garg)
+    rm.activate_exile_ability(s, 0, garg.id, 5)  # no such ability
+    assert s.stack == []

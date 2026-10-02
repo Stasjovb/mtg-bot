@@ -531,6 +531,50 @@ _KINNAN_EXTRA_MANA_LINE = (
 )
 
 
+# "Sacrifice a[n] <type list>: Remove a time counter from this card.
+# Activate only if this card is suspended." (Greater Gargadon).
+_SUSPENDED_SAC_REMOVE_TIME_COUNTER_RE = re.compile(
+    r"^Sacrifice an? (?P<noun>[a-z]+(?:, [a-z]+)*,? or [a-z]+|[a-z]+): Remove "
+    r"a time counter from this card\. Activate only if this card is "
+    r"suspended\.$"
+)
+
+
+def _type_union_predicate(noun: str):
+    """``artifact, creature, or land`` -> IsArtifact | IsCreature | IsLand
+    (``None`` outside the card-type vocabulary)."""
+    from mtg_bot.effects import object_predicates as op
+
+    words = [w for w in re.split(r",? or |, ", noun) if w]
+    pred = None
+    for w in words:
+        if w not in _CARD_TYPE_PREDICATES:
+            return None
+        atom = getattr(op, _CARD_TYPE_PREDICATES[w])()
+        pred = atom if pred is None else pred | atom
+    return pred
+
+
+def _suspended_time_counter_ability(noun: str):
+    from mtg_bot.cards.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic import roto_mana as rm
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        SacrificePermanentsCost,
+    )
+
+    pred = _type_union_predicate(noun)
+    if pred is None:
+        return None
+    ability = ActivatedAbility(
+        cost=ActivationCost(extra_costs=(SacrificePermanentsCost(
+            permanent_filter=pred, count=1, another=False,
+            label=f"a {noun}",
+        ),)),
+        effect=rm.RemoveTimeCounterFromSuspendedSource(),
+    )
+    return rm.ExileZoneAbility(ability=ability, activate_only_if_suspended=True)
+
+
 def _tapped_for_mana_trigger(line: str):
     m = _TAPPED_FOR_MANA_TRIGGER_RE.match(line)
     if m is None:
@@ -557,6 +601,12 @@ def parse_roto_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.creature_wg_lines import WGLine
 
+    m = _SUSPENDED_SAC_REMOVE_TIME_COUNTER_RE.match(line)
+    if m is not None:
+        ability = _suspended_time_counter_ability(m.group("noun"))
+        if ability is None:
+            return None
+        return WGLine(fields={"exile_activated_abilities": (ability,)})
     if line == _KINNAN_EXTRA_MANA_LINE:
         return WGLine(fields={"extra_mana_when_you_tap_nonland_for_mana": True})
     trig = _tapped_for_mana_trigger(line)

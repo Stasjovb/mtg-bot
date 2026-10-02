@@ -1588,6 +1588,11 @@ class CardPrinting:
     # cast by paying its mana cost (CR 202.1b / 601.2f), only through an
     # alternative cost such as "without paying its mana cost".
     has_no_mana_cost: bool = False
+    # Activated abilities that function while the card is in exile
+    # (Greater Gargadon's "Activate only if this card is suspended."),
+    # offered by ``roto_mana.roto_legal_actions`` and activated through
+    # ``roto_mana.activate_exile_ability``.
+    exile_activated_abilities: tuple = ()
     # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
     # entries checked with the state-based actions ("When Dark Depths has
     # no ice counters on it, ...").

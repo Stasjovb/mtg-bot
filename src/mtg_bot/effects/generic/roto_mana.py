@@ -950,6 +950,88 @@ def _free_cast_tax_payable(state: "GameState", player_id: int, card) -> bool:
     )
 
 
+def roto_legal_actions(
+    state: "GameState", player_id: int, existing: list, *,
+    sorcery_timing: bool,
+) -> list:
+    """This bucket's extra legal actions (the single
+    ``legal._legal_actions_core`` hook): permission casts and suspend
+    (``permission_cast_actions``) plus activations of abilities that
+    work from exile (``exile_ability_actions``)."""
+    return permission_cast_actions(
+        state, player_id, existing, sorcery_timing=sorcery_timing,
+    ) + exile_ability_actions(state, player_id)
+
+
+def exile_ability_actions(state: "GameState", player_id: int) -> list:
+    """``ActivateAbility`` for each payable exile-zone ability of a card
+    ``player_id`` owns in exile (Greater Gargadon: only while suspended).
+    No timing restriction is printed, so they're offered at any
+    priority."""
+    from mtg_bot.actions import ActivateAbility, can_pay_cost
+    from mtg_bot.effects.generic.cube_creatures_rmc import extra_costs_payable
+
+    out: list = []
+    for card in state.player_by_id(player_id).exile:
+        for idx, ab in enumerate(card.printing.exile_activated_abilities):
+            if ab.activate_only_if_suspended and not is_suspended(card):
+                continue
+            if ab.cost.mana is not None and not can_pay_cost(
+                state, player_id, ab.cost.mana,
+            ):
+                continue
+            if not extra_costs_payable(state, player_id, card, ab.cost):
+                continue
+            out.append(ActivateAbility(source_id=card.id, ability_index=idx))
+    return out
+
+
+def activate_exile_ability(
+    state: "GameState", player_id: int, card_id: int, ability_index: int,
+) -> None:
+    """Activate ``exile_activated_abilities[ability_index]`` of a card in
+    ``player_id``'s exile: pay its costs and put it on the stack with the
+    card as its source (the graveyard-ability path's shape)."""
+    from mtg_bot.actions import auto_tap_for_cost
+    from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
+    from mtg_bot.game import StackItem
+
+    card = next(
+        (c for c in state.player_by_id(player_id).exile if c.id == card_id),
+        None,
+    )
+    if card is None:
+        return
+    abilities = card.printing.exile_activated_abilities
+    if not 0 <= ability_index < len(abilities):
+        return
+    ability = abilities[ability_index].ability
+    if ability.cost.mana is not None:
+        auto_tap_for_cost(state, player_id, ability.cost.mana)
+    paid = pay_extra_costs(state, player_id, card, ability.cost)
+    state.stack.append(StackItem(
+        source=card, controller_id=player_id, ability=ability,
+        targets=(), cost_paid_objects=tuple(paid),
+    ))
+    state.log.append(
+        f"P{player_id} activates {card.printing.name}'s ability from exile"
+    )
+
+
+@dataclass(frozen=True)
+class ExileZoneAbility:
+    """An activated ability that functions while its card is in exile.
+    ``activate_only_if_suspended``: "Activate only if this card is
+    suspended." (Greater Gargadon)."""
+
+    ability: object
+    activate_only_if_suspended: bool = False
+
+    @property
+    def cost(self):
+        return self.ability.cost
+
+
 def permission_cast_actions(
     state: "GameState", player_id: int, existing: list, *,
     sorcery_timing: bool,
@@ -1509,6 +1591,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "activate_exile_ability",
+    "ExileZoneAbility",
+    "roto_legal_actions",
     "ConvergeDrawDamageGainLife",
     "MillTargetPlayerMoreIfManaSpent",
     "GetEnergyThenExileUntilNonlandCastForEnergy",

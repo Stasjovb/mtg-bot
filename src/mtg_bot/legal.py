@@ -909,12 +909,12 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
             seen_bestow.add(pr.name)
             actions.append(CastSpell(card.id, use_bestow=True))
 
-    # Vintage Roto P3 cast permissions (Mystic Forge, ...): offered here,
-    # before the instant-speed return, so every restriction filter below
-    # sees them.
-    from mtg_bot.effects.generic.roto_mana import permission_cast_actions
+    # Vintage Roto P3 cast permissions (Mystic Forge, Omniscience, ...),
+    # suspend and exile-zone activations: offered here, before the
+    # instant-speed return, so every restriction filter below sees them.
+    from mtg_bot.effects.generic.roto_mana import roto_legal_actions
 
-    actions.extend(permission_cast_actions(
+    actions.extend(roto_legal_actions(
         state, player_id, actions, sorcery_timing=sorcery_timing,
     ))
 

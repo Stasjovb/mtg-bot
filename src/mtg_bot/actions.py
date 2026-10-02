@@ -3665,6 +3665,12 @@ def _activate_ability(
             _activate_graveyard_ability(
                 state, player_id, grave_card, ability_index,
             )
+            return
+        # Exile-resident source (Greater Gargadon while suspended;
+        # Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import activate_exile_ability
+
+        activate_exile_ability(state, player_id, source_id, ability_index)
         return
     if source.controller_id != player_id:
         return
