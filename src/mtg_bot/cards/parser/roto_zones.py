@@ -267,6 +267,17 @@ _GRAVEYARD_EXILE_INSTEAD_LINE_RE = re.compile(
 )
 
 
+# Opposition Agent's two library-search statics. Literal: it is the only
+# card in the pool with either line; the engine specs live in
+# ``effects.generic.roto_search``.
+_SEARCH_HOOK_LINES = {
+    "You control your opponents while they're searching their libraries.":
+        "ControlSearchingOpponents",
+    "While an opponent is searching their library, they exile each card "
+    "they find. You may play those cards for as long as they remain "
+    "exiled, and you may spend mana as though it were mana of any color "
+    "to cast them.": "ExileFoundCardsForYou",
+}
 # "Dredge N" (CR 702.52).
 _DREDGE_LINE_RE = re.compile(r"^Dredge (?P<n>\d+)$")
 # Chains of Mephistopheles' discard-instead draw replacement.
@@ -301,6 +312,11 @@ def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
         from mtg_bot.effects.generic.roto_zones import Dredge
 
         return {"zone_abilities": (Dredge(n=int(m.group("n"))),)}
+    search_spec = _SEARCH_HOOK_LINES.get(line)
+    if search_spec is not None:
+        from mtg_bot.effects.generic import roto_search
+
+        return {"zone_abilities": (getattr(roto_search, search_spec)(),)}
     m = _DISCARD_INSTEAD_OF_DRAW_LINE_RE.match(line)
     if m is not None:
         from mtg_bot.effects.generic.roto_zones import DiscardInsteadOfDraw
@@ -350,6 +366,13 @@ _COMBAT_DAMAGE_DESTROY_THAT_CREATURE_RE = re.compile(
 )
 
 
+# "Whenever an opponent searches their library, <effect>." (Wan Shi Tong,
+# Librarian).
+_OPPONENT_SEARCHES_TRIGGER_RE = re.compile(
+    r"^Whenever an opponent searches their library, (?P<eff>.+)\.$"
+)
+
+
 def parse_roto_zones_creature_line(line: str, card: dict):
     """``creature_builder`` fallback hook: a ``WGLine`` for a P2 creature
     line (static fields or the damaged-creature trigger), or ``None``."""
@@ -362,6 +385,25 @@ def parse_roto_zones_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
+    m = _OPPONENT_SEARCHES_TRIGGER_RE.match(
+        _substitute_self_name(line, card["name"])
+    )
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.roto_search import OpponentSearchedLibrary
+        from mtg_bot.effects.predicates import Event
+
+        effect = _parse_effect(m.group("eff"))
+        if effect is None or effect.requires_target():
+            return None
+        # The marker predicate never matches a dispatched event; the
+        # library-search hook stacks the ability (``roto_search``).
+        return WGLine(triggers=(TriggeredAbility(
+            event=Event.DIES,
+            predicate=OpponentSearchedLibrary(),
+            effect=effect,
+        ),))
     if _COMBAT_DAMAGE_DESTROY_THAT_CREATURE_RE.match(
         _substitute_self_name(line, card["name"])
     ):
@@ -518,6 +560,16 @@ def roto_zones_casting_keyword_fields(clause: str) -> dict | None:
         from mtg_bot.effects.generic.roto_zones import Bargain
 
         return {"zone_abilities": (Bargain(),)}
+    m = _PAY_ZERO_IF_RE.match(clause)
+    if m is not None:
+        condition = _PAY_ZERO_CONDITIONS.get(m.group("cond"))
+        if condition is None:
+            return None
+        from mtg_bot.effects.generic import roto_search
+
+        # Paying {0} rather than the mana cost is casting it without
+        # paying its mana cost (``free_cast_condition``).
+        return {"free_cast_condition": getattr(roto_search, condition)()}
     m = _FLASHBACK_SACRIFICE_LINE_RE.match(clause)
     if m is None:
         return None
@@ -835,6 +887,20 @@ def _type_list_filter(text: str):
 def _parse_more_tutors(phrase: str) -> Effect | None:
     from mtg_bot.effects.generic import roto_zones as rz
 
+    m = _MILLS_SPELLED_RE.match(phrase)
+    if m is not None:
+        # "target opponent mills thirteen cards": the base mill grammar
+        # with the count beyond its cardinal words.
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        n = _count(m.group("n"))
+        if n is None or m.group("n").isdigit():
+            return None
+        return _parse_effect(f"target {m.group('who')} mills {n} cards")
+    m = _PUT_X_COUNTERS_DRAW_HALF_X_RE.match(phrase)
+    if m is not None:
+        return rz.PutXCountersOnSelfThenDrawHalfX()
+
     m = _SEARCH_EXILE_FACE_DOWN_BARGAIN_RE.match(phrase)
     if m is not None:
         return rz.SearchExileFaceDownCastFreeIfBargained(max_mv=int(m.group("n")))
@@ -876,9 +942,27 @@ def _parse_more_tutors(phrase: str) -> Effect | None:
     return None
 
 
+_MILLS_SPELLED_RE = re.compile(
+    r"^target (?P<who>opponent|player) mills (?P<n>[a-z]+) cards$"
+)
+# Wan Shi Tong's ETB (its self-name substitution leaves the pronoun).
+_PUT_X_COUNTERS_DRAW_HALF_X_RE = re.compile(
+    r"^put X \+1/\+1 counters on (?:him|her|it|this creature)\. Then draw "
+    r"half X cards, rounded down$"
+)
 # "Discard a <creature> card" -- a cost piece (Survival of the Fittest).
 _DISCARD_CARD_COST_RE = re.compile(r"^[Dd]iscard (?P<desc>an? .+? card)$")
 _BARGAIN_LINE_RE = re.compile(r"^Bargain$")
+# "If <condition>, you may pay {0} rather than pay this spell's mana cost."
+# (the Trap alternative cost; Archive Trap).
+_PAY_ZERO_IF_RE = re.compile(
+    r"^If (?P<cond>.+), you may pay \{0\} rather than pay this spell's "
+    r"mana cost\.$"
+)
+_PAY_ZERO_CONDITIONS = {
+    "an opponent searched their library this turn":
+        "OpponentSearchedLibraryThisTurn",
+}
 
 
 # ---------------------------------------------------------------------

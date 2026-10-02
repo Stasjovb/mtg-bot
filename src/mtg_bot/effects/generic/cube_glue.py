@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
@@ -789,6 +793,7 @@ class SearchAnyNumberExileCastFreeThisTurn(Effect):
             return False
         return not self.colorless or not effective_colors(state, card)
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -815,6 +820,8 @@ class SearchAnyNumberExileCastFreeThisTurn(Effect):
             if card is None:
                 break
             p.library.remove(card)
+            if searched_card_taken(state, controller_id, card):
+                continue
             exile_card(state, card)
             grant_exile_play(
                 state, card, controller_id, duration=THIS_TURN, free=True,
@@ -931,6 +938,7 @@ class SearchAnyNumberOntoBattlefield(Effect):
     card_filter: object = None
     tapped: bool = False
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -956,6 +964,8 @@ class SearchAnyNumberOntoBattlefield(Effect):
             if card is None:
                 break
             p.library.remove(card)
+            if searched_card_taken(state, controller_id, card):
+                continue
             found.append(card)
         for card in found:
             put_into_battlefield(state, card, controller_id)

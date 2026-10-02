@@ -11,6 +11,10 @@ from mtg_bot.effects.base import (
     _apply_damage, _multicolored_permanents_count,
     _find_moonlit_replacement_source,
 )
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.generic.targets_helpers import (
     _eff_subtypes,
     _slot_target_still_legal,
@@ -96,6 +100,7 @@ class SearchLibraryForCard(Effect):
             return any(s in printing.subtypes for s in self.subtypes)
         return False
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -126,6 +131,9 @@ class SearchLibraryForCard(Effect):
             chosen_id = options[0].id
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         card.zone = Zone.HAND
         p.hand.append(card)
         state.log.append(
@@ -179,6 +187,7 @@ class SearchLibraryForBasicLandTapped(Effect):
 
     count: int = 1
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -202,6 +211,8 @@ class SearchLibraryForBasicLandTapped(Effect):
                 shuffle_library(state, controller_id)
                 return
             p.library.remove(land)
+            if searched_card_taken(state, controller_id, land):
+                continue
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
             # CR 302.1 — summoning sickness applies only to creatures;
@@ -275,6 +286,7 @@ class SearchLibraryForLandCardToBattlefield(Effect):
             return any(t in printing.subtypes for t in self.land_types)
         return True
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -300,6 +312,9 @@ class SearchLibraryForLandCardToBattlefield(Effect):
             shuffle_library(state, controller_id)
             return
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         card.zone = Zone.BATTLEFIELD
         card.controller_id = controller_id
         card.summoning_sick = False
@@ -349,6 +364,7 @@ class SearchLibraryForEquipmentToBattlefield(Effect):
     normally.
     """
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -376,6 +392,9 @@ class SearchLibraryForEquipmentToBattlefield(Effect):
             (c for c in options if c.id == chosen_id), options[0],
         )
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to "
             f"battlefield (Honored Knight-Captain)"
@@ -402,6 +421,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
     fetch is legal (matches the "search ... may fail" convention).
     """
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -437,6 +457,9 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
             return
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} onto the battlefield"
         )

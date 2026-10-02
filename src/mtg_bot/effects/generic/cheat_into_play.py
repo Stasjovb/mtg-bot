@@ -7,6 +7,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.base import Effect
 
 if TYPE_CHECKING:
@@ -114,6 +118,7 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
     this shape.
     """
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.cards import ManaCost
@@ -145,6 +150,9 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
             found = next((c for c in options if c.id == picked), None)
         if found is not None:
             p.library.remove(found)
+            if searched_card_taken(state, controller_id, found):
+                found = None
+        if found is not None:
             reveal_to_all(state, found)
             diff = found.printing.mana_cost.total - sacrificed_mv
             enters = diff <= 0 or pay_mana_during_resolution(

@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.generic.card_flow import CardFilter
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    run_library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.generic.targeted_removal import RemovalRider
 
 if TYPE_CHECKING:
@@ -121,6 +126,7 @@ class SearchToHandDiscardAtRandomThenShuffle(Effect):
 
     card_filter: CardFilter = CardFilter()
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.effects.generic.card_flow import discard_card
         from mtg_bot.game import Zone, reveal_to, shuffle_library
@@ -132,6 +138,9 @@ class SearchToHandDiscardAtRandomThenShuffle(Effect):
         )
         if found is not None:
             p.library.remove(found)
+            if searched_card_taken(state, controller_id, found):
+                found = None
+        if found is not None:
             found.zone = Zone.HAND
             p.hand.append(found)
             reveal_to(found, controller_id)
@@ -158,6 +167,7 @@ class SearchOntoBattlefieldTappedUntapIfLands(Effect):
     card_filter: CardFilter = CardFilter()
     min_lands: int = 4
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import shuffle_library
@@ -169,6 +179,9 @@ class SearchOntoBattlefieldTappedUntapIfLands(Effect):
         )
         if found is not None:
             p.library.remove(found)
+            if searched_card_taken(state, controller_id, found):
+                found = None
+        if found is not None:
             state.log.append(
                 f"P{controller_id} puts {found.printing.name} onto the "
                 f"battlefield tapped"
@@ -206,6 +219,7 @@ class SearchAnyNumberTotalManaValueOntoBattlefield(Effect):
     card_filter: CardFilter = CardFilter()
     max_total_mv: int = 6
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import shuffle_library
@@ -223,8 +237,9 @@ class SearchAnyNumberTotalManaValueOntoBattlefield(Effect):
             if pick is None:
                 break
             p.library.remove(pick)
-            found.append(pick)
             budget -= pick.printing.mana_cost.total
+            if not searched_card_taken(state, controller_id, pick):
+                found.append(pick)
         for card in found:
             put_into_battlefield(state, card, controller_id)
         shuffle_library(state, controller_id)
@@ -293,17 +308,25 @@ class ControllerMaySearchOntoBattlefield(RemovalRider):
         ):
             state.log.append(f"P{pid} declines to search")
             return
-        options = [c for c in p.library if self.card_filter.matches(c.printing)]
-        found = search_pick(state, p, options, may_fail=True)
-        if found is not None:
-            p.library.remove(found)
-            state.log.append(
-                f"P{pid} puts {found.printing.name} onto the battlefield"
-            )
-            put_into_battlefield(state, found, pid)
-            if self.tapped and found in state.battlefield:
-                found.tapped = True
-        shuffle_library(state, pid)
+        def search():
+            options = [
+                c for c in p.library if self.card_filter.matches(c.printing)
+            ]
+            found = search_pick(state, p, options, may_fail=True)
+            if found is not None:
+                p.library.remove(found)
+                if searched_card_taken(state, pid, found):
+                    found = None
+            if found is not None:
+                state.log.append(
+                    f"P{pid} puts {found.printing.name} onto the battlefield"
+                )
+                put_into_battlefield(state, found, pid)
+                if self.tapped and found in state.battlefield:
+                    found.tapped = True
+            shuffle_library(state, pid)
+
+        run_library_search(state, pid, search)
 
     def describe(self) -> str:
         tapped = " tapped" if self.tapped else ""
@@ -1877,6 +1900,7 @@ class SearchExileFaceDownCastFreeIfBargained(Effect):
 
     max_mv: int = 4
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.creature_casting_ub import can_cast_now, cast_now
         from mtg_bot.game import Zone, reveal_to, shuffle_library
@@ -1885,6 +1909,9 @@ class SearchExileFaceDownCastFreeIfBargained(Effect):
         found = search_pick(state, p, list(p.library), may_fail=False)
         if found is not None:
             p.library.remove(found)
+            if searched_card_taken(state, controller_id, found):
+                found = None
+        if found is not None:
             found.zone = Zone.EXILE
             p.exile.append(found)
             reveal_to(found, controller_id)
@@ -1928,6 +1955,7 @@ class SearchManaValueOnePlusSacrificed(Effect):
     card_filter: CardFilter = CardFilter()
     plus: int = 1
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
@@ -1943,6 +1971,9 @@ class SearchManaValueOnePlusSacrificed(Effect):
         found = search_pick(state, p, options, may_fail=True)
         if found is not None:
             p.library.remove(found)
+            if searched_card_taken(state, controller_id, found):
+                found = None
+        if found is not None:
             state.log.append(
                 f"P{controller_id} puts {found.printing.name} onto the battlefield"
             )
@@ -2022,18 +2053,23 @@ class SacrificeLandsSearchThatMany(Effect):
                 break
             sacrificed += 1
         found = []
-        for _ in range(sacrificed):
-            options = [c for c in p.library if c.printing.is_land]
-            pick = search_pick(state, p, options, may_fail=True)
-            if pick is None:
-                break
-            p.library.remove(pick)
-            found.append(pick)
-        for card in found:
-            put_into_battlefield(state, card, controller_id)
-            if card in state.battlefield:
-                card.tapped = True
-        shuffle_library(state, controller_id)
+
+        def search():
+            for _ in range(sacrificed):
+                options = [c for c in p.library if c.printing.is_land]
+                pick = search_pick(state, p, options, may_fail=True)
+                if pick is None:
+                    break
+                p.library.remove(pick)
+                if not searched_card_taken(state, controller_id, pick):
+                    found.append(pick)
+            for card in found:
+                put_into_battlefield(state, card, controller_id)
+                if card in state.battlefield:
+                    card.tapped = True
+            shuffle_library(state, controller_id)
+
+        run_library_search(state, controller_id, search)
         state.log.append(
             f"P{controller_id} sacrifices {sacrificed} land(s), fetches "
             f"{len(found)}"
@@ -2069,18 +2105,30 @@ class SearchLibraryAndOrGraveyardXThenPump(Effect):
         search_library = p.agent is None or p.agent.choose_yes_no(
             state, controller_id, "search your library too?",
         )
-        pool = list(p.graveyard) + (list(p.library) if search_library else [])
-        options = [
-            c for c in pool
-            if self.card_filter.matches(c.printing)
-            and c.printing.mana_cost.total <= x
-        ]
-        found = search_pick(state, p, options, may_fail=True)
-        if found is not None:
-            (p.library if found in p.library else p.graveyard).remove(found)
-            put_into_battlefield(state, found, controller_id)
+
+        def search():
+            pool = list(p.graveyard) + (list(p.library) if search_library else [])
+            options = [
+                c for c in pool
+                if self.card_filter.matches(c.printing)
+                and c.printing.mana_cost.total <= x
+            ]
+            found = search_pick(state, p, options, may_fail=True)
+            if found is not None:
+                (p.library if found in p.library else p.graveyard).remove(found)
+                if search_library and searched_card_taken(
+                    state, controller_id, found,
+                ):
+                    found = None
+            if found is not None:
+                put_into_battlefield(state, found, controller_id)
+            if search_library:
+                shuffle_library(state, controller_id)
+
         if search_library:
-            shuffle_library(state, controller_id)
+            run_library_search(state, controller_id, search)
+        else:
+            search()
         if x >= self.pump_threshold:
             PumpCreaturesYouControlUntilEOT(
                 power_bonus=x, toughness_bonus=x,
@@ -2118,6 +2166,7 @@ class SearchDifferentNamesOpponentSplits(Effect):
             if not p.has_lost and p.id != controller_id
         ]
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, reveal_to_all, shuffle_library
 
@@ -2132,7 +2181,8 @@ class SearchDifferentNamesOpponentSplits(Effect):
                 break
             p.library.remove(pick)
             reveal_to_all(state, pick)
-            found.append(pick)
+            if not searched_card_taken(state, controller_id, pick):
+                found.append(pick)
         to_graveyard = []
         if len(found) <= self.opponent_picks or opp is None:
             to_graveyard = list(found) if opp is not None else []
@@ -2178,6 +2228,7 @@ class DoomsdayPile(Effect):
 
     count: int = 5
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, reveal_to
 
@@ -2192,6 +2243,9 @@ class DoomsdayPile(Effect):
             if c not in chosen:
                 c.zone = Zone.EXILE
                 p.exile.append(c)
+        chosen = [
+            c for c in chosen if not searched_card_taken(state, controller_id, c)
+        ]
         for c in reversed(chosen):
             c.zone = Zone.LIBRARY
             p.library.insert(0, c)
@@ -2337,3 +2391,29 @@ class EachPlayerChoosesLowestCreatureEnters(Effect):
             "each player chooses a card in their hand and reveals it; each "
             "revealed creature card with the lowest mana value enters"
         )
+
+
+# ---------------------------------------------------------------------
+# Library-search payoffs (F18)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PutXCountersOnSelfThenDrawHalfX(Effect):
+    """"Put X +1/+1 counters on him. Then draw half X cards, rounded
+    down." (Wan Shi Tong, Librarian's ETB; X is the X its spell was cast
+    with -- 0 when it entered another way.)"""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import add_counters
+        from mtg_bot.turn import draw_n_cards
+
+        src = state.resolving_source
+        x = getattr(src, "entered_x_value", 0) if src is not None else 0
+        if src is not None and src in state.battlefield and x > 0:
+            add_counters(state, src, "+1/+1", x)
+        if x // 2:
+            draw_n_cards(state, controller_id, x // 2)
+
+    def describe(self) -> str:
+        return "put X +1/+1 counters on this creature; draw half X cards, rounded down"

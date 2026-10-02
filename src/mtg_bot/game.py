@@ -3054,6 +3054,10 @@ class Player:
     # applying to it; the SBA catch-all leaves them (see
     # ``roto_zones.apply_graveyard_exile_instead``).
     graveyard_exile_instead_snapshot: frozenset = frozenset()
+    # Roto P2: ``GameState.turn_number`` of this player's latest library
+    # search (``roto_search.run_library_search``; "if an opponent
+    # searched their library this turn", Archive Trap). 0 = never.
+    library_searched_turn: int = 0
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions

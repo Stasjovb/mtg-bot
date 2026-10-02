@@ -920,6 +920,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 wg = parse_roto_zones_creature_line(line, card)
             if wg is None:
                 return None
+            if "zone_abilities" in wg.fields:
+                # Roto P2 zone abilities accumulate across lines.
+                wg_fields["zone_abilities"] = tuple(
+                    wg_fields.get("zone_abilities", ())
+                ) + tuple(wg.fields["zone_abilities"])
+                wg = replace(wg, fields={
+                    k: v for k, v in wg.fields.items() if k != "zone_abilities"
+                })
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)
             triggers.extend(wg.triggers)
