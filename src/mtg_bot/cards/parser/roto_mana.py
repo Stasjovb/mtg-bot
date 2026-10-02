@@ -152,6 +152,32 @@ _SACRIFICED_MV_PHRASE = re.compile(
 _SOURCE_POWER_PHRASE = re.compile(r"^(?P<self>.+)'s power$")
 
 
+_CARD_TYPE_PREDICATES = {
+    "artifact": "IsArtifact", "creature": "IsCreature",
+    "enchantment": "IsEnchantment", "land": "IsLand",
+    "planeswalker": "IsPlaneswalker",
+}
+
+
+def _destroy_each_of_types(np: str):
+    """``destroy each <t1>, <t2>, and <t3>`` -- a singular card-type
+    list (Wrath of the Skies' "artifact, creature, and enchantment") the
+    base removal grammar reads only in its plural "all" form."""
+    from mtg_bot.effects import object_predicates as op
+    from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
+
+    words = re.split(r", and |, | and ", np)
+    if len(words) < 2 or any(w not in _CARD_TYPE_PREDICATES for w in words):
+        return None
+    pred = None
+    for w in words:
+        atom = getattr(op, _CARD_TYPE_PREDICATES[w])()
+        pred = atom if pred is None else pred | atom
+    return RemoveAllMatching(
+        permanent_filter=pred, action="destroy", label=f"each {np}",
+    )
+
+
 def _parse_x_formula(phrase: str):
     from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
     from mtg_bot.effects.generic import roto_mana as rm
@@ -180,6 +206,23 @@ _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE = re.compile(
 _SAC_UNLESS_TOTAL_POWER_RE = re.compile(
     r"^sacrifice (?:it|this creature) unless you sacrifice any number of "
     r"creatures with total power (?P<n>\d+) or greater$"
+)
+# "you get X {E}, then you may pay any amount of {E}. Destroy each <np>
+# with mana value less than or equal to the amount of {E} paid this way"
+# (Wrath of the Skies).
+_GET_X_ENERGY_PAY_DESTROY_RE = re.compile(
+    r"^you get X \{E\}, then you may pay any amount of \{E\}\. Destroy "
+    r"each (?P<np>.+?) with mana value less than or equal to the amount of "
+    r"\{E\} paid this way$"
+)
+# Amped Raptor's enters trigger. A literal: the only card in the pools
+# with this energy-cast shape; broader grammar deferred until a second
+# example exists.
+_AMPED_RAPTOR_RE = re.compile(
+    r"^you get (?P<e>(?:\{E\})+)\. Then if you cast it from your hand, "
+    r"exile cards from the top of your library until you exile a nonland "
+    r"card\. You may cast that card by paying an amount of \{E\} equal "
+    r"to its mana value rather than paying its mana cost$"
 )
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
@@ -273,6 +316,22 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _GET_X_ENERGY_PAY_DESTROY_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
+
+        base = _parse_effect(f"destroy each {m.group('np')}")
+        if base is None:
+            base = _destroy_each_of_types(m.group("np"))
+        if not isinstance(base, RemoveAllMatching) or base.action != "destroy":
+            return None
+        return rm.GetXEnergyPayAnyDestroyMVAtMostPaid(destroy=base)
+    m = _AMPED_RAPTOR_RE.match(phrase)
+    if m is not None:
+        return rm.GetEnergyThenExileUntilNonlandCastForEnergy(
+            energy=m.group("e").count("{E}"),
+        )
     m = _SAC_UNLESS_TOTAL_POWER_RE.match(phrase)
     if m is not None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(

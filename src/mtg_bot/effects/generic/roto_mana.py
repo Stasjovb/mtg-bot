@@ -304,6 +304,112 @@ class SacrificeSourceUnlessSacrificeTotalPower(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Energy
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GetXEnergyPayAnyDestroyMVAtMostPaid(Effect):
+    """"You get X {E}, then you may pay any amount of {E}. Destroy each
+    <np> with mana value less than or equal to the amount of {E} paid
+    this way." (Wrath of the Skies). X is the spell's X; the amount paid
+    (any of ALL the controller's energy) is ``choose_x``."""
+
+    destroy: Effect = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from dataclasses import replace
+
+        p = state.player_by_id(controller_id)
+        p.energy += max(0, state.resolving_x_value)
+        paid = p.energy
+        if p.agent is not None:
+            paid = p.agent.choose_x(
+                state, controller_id, "energy to pay", p.energy,
+            )
+        paid = max(0, min(paid, p.energy))
+        p.energy -= paid
+        state.log.append(
+            f"P{controller_id} pays {paid} energy (now {p.energy})"
+        )
+        from mtg_bot.effects.value_predicates import HasManaValueAtMost
+
+        replace(
+            self.destroy,
+            permanent_filter=self.destroy.permanent_filter
+            & HasManaValueAtMost(n=paid),
+        ).resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return (
+            "you get X energy, then pay any amount; "
+            f"{self.destroy.describe()} with mana value up to the amount paid"
+        )
+
+
+@dataclass(frozen=True)
+class GetEnergyThenExileUntilNonlandCastForEnergy(Effect):
+    """"You get {E}{E}. Then if you cast it from your hand, exile cards
+    from the top of your library until you exile a nonland card. You may
+    cast that card by paying an amount of {E} equal to its mana value
+    rather than paying its mana cost." (Amped Raptor). The card is cast
+    during the resolution (``cast_now``, timing ignored) after the energy
+    is paid; if it isn't cast it stays exiled."""
+
+    energy: int = 2
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.game import Zone
+
+        p = state.player_by_id(controller_id)
+        p.energy += self.energy
+        state.log.append(
+            f"P{controller_id} gets {self.energy} energy (now {p.energy})"
+        )
+        src = state.resolving_source
+        if src is None or not src.entered_from_hand_cast:
+            return
+        found = None
+        while p.library:
+            card = p.library.pop(0)
+            card.zone = Zone.EXILE
+            p.exile.append(card)
+            state.log.append(f"P{controller_id} exiles {card.printing.name}")
+            if not card.printing.is_land:
+                found = card
+                break
+        if found is None:
+            return
+        mv = found.printing.mana_cost.total
+        if p.energy < mv or not can_cast_now(
+            state, controller_id, found, free=True,
+        ):
+            return
+        if p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id,
+            f"Pay {mv} energy to cast {found.printing.name}?",
+        ):
+            return
+        p.energy -= mv
+        state.log.append(f"P{controller_id} pays {mv} energy (now {p.energy})")
+        cast_now(state, controller_id, found, free=True)
+
+    def describe(self) -> str:
+        return (
+            f"you get {self.energy} energy; if cast from hand, exile until a "
+            "nonland card and you may cast it paying energy equal to its "
+            "mana value"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -1275,6 +1381,8 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "GetEnergyThenExileUntilNonlandCastForEnergy",
+    "GetXEnergyPayAnyDestroyMVAtMostPaid",
     "SacrificeSourceUnlessSacrificeTotalPower",
     "LookAtTopMayPutOntoBattlefieldRestBottom",
     "GrantExtraManaOnLandTapUntilEndOfTurn",

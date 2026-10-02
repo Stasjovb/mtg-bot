@@ -5551,6 +5551,11 @@ def put_into_battlefield(
             state, obj,
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
+    # Persistent provenance for "if you cast it from your hand" on its
+    # enters trigger (Amped Raptor; Vintage Roto P3).
+    obj.entered_from_hand_cast = (
+        obj.cast_via_hand and obj.entered_from_zone == Zone.STACK.value
+    )
     obj.cast_via_hand = False
     # A "void" graveyard replacement source (Dauthi Voidwalker) applies
     # only to cards put into its opponents' graveyards from now on.

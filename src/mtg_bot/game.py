@@ -977,6 +977,10 @@ class GameObject:
     # Vintage Roto P3: the creature type chosen as this permanent
     # entered (Cavern of Souls); ``None`` when none was chosen.
     chosen_creature_type: Optional[str] = None
+    # This permanent entered by resolving as a spell cast from its owner's
+    # hand ("if you cast it from your hand" on an enters trigger: Amped
+    # Raptor); set by ``put_into_battlefield`` from ``cast_via_hand``.
+    entered_from_hand_cast: bool = False
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
