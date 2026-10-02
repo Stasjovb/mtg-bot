@@ -1785,9 +1785,9 @@ def state_based_actions(state: GameState) -> bool:
 
     # Roto P2 exile-instead catch-all: before any graveyard watcher, so
     # an exiled-instead card never looks like a graveyard arrival.
-    from mtg_bot.effects.generic.roto_zones import apply_graveyard_exile_instead
+    from mtg_bot.effects.generic.roto_zones import run_zone_sweeps
 
-    if apply_graveyard_exile_instead(state):
+    if run_zone_sweeps(state):
         any_changed = True
     if sweep_graveyard_watch(state):
         any_changed = True

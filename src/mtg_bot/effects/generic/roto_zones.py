@@ -143,6 +143,8 @@ class SearchToHandDiscardAtRandomThenShuffle(Effect):
             if searched_card_taken(state, controller_id, found):
                 found = None
         if found is not None:
+            # Into the hand (not the graveyard) before the random discard.
+            note_left_library(state, p, found)
             found.zone = Zone.HAND
             p.hand.append(found)
             reveal_to(found, controller_id)
@@ -1443,6 +1445,17 @@ def _dredgers(player):
 
 
 def replace_draw(state, player) -> bool:
+    """``turn.draw_card`` hook (see :func:`_replace_draw`); a draw that
+    isn't replaced takes the top card out of the library, which the
+    graveyard zone watch must not later mistake for a mill."""
+    if _replace_draw(state, player):
+        return True
+    if player.library:
+        note_left_library(state, player, player.library[0])
+    return False
+
+
+def _replace_draw(state, player) -> bool:
     """``turn.draw_card`` hook: offer the P2 replacements for the draw
     ``player`` is about to make; returns ``True`` when the draw was
     replaced (the caller then performs no draw).
@@ -2688,3 +2701,220 @@ class LookTopMayPutAttackingGainKeyword(Effect):
             f"attacking with {self.keyword} until end of turn; the rest on "
             f"the bottom in a random order"
         )
+
+
+# ---------------------------------------------------------------------
+# Graveyard zone-change watch (F14): Narcomoeba, Slogurk, Kishla
+# Skimmer, Gau
+# ---------------------------------------------------------------------
+
+
+class _WatchMarker(_TriggerPredicate):
+    """Base of the graveyard-watch marker predicates: they never match a
+    dispatched event; :func:`sweep_graveyard_zone_watch` stacks their
+    abilities."""
+
+    def matches(self, state, subjects, source) -> bool:
+        return False
+
+    def __eq__(self, other):
+        return type(other) is type(self)
+
+    def __hash__(self):
+        return hash(type(self).__name__)
+
+    def __repr__(self):
+        return f"{type(self).__name__}()"
+
+
+class PutIntoYourGraveyardFromYourLibrary(_WatchMarker):
+    """"When this card is put into your graveyard from your library"
+    (Narcomoeba) -- the card's own ability, stacked as it arrives."""
+
+
+class LandCardPutIntoYourGraveyard(_WatchMarker):
+    """"Whenever a land card is put into your graveyard from anywhere"
+    (Slogurk) -- a battlefield permanent's ability."""
+
+
+class CardLeftYourGraveyardDuringYourTurn(_WatchMarker):
+    """"Whenever a card leaves your graveyard during your turn" (Kishla
+    Skimmer; its "only once each turn" is the ability's
+    ``once_per_turn``)."""
+
+
+class CardLeftYourGraveyardThisTurn(_TriggerPredicate):
+    """Intervening "if a card left your graveyard this turn" on an
+    end-step trigger (Gau, Feral Youth): checked as it triggers, from
+    ``Player.card_left_graveyard_turn``."""
+
+    def matches(self, state, subjects, source) -> bool:
+        if source is None:
+            return False
+        p = state.player_by_id(source.controller_id)
+        return p.card_left_graveyard_turn == state.turn_number
+
+    def __eq__(self, other):
+        return isinstance(other, CardLeftYourGraveyardThisTurn)
+
+    def __hash__(self):
+        return hash("CardLeftYourGraveyardThisTurn")
+
+    def __repr__(self):
+        return "CardLeftYourGraveyardThisTurn()"
+
+
+_WATCH_PREDICATES = (
+    PutIntoYourGraveyardFromYourLibrary, LandCardPutIntoYourGraveyard,
+    CardLeftYourGraveyardDuringYourTurn, CardLeftYourGraveyardThisTurn,
+)
+
+
+def _all_objects(state):
+    for p in state.players:
+        yield from p.hand
+        yield from p.library
+        yield from p.graveyard
+        yield from p.exile
+    yield from state.battlefield
+    for item in state.stack:
+        yield item.source
+
+
+def zone_watch_active(state) -> bool:
+    """Is any card in this game watching graveyard zone changes? Decided
+    once per game (the first sweep scans every zone) so games without
+    such cards pay nothing."""
+    active = state.p2_zone_watch
+    if active is None:
+        active = any(
+            isinstance(t.predicate, _WATCH_PREDICATES)
+            for o in _all_objects(state)
+            for t in o.printing.triggered_abilities
+        )
+        state.p2_zone_watch = active
+    return active
+
+
+def note_left_library(state, player, card) -> None:
+    """``card`` left ``player``'s library some other way than being put
+    into the graveyard (drawn, found by a search): if it reaches the
+    graveyard before the next sweep it didn't come from the library."""
+    if state.p2_zone_watch:
+        player.left_library_ids = player.left_library_ids | {card.id}
+
+
+def _push_watch_triggers(state, source, marker, controller_id, label) -> bool:
+    from mtg_bot.actions import push_triggered_ability
+
+    fired = False
+    for idx, ability in enumerate(source.printing.triggered_abilities):
+        if isinstance(ability.predicate, marker):
+            fired = push_triggered_ability(
+                state, source=source, ability=ability, ability_index=idx,
+                controller_id=controller_id, label=label,
+            ) or fired
+    return fired
+
+
+def sweep_graveyard_zone_watch(state) -> bool:
+    """State-based sweep (with the exile-instead catch-all) comparing
+    each player's library and graveyard with the previous sweep:
+
+    * a card that left the graveyard marks ``card_left_graveyard_turn``
+      and, during that player's turn, stacks their "whenever a card
+      leaves your graveyard during your turn" abilities;
+    * a card that arrived from the library (it was there at the last
+      sweep and wasn't drawn or found since) stacks its own "put into
+      your graveyard from your library" ability;
+    * a land card that arrived stacks the owner's "whenever a land card
+      is put into your graveyard from anywhere" abilities.
+    """
+    if not zone_watch_active(state):
+        return False
+    fired = False
+    active_id = state.players[state.active_player_idx].id
+    for p in state.players:
+        prev = p.zone_watch
+        library = frozenset(c.id for c in p.library)
+        graveyard = frozenset(c.id for c in p.graveyard)
+        p.zone_watch = (library, graveyard)
+        not_milled = p.left_library_ids
+        p.left_library_ids = frozenset()
+        if not prev:
+            continue
+        prev_library, prev_graveyard = prev
+        if prev_graveyard - graveyard:
+            p.card_left_graveyard_turn = state.turn_number
+            if p.id == active_id:
+                for o in list(state.battlefield):
+                    if o.controller_id == p.id:
+                        fired = _push_watch_triggers(
+                            state, o, CardLeftYourGraveyardDuringYourTurn,
+                            p.id, "card left your graveyard",
+                        ) or fired
+        for c in list(p.graveyard):
+            if c.id in prev_graveyard:
+                continue
+            if c.id in prev_library and c.id not in not_milled:
+                fired = _push_watch_triggers(
+                    state, c, PutIntoYourGraveyardFromYourLibrary, p.id,
+                    "put into your graveyard from your library",
+                ) or fired
+            if c.printing.is_land:
+                for o in list(state.battlefield):
+                    if o.controller_id == p.id:
+                        fired = _push_watch_triggers(
+                            state, o, LandCardPutIntoYourGraveyard, p.id,
+                            "land card put into your graveyard",
+                        ) or fired
+    return fired
+
+
+def run_zone_sweeps(state) -> bool:
+    """``turn.state_based_actions`` hook: the P2 sweeps, exile-instead
+    first (an exiled-instead card never looks like an arrival)."""
+    changed = apply_graveyard_exile_instead(state)
+    if sweep_graveyard_zone_watch(state):
+        changed = True
+    return changed
+
+
+@dataclass(frozen=True)
+class SelfDealsDamageEqualToPowerToEachOpponent(Effect):
+    """"<This creature> deals damage equal to its power to each
+    opponent." (Gau, Feral Youth.) Last-known power if it already left
+    the battlefield."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.base import _apply_damage
+        from mtg_bot.game import effective_power
+
+        src = state.resolving_source
+        if src is None:
+            return
+        n = max(0, effective_power(state, src))
+        for p in state.players:
+            if p.id != controller_id and not p.has_lost and n:
+                _apply_damage(state, ("player", p.id), n)
+        state.log.append(f"{src.printing.name} deals {n} to each opponent")
+
+    def describe(self) -> str:
+        return "this creature deals damage equal to its power to each opponent"
+
+
+@dataclass(frozen=True)
+class ReturnSourceToOwnersHand(Effect):
+    """"Return this creature to its owner's hand." -- the resolving
+    ability's source, if it is still on the battlefield."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
+
+        src = state.resolving_source
+        if src is not None and src in state.battlefield:
+            _bounce_to_hand(state, src)
+            state.log.append(f"{src.printing.name} returns to its owner's hand")
+
+    def describe(self) -> str:
+        return "return this creature to its owner's hand"

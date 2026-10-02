@@ -431,6 +431,103 @@ _OPPONENT_SEARCHES_TRIGGER_RE = re.compile(
 )
 
 
+# Graveyard zone-watch trigger lines (F14) and the "it" lines of those
+# cards. Each regex is the whole printed line; "it" means the card itself
+# only inside these exact shapes.
+_FROM_LIBRARY_TRIGGER_RE = re.compile(
+    r"^When this (?:card|creature) is put into your graveyard from your "
+    r"library, (?P<eff>.+)\.$"
+)
+_LAND_INTO_GRAVEYARD_TRIGGER_RE = re.compile(
+    r"^Whenever a land card is put into your graveyard from anywhere, "
+    r"(?P<eff>.+)\.$"
+)
+_LEAVES_GRAVEYARD_YOUR_TURN_TRIGGER_RE = re.compile(
+    r"^Whenever a card leaves your graveyard during your turn, (?P<eff>.+)\. "
+    r"This ability triggers only once each turn\.$"
+)
+_END_STEP_IF_LEFT_GRAVEYARD_RE = re.compile(
+    r"^At the beginning of each end step, if a card left your graveyard this "
+    r"turn, (?P<eff>.+)\.$"
+)
+_ATTACKS_COUNTER_ON_IT_RE = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?Whenever this creature attacks, put a \+1/\+1 "
+    r"counter on it\.$"
+)
+_RETURN_IT_TO_HAND_ACTIVATED_RE = re.compile(
+    r"^(?P<cost>[^:]+): Return it to its owner's hand\.$"
+)
+
+
+def _zone_watch_effect(body: str):
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import roto_zones as rz
+
+    if body == "you may put it onto the battlefield":
+        from mtg_bot.effects.combinators import MayDo
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            ReturnThisCardFromGraveyardToBattlefield,
+        )
+
+        return MayDo(inner=ReturnThisCardFromGraveyardToBattlefield())
+    if body == "this creature deals damage equal to its power to each opponent":
+        return rz.SelfDealsDamageEqualToPowerToEachOpponent()
+    effect = _parse_effect(body)
+    if effect is None or effect.requires_target():
+        return None
+    return effect
+
+
+def _parse_zone_watch_line(line: str):
+    if _disabled():
+        return None
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import roto_zones as rz
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    shapes = (
+        (_FROM_LIBRARY_TRIGGER_RE, Event.DIES,
+         rz.PutIntoYourGraveyardFromYourLibrary(), False),
+        (_LAND_INTO_GRAVEYARD_TRIGGER_RE, Event.DIES,
+         rz.LandCardPutIntoYourGraveyard(), False),
+        (_LEAVES_GRAVEYARD_YOUR_TURN_TRIGGER_RE, Event.DIES,
+         rz.CardLeftYourGraveyardDuringYourTurn(), True),
+        (_END_STEP_IF_LEFT_GRAVEYARD_RE, Event.BEGINNING_OF_END_STEP,
+         rz.CardLeftYourGraveyardThisTurn(), False),
+    )
+    for rx, event, predicate, once in shapes:
+        m = rx.match(line)
+        if m is None:
+            continue
+        effect = _zone_watch_effect(m.group("eff"))
+        if effect is None:
+            return None
+        # The watch markers never match a dispatched event (the zone
+        # watch stacks them); the end-step one is a real predicate.
+        return WGLine(triggers=(TriggeredAbility(
+            event=event, predicate=predicate, effect=effect,
+            once_per_turn=once,
+        ),))
+    if _ATTACKS_COUNTER_ON_IT_RE.match(line):
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        return WGLine(triggers=(TriggeredAbility(
+            event=Event.ATTACKS, predicate=IsSelf(),
+            effect=_parse_effect("put a +1/+1 counter on this creature"),
+        ),))
+    m = _RETURN_IT_TO_HAND_ACTIVATED_RE.match(line)
+    if m is not None:
+        # The ability's "it" is its source: the printed self-reference.
+        from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+
+        ability = _parse_activated_ability_line(
+            f"{m.group('cost')}: Return this creature to its owner's hand."
+        )
+        return None if ability is None else WGLine(activated=(ability,))
+    return None
+
+
 def parse_roto_zones_creature_line(line: str, card: dict):
     """``creature_builder`` fallback hook: a ``WGLine`` for a P2 creature
     line (static fields or the damaged-creature trigger), or ``None``."""
@@ -443,6 +540,9 @@ def parse_roto_zones_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
+    watch = _parse_zone_watch_line(_substitute_self_name(line, card["name"]))
+    if watch is not None:
+        return watch
     m = _SELF_INTO_YOUR_GRAVEYARD_TRIGGER_RE.match(
         _substitute_self_name(line, card["name"])
     )
@@ -1007,6 +1107,8 @@ def _parse_more_tutors(phrase: str) -> Effect | None:
     m = _PUT_X_COUNTERS_DRAW_HALF_X_RE.match(phrase)
     if m is not None:
         return rz.PutXCountersOnSelfThenDrawHalfX()
+    if phrase == "return this creature to its owner's hand":
+        return rz.ReturnSourceToOwnersHand()
     m = _EXILE_SELF_AND_TOP_N_PILE_RE.match(phrase)
     if m is not None:
         n = _count(m.group("n"))

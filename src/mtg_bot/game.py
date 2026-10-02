@@ -3058,6 +3058,13 @@ class Player:
     # search (``roto_search.run_library_search``; "if an opponent
     # searched their library this turn", Archive Trap). 0 = never.
     library_searched_turn: int = 0
+    # Roto P2 graveyard zone watch (``roto_zones.sweep_graveyard_zone_
+    # watch``): (library ids, graveyard ids) at the previous sweep; the
+    # turn a card last left this player's graveyard; ids that left the
+    # library by a draw or a search since the last sweep.
+    zone_watch: tuple = ()
+    card_left_graveyard_turn: int = 0
+    left_library_ids: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions
@@ -3330,6 +3337,9 @@ class GameState:
     active_player_idx: int = 0
     priority_player_idx: int = 0
     turn_number: int = 1
+    # Roto P2: does any card in this game watch graveyard zone changes
+    # (``roto_zones.zone_watch_active``)? None until the first sweep.
+    p2_zone_watch: object = None
     step: Optional["Step"] = None
     next_object_id: int = 0
     # Layered-effects registry (CR 613). Phase 1 introduces it as
@@ -4216,6 +4226,7 @@ class GameState:
             list(self.extra_turn_queue) if self.extra_turn_queue else []
         )
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
+        new_state.p2_zone_watch = self.p2_zone_watch
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the
