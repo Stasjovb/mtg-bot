@@ -64,6 +64,7 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Animate Dead",
+    "Exploration",
     "Fastbond",
     "Goblin Bombardment",
     "Leyline Binding",
@@ -143,8 +144,19 @@ _ANY_NUMBER_OF_LANDS_LINE = (
 
 def _any_number_of_lands(line: str, acc: _Accumulator) -> bool:
     """Fastbond. Literal: the only "any number of lands" surface in the
-    pool (the "an additional land" family is parsed by the creature
-    builder's printing keywords)."""
+    pool. The "<N> additional land(s)" family (Exploration) is the
+    printing keywords' parameterized ``parse_additional_lands_per_turn``."""
+    from mtg_bot.cards.parser.printing_keywords import (
+        parse_additional_lands_per_turn,
+    )
+
+    extra = parse_additional_lands_per_turn(line)
+    if extra is not None:
+        acc.printing_fields["grants_additional_land_per_turn"] = (
+            acc.printing_fields.get("grants_additional_land_per_turn", 0)
+            + extra
+        )
+        return True
     if line != _ANY_NUMBER_OF_LANDS_LINE:
         return False
     acc.printing_fields["grants_additional_land_per_turn"] = (

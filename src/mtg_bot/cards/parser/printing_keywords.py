@@ -754,26 +754,31 @@ def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
     return m.group("subtype"), m.group("cost")
 
 
-# ``You may play an additional land on each of your turns.`` — Icetill
-# Explorer's printed static land-drop grant. The engine field
+# ``You may play <N> additional land(s) on each of your turns.`` — the
+# printed static land-drop grant, parameterized over the count: Icetill
+# Explorer / Exploration ("an additional land"), Azusa, Lost but Seeking
+# ("two additional lands"). The engine field
 # ``grants_additional_land_per_turn: int`` is consumed by the turn
 # engine when counting legal land plays; the printing increments the
-# controller's per-turn quota by this value. Matched as a literal
-# string — Icetill Explorer is the only card in the pool with this
-# exact surface today; broader grammar deferred until a second example
-# with a different count (``two additional lands``) exists.
-_ADDITIONAL_LAND_PER_TURN_LINE = (
-    "You may play an additional land on each of your turns."
+# controller's per-turn quota by this value.
+_ADDITIONAL_LANDS_PER_TURN_RE = re.compile(
+    r"^You may play (?P<n>an|two|three|four) additional lands? on each of "
+    r"your turns\.$"
 )
+_ADDITIONAL_LAND_COUNTS = {"an": 1, "two": 2, "three": 3, "four": 4}
+
+
+def parse_additional_lands_per_turn(line: str) -> "int | None":
+    """The extra land plays a ``You may play <N> additional land(s) on
+    each of your turns.`` static grants, or ``None``."""
+    m = _ADDITIONAL_LANDS_PER_TURN_RE.match(line.strip())
+    return None if m is None else _ADDITIONAL_LAND_COUNTS[m.group("n")]
 
 
 def _parse_additional_land_per_turn_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the ``You may play an additional
-    land on each of your turns.`` static, else ``False``. Increments
-    the ``grants_additional_land_per_turn`` kwarg on ``make_creature``
-    by 1.
-    """
-    return line.strip() == _ADDITIONAL_LAND_PER_TURN_LINE
+    """Return ``True`` if ``line`` is an additional-land-plays static
+    (``parse_additional_lands_per_turn`` gives the count)."""
+    return parse_additional_lands_per_turn(line) is not None
 
 
 # ``You may play lands from your graveyard.`` — Icetill Explorer's
