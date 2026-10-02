@@ -125,3 +125,102 @@ def test_modal_block_extraction_paths():
     # A header with no bullet lines after it is left in place.
     lone = "When this artifact enters, choose one —"
     assert extract_modal_trigger_blocks(lone, "X") == (lone, ())
+
+
+# ---------------------------------------------------------------------------
+# Cavern of Souls
+# ---------------------------------------------------------------------------
+
+
+def _goblin(name="Goblin Raider", cost="{1}"):
+    return make_creature(name, cost, 1, 1, subtypes=("Goblin", "Warrior"))
+
+
+def _elf(name="Elf Scout", cost="{1}"):
+    return make_creature(name, cost, 1, 1, subtypes=("Elf",))
+
+
+def _cavern_in_play(chosen_index=0):
+    from mtg_bot.actions import PlayLand
+
+    s = arena()
+    to_library(s, _goblin(), 0)
+    to_library(s, _elf(), 0)
+    to_library(s, ROCK, 0)  # noncreature types aren't offered
+    s.players[0].agent.choose_mode = lambda state, pid, opts: chosen_index
+    cavern = to_hand(s, printing("Cavern of Souls"), 0)
+    apply_action(s, 0, PlayLand(cavern.id))
+    return s, cavern
+
+
+def _any_color_index(cavern):
+    from mtg_bot.effects.generic.roto_mana import (
+        AddAnyColorManaForChosenCreatureType,
+    )
+
+    return next(
+        i for i, a in enumerate(cavern.printing.activated_abilities)
+        if isinstance(a.effect, AddAnyColorManaForChosenCreatureType)
+    )
+
+
+def test_cavern_chooses_among_owned_creature_types_as_it_enters():
+    from mtg_bot.effects.generic.roto_mana import creature_types_owned_by
+
+    s, cavern = _cavern_in_play(chosen_index=1)
+    assert creature_types_owned_by(s, 0) == ["Elf", "Goblin", "Warrior"]
+    assert cavern.chosen_creature_type == "Goblin"
+    assert cavern.printing.produces == frozenset({"C"})
+
+
+def test_cavern_mana_casts_only_the_chosen_type_and_it_cant_be_countered():
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+
+    s, cavern = _cavern_in_play(chosen_index=1)  # Goblin
+    _activate_ability(s, 0, cavern.id, _any_color_index(cavern))
+    coin = s.players[0].mana_pool[0]
+    assert coin.spend_restriction == "creature_type:Goblin"
+    goblin = to_hand(s, _goblin(), 0)
+    elf = to_hand(s, _elf(), 0)
+    acts = legal_actions(s, 0)
+    assert CastSpell(goblin.id) in acts
+    assert CastSpell(elf.id) not in acts
+    apply_action(s, 0, CastSpell(goblin.id))
+    assert goblin.cast_uncounterable
+    assert CounterTargetSpell().legal_targets(s, 1) == []
+
+
+def test_cavern_mana_with_a_changeling_and_without_a_choice():
+    from dataclasses import replace
+
+    from mtg_bot.effects.generic.roto_mana import (
+        creature_types_owned_by,
+        roto_coin_satisfies,
+        roto_spell_kinds,
+    )
+
+    s, cavern = _cavern_in_play(chosen_index=0)  # Elf
+    shifter = to_hand(
+        s, replace(_elf("Mutavault Kin"), keywords=frozenset({"changeling"})), 0,
+    )
+    kinds = roto_spell_kinds(shifter)
+    assert kinds == frozenset({"creature_type:*"})
+    coin = ManaCoin(color="any", spend_restriction="creature_type:Elf")
+    assert roto_coin_satisfies(coin, kinds)
+    # Nothing chosen (no creature card owned): the mana pays for nothing.
+    none_coin = ManaCoin(color="any", spend_restriction="creature_type:")
+    assert not roto_coin_satisfies(none_coin, kinds)
+    assert roto_spell_kinds(to_hand(s, ROCK, 0)) == frozenset()
+    empty = arena()
+    assert creature_types_owned_by(empty, 0) == []
+
+
+def test_cavern_with_no_creature_cards_records_no_type():
+    from mtg_bot.actions import PlayLand
+
+    s = arena()
+    cavern = to_hand(s, printing("Cavern of Souls"), 0)
+    apply_action(s, 0, PlayLand(cavern.id))
+    assert cavern.chosen_creature_type is None
+    _activate_ability(s, 0, cavern.id, _any_color_index(cavern))
+    assert s.players[0].mana_pool[0].spend_restriction == "creature_type:"

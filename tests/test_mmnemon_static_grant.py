@@ -274,4 +274,9 @@ def test_normal_hand_cast_still_uses_default_spell_kind():
         state, _PRINTINGS["Rayblade Trooper"], zone=Zone.HAND,
     )
     kinds = _spell_kinds_for_card(card)
-    assert kinds == frozenset({"spell"})
+    # The creature spell also carries its creature-type tags (Cavern of
+    # Souls' restricted mana, ``roto_mana.roto_spell_kinds``).
+    assert kinds - {"creature_type:Human", "creature_type:Soldier"} == (
+        frozenset({"spell"})
+    )
+    assert "cast_from_outside_hand" not in kinds

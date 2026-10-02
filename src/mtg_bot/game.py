@@ -974,6 +974,9 @@ class GameObject:
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()
+    # Vintage Roto P3: the creature type chosen as this permanent
+    # entered (Cavern of Souls); ``None`` when none was chosen.
+    chosen_creature_type: Optional[str] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

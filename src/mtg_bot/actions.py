@@ -1719,6 +1719,10 @@ def apply_land_etb_replacements(
 
     if forced_to_enter_tapped(state, card, player_id):
         card.tapped = True
+    # Vintage Roto P3 "As this land enters, ..." choices (Cavern of Souls).
+    from mtg_bot.effects.generic.roto_mana import apply_roto_land_as_enters
+
+    apply_roto_land_as_enters(state, player_id, card)
 
 
 def _offer_echoing_deeps_copy(
@@ -2728,6 +2732,10 @@ def _cast_spell(
     # of library — set above when we resolved the spell's source zone).
     if cast_from_outside_hand:
         spell_kinds.add("cast_from_outside_hand")
+    # Vintage Roto P3 tags (Cavern of Souls' creature-type mana).
+    from mtg_bot.effects.generic.roto_mana import roto_spell_kinds
+
+    spell_kinds |= roto_spell_kinds(card)
     # CR 601.2g (mana abilities) precedes 601.2h (pay total cost). Sac
     # Treasures and other "sacrifice: Add ..." mana abilities fire
     # FIRST, filling the pool. Convoke is part of paying the cost

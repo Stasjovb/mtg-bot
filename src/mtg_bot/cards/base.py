@@ -1562,6 +1562,11 @@ class CardPrinting:
     # N or more." Optional; recorded on the spell object as
     # ``GameObject.optional_additional_cost_paid``.
     teamwork_power: int = 0
+    # --- Vintage Roto P3: mana, costs, cast permissions -------------
+    # "As this land enters, choose a creature type." (Cavern of Souls):
+    # the choice lands on ``GameObject.chosen_creature_type``
+    # (``effects.generic.roto_mana.choose_creature_type_as_enters``).
+    enters_choosing_creature_type: bool = False
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

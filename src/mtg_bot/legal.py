@@ -169,6 +169,10 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
         kinds.add("legendary_spell")
     if card.zone != Zone.HAND:
         kinds.add("cast_from_outside_hand")
+    # Vintage Roto P3 tags (Cavern of Souls' creature-type mana).
+    from mtg_bot.effects.generic.roto_mana import roto_spell_kinds
+
+    kinds |= roto_spell_kinds(card)
     return frozenset(kinds)
 
 

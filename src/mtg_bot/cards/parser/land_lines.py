@@ -286,6 +286,7 @@ def _try_build_line_composed_land(
     opening_hand_action = None
     gated: tuple[str, str] | None = None  # (counter kind, base color)
     self_refs = ("this land", card["name"])
+    roto_fields: dict = {}  # Vintage Roto P3 lines (``roto_mana``)
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
         if m is not None:
@@ -374,6 +375,13 @@ def _try_build_line_composed_land(
             # Hideaway N (Shelldock Isle; cube glue bucket).
             triggered.append(keyword_trigger)
             continue
+        from mtg_bot.cards.parser.roto_mana import parse_roto_land_line
+
+        roto = parse_roto_land_line(line)
+        if roto is not None:
+            # Vintage Roto P3 (Cavern of Souls' creature-type choice).
+            roto_fields.update(roto)
+            continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
         if m is not None:
             line = m.group("rest")
@@ -432,7 +440,7 @@ def _try_build_line_composed_land(
             # life-costed ability stays explicit so automatic payment
             # never charges life for the free mana.
             activated.extend(ability for _, _, ability in life_mana)
-    return make_utility_land(
+    printing = make_utility_land(
         card["name"],
         produces=frozenset(produces),
         subtypes_str=" ".join(subtypes),
@@ -451,3 +459,8 @@ def _try_build_line_composed_land(
         produces_with_counter=produces_with_counter,
         opening_hand_action=opening_hand_action,
     )
+    if roto_fields:
+        from dataclasses import replace
+
+        printing = replace(printing, **roto_fields)
+    return printing

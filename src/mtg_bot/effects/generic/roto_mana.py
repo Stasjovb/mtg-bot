@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.formulas import Formula
+from mtg_bot.effects.generic.mana import AddManaToPool
 from mtg_bot.effects.object_predicates import ObjectPredicate
 
 if TYPE_CHECKING:
@@ -75,10 +76,90 @@ def roto_coin_satisfies(coin, kinds: "frozenset[str]") -> bool:
     - ``"not_nonartifact_spell"``: "This mana can't be spent to cast
       nonartifact spells." (The Mightstone and Weakstone) -- it pays for
       artifact spells and for anything that isn't casting a spell.
+    - ``"creature_type:<T>"``: "Spend this mana only to cast a creature
+      spell of the chosen type" (Cavern of Souls) -- matched against
+      the ``creature_type:<T>`` tags ``roto_spell_kinds`` adds for a
+      creature spell (``creature_type:*`` for a changeling).
     """
-    if coin.spend_restriction == "not_nonartifact_spell":
+    tag = coin.spend_restriction or ""
+    if tag == "not_nonartifact_spell":
         return "artifact_spell" in kinds or bool(kinds & _NON_SPELL_CONTEXTS)
+    if tag.startswith("creature_type:"):
+        return tag in kinds or (
+            tag != "creature_type:" and "creature_type:*" in kinds
+        )
     return False
+
+
+def roto_spell_kinds(card) -> "frozenset[str]":
+    """Payment-context tags this bucket adds when ``card`` is cast (the
+    casting contexts in ``legal._spell_kinds_for_card`` and
+    ``actions._cast_spell``): one ``creature_type:<T>`` per creature type
+    of a creature spell, ``creature_type:*`` for a changeling (every
+    creature type, CR 702.73a)."""
+    pr = card.printing
+    if not pr.is_creature:
+        return frozenset()
+    if "changeling" in pr.keywords:
+        return frozenset({"creature_type:*"})
+    return frozenset(f"creature_type:{s}" for s in pr.subtypes)
+
+
+# ---------------------------------------------------------------------------
+# As-enters choices
+# ---------------------------------------------------------------------------
+
+
+def creature_types_owned_by(state: "GameState", player_id: int) -> list[str]:
+    """Creature types among creature cards ``player_id`` owns in any zone
+    (library, hand, graveyard, exile, battlefield, stack), sorted -- the
+    offered set of "choose a creature type" (a type no card of yours has
+    can't matter to an own-spell restriction)."""
+    p = state.player_by_id(player_id)
+    zones = list(p.library) + list(p.hand) + list(p.graveyard) + list(p.exile)
+    zones += [o for o in state.battlefield if o.owner_id == player_id]
+    zones += [
+        item.source for item in state.stack
+        if getattr(item, "source", None) is not None
+        and item.source.owner_id == player_id
+    ]
+    types: set[str] = set()
+    for c in zones:
+        if c.printing.is_creature and not c.printing.is_token:
+            types.update(c.printing.subtypes)
+    return sorted(types)
+
+
+def apply_roto_land_as_enters(
+    state: "GameState", player_id: int, card,
+) -> None:
+    """This bucket's "As this land enters, ..." choices (called from
+    ``actions.apply_land_etb_replacements``)."""
+    if card.printing.enters_choosing_creature_type:
+        choose_creature_type_as_enters(state, player_id, card)
+
+
+def choose_creature_type_as_enters(
+    state: "GameState", player_id: int, card,
+) -> None:
+    """"As this land enters, choose a creature type." (Cavern of Souls):
+    ``choose_mode`` over ``creature_types_owned_by``; with no creature
+    card owned the choice is moot and recorded as ``None``."""
+    options = creature_types_owned_by(state, player_id)
+    card.chosen_creature_type = None
+    if not options:
+        state.log.append(f"{card.printing.name}: no creature type to choose")
+        return
+    idx = 0
+    agent = state.player_by_id(player_id).agent
+    if agent is not None and len(options) > 1:
+        picked = agent.choose_mode(state, player_id, options)
+        if isinstance(picked, int) and 0 <= picked < len(options):
+            idx = picked
+    card.chosen_creature_type = options[idx]
+    state.log.append(
+        f"{card.printing.name}: P{player_id} chooses {options[idx]}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +211,46 @@ class AddManaPerCardInTargetOpponentsHand(Effect):
         return f"add {{{self.color}}} for each card in target opponent's hand"
 
 
+@dataclass(frozen=True)
+class AddAnyColorManaForChosenCreatureType(AddManaToPool):
+    """"Add one mana of any color. Spend this mana only to cast a creature
+    spell of the chosen type, and that spell can't be countered."
+    (Cavern of Souls). An ``AddManaToPool`` (so it is a mana ability and
+    is never folded into automatic payment) whose coin's restriction is
+    read from the source's ``chosen_creature_type`` as it resolves."""
+
+    produces: tuple = (("any", 1),)
+    makes_spell_uncounterable: bool = True
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        src = state.resolving_source
+        chosen = getattr(src, "chosen_creature_type", None) or ""
+        state.player_by_id(controller_id).mana_pool.append(
+            ManaCoin(
+                color="any",
+                spend_restriction=f"creature_type:{chosen}",
+                makes_spell_uncounterable=True,
+            )
+        )
+        state.log.append(
+            f"P{controller_id} adds {{any}} (only for a {chosen or 'no'} "
+            f"creature spell; it can't be countered)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "add one mana of any color (only to cast a creature spell of "
+            "the chosen type; that spell can't be countered)"
+        )
+
+
 __all__ = [
+    "AddAnyColorManaForChosenCreatureType",
     "AddManaPerCardInTargetOpponentsHand",
     "CardsNamedInAllGraveyards",
     "EnteredThisTurn",

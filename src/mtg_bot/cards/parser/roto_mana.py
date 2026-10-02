@@ -87,6 +87,14 @@ _ADD_MANA_CANT_BE_SPENT_ON_RE = re.compile(
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
+# Cavern of Souls' restricted, uncounterable any-color mana. A literal:
+# the only card in the pools with this restriction; broader grammar
+# (other "of the chosen type" spend restrictions) deferred until a second
+# example exists.
+_CHOSEN_CREATURE_TYPE_MANA_LINE = (
+    "add one mana of any color. Spend this mana only to cast a creature "
+    "spell of the chosen type, and that spell can't be countered"
+)
 
 
 def parse_roto_mana_effect(phrase: str) -> Effect | None:
@@ -132,6 +140,27 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return AddManaToPool(
             produces=tuple((c, 1) for c in colors), spend_restriction=tag,
         )
+    if phrase == _CHOSEN_CREATURE_TYPE_MANA_LINE:
+        return rm.AddAnyColorManaForChosenCreatureType()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Land lines (``land_lines._try_build_line_composed_land`` hook)
+# ---------------------------------------------------------------------------
+
+_CHOOSE_CREATURE_TYPE_AS_ENTERS_RE = re.compile(
+    r"^As this land enters, choose a creature type\.$"
+)
+
+
+def parse_roto_land_line(line: str) -> dict | None:
+    """``CardPrinting`` field updates for a land line of this bucket, or
+    ``None`` (the line-composed land grammar then tries its own)."""
+    if _disabled():
+        return None
+    if _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE.match(line):
+        return {"enters_choosing_creature_type": True}
     return None
 
 
@@ -214,6 +243,7 @@ def rewrite_spell_clauses(clauses: list[str]) -> list[str]:
 
 __all__ = [
     "extract_modal_trigger_blocks",
+    "parse_roto_land_line",
     "rewrite_spell_clauses",
     "parse_activate_only_if_condition",
     "parse_roto_mana_effect",
