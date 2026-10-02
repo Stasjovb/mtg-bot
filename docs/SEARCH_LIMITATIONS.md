@@ -19697,3 +19697,55 @@ Roto-only cards (not in the default `all` pool). Engine code: `src/mtg_bot/roto_
 ### Mana value of spells with X on the stack
 
 **Where:** `effects/generic/roto_stack.stack_mana_value` / `SpellManaValueIs` / `CounterSpellMVAtMostCount`. **What:** Mental Misstep, Spell Snare and Spellstutter Sprite read a spell's mana value with its chosen X (CR 202.3e); the pre-existing `value_predicates.HasManaValueAtMost` (used by older counterspell filters such as "with mana value 4 or less") still reads X as 0 on the stack. **Fix scope:** have `mana_value_of` consult the stack item (changes claimed cube cards; left for a parity-pinned follow-up).
+
+### "Choose a card name" offers the opponents' card names
+
+**Where:** `roto_restrictions.nameable_card_names` / `choose_card_name_as_enters` (hooked from `actions.put_into_battlefield`), `ChooseCardNameAsEnters` (Pithing Needle, Phyrexian Revoker, Disruptor Flute, Meddling Mage). **What:** the rules allow any card name; the engine offers the distinct names of every card an opponent owns, in any zone (their deck list -- public in a rotisserie draft; nonland names for "nonland card name"), and the controller picks one through `choose_mode`, which search explores as a decision. Naming one of your own cards (or a card not in the game) is never offered. With no opponent cards the permanent names nothing. A split card / MDFC is matched by the name of the face it is cast as or of its front face, not by its combined name. **Why OK:** a name outside the opponents' cards can only restrict yourself. **Failure mode:** a Needle can't be pointed at your own card to dodge a symmetric effect (no card in the pool needs that). **Impact:** one decision with up to ~40 options per such permanent entering.
+
+### Named locks and the auto-payer
+
+**Where:** `roto_restrictions.filter_actions` (legal), `actions._sac_for_mana_sources`. **What:** a named activation lock drops `ActivateAbility` / `ActivateStation` proposals for battlefield, hand and graveyard sources with the chosen name (mana abilities too, unless the card says "unless they're mana abilities"), and keeps a locked sac-for-mana ability (Lotus Petal) out of automatic payment. Lands' mana production rides automatic payment, which no named lock reaches -- Phyrexian Revoker can't name a land and Pithing Needle excepts mana abilities, so no claimed card needs it. Morph's turn-face-up is a special action (not locked), as in the rules.
+
+### Player-scoped "this turn" restrictions are emblems
+
+**Where:** `roto_restrictions.create_this_turn_emblem` (`CantCastSpellsThisTurn`, `CreaturesCantAttackThisTurn`), `combat.eligible_attackers` (`filter_attackers`), `creature_casting_ub.can_cast_now`. **What:** Silence / Orim's Chant / Ranger-Captain of Eos leave a command-zone emblem carrying a `CastProhibition` / `AttackProhibition` that turn cleanup removes (the `CreateThisTurnTriggeredAbility` mechanism). Casts during an effect's resolution (`can_cast_now`) honor the roto prohibitions; the W/G bucket's statics (Archon of Emeria) still don't (pre-existing). Ranger-Captain's and High Noon's sacrifice abilities, like every battlefield activated ability, are offered only in a sorcery window (see the cube-lands entry), so Ranger-Captain can't be cracked in response on an opponent's turn. **Impact:** an emblem scan per legal-action call while one exists.
+
+### Cast triggers bound to the spell and its caster
+
+**Where:** `effects/generic/roto_stack._CastEventBound` (`CounterEventSpell`, `SourceDealsDamageToCaster`, `DrawUnlessCasterPays`), `cards/parser/roto_stack._cast_trigger`. **What:** "that spell" is the cast event's spell (by id, `event_subject_id`), "that player" its caster (a fixed `("player", id)` target -- not a targeting choice, so hexproof doesn't matter). Counter-that-spell triggers don't target; an uncounterable spell is left alone and a spell already gone is ignored. "Unless that player pays {N}" is the payer's `choose_yes_no` (a search decision), offered only when payable; Esper Sentinel's X is its power on resolution (last known if it left). Mystic Remora's "you may draw" asks the payer first, then the controller. "their first noncreature spell each turn" reads the caster's noncreature-spell count (copies aren't cast; spells cast before the trigger source arrived count). The intervening "if no mana was spent to cast it" (Vexing Bauble, Lavinia) is checked when the spell is cast only -- the mana spent can't change afterwards. **Failure mode:** none known.
+
+### Mana spent to cast a spell
+
+**Where:** `GameObject.mana_spent_to_cast`, set in `actions._cast_spell` from the final cost handed to automatic payment. **What:** the total of mana paid (after convoke / improvise / delve, which pay without mana, and after Phyrexian pips paid with life were taken out). Mana from a sac-for-mana source that floated into the pool is counted; mana floating from earlier and left unspent isn't. **Impact:** none.
+
+### Cumulative upkeep (mana costs only)
+
+**Where:** `effects/generic/roto_stack.CumulativeUpkeep`, `cards/parser/roto_stack._cumulative_upkeep`. **What:** age counters are named counters; the whole accumulated cost is paid or declined at once (`choose_yes_no`, offered only when payable), else the permanent is sacrificed (CR 702.24a). Only mana cumulative upkeep costs parse; life / sacrifice forms stay unclaimed.
+
+### Lavinia's mana-value cap and X
+
+**Where:** `roto_restrictions.cast_prohibited` / `max_x_allowed`, `actions._choose_and_apply_x`. **What:** a noncreature spell is castable while its mana value with X = 0 is within the caster's land count; X is then capped so the mana value with X stays within it (the X choice offers only legal values). **Failure mode:** none known.
+
+### The world rule
+
+**Where:** `roto_restrictions.apply_world_rule`, called from `turn.state_based_actions` (CR 704.5k; closes the former "world rule not implemented" gap). The newest world permanent (by `etb_timestamp`) stays; on a tie all go. Nether Void is the only World card in any pool.
+
+### Strict Proctor's watcher trigger
+
+**Where:** `roto_restrictions.fire_entering_trigger_watchers` (hooked at the end of `actions.push_triggered_ability` for abilities whose event is `ENTERS`), `CounterTriggerUnlessPays`. **What:** "Whenever a permanent entering causes a triggered ability to trigger, counter that ability unless its controller pays {2}" is a trigger on a trigger; the engine synthesizes it right after each ENTERS-event triggered ability goes on the stack (every such ability is pushed through `push_triggered_ability`), so the Proctor's trigger lands directly above the ability it watches and resolves first (APNAP / controller ordering of simultaneous triggers isn't asked). "That ability" is fixed by position (`("stack", i)`, kept current by `pop_stack_item`), not targeted; the payment is the ability controller's `choose_yes_no`. Leaves-the-battlefield and other non-entering triggers are untouched. **Impact:** a battlefield scan per ENTERS trigger.
+
+### Harsh Mentor's activation event
+
+**Where:** `Event.ACTIVATES_ABILITY`, dispatched by `actions._activate_ability` after a non-mana ability of a battlefield permanent goes on the stack. **What:** mana abilities never dispatch it (they return before), nor do hand / graveyard abilities (not "on the battlefield"). `ActivateStation` (a Spacecraft's station ability) doesn't dispatch it -- no Spacecraft is in the roto pool. **Impact:** one dispatch per activation.
+
+### Chancellor of the Annex's reveal
+
+**Where:** `effects/generic/roto_stack.RevealForFirstSpellTax` (an `opening_hand_action` with its own `apply`; `opening_hand.apply_opening_hand_actions` calls it). **What:** the reveal is a setup-agent decision like Gemstone Caverns' (see "Opening-hand actions are setup-agent decisions"); it leaves a game-long command-zone emblem whose delayed trigger fires on each opponent's first spell of the game (once per opponent by construction). The emblem isn't in the search hash.
+
+### Aven Interrupter: plotting a spell, the graveyard / exile tax
+
+**Where:** `effects/generic/roto_stack.ExileTargetSpellPlotted`, `creature_casting_ub.casting_origin` (`from_exile`, set at its three call sites and around the free-cast tax in `actions._cast_spell` / `legal._free_cast_tax_payable`), `roto_restrictions.SpellTax.from_graveyard_or_exile`. **What:** the exiled spell gets `plotted_turn` = this turn, so the existing plot machinery lets its owner cast it free, as a sorcery, on a later turn; a copy ceases to exist. The tax applies to spells an opponent casts from a graveyard or from exile -- including those cast without paying their mana cost (a plotted card) -- and not to casts from the top of a library. Casts during an effect's resolution (`can_cast_now(free=True)`) don't check any tax's affordability (pre-existing for every tax). **Impact:** none.
+
+### P1 state not in the search hashes
+
+**Where:** `search/canonical_state._shape_key` / `_canonical_state_tuple` (search code out of scope, like the cube buckets; the recipe mirrors the Rust native fingerprint). **What:** `GameObject.chosen_card_name` (also Anointed Peacekeeper's, pre-existing), `GameObject.mana_spent_to_cast`, age counters (named counters, pre-existing) and command-zone emblems (the "this turn" prohibitions, Chancellor of the Annex's reveal) aren't in the canonical state key, so two search states differing only in them can share a transposition entry. **Failure mode:** a Pithing Needle naming A and one naming B, or a turn with and without Silence active, can be conflated by the transposition table. **Fix scope:** add the fields / an emblem digest to the canonical tuple together with the Rust fingerprint (~an hour plus the parity pin). **Impact:** rare (needs two lines reaching the same position with different names / emblems).

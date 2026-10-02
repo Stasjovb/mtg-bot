@@ -418,19 +418,29 @@ CASTING_FROM_OUTSIDE_HAND: "_contextvars.ContextVar[bool]" = (
 CASTING_FROM_GRAVEYARD: "_contextvars.ContextVar[bool]" = (
     _contextvars.ContextVar("casting_from_graveyard", default=False)
 )
+# Roto P1 (Aven Interrupter: "Spells your opponents cast from graveyards
+# or from exile cost {2} more to cast."): the spell is cast from exile.
+CASTING_FROM_EXILE: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_exile", default=False)
+)
 
 
 @_contextlib.contextmanager
-def casting_origin(outside_hand: bool, from_graveyard: bool = False):
+def casting_origin(
+    outside_hand: bool, from_graveyard: bool = False, from_exile: bool = False,
+):
     """Mark the spell whose cost is being determined as cast from
     outside its caster's hand (graveyard, exile, library) -- and whether
-    from a graveyard -- for the duration of the block (read by
-    ``SpellCastFromOutsideHand`` / ``SpellCastFromGraveyard``)."""
+    from a graveyard / from exile -- for the duration of the block (read
+    by ``SpellCastFromOutsideHand`` / ``SpellCastFromGraveyard`` and the
+    roto P1 taxes)."""
     token = CASTING_FROM_OUTSIDE_HAND.set(outside_hand)
     gy_token = CASTING_FROM_GRAVEYARD.set(from_graveyard)
+    ex_token = CASTING_FROM_EXILE.set(from_exile)
     try:
         yield
     finally:
+        CASTING_FROM_EXILE.reset(ex_token)
         CASTING_FROM_GRAVEYARD.reset(gy_token)
         CASTING_FROM_OUTSIDE_HAND.reset(token)
 
@@ -454,6 +464,10 @@ def can_cast_now(
 
     if card.printing.is_land:
         return False
+    from mtg_bot.roto_restrictions import cast_prohibited
+
+    if cast_prohibited(state, player_id, card):
+        return False  # roto P1 can't-cast statics
     if not (
         _targets_are_satisfiable(state, player_id, card)
         and _additional_costs_payable(state, player_id, card)
@@ -469,6 +483,7 @@ def can_cast_now(
         )
     with casting_origin(
         card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+        from_exile=card.zone == Zone.EXILE,
     ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, card.printing.mana_cost,

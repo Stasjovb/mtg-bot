@@ -66,8 +66,12 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Animate Dead",
     "Fastbond",
     "Goblin Bombardment",
+    "High Noon",
+    "Jeskai Ascendancy",
     "Leyline Binding",
+    "Mystic Remora",
     "Necromancy",
+    "Nether Void",
     "Oath of Druids",
     "Parallax Wave",
     "Sneak Attack",
@@ -357,6 +361,12 @@ def _assemble(card, supertypes, subtypes, acc: _Accumulator) -> CardPrinting:
         )
         if acc.keywords:
             printing = replace(printing, keywords=frozenset(acc.keywords))
+        if "World" in supertypes:
+            # World enchantments (Nether Void; the world rule reads it).
+            printing = replace(
+                printing, supertypes=tuple(supertypes),
+                type_line=card.get("type_line", printing.type_line),
+            )
     updates = dict(acc.printing_fields)
     if acc.cost_reductions:
         updates["cost_reductions"] = tuple(acc.cost_reductions)

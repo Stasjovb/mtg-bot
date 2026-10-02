@@ -820,8 +820,15 @@ def _choose_and_apply_x(
     actually pay. Returns the chosen X (clamped into ``[0, upper_bound]``)
     and logs the choice.
     """
+    from mtg_bot.roto_restrictions import any_roto_statics, max_x_allowed
+
     p = state.player_by_id(player_id)
     upper_bound = _x_upper_bound(state, player_id, cost)
+    if card.zone != Zone.BATTLEFIELD and any_roto_statics(state):
+        # A mana-value cap on spells (roto P1: Lavinia, Azorius Renegade).
+        x_cap = max_x_allowed(state, player_id, card)
+        if x_cap is not None:
+            upper_bound = min(upper_bound, x_cap)
     if p.agent is None:  # pragma: no cover - games run with agents set
         chosen = 0
     else:
@@ -1106,6 +1113,15 @@ def _sac_for_mana_sources(
         if activation_locked(state, o):
             continue
         for idx, produces in _classify_sac_for_mana(state, o):
+            if any(b.printing.roto_statics for b in state.battlefield):
+                # A named lock (Phyrexian Revoker) forbids this mana
+                # ability (roto P1).
+                from mtg_bot.game import effective_activated_abilities
+                from mtg_bot.roto_restrictions import activation_prohibited
+
+                abilities = effective_activated_abilities(state, o)
+                if activation_prohibited(state, o, abilities[idx]):
+                    continue
             sources.append((o, idx, produces))
     return sources
 
@@ -2567,6 +2583,7 @@ def _cast_spell(
 
     with _casting_origin(
         cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
+        from_exile=card.zone == Zone.EXILE,
     ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
@@ -2698,7 +2715,11 @@ def _cast_spell(
         # mana cost (CR 601.2f -- Thalia on a pitched Force of Will).
         from mtg_bot.creature_statics_wg import spell_cost_increase
 
-        free_tax = spell_cost_increase(state, card.printing, player_id)
+        with _casting_origin(
+            cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
+            from_exile=card.zone == Zone.EXILE,
+        ):
+            free_tax = spell_cost_increase(state, card.printing, player_id)
         if free_tax:
             from mtg_bot.alt_casting import cost_plus as _cost_plus
 
@@ -4416,6 +4437,14 @@ def _activate_ability(
         )
 
         fire_becomes_target(state, targets, source, player_id)
+    # "Whenever an opponent activates an ability of ..." (roto P1:
+    # Harsh Mentor). Mana abilities returned above.
+    from mtg_bot.effects.predicates import Event as _ActEvent
+
+    dispatch_event(
+        state, _ActEvent.ACTIVATES_ABILITY, label="activation",
+        source=source, controller=state.player_by_id(player_id),
+    )
 
 
 def _activate_station(
@@ -5519,6 +5548,14 @@ def put_into_battlefield(
         from mtg_bot.creature_statics_wg import choose_card_name_as_enters
 
         choose_card_name_as_enters(state, obj, controller_id)
+    if obj.printing.roto_statics:
+        # "As this enters, choose a card name." (roto P1: Pithing
+        # Needle, Phyrexian Revoker, Disruptor Flute, Meddling Mage).
+        from mtg_bot.roto_restrictions import (
+            choose_card_name_as_enters as _roto_choose_name,
+        )
+
+        _roto_choose_name(state, obj, controller_id)
     obj.chosen_parity = None
     obj.modes_chosen = ()
     if obj.printing.chooses_parity_as_enters:
@@ -5549,6 +5586,11 @@ def put_into_battlefield(
     if mode == "x":
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, state.resolving_x_value)
+    elif mode == "x_charge":
+        # "This artifact enters with X charge counters on it." (Chalice
+        # of the Void; X is 0 unless it was cast).
+        from mtg_bot.game import add_counters
+        add_counters(state, obj, "charge", obj.entered_x_value)
     elif mode == "mana_spent":
         from mtg_bot.game import add_plus_one_counters
         mc = obj.printing.mana_cost
@@ -5881,6 +5923,12 @@ def push_triggered_ability(
         )
 
         fire_becomes_target(state, targets, source, controller_id)
+    # "Whenever a permanent entering causes a triggered ability to
+    # trigger, ..." (roto P1: Strict Proctor).
+    if ability.event == "enters":
+        from mtg_bot.roto_restrictions import fire_entering_trigger_watchers
+
+        fire_entering_trigger_watchers(state, len(state.stack) - 1)
     return True
 
 

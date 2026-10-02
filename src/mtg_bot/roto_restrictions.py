@@ -43,18 +43,15 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class SpellTax:
-    """A spell-cost increase (CR 601.2f).
-
-    ``spell_filter`` (a ``CardFilter``; ``None`` = every spell) selects
-    the taxed spells; ``opponents_only`` limits it to spells the
-    source's controller's opponents cast; ``except_during_casters_turn``
-    exempts a spell cast during its controller's own turn;
-    ``from_graveyard_or_exile`` taxes only spells cast from a graveyard
-    ``named`` taxes only spells with the source's chosen
-    card name."""
+    """A spell-cost increase (CR 601.2f) on every spell, narrowed by:
+    ``opponents_only`` -- spells the source's controller's opponents
+    cast; ``except_during_casters_turn`` -- not a spell cast during its
+    controller's own turn; ``from_graveyard_or_exile`` -- only spells
+    cast from a graveyard or from exile; ``named`` -- only spells with
+    the source's chosen card name. (Type-filtered taxes use Thalia's
+    ``CardPrinting.spell_cost_increases``.)"""
 
     amount: int
-    spell_filter: object = None
     opponents_only: bool = False
     except_during_casters_turn: bool = False
     from_graveyard_or_exile: bool = False
@@ -77,12 +74,18 @@ class CastProhibition:
     card; ``None`` = every spell) can't be cast by the restricted
     players: ``who`` is ``"each"`` (every player), ``"opponents"`` (the
     source's controller's opponents) or ``"player"`` (``player_id``).
-    ``named``: only spells with the source's chosen card name."""
+    ``named``: only spells with the source's chosen card name.
+    ``mv_above_casters_lands``: only spells whose mana value exceeds the
+    number of lands the caster controls (X counts as chosen; see
+    :func:`max_x_allowed`)."""
 
     who: str = "each"
     spell_filter: object = None
     player_id: int = -1
     named: bool = False
+    # "with mana value greater than the number of lands that player
+    # controls" (Lavinia, Azorius Renegade).
+    mv_above_casters_lands: bool = False
 
     def __post_init__(self) -> None:
         if self.who not in ("each", "opponents", "player"):
@@ -95,6 +98,21 @@ class ActivationProhibition:
     activated[ unless they're mana abilities]." """
 
     except_mana_abilities: bool = False
+
+
+@dataclass(frozen=True)
+class AttackProhibition:
+    """"Creatures can't attack this turn." (Orim's Chant, kicked) -- on a
+    cleanup-expiring emblem."""
+
+
+@dataclass(frozen=True)
+class ChooseCardNameAsEnters:
+    """"As this <permanent> enters, choose a [nonland ]card name."
+    (Pithing Needle, Phyrexian Revoker, Disruptor Flute, Meddling Mage):
+    the name is stored on ``GameObject.chosen_card_name``."""
+
+    nonland: bool = False
 
 
 # ---------------------------------------------------------------------
@@ -125,16 +143,13 @@ def any_roto_statics(state: "GameState") -> bool:
 
 def _casting_from_graveyard_or_exile() -> bool:
     """The spell whose cost is being determined is cast from a graveyard
-    or from exile (``creature_casting_ub.casting_origin``; the library
-    origin is told apart by ``CASTING_FROM_EXILE``)."""
+    or from exile (``creature_casting_ub.casting_origin``)."""
     from mtg_bot.creature_casting_ub import (
+        CASTING_FROM_EXILE,
         CASTING_FROM_GRAVEYARD,
-        CASTING_FROM_OUTSIDE_HAND,
     )
 
-    if CASTING_FROM_GRAVEYARD.get():
-        return True
-    return CASTING_FROM_OUTSIDE_HAND.get() and CASTING_FROM_EXILE.get()
+    return CASTING_FROM_GRAVEYARD.get() or CASTING_FROM_EXILE.get()
 
 
 def roto_spell_tax(
@@ -146,8 +161,6 @@ def roto_spell_tax(
     active_id = state.players[state.active_player_idx].id if state.players else None
     for src, s in _static_sources(state):
         if not isinstance(s, SpellTax):
-            continue
-        if s.spell_filter is not None and not s.spell_filter.matches(printing):
             continue
         if s.opponents_only and (caster_id is None or caster_id == src.controller_id):
             continue
@@ -211,11 +224,14 @@ def _restricts(state: "GameState", src, s: CastProhibition, player_id: int) -> b
     return player_id == s.player_id
 
 
-def cast_prohibited(
-    state: "GameState", player_id: int, card: "GameObject",
-) -> bool:
-    """Whether a roto can't-cast static forbids ``player_id`` from casting
-    ``card`` right now."""
+def _lands_controlled(state: "GameState", player_id: int) -> int:
+    return sum(
+        1 for o in state.battlefield
+        if o.controller_id == player_id and o.printing.is_land
+    )
+
+
+def _applicable_prohibitions(state, player_id, card):
     for src, s in _static_sources(state):
         if not isinstance(s, CastProhibition):
             continue
@@ -225,8 +241,138 @@ def cast_prohibited(
             continue
         if s.spell_filter is not None and not s.spell_filter.test(card, state):
             continue
+        yield s
+
+
+def cast_prohibited(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> bool:
+    """Whether a roto can't-cast static forbids ``player_id`` from casting
+    ``card`` right now (X counted as 0 -- the least X; a larger X is
+    capped by :func:`max_x_allowed`)."""
+    for s in _applicable_prohibitions(state, player_id, card):
+        if s.mv_above_casters_lands:
+            if card.printing.mana_cost.total <= _lands_controlled(state, player_id):
+                continue
         return True
     return False
+
+
+def max_x_allowed(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> "int | None":
+    """The largest X ``player_id`` may choose casting ``card`` under a
+    mana-value cap (Lavinia: the spell's mana value with X can't exceed
+    the lands they control); ``None`` without one."""
+    cost = card.printing.mana_cost
+    if not cost.x_pips:
+        return None
+    cap = None
+    for s in _applicable_prohibitions(state, player_id, card):
+        if not s.mv_above_casters_lands:
+            continue
+        room = _lands_controlled(state, player_id) - cost.total
+        x = max(0, room // cost.x_pips)
+        cap = x if cap is None else min(cap, x)
+    return cap
+
+
+def attack_prohibited(state: "GameState", creature) -> bool:
+    """Whether a "creatures can't attack this turn" effect applies."""
+    return any(
+        isinstance(s, AttackProhibition) for _src, s in _static_sources(state)
+    )
+
+
+def filter_attackers(state: "GameState", attackers: list) -> list:
+    """Drop the creatures a roto attack prohibition forbids."""
+    if not state.emblems:
+        return attackers
+    return [o for o in attackers if not attack_prohibited(state, o)]
+
+
+def create_this_turn_emblem(
+    state: "GameState", controller_id: int, statics: tuple, label: str,
+) -> None:
+    """A command-zone emblem carrying ``statics`` (``roto_statics``
+    descriptors) that ends at this turn's cleanup -- "<player> can't
+    ... this turn"."""
+    from dataclasses import replace
+
+    from mtg_bot.cards.base import make_emblem
+    from mtg_bot.game import Zone
+
+    printing = replace(make_emblem(name=f"{label} (this turn)"), roto_statics=statics)
+    holder = state.new_object(printing, owner_id=controller_id, zone=Zone.COMMAND)
+    holder.expires_at_cleanup = True
+    holder.etb_timestamp = state.next_timestamp
+    state.next_timestamp += 1
+    state.emblems.append(holder)
+
+
+# ---------------------------------------------------------------------
+# "As this enters, choose a card name"
+# ---------------------------------------------------------------------
+
+
+def nameable_card_names(
+    state: "GameState", controller_id: int, *, nonland: bool,
+) -> list[str]:
+    """The names offered for "choose a [nonland ]card name": every card
+    an opponent owns, in any zone (their deck list -- public in a
+    rotisserie draft), sorted. The rules allow any card name; names
+    outside the opponents' cards can't affect them (see
+    ``docs/SEARCH_LIMITATIONS.md``)."""
+    names: set[str] = set()
+
+    def add(card) -> None:
+        pr = card.printing
+        if pr.is_token or getattr(card, "is_spell_copy", False):
+            return
+        if nonland and pr.is_land:
+            return
+        names.add(pr.name)
+
+    for p in state.players:
+        if p.id == controller_id:
+            continue
+        for zone in (p.library, p.hand, p.graveyard, p.exile):
+            for c in zone:
+                add(c)
+        for o in state.battlefield:
+            if o.owner_id == p.id:
+                add(o)
+        for item in state.stack:
+            if item.ability is None and item.source.owner_id == p.id:
+                add(item.source)
+    return sorted(names)
+
+
+def choose_card_name_as_enters(
+    state: "GameState", obj: "GameObject", controller_id: int,
+) -> None:
+    """Apply ``obj``'s :class:`ChooseCardNameAsEnters` (as it enters the
+    battlefield): the controller picks one of :func:`nameable_card_names`
+    through ``choose_mode`` (a search decision)."""
+    spec = next(
+        (s for s in obj.printing.roto_statics if isinstance(s, ChooseCardNameAsEnters)),
+        None,
+    )
+    if spec is None:
+        return
+    names = nameable_card_names(state, controller_id, nonland=spec.nonland)
+    obj.chosen_card_name = None
+    if not names:
+        state.log.append(f"{obj.printing.name}: no card name to choose")
+        return
+    idx = 0
+    agent = state.player_by_id(controller_id).agent
+    if agent is not None and len(names) > 1:
+        pick = agent.choose_mode(state, controller_id, names)
+        if isinstance(pick, int) and 0 <= pick < len(names):
+            idx = pick
+    obj.chosen_card_name = names[idx]
+    state.log.append(f"{obj.printing.name}: P{controller_id} names {names[idx]}")
 
 
 # ---------------------------------------------------------------------
@@ -313,6 +459,84 @@ def filter_actions(state: "GameState", player_id: int, actions: list) -> list:
                 continue
         out.append(a)
     return out
+
+
+# ---------------------------------------------------------------------
+# Triggers on "a permanent entering causes a triggered ability to trigger"
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CounterEnteringTriggers:
+    """"Whenever a permanent entering causes a triggered ability to
+    trigger, counter that ability unless its controller pays <cost>."
+    (Strict Proctor) -- a triggered ability of the permanent, fired by
+    :func:`fire_entering_trigger_watchers` (``push_triggered_ability``'s
+    hook) rather than by event dispatch."""
+
+    unless_pays: str = ""
+
+
+# Ability index for the synthesized watcher trigger (off the printed
+# abilities' once-per-turn ledger, like prowess's 2000).
+_ENTERING_TRIGGER_WATCHER_INDEX = 2100
+
+
+def fire_entering_trigger_watchers(state: "GameState", item_index: int) -> None:
+    """The ENTERS-event triggered ability at ``state.stack[item_index]``
+    was just put on the stack: each :class:`CounterEnteringTriggers`
+    permanent triggers, with the ability as its fixed object."""
+    watchers = [
+        (o, s) for o in state.battlefield if not o.phased_out
+        for s in o.printing.roto_statics
+        if isinstance(s, CounterEnteringTriggers)
+    ]
+    if not watchers:
+        return
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.roto_stack import CounterTriggerUnlessPays
+    from mtg_bot.effects.predicates import Event
+
+    for obj, s in watchers:
+        push_triggered_ability(
+            state, source=obj,
+            ability=TriggeredAbility(
+                event=Event.TRIGGERED_ABILITY_TRIGGERS,
+                effect=CounterTriggerUnlessPays(unless_pays=s.unless_pays),
+            ),
+            ability_index=_ENTERING_TRIGGER_WATCHER_INDEX,
+            controller_id=obj.controller_id,
+            label="triggered-ability",
+            fixed_targets=(("stack", item_index),),
+        )
+
+
+# ---------------------------------------------------------------------
+# The world rule (CR 704.5k)
+# ---------------------------------------------------------------------
+
+
+def apply_world_rule(state: "GameState") -> bool:
+    """State-based action: with two or more world permanents on the
+    battlefield, all but the one that has been a world permanent for the
+    shortest time (the newest by ``etb_timestamp``) go to their owners'
+    graveyards; on a tie, all of them do. Returns True when anything
+    moved."""
+    worlds = [o for o in state.battlefield if "World" in o.printing.supertypes]
+    if len(worlds) < 2:
+        return False
+    from mtg_bot.turn import move_off_battlefield
+
+    newest = max(o.etb_timestamp for o in worlds)
+    keep = [o for o in worlds if o.etb_timestamp == newest]
+    survivors = keep if len(keep) == 1 else []
+    for o in worlds:
+        if o in survivors:
+            continue
+        state.log.append(f"{o.printing.name} put into graveyard (world rule)")
+        move_off_battlefield(state, o, destination="graveyard")
+    return True
 
 
 # ---------------------------------------------------------------------
@@ -425,31 +649,27 @@ def instant_speed_spell_targeting_activations(
     return out
 
 
-# ---------------------------------------------------------------------
-# Cast origin: exile vs. the top of a library
-# ---------------------------------------------------------------------
-
-import contextvars  # noqa: E402
-
-# Set while a spell cast from exile has its cost determined (paired with
-# ``creature_casting_ub.casting_origin``'s outside-hand flag, which is
-# also set for casts from the top of a library).
-CASTING_FROM_EXILE: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "roto_casting_from_exile", default=False,
-)
-
-
 __all__ = [
     "ActivationProhibition",
-    "CASTING_FROM_EXILE",
+    "AttackProhibition",
+    "ChooseCardNameAsEnters",
+    "CounterEnteringTriggers",
+    "fire_entering_trigger_watchers",
+    "attack_prohibited",
+    "choose_card_name_as_enters",
+    "create_this_turn_emblem",
+    "filter_attackers",
+    "nameable_card_names",
     "CastProhibition",
     "MinimumSpellCost",
     "SpellTax",
     "activation_prohibited",
     "any_roto_statics",
+    "apply_world_rule",
     "apply_minimum_spell_cost",
     "cast_prohibited",
     "filter_actions",
+    "max_x_allowed",
     "instant_speed_spell_targeting_activations",
     "minimum_spell_cost",
     "roto_spell_tax",

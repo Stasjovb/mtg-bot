@@ -1864,9 +1864,10 @@ def _state_based_actions_pass(state: GameState) -> bool:
     - 701.15: regeneration shield (handled in the destroyed
       pass — not strictly an SBA).
 
+    - 704.5k (audit) / 704.5o (current CR): world rule
+      (``roto_restrictions.apply_world_rule``).
+
     KNOWN GAPS:
-    - 704.5k (audit) / 704.5o (current CR): world rule.
-      Not implemented. No World cards are in the EoE pool.
     - 704.5s (audit) / 704.5u (current CR): battle with 0
       defense → graveyard. Not implemented. No Battles in EoE.
     - 21+ commander damage from one source: not implemented.
@@ -1932,6 +1933,11 @@ def _state_based_actions_pass(state: GameState) -> bool:
             )
             move_off_battlefield(state, obj, destination="graveyard")
             changed = True
+    # World rule (CR 704.5k; roto P1 -- Nether Void).
+    from mtg_bot.roto_restrictions import apply_world_rule
+
+    if apply_world_rule(state):
+        changed = True
 
     destroyed = []
     for obj in state.battlefield:

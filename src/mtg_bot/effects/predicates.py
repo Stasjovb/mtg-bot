@@ -279,6 +279,12 @@ class Event(str, Enum):
     # ``combat_damage_amount``. "Whenever <this creature> deals damage"
     # (Cecil, Dark Knight). Fired by ``layouts.fire_deals_damage``.
     DEALS_DAMAGE = "deals_damage"
+    # A player activated a (non-mana) ability of a permanent on the
+    # battlefield (roto P1: Harsh Mentor). Subjects: the permanent
+    # (``"source"``) and the activating Player (``"controller"``).
+    # Dispatched by ``actions._activate_ability`` once the ability is on
+    # the stack.
+    ACTIVATES_ABILITY = "activates_ability"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -326,6 +332,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
     Event.TRANSFORMS: ("obj",),
     Event.DEALS_DAMAGE: ("source",),
+    Event.ACTIVATES_ABILITY: ("source", "controller"),
 }
 
 

@@ -13,7 +13,7 @@ from mtg_bot.game import (
 
 
 def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    attackers = [
         o for o in state.battlefield
         if o.controller_id == player_id
         and is_creature_now(o)
@@ -21,6 +21,10 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
         and (not o.summoning_sick or "haste" in effective_keywords(state, o))
         and "defender" not in effective_keywords(state, o)
     ]
+    # "Creatures can't attack this turn." (roto P1: Orim's Chant).
+    from mtg_bot.roto_restrictions import filter_attackers
+
+    return filter_attackers(state, attackers)
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:

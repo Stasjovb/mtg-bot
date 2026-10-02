@@ -15,6 +15,12 @@ declined, so no claimed card's parse changes:
   ``effects._parse_effect`` (normalized phrases: no trailing period,
   lower-cased first letter).
 
+Smaller hooks feed shared grammars: :func:`parse_roto_cost_piece`
+(``activated._classify_cost_piece``), :func:`roto_rider_condition` /
+:func:`roto_counter_variant` (``conditional_phrases``'s "instead"
+riders), :func:`roto_alt_cost_condition` (``spell_cost_lines``) and
+:func:`roto_cost_reduction_condition` (``cost_reduction``).
+
 Like the cube buckets, the grammar is switched off for printings that
 exist only in the EoE-era dumps (``creature_rmc_grammar``'s switch).
 Engine statics live in :mod:`mtg_bot.roto_restrictions`; effects in
@@ -151,30 +157,6 @@ def _static_flag(line: str, card: dict) -> WGLine | None:
     return _parse_static_flag_line(line, card)
 
 
-_LINE_RECOGNIZERS = (
-    _spells_cost_more,
-    _each_spell_costs_more_except_controllers_turn,
-    _minimum_spell_cost,
-    _activation_lock,
-    _static_flag,
-)
-
-
-def parse_roto_stack_line(line: str, card: dict) -> WGLine | None:
-    """The :class:`WGLine` for one reminder-stripped permanent oracle
-    ``line`` of ``card``, or ``None`` when no P1 recognizer claims it."""
-    if _disabled():
-        return None
-    from mtg_bot.cards.parser.triggers import _substitute_self_name
-
-    line = _substitute_self_name(line.strip(), card.get("name", ""))
-    for recognizer in _LINE_RECOGNIZERS:
-        out = recognizer(line, card)
-        if out is not None:
-            return out
-    return None
-
-
 _ENTERS_WITH_MINUS_COUNTERS_RE = re.compile(
     r"^This (?:creature|artifact|permanent) enters with "
     r"(?P<n>a|an|one|two|three|four|five|\d+) -1/-1 counters? on it\.$"
@@ -192,7 +174,474 @@ def _enters_with_minus_one_counters(line: str, card: dict) -> WGLine | None:
     return WGLine(fields={"enters_with_named_counters": (("-1/-1", count),)})
 
 
-_LINE_RECOGNIZERS = _LINE_RECOGNIZERS + (_enters_with_minus_one_counters,)
+_ENTERS_WITH_X_COUNTERS_RE = re.compile(
+    r"^This (?:artifact|creature|permanent|enchantment) enters with X "
+    r"(?P<kind>charge) counters on it\.$"
+)
+
+
+def _enters_with_x_counters(line: str, card: dict) -> WGLine | None:
+    """``This artifact enters with X charge counters on it.`` (Chalice of
+    the Void) -> ``enters_with_counters_from_x="x_charge"`` (X is the
+    value paid when it was cast; 0 otherwise)."""
+    m = _ENTERS_WITH_X_COUNTERS_RE.match(line)
+    if m is None:
+        return None
+    return WGLine(fields={"enters_with_counters_from_x": "x_charge"})
+
+
+_CUMULATIVE_UPKEEP_RE = re.compile(
+    r"^Cumulative upkeep (?P<cost>(?:\{[0-9WUBRGC]\})+)$"
+)
+
+
+def _cumulative_upkeep(line: str, card: dict) -> WGLine | None:
+    """``Cumulative upkeep {cost}`` (CR 702.24; Mystic Remora) -- a mana
+    cost only (life / other costs aren't modeled)."""
+    m = _CUMULATIVE_UPKEEP_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.roto_stack import CumulativeUpkeep
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.BEGINNING_OF_UPKEEP, predicate=Controlled(YOU),
+        effect=CumulativeUpkeep(cost=m.group("cost")),
+    ),))
+
+
+# ---------------------------------------------------------------------
+# Cast triggers
+# ---------------------------------------------------------------------
+
+_CAST_TRIGGER_RE = re.compile(
+    r"^Whenever (?P<who>a player|an opponent|you) casts? (?P<what>[^,]+), "
+    r"(?P<eff>.+)\.$"
+)
+_FIRST_EACH_TURN_RE = re.compile(
+    r"^their first (?P<np>(?:noncreature )?spell) each turn$"
+)
+_MV_AT_MOST_SUFFIX_RE = re.compile(
+    r"^(?P<np>.+?) with mana value (?P<n>\d+) or less$"
+)
+_MV_EQUALS_COUNTERS_SUFFIX_RE = re.compile(
+    r"^(?P<np>.+?) with mana value equal to the number of (?P<kind>[a-z]+) "
+    r"counters on this (?:artifact|creature|permanent|enchantment)$"
+)
+
+
+def _cast_subject_predicate(what: str):
+    """The cast event's ``spell`` condition for ``a <spell np>`` (``None``
+    when the phrase is outside the grammar; ``Always()`` for "a spell")."""
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.roto_stack import (
+        CastersNoncreatureSpellsThisTurnIs,
+        SpellManaValueAtMost,
+        SpellManaValueEqualsSourceCounters,
+    )
+    from mtg_bot.effects.predicates import Always, Subject
+
+    m = _FIRST_EACH_TURN_RE.match(what)
+    if m is not None:
+        if m.group("np") != "noncreature spell":
+            return None
+        from mtg_bot.effects.object_predicates import IsCreature
+
+        return Subject("spell", ~IsCreature()) & CastersNoncreatureSpellsThisTurnIs(1)
+    for article in ("a ", "an "):
+        if what.startswith(article):
+            np = what[len(article):]
+            break
+    else:
+        return None
+    extra = None
+    m = _MV_EQUALS_COUNTERS_SUFFIX_RE.match(np)
+    if m is not None:
+        np = m.group("np")
+        extra = SpellManaValueEqualsSourceCounters(kind=m.group("kind"))
+    else:
+        m = _MV_AT_MOST_SUFFIX_RE.match(np)
+        if m is not None:
+            np = m.group("np")
+            extra = Subject("spell", SpellManaValueAtMost(int(m.group("n"))))
+    ok, f = parse_spell_phrase(np)
+    if not ok:
+        return None
+    pred = Always() if f is None else Subject("spell", f)
+    if extra is not None:
+        pred = extra if f is None else pred & extra
+    return pred
+
+
+_UNLESS_PAYS_RE = re.compile(
+    r"^counter (?:it|that spell) unless that player pays "
+    r"(?P<cost>(?:\{[0-9WUBRGC]\})+)$"
+)
+_DEALS_DAMAGE_TO_THAT_PLAYER_RE = re.compile(
+    r"^this (?:creature|artifact|enchantment|permanent) deals (?P<n>\d+) "
+    r"damage to that player$"
+)
+_DRAW_UNLESS_PAYS_RE = re.compile(
+    r"^(?P<may>you may )?draw a card unless that player pays "
+    r"(?P<cost>\{X\}, where X is this creature's power|"
+    r"(?:\{[0-9WUBRGC]\})+)$"
+)
+
+
+def _cast_trigger_effect(eff: str):
+    """``(effect, extra spell condition)`` for a cast trigger's effect
+    text, or ``None``."""
+    from mtg_bot.effects.generic.roto_stack import (
+        CounterEventSpell,
+        DrawUnlessCasterPays,
+        GainLifePerSpellYouCastThisTurn,
+        NoManaSpentToCast,
+        SourceDealsDamageToCaster,
+    )
+    from mtg_bot.effects.predicates import Subject
+
+    extra = None
+    if eff.startswith("if no mana was spent to cast it, "):
+        # Intervening if (CR 603.4): the mana spent never changes once
+        # the spell is cast, so the trigger-time check is also the
+        # resolution-time check.
+        eff = eff[len("if no mana was spent to cast it, "):]
+        extra = Subject("spell", NoManaSpentToCast())
+    if eff == "counter that spell":
+        return CounterEventSpell(), extra
+    m = _UNLESS_PAYS_RE.match(eff)
+    if m is not None:
+        return CounterEventSpell(unless_pays=m.group("cost")), extra
+    if extra is not None:
+        return None
+    m = _DEALS_DAMAGE_TO_THAT_PLAYER_RE.match(eff)
+    if m is not None:
+        return SourceDealsDamageToCaster(amount=int(m.group("n"))), None
+    m = _DRAW_UNLESS_PAYS_RE.match(eff)
+    if m is not None:
+        cost = m.group("cost")
+        if cost.startswith("{X}"):
+            eff_obj = DrawUnlessCasterPays(
+                cost_is_source_power=True, optional=bool(m.group("may")),
+            )
+        else:
+            eff_obj = DrawUnlessCasterPays(cost=cost, optional=bool(m.group("may")))
+        return eff_obj, None
+    # Literals: Aetherflux Reservoir / The Queen of Dale are the only
+    # cards in the pool with these effects; broader grammar deferred
+    # until a second example exists.
+    if eff == "you gain 1 life for each spell you've cast this turn":
+        return GainLifePerSpellYouCastThisTurn(), None
+    if eff == "you recruit":
+        from mtg_bot.effects.generic.roto_stack import Recruit
+
+        return Recruit(), None
+    return None
+
+
+def _cast_trigger(line: str, card: dict) -> WGLine | None:
+    """``Whenever <a player | an opponent | you> cast(s) <spell>, <effect>.``
+    -- the cast triggers whose effect refers back to the spell or its
+    caster (Chalice of the Void, Eidolon of the Great Revel, Esper
+    Sentinel, Mystic Remora, Vexing Bauble, Nether Void, Aetherflux
+    Reservoir)."""
+    m = _CAST_TRIGGER_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import OPPONENT, YOU, Controlled, Event
+
+    who = m.group("who")
+    subject = _cast_subject_predicate(m.group("what"))
+    if subject is None:
+        return None
+    if m.group("what").startswith("their ") and who != "an opponent":
+        return None
+    parsed = _cast_trigger_effect(m.group("eff"))
+    if parsed is None:
+        return None
+    effect, extra = parsed
+    from mtg_bot.effects.predicates import Always
+
+    parts = [] if isinstance(subject, Always) else [subject]
+    if who == "an opponent":
+        parts.append(Controlled(OPPONENT, subject="controller"))
+    elif who == "you":
+        parts.append(Controlled(YOU, subject="controller"))
+    if extra is not None:
+        parts.append(extra)
+    pred = parts[0] if parts else subject
+    for part in parts[1:]:
+        pred = pred & part
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.IS_CAST, predicate=pred, effect=effect,
+    ),))
+
+
+# ---------------------------------------------------------------------
+# "Choose a card name" and the named restrictions
+# ---------------------------------------------------------------------
+
+_CHOOSE_NAME_RE = re.compile(
+    r"^As this (?:creature|artifact|enchantment|permanent) enters, choose a "
+    r"(?P<nonland>nonland )?card name\.$"
+)
+_NAMED_ACTIVATION_LOCK_RE = re.compile(
+    r"^Activated abilities of sources with the chosen name can't be "
+    r"activated(?P<mana> unless they're mana abilities)?\.$"
+)
+# Literal: Meddling Mage is the only card in the pool with this line;
+# broader grammar deferred until a second example exists.
+_NAMED_CANT_CAST = "Spells with the chosen name can't be cast."
+_NAMED_TAX_RE = re.compile(
+    r"^Spells with the chosen name cost \{(?P<n>\d+)\} more to cast\.$"
+)
+
+
+def _named_lines(line: str, card: dict) -> WGLine | None:
+    """Pithing Needle / Phyrexian Revoker / Disruptor Flute / Meddling
+    Mage: the as-enters name choice and the restrictions keyed on it."""
+    from mtg_bot.roto_restrictions import (
+        ActivationProhibition,
+        CastProhibition,
+        ChooseCardNameAsEnters,
+        SpellTax,
+    )
+
+    m = _CHOOSE_NAME_RE.match(line)
+    if m is not None:
+        static = ChooseCardNameAsEnters(nonland=bool(m.group("nonland")))
+        return WGLine(fields={"roto_statics": (static,)})
+    m = _NAMED_ACTIVATION_LOCK_RE.match(line)
+    if m is not None:
+        static = ActivationProhibition(except_mana_abilities=bool(m.group("mana")))
+        return WGLine(fields={"roto_statics": (static,)})
+    if line == _NAMED_CANT_CAST:
+        return WGLine(fields={"roto_statics": (
+            CastProhibition(who="each", named=True),
+        )})
+    m = _NAMED_TAX_RE.match(line)
+    if m is not None:
+        return WGLine(fields={"roto_statics": (
+            SpellTax(amount=int(m.group("n")), named=True),
+        )})
+    return None
+
+
+_MV_ABOVE_LANDS_RE = re.compile(
+    r"^Each opponent can't cast (?P<np>(?:[a-z]+ )?spells) with mana value "
+    r"greater than the number of lands that player controls\.$"
+)
+
+
+def _mv_above_lands(line: str, card: dict) -> WGLine | None:
+    """``Each opponent can't cast <type> spells with mana value greater
+    than the number of lands that player controls.`` (Lavinia, Azorius
+    Renegade)."""
+    m = _MV_ABOVE_LANDS_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.roto_restrictions import CastProhibition
+
+    ok, f = parse_spell_phrase(m.group("np")[:-1])
+    if not ok:
+        return None
+    return WGLine(fields={"roto_statics": (CastProhibition(
+        who="opponents", spell_filter=f, mv_above_casters_lands=True,
+    ),)})
+
+
+# ---------------------------------------------------------------------
+# Activation triggers, entering-trigger watchers, opening-hand reveals
+# ---------------------------------------------------------------------
+
+_ACTIVATION_TRIGGER_RE = re.compile(
+    r"^Whenever an opponent activates an ability of an? (?P<types>[a-z, ]+?) "
+    r"on the battlefield, if it isn't a mana ability, this "
+    r"(?:creature|artifact|enchantment|permanent) deals (?P<n>\d+) damage "
+    r"to that player\.$"
+)
+def _type_word_predicate(word: str):
+    from mtg_bot.effects.object_predicates import (
+        IsArtifact, IsCreature, IsEnchantment, IsLand, IsPlaneswalker,
+    )
+
+    return {
+        "artifact": IsArtifact, "creature": IsCreature, "land": IsLand,
+        "enchantment": IsEnchantment, "planeswalker": IsPlaneswalker,
+    }.get(word, lambda: None)()
+
+
+def _activation_trigger(line: str, card: dict) -> WGLine | None:
+    """``Whenever an opponent activates an ability of an artifact,
+    creature, or land on the battlefield, if it isn't a mana ability,
+    this creature deals N damage to that player.`` (Harsh Mentor). The
+    activation event is only dispatched for non-mana abilities."""
+    m = _ACTIVATION_TRIGGER_RE.match(line)
+    if m is None:
+        return None
+    atoms = [_type_word_predicate(w) for w in re.split(r", or |, | or ", m.group("types"))]
+    if any(a is None for a in atoms):
+        return None
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.roto_stack import SourceDealsDamageToCaster
+    from mtg_bot.effects.predicates import OPPONENT, Controlled, Event, Subject
+
+    kinds = atoms[0]
+    for a in atoms[1:]:
+        kinds = kinds | a
+    pred = Subject("source", kinds) & Controlled(OPPONENT, subject="controller")
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.ACTIVATES_ABILITY, predicate=pred,
+        effect=SourceDealsDamageToCaster(amount=int(m.group("n"))),
+    ),))
+
+
+_COUNTER_ENTERING_TRIGGERS_RE = re.compile(
+    r"^Whenever a permanent entering causes a triggered ability to trigger, "
+    r"counter that ability unless its controller pays "
+    r"(?P<cost>(?:\{[0-9WUBRGC]\})+)\.$"
+)
+
+
+def _counter_entering_triggers(line: str, card: dict) -> WGLine | None:
+    """``Whenever a permanent entering causes a triggered ability to
+    trigger, counter that ability unless its controller pays {N}.``
+    (Strict Proctor)."""
+    m = _COUNTER_ENTERING_TRIGGERS_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.roto_restrictions import CounterEnteringTriggers
+
+    return WGLine(fields={"roto_statics": (
+        CounterEnteringTriggers(unless_pays=m.group("cost")),
+    )})
+
+
+_OPENING_HAND_REVEAL_RE = re.compile(
+    r"^You may reveal this card from your opening hand\. If you do, when "
+    r"each opponent casts their first spell of the game, counter that spell "
+    r"unless that player pays (?P<cost>(?:\{[0-9WUBRGC]\})+)\.$"
+)
+
+
+def _opening_hand_reveal(line: str, card: dict) -> WGLine | None:
+    """Chancellor of the Annex's opening-hand reveal (CR 103.6) ->
+    ``opening_hand_action``."""
+    m = _OPENING_HAND_REVEAL_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.effects.generic.roto_stack import RevealForFirstSpellTax
+
+    return WGLine(fields={
+        "opening_hand_action": RevealForFirstSpellTax(unless_pays=m.group("cost")),
+    })
+
+
+_GRAVEYARD_EXILE_TAX_RE = re.compile(
+    r"^Spells your opponents cast from graveyards or from exile cost "
+    r"\{(?P<n>\d+)\} more to cast\.$"
+)
+
+
+def _graveyard_exile_tax(line: str, card: dict) -> WGLine | None:
+    """``Spells your opponents cast from graveyards or from exile cost {N}
+    more to cast.`` (Aven Interrupter)."""
+    m = _GRAVEYARD_EXILE_TAX_RE.match(line)
+    if m is None:
+        return None
+    from mtg_bot.roto_restrictions import SpellTax
+
+    return WGLine(fields={"roto_statics": (SpellTax(
+        amount=int(m.group("n")), opponents_only=True,
+        from_graveyard_or_exile=True,
+    ),)})
+
+
+# ---------------------------------------------------------------------
+# "<pump creatures you control>. Untap those creatures" (Jeskai Ascendancy)
+# ---------------------------------------------------------------------
+
+_PUMP_THEN_UNTAP_RE = re.compile(
+    r"^(?P<pump>creatures you control get [+-]\d+/[+-]\d+ until end of "
+    r"turn)\. Untap those creatures$"
+)
+
+
+def _pump_then_untap(phrase: str) -> Effect | None:
+    """``creatures you control get +N/+M until end of turn. Untap those
+    creatures`` -- "those creatures" are the ones the first sentence
+    affected: the creatures you control as it resolves."""
+    m = _PUMP_THEN_UNTAP_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.combinators import Sequence
+
+    pump = _parse_effect(m.group("pump"))
+    untap = _parse_effect("untap all creatures you control")
+    if pump is None or untap is None:
+        return None
+    return Sequence(effects=(pump, untap))
+
+
+# ---------------------------------------------------------------------
+# Effect phrases: "can't cast / can't attack this turn", "it deals"
+# ---------------------------------------------------------------------
+
+_CANT_CAST_THIS_TURN_RE = re.compile(
+    r"^(?P<who>your opponents|target player) can't cast "
+    r"(?P<np>(?:[a-z]+ )?spells) this turn$"
+)
+
+
+def _cant_cast_this_turn(phrase: str) -> Effect | None:
+    """``your opponents | target player can't cast [<type>] spells this
+    turn`` (Silence, Orim's Chant, Ranger-Captain of Eos)."""
+    m = _CANT_CAST_THIS_TURN_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.roto_stack import CantCastSpellsThisTurn
+
+    ok, f = parse_spell_phrase(m.group("np")[:-1])  # "spells" -> "spell"
+    if not ok:
+        return None
+    who = "opponents" if m.group("who") == "your opponents" else "target_player"
+    return CantCastSpellsThisTurn(who=who, spell_filter=f)
+
+
+def _creatures_cant_attack_this_turn(phrase: str) -> Effect | None:
+    """``creatures can't attack this turn`` (Orim's Chant's kicker).
+    Literal: only card in the pool with this shape; broader grammar
+    deferred until a second example exists."""
+    if phrase != "creatures can't attack this turn":
+        return None
+    from mtg_bot.effects.generic.roto_stack import CreaturesCantAttackThisTurn
+
+    return CreaturesCantAttackThisTurn()
+
+
+_IF_KICKED_RE = re.compile(r"^if this spell was kicked, (?P<eff>.+)$")
+
+
+def _if_kicked(phrase: str) -> Effect | None:
+    """``if this spell was kicked, <untargeted effect>`` -- an additional
+    kicked-only effect (Orim's Chant's "creatures can't attack this
+    turn"); the "<...> instead" form is ``conditional_phrases``'s."""
+    m = _IF_KICKED_RE.match(phrase)
+    if m is None or m.group("eff").endswith(" instead"):
+        return None
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.generic.cast_conditionals import SpellWasKicked
+
+    inner = _parse_effect(m.group("eff"))
+    if inner is None or inner.requires_target():
+        return None
+    return IfConditionElse(condition=SpellWasKicked(), then_effect=inner)
 
 
 # ---------------------------------------------------------------------
@@ -205,8 +654,12 @@ _REMOVE_ANY_COUNTER_PIECE = re.compile(
 
 
 def parse_roto_cost_piece(piece: str):
-    """A composable ``ActivationCost.extra_costs`` atom (the last fallback
-    of ``activated._classify_cost_piece``), or ``None``."""
+    """``(cost-piece kind, atom)`` for a cost piece the base grammar
+    declined (the last fallback of ``activated._classify_cost_piece``):
+    ``("extra", <atom>)`` for a composable ``ActivationCost.extra_costs``
+    atom, ``("sacrifice_self", None)`` for "Sacrifice this enchantment"
+    (High Noon -- the enchantment wording of the base's sacrifice-self
+    pieces). ``None`` otherwise."""
     if _disabled():
         return None
     if _REMOVE_ANY_COUNTER_PIECE.match(piece):
@@ -214,7 +667,9 @@ def parse_roto_cost_piece(piece: str):
             RemoveAnyCounterFromSelfCost,
         )
 
-        return RemoveAnyCounterFromSelfCost()
+        return ("extra", RemoveAnyCounterFromSelfCost())
+    if piece == "Sacrifice this enchantment":
+        return ("sacrifice_self", None)
     return None
 
 
@@ -321,7 +776,9 @@ def _counter_then_controller(phrase: str) -> Effect | None:
 
 def _return_spell_or_permanent(phrase: str) -> Effect | None:
     """``return target spell or permanent to its owner's hand`` (Venser,
-    Shaper Savant)."""
+    Shaper Savant). Literal: only card in the pool with this shape (the
+    nonland / opponent-only sibling is ``card_flow_grammar``'s); broader
+    grammar deferred until a second example exists."""
     if phrase != "return target spell or permanent to its owner's hand":
         return None
     from mtg_bot.effects.generic.roto_stack import (
@@ -331,8 +788,21 @@ def _return_spell_or_permanent(phrase: str) -> Effect | None:
     return ReturnTargetSpellOrPermanentToHand()
 
 
+def _exile_spell_plotted(phrase: str) -> Effect | None:
+    """``exile target spell. It becomes plotted`` (Aven Interrupter).
+    Literal: only card in the pool with this shape; broader grammar
+    deferred until a second example exists."""
+    if phrase != "exile target spell. It becomes plotted":
+        return None
+    from mtg_bot.effects.generic.roto_stack import ExileTargetSpellPlotted
+
+    return ExileTargetSpellPlotted()
+
+
 def _exile_any_number_of_spells(phrase: str) -> Effect | None:
-    """``exile any number of target spells`` (Mindbreak Trap)."""
+    """``exile any number of target spells`` (Mindbreak Trap). Literal:
+    only card in the pool with this shape; broader grammar deferred
+    until a second example exists."""
     if phrase != "exile any number of target spells":
         return None
     from mtg_bot.effects.generic.roto_stack import ExileTargetSpells
@@ -431,7 +901,6 @@ _COUNTER_ABILITY_OR_SPELL_RE = re.compile(r"^counter target (?P<items>.+)$")
 _ABILITY_KINDS = {
     "activated ability": ("activated",),
     "triggered ability": ("triggered",),
-    "ability": ("activated", "triggered"),
 }
 
 
@@ -477,13 +946,56 @@ def _counter_ability_or_spell(phrase: str) -> Effect | None:
     )
 
 
+# ---------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------
+
+_LINE_RECOGNIZERS = (
+    _spells_cost_more,
+    _each_spell_costs_more_except_controllers_turn,
+    _minimum_spell_cost,
+    _activation_lock,
+    _static_flag,
+    _enters_with_minus_one_counters,
+    _enters_with_x_counters,
+    _cumulative_upkeep,
+    _cast_trigger,
+    _named_lines,
+    _mv_above_lands,
+    _activation_trigger,
+    _counter_entering_triggers,
+    _opening_hand_reveal,
+    _graveyard_exile_tax,
+)
+
+
+def parse_roto_stack_line(line: str, card: dict) -> WGLine | None:
+    """The :class:`WGLine` for one reminder-stripped permanent oracle
+    ``line`` of ``card``, or ``None`` when no P1 recognizer claims it."""
+    if _disabled():
+        return None
+    from mtg_bot.cards.parser.triggers import _substitute_self_name
+
+    line = _substitute_self_name(line.strip(), card.get("name", ""))
+    for recognizer in _LINE_RECOGNIZERS:
+        out = recognizer(line, card)
+        if out is not None:
+            return out
+    return None
+
+
 _EFFECT_RECOGNIZERS: tuple = (
     _counter_with_mana_value,
     _counter_mv_at_most_count,
     _counter_then_controller,
     _return_spell_or_permanent,
     _exile_any_number_of_spells,
+    _exile_spell_plotted,
     _counter_ability_or_spell,
+    _cant_cast_this_turn,
+    _creatures_cant_attack_this_turn,
+    _if_kicked,
+    _pump_then_untap,
 )
 
 

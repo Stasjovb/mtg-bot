@@ -1,6 +1,9 @@
 """Effects for the Vintage Roto P1 package (stack & restrictions):
-counterspell variants, effects that move spells off the stack without
-countering them, the "remove a counter" cost atom.
+counterspell variants and effects that move spells off the stack
+without countering them; cast-trigger effects bound to the cast spell
+and its caster; "can't cast / attack this turn"; countering a triggered
+ability; cumulative upkeep; recruit; Chancellor of the Annex's
+opening-hand reveal; the "remove a counter" cost atom.
 
 Spells on the stack are targeted as ``("stack", index)`` (the
 convention of :class:`~mtg_bot.effects.generic.counterspells.
@@ -12,18 +15,18 @@ pointed at the removed spell becomes ``("stack", -1)``, i.e. illegal).
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.counterspells import CounterSpell
+from mtg_bot.effects.generic.cube_creatures_ub import CounterTargetStackObject
 from mtg_bot.effects.object_predicates import ObjectPredicate
 from mtg_bot.effects.predicates import TriggerPredicate
 
 if TYPE_CHECKING:
-    from mtg_bot.game import GameObject, GameState, StackItem
+    from mtg_bot.game import GameState, StackItem
 
 
 # ---------------------------------------------------------------------
@@ -244,16 +247,8 @@ class CounterSpellThenControllerEffect(Effect):
         return f"{self.counter.describe()}; its controller: {self.rider.describe()}"
 
 
-def _counter_target_stack_object():
-    from mtg_bot.effects.generic.cube_creatures_ub import (
-        CounterTargetStackObject,
-    )
-
-    return CounterTargetStackObject
-
-
 @dataclass(frozen=True)
-class CounterTargetStackObjectFiltered(_counter_target_stack_object()):
+class CounterTargetStackObjectFiltered(CounterTargetStackObject):
     """"Counter target triggered ability or colorless spell." (Consign
     to Memory) -- the U/B bucket's stack-object counter with a filter on
     the spell kind. A countered ability is removed from the stack
@@ -368,6 +363,42 @@ class ExileTargetSpells(Effect):
 
     def describe(self) -> str:
         return "exile any number of target spells"
+
+
+@dataclass(frozen=True)
+class ExileTargetSpellPlotted(Effect):
+    """"Exile target spell. It becomes plotted." (Aven Interrupter): the
+    spell leaves the stack for its owner's exile (not countered -- an
+    uncounterable spell is exiled too) and becomes plotted, so its owner
+    may cast it as a sorcery on a later turn without paying its mana cost
+    (``GameObject.plotted_turn``). A copy ceases to exist."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(self, state, controller_id):
+        return [("stack", i) for i, _ in _spell_items(state)]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.actions import move_spell_off_stack
+        from mtg_bot.game import Zone
+
+        if not targets:
+            return
+        kind, idx = targets[0]
+        if kind != "stack" or not (0 <= idx < len(state.stack)):
+            return
+        if state.stack[idx].ability is not None:
+            return
+        item = pop_stack_item(state, idx)
+        card = item.source
+        move_spell_off_stack(state, card, destination="exile")
+        if card.zone == Zone.EXILE and not card.is_spell_copy:
+            card.plotted_turn = state.turn_number
+            state.log.append(f"{card.printing.name} becomes plotted")
+
+    def describe(self) -> str:
+        return "exile target spell; it becomes plotted"
 
 
 # ---------------------------------------------------------------------
@@ -652,6 +683,222 @@ class CumulativeUpkeep(Effect):
 
 
 # ---------------------------------------------------------------------
+# "... can't cast spells / can't attack this turn"
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CantCastSpellsThisTurn(Effect):
+    """"Your opponents can't cast [noncreature] spells this turn."
+    (Silence, Ranger-Captain of Eos) / "Target player can't cast spells
+    this turn." (Orim's Chant): a cleanup-expiring emblem with a
+    ``CastProhibition``."""
+
+    who: str = "opponents"  # "opponents" | "target_player"
+    spell_filter: "ObjectPredicate | None" = None
+
+    def requires_target(self) -> bool:
+        return self.who == "target_player"
+
+    def legal_targets(self, state, controller_id):
+        if self.who != "target_player":
+            return []
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.roto_restrictions import (
+            CastProhibition,
+            create_this_turn_emblem,
+        )
+
+        if self.who == "target_player":
+            if not targets or targets[0][0] != "player":
+                return
+            static = CastProhibition(
+                who="player", player_id=targets[0][1],
+                spell_filter=self.spell_filter,
+            )
+            who = f"P{targets[0][1]}"
+        else:
+            static = CastProhibition(who="opponents", spell_filter=self.spell_filter)
+            who = f"P{controller_id}'s opponents"
+        create_this_turn_emblem(state, controller_id, (static,), "can't cast")
+        state.log.append(f"{who} can't cast {self._noun()} this turn")
+
+    def _noun(self) -> str:
+        return "spells" if self.spell_filter is None else "those spells"
+
+    def describe(self) -> str:
+        subject = "target player" if self.who == "target_player" else "your opponents"
+        return f"{subject} can't cast {self._noun()} this turn"
+
+
+@dataclass(frozen=True)
+class CreaturesCantAttackThisTurn(Effect):
+    """"Creatures can't attack this turn." (Orim's Chant, kicked)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.roto_restrictions import (
+            AttackProhibition,
+            create_this_turn_emblem,
+        )
+
+        create_this_turn_emblem(
+            state, controller_id, (AttackProhibition(),), "can't attack",
+        )
+        state.log.append("creatures can't attack this turn")
+
+    def describe(self) -> str:
+        return "creatures can't attack this turn"
+
+
+# ---------------------------------------------------------------------
+# Countering a triggered ability (Strict Proctor)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CounterTriggerUnlessPays(Effect):
+    """"counter that ability unless its controller pays <cost>" -- the
+    triggered ability at the fixed ``("stack", i)`` (not a target)."""
+
+    unless_pays: str = ""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects import ActivatedAbility
+
+        if not targets:
+            return
+        kind, idx = targets[0]
+        if kind != "stack" or not (0 <= idx < len(state.stack)):
+            return
+        item = state.stack[idx]
+        if (
+            item.ability is None or isinstance(item.ability, ActivatedAbility)
+            or item.countered
+        ):
+            return
+        name = item.source.printing.name
+        if self.unless_pays and _pay_or_decline(
+            state, item.controller_id, self.unless_pays,
+            f"so {name}'s ability isn't countered",
+        ):
+            return
+        item.countered = True
+        state.log.append(f"{name}'s triggered ability is countered")
+
+    def describe(self) -> str:
+        text = "counter that ability"
+        if self.unless_pays:
+            text += f" unless its controller pays {self.unless_pays}"
+        return text
+
+
+# ---------------------------------------------------------------------
+# Recruit (The Queen of Dale)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Recruit(Effect):
+    """"you recruit" -- "Draw a card, then discard a card. If you
+    discarded a nonland card, create a 1/1 white Human Soldier creature
+    token." (the keyword action's reminder text)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.card_flow import discard_card
+        from mtg_bot.effects.generic.tokens import CreateToken
+        from mtg_bot.turn import draw_n_cards
+
+        draw_n_cards(state, controller_id, 1)
+        p = state.player_by_id(controller_id)
+        if not p.hand:
+            return
+        chosen = p.hand[0]
+        if p.agent is not None:
+            pick = p.agent.choose_discard(state, controller_id, [c.id for c in p.hand])
+            chosen = next((c for c in p.hand if c.id == pick), p.hand[0])
+        nonland = not chosen.printing.is_land
+        discard_card(state, p, chosen)
+        if nonland and chosen in p.graveyard:
+            CreateToken(token_printing=_human_soldier_token()).resolve(
+                state, controller_id, (),
+            )
+
+    def describe(self) -> str:
+        return "recruit"
+
+
+def _human_soldier_token():
+    from mtg_bot.cards.base import make_token_creature
+
+    return make_token_creature(
+        name="Human Soldier", power=1, toughness=1,
+        subtypes=("Human", "Soldier"), colors=("W",),
+    )
+
+
+# ---------------------------------------------------------------------
+# Chancellor of the Annex's opening-hand reveal
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RevealForFirstSpellTax:
+    """"You may reveal this card from your opening hand. If you do, when
+    each opponent casts their first spell of the game, counter that
+    spell unless that player pays {N}." (CR 103.6; Chancellor of the
+    Annex). The reveal leaves a command-zone emblem holding the delayed
+    trigger -- an opponent's first spell of the game happens once, so
+    it fires once per opponent."""
+
+    unless_pays: str = "{1}"
+
+    def available_to(self, player_id: int, starting_player_id: int) -> bool:
+        return True
+
+    def describe(self, name: str) -> str:
+        return f"reveal {name} from your opening hand"
+
+    def apply(self, state, player, card) -> None:
+        from mtg_bot.cards.base import make_emblem
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.predicates import OPPONENT, Controlled, Event
+        from mtg_bot.game import Zone, reveal_to_all
+
+        reveal_to_all(state, card)
+        trigger = TriggeredAbility(
+            event=Event.IS_CAST,
+            predicate=(
+                Controlled(OPPONENT, subject="controller")
+                & CastersFirstSpellOfTheGame()
+            ),
+            effect=CounterEventSpell(unless_pays=self.unless_pays),
+        )
+        printing = make_emblem(
+            name=f"{card.printing.name} (revealed)",
+            triggered_abilities=(trigger,),
+        )
+        holder = state.new_object(printing, owner_id=player.id, zone=Zone.COMMAND)
+        holder.etb_timestamp = state.next_timestamp
+        state.next_timestamp += 1
+        state.emblems.append(holder)
+        state.log.append(
+            f"P{player.id} reveals {card.printing.name} from their opening hand"
+        )
+
+
+@dataclass(frozen=True)
+class CastersFirstSpellOfTheGame(TriggerPredicate):
+    """The spell being cast is its caster's first spell of the game (the
+    count is bumped before the cast event fires)."""
+
+    def matches(self, state, subjects, source):
+        caster = subjects.get("controller")
+        return caster is not None and caster.spells_cast_this_game == 1
+
+
+# ---------------------------------------------------------------------
 # Cost atoms
 # ---------------------------------------------------------------------
 
@@ -697,6 +944,13 @@ class RemoveAnyCounterFromSelfCost:
 
 
 __all__ = [
+    "ExileTargetSpellPlotted",
+    "CastersFirstSpellOfTheGame",
+    "CounterTriggerUnlessPays",
+    "Recruit",
+    "RevealForFirstSpellTax",
+    "CantCastSpellsThisTurn",
+    "CreaturesCantAttackThisTurn",
     "CastersNoncreatureSpellsThisTurnIs",
     "CounterEventSpell",
     "CumulativeUpkeep",

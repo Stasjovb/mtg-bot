@@ -121,7 +121,13 @@ def apply_opening_hand_actions(
                 continue
             prompt = action.describe(card.printing.name)
             if player.agent.choose_yes_no(state, player.id, prompt):
-                _begin_on_battlefield(state, player, card, action)
+                # An action may carry its own procedure (roto P1:
+                # Chancellor of the Annex's reveal).
+                apply = getattr(action, "apply", None)
+                if apply is not None:
+                    apply(state, player, card)
+                else:
+                    _begin_on_battlefield(state, player, card, action)
 
 
 __all__ = ["BeginGameOnBattlefield", "apply_opening_hand_actions"]

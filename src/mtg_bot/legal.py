@@ -500,6 +500,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
 
         with casting_origin(
             card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+            from_exile=card.zone == Zone.EXILE,
         ):
             reduced = apply_cost_reductions(
                 card.printing, state, player_id, base_cost,
@@ -550,7 +551,13 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         # Cost increases (Thalia) still apply to free casts (CR 601.2f).
         from mtg_bot.creature_statics_wg import spell_cost_increase
 
-        tax = spell_cost_increase(state, card.printing, player_id)
+        from mtg_bot.creature_casting_ub import casting_origin
+
+        with casting_origin(
+            card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+            from_exile=card.zone == Zone.EXILE,
+        ):
+            tax = spell_cost_increase(state, card.printing, player_id)
         from mtg_bot.roto_restrictions import minimum_spell_cost
 
         return (tax == 0 and not minimum_spell_cost(state)) or _can_cast(
