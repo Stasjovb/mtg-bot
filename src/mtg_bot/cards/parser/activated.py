@@ -334,6 +334,12 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     atom = parse_rmc_cost_piece(piece)
     if atom is not None:
         return _CostPiece(kind="extra", atom=atom)
+    # Roto P1 cost atoms ("Remove a counter from this creature").
+    from mtg_bot.cards.parser.roto_stack import parse_roto_cost_piece
+
+    atom = parse_roto_cost_piece(piece)
+    if atom is not None:
+        return _CostPiece(kind="extra", atom=atom)
     return None
 
 

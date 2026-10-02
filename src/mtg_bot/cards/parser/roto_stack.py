@@ -175,11 +175,316 @@ def parse_roto_stack_line(line: str, card: dict) -> WGLine | None:
     return None
 
 
+_ENTERS_WITH_MINUS_COUNTERS_RE = re.compile(
+    r"^This (?:creature|artifact|permanent) enters with "
+    r"(?P<n>a|an|one|two|three|four|five|\d+) -1/-1 counters? on it\.$"
+)
+
+
+def _enters_with_minus_one_counters(line: str, card: dict) -> WGLine | None:
+    """``This creature enters with a -1/-1 counter on it.`` (Glen Elendra
+    Guardian) -> ``enters_with_named_counters``."""
+    m = _ENTERS_WITH_MINUS_COUNTERS_RE.match(line)
+    if m is None:
+        return None
+    n = m.group("n")
+    count = 1 if n in ("a", "an") else (int(n) if n.isdigit() else _NUMBER_WORDS[n])
+    return WGLine(fields={"enters_with_named_counters": (("-1/-1", count),)})
+
+
+_LINE_RECOGNIZERS = _LINE_RECOGNIZERS + (_enters_with_minus_one_counters,)
+
+
 # ---------------------------------------------------------------------
-# Effect phrases
+# Cost pieces
 # ---------------------------------------------------------------------
 
-_EFFECT_RECOGNIZERS: tuple = ()
+_REMOVE_ANY_COUNTER_PIECE = re.compile(
+    r"^Remove a counter from this (?:creature|artifact|permanent)$"
+)
+
+
+def parse_roto_cost_piece(piece: str):
+    """A composable ``ActivationCost.extra_costs`` atom (the last fallback
+    of ``activated._classify_cost_piece``), or ``None``."""
+    if _disabled():
+        return None
+    if _REMOVE_ANY_COUNTER_PIECE.match(piece):
+        from mtg_bot.effects.generic.roto_stack import (
+            RemoveAnyCounterFromSelfCost,
+        )
+
+        return RemoveAnyCounterFromSelfCost()
+    return None
+
+
+# ---------------------------------------------------------------------
+# Effect phrases: counterspell variants
+# ---------------------------------------------------------------------
+
+# Plural subtypes whose singular isn't the regular English one.
+_IRREGULAR_PLURAL_SUBTYPES = {
+    "Faeries": "Faerie", "Zombies": "Zombie", "Pixies": "Pixie",
+}
+
+
+def _plural_permanent_noun(noun: str):
+    """``Faeries`` / ``artifacts`` / ``Elves`` -> an ObjectPredicate."""
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        _permanent_noun_predicate,
+    )
+    from mtg_bot.effects.object_predicates import HasSubtype
+
+    if noun in _IRREGULAR_PLURAL_SUBTYPES:
+        return HasSubtype(_IRREGULAR_PLURAL_SUBTYPES[noun])
+    return _permanent_noun_predicate(noun, plural=True)
+
+
+_COUNTER_WITH_MV_RE = re.compile(
+    r"^counter target (?P<np>.+?) with mana value (?P<n>\d+)$"
+)
+
+
+def _counter_with_mana_value(phrase: str) -> Effect | None:
+    """``counter target <spell np> with mana value N`` (Mental Misstep,
+    Spell Snare) -- X counts on the stack."""
+    m = _COUNTER_WITH_MV_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.counterspells import CounterSpell
+    from mtg_bot.effects.generic.roto_stack import SpellManaValueIs
+
+    ok, f = parse_spell_phrase(m.group("np"))
+    if not ok:
+        return None
+    mv = SpellManaValueIs(int(m.group("n")))
+    return CounterSpell(
+        spell_filter=mv if f is None else f & mv,
+        label=f"{m.group('np')} with mana value {m.group('n')}",
+    )
+
+
+_COUNTER_MV_AT_MOST_COUNT_RE = re.compile(
+    r"^counter target (?P<np>.+?) with mana value X or less, where X is the "
+    r"number of (?P<noun>.+) you control$"
+)
+
+
+def _counter_mv_at_most_count(phrase: str) -> Effect | None:
+    """``counter target <spell np> with mana value X or less, where X is
+    the number of <permanents> you control`` (Spellstutter Sprite)."""
+    m = _COUNTER_MV_AT_MOST_COUNT_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.roto_stack import CounterSpellMVAtMostCount
+
+    ok, f = parse_spell_phrase(m.group("np"))
+    pred = _plural_permanent_noun(m.group("noun"))
+    if not ok or pred is None:
+        return None
+    return CounterSpellMVAtMostCount(
+        spell_filter=f, count_predicate=pred,
+        label=f"{m.group('np')} with mana value X or less",
+    )
+
+
+_COUNTER_THEN_CONTROLLER_RE = re.compile(
+    r"^(?P<counter>counter target [^.]+)\. Its controller "
+    r"(?P<verb>creates) (?P<rest>.+)$"
+)
+
+
+def _counter_then_controller(phrase: str) -> Effect | None:
+    """``<counter target ...>. Its controller creates <token>`` (Swan
+    Song, Strix Serenade). The "Its controller draws a card" sibling
+    (Glen Elendra Guardian) is the U/B bucket's ``ThenItsControllerDraws``."""
+    m = _COUNTER_THEN_CONTROLLER_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.counter_phrases import parse_counter
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic.counterspells import CounterSpell
+    from mtg_bot.effects.generic.roto_stack import (
+        CounterSpellThenControllerEffect,
+    )
+
+    counter = parse_counter(m.group("counter"))
+    if not isinstance(counter, CounterSpell):
+        return None
+    rider = _parse_effect(f"create {m.group('rest')}")
+    if rider is None or rider.requires_target():
+        return None
+    return CounterSpellThenControllerEffect(counter=counter, rider=rider)
+
+
+def _return_spell_or_permanent(phrase: str) -> Effect | None:
+    """``return target spell or permanent to its owner's hand`` (Venser,
+    Shaper Savant)."""
+    if phrase != "return target spell or permanent to its owner's hand":
+        return None
+    from mtg_bot.effects.generic.roto_stack import (
+        ReturnTargetSpellOrPermanentToHand,
+    )
+
+    return ReturnTargetSpellOrPermanentToHand()
+
+
+def _exile_any_number_of_spells(phrase: str) -> Effect | None:
+    """``exile any number of target spells`` (Mindbreak Trap)."""
+    if phrase != "exile any number of target spells":
+        return None
+    from mtg_bot.effects.generic.roto_stack import ExileTargetSpells
+
+    return ExileTargetSpells()
+
+
+# ---------------------------------------------------------------------
+# "Instead" riders (``conditional_phrases.parse_instead_rider`` hooks)
+# ---------------------------------------------------------------------
+
+_CONTROL_CREATURE_POWER_RE = re.compile(
+    r"^you control a creature with power (?P<n>\d+) or greater$"
+)
+
+
+def roto_rider_condition(text: str):
+    """``you control a creature with power N or greater`` (Ferocious) ->
+    a ``Condition`` checked on resolution, or ``None``."""
+    if _disabled():
+        return None
+    m = _CONTROL_CREATURE_POWER_RE.match(text)
+    if m is None:
+        return None
+    from mtg_bot.effects.conditions import ControlPermanent
+    from mtg_bot.effects.object_predicates import HasPowerAtLeast, IsCreature
+
+    return ControlPermanent(IsCreature() & HasPowerAtLeast(int(m.group("n"))))
+
+
+def roto_counter_variant(eff_text: str, base):
+    """``counter that spell`` restating a taxed counterspell without its
+    tax (Stubborn Denial), or ``None``."""
+    if _disabled() or eff_text != "counter that spell":
+        return None
+    from mtg_bot.effects.generic.counterspells import CounterSpell
+
+    if not isinstance(base, CounterSpell) or not base.unless_pays:
+        return None
+    import dataclasses
+
+    return dataclasses.replace(base, unless_pays="")
+
+
+# ---------------------------------------------------------------------
+# Alternative-cost gates (``spell_cost_lines`` hook)
+# ---------------------------------------------------------------------
+
+_OPPONENT_CAST_N_SPELLS_RE = re.compile(
+    r"^an opponent cast (?P<n>\w+) or more spells this turn$"
+)
+
+
+def roto_alt_cost_condition(text: str):
+    """``an opponent cast N or more spells this turn`` (Mindbreak Trap) ->
+    :class:`~mtg_bot.effects.generic.roto_stack.OpponentCastSpellsThisTurn`."""
+    if _disabled():
+        return None
+    m = _OPPONENT_CAST_N_SPELLS_RE.match(text)
+    if m is None:
+        return None
+    n = m.group("n")
+    n = int(n) if n.isdigit() else _NUMBER_WORDS.get(n)
+    if n is None:
+        return None
+    from mtg_bot.effects.generic.roto_stack import OpponentCastSpellsThisTurn
+
+    return OpponentCastSpellsThisTurn(n)
+
+
+# ---------------------------------------------------------------------
+# Cost-reduction conditions (``cost_reduction`` hook)
+# ---------------------------------------------------------------------
+
+_TARGETS_SPELL_RE = re.compile(r"^it targets an? (?P<np>.+ spell)$")
+
+
+def roto_cost_reduction_condition(text: str):
+    """``it targets a <spell np>`` (Mystical Dispute: "a blue spell") ->
+    :class:`~mtg_bot.effects.generic.roto_stack.TargetsSpellMatching`."""
+    if _disabled():
+        return None
+    m = _TARGETS_SPELL_RE.match(text)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.roto_stack import TargetsSpellMatching
+
+    ok, f = parse_spell_phrase(m.group("np"))
+    if not ok or f is None:
+        return None
+    return TargetsSpellMatching(f)
+
+
+_COUNTER_ABILITY_OR_SPELL_RE = re.compile(r"^counter target (?P<items>.+)$")
+_ABILITY_KINDS = {
+    "activated ability": ("activated",),
+    "triggered ability": ("triggered",),
+    "ability": ("activated", "triggered"),
+}
+
+
+def _counter_ability_or_spell(phrase: str) -> Effect | None:
+    """``counter target triggered ability or colorless spell`` (Consign
+    to Memory): stack-object kinds where the spell kind carries a filter
+    (``colorless`` included)."""
+    m = _COUNTER_ABILITY_OR_SPELL_RE.match(phrase)
+    if m is None:
+        return None
+    from mtg_bot.cards.parser.target_phrases import parse_spell_phrase
+    from mtg_bot.effects.generic.roto_stack import (
+        CounterTargetStackObjectFiltered,
+        IsColorless,
+    )
+
+    kinds: list[str] = []
+    spell_filter = None
+    has_spell = False
+    for item in re.split(r", or |, | or ", m.group("items")):
+        if item in _ABILITY_KINDS:
+            kinds.extend(_ABILITY_KINDS[item])
+            continue
+        if has_spell or not item.endswith("spell"):
+            return None
+        has_spell = True
+        colorless = item.startswith("colorless ")
+        if colorless:
+            item = item[len("colorless "):]
+        ok, f = parse_spell_phrase(item)
+        if not ok:
+            return None
+        if colorless:
+            f = IsColorless() if f is None else f & IsColorless()
+        spell_filter = f
+        kinds.append("spell")
+    if not has_spell or len(kinds) < 2 or spell_filter is None:
+        # Plain spell counters and pure ability counters belong to the
+        # base / U/B grammars.
+        return None
+    return CounterTargetStackObjectFiltered(
+        kinds=tuple(kinds), spell_filter=spell_filter,
+    )
+
+
+_EFFECT_RECOGNIZERS: tuple = (
+    _counter_with_mana_value,
+    _counter_mv_at_most_count,
+    _counter_then_controller,
+    _return_spell_or_permanent,
+    _exile_any_number_of_spells,
+    _counter_ability_or_spell,
+)
 
 
 def parse_roto_stack_effect(phrase: str) -> Effect | None:
@@ -195,6 +500,11 @@ def parse_roto_stack_effect(phrase: str) -> Effect | None:
 
 __all__ = [
     "merge_fields",
+    "parse_roto_cost_piece",
     "parse_roto_stack_effect",
     "parse_roto_stack_line",
+    "roto_alt_cost_condition",
+    "roto_cost_reduction_condition",
+    "roto_counter_variant",
+    "roto_rider_condition",
 ]

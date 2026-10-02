@@ -914,6 +914,15 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         # is surfaced at sorcery timing only (see the activated-ability
         # block below).
         actions.extend(_instant_speed_loyalty_activations(state, player_id))
+        # Counter-a-spell activated abilities (roto P1: Glen Elendra
+        # Guardian) -- only ever useful with a spell on the stack.
+        from mtg_bot.roto_restrictions import (
+            instant_speed_spell_targeting_activations,
+        )
+
+        actions.extend(
+            instant_speed_spell_targeting_activations(state, player_id),
+        )
         # Teferi, Time Raveler: an opponent's static confines this
         # player's spell casts to their own sorcery timing.
         if _restricted_to_sorcery_speed_casts(state, player_id):

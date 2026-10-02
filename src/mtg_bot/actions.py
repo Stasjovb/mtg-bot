@@ -2778,6 +2778,7 @@ def _cast_spell(
     # Colors of mana spent (Sunburst, Converge): every cast records
     # them — Prismatic Ending reads the count on the stack.
     color_sources: list = []
+    card.mana_spent_to_cast = cost.total
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
         color_sources=color_sources,
@@ -2968,7 +2969,16 @@ def _cast_spell(
     # so cost-reduction rules that key off the chosen target — e.g.
     # Dark Endurance's "costs {1} less if it targets a blocking
     # creature" — could see the choice.
-    countered = _apply_ward_check(state, player_id, targets)
+    # Ward counters "unless its controller pays": a spell that can't be
+    # countered (Long Goodbye: "This includes by the ward ability.") is
+    # unaffected, so nothing is paid (CR 702.21a / 101.2).
+    from types import SimpleNamespace as _Probe
+
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell as _CTS
+
+    countered = not _CTS._is_uncounterable(
+        state, _Probe(source=card, controller_id=player_id),
+    ) and _apply_ward_check(state, player_id, targets)
     card.cast_without_sorcery_timing = (
         card.printing.sacrifice_at_cleanup_if_cast_without_sorcery_timing
         and not sorcery_timing_at_cast

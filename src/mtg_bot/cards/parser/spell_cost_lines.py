@@ -42,6 +42,10 @@ _ALT_COST_RE = re.compile(
     r"|you control an? (?P<ctrl>[A-Z][a-z]+)), you may|You may) "
     r"(?P<cost>.+) rather than pay this spell's mana cost\.$"
 )
+_ALT_COST_CONDITION_RE = re.compile(
+    r"^If (?P<cond>[^,]+), you may (?P<cost>.+) rather than pay this "
+    r"spell's mana cost\.$"
+)
 _PAY_LIFE_RE = re.compile(r"^pay (\d+) life$")
 _PAY_MANA_RE = re.compile(r"^pay ((?:\{[^}]+\})+)$")
 _EXILE_COLOR_RE = re.compile(
@@ -62,10 +66,20 @@ def parse_alternative_cost_line(line: str) -> AlternativeCost | None:
     if m is not None:
         return AlternativeCost(mana=m.group("cost"), overload=True)
     m = _ALT_COST_RE.match(line)
-    if m is None:
-        return None
     fields: dict = {}
-    gate = m.group("gate")
+    if m is None:
+        # Roto P1: a game-state gate ("If an opponent cast three or more
+        # spells this turn, ..." -- Mindbreak Trap).
+        m = _ALT_COST_CONDITION_RE.match(line)
+        if m is None:
+            return None
+        from mtg_bot.cards.parser.roto_stack import roto_alt_cost_condition
+
+        condition = roto_alt_cost_condition(m.group("cond"))
+        if condition is None:
+            return None
+        fields["condition"] = condition
+    gate = m.groupdict().get("gate")
     if gate == "it's your turn":
         fields["turn"] = "yours"
     elif gate == "it's not your turn":
@@ -138,6 +152,12 @@ def parse_additional_cost_line(
 UNCOUNTERABLE_LINE = "This spell can't be countered."
 
 
+def _is_uncounterable_line(line: str) -> bool:
+    """``This spell can't be countered.`` -- reminder text stripped (Long
+    Goodbye's "(This includes by the ward ability.)")."""
+    return _strip_reminder_text(line.strip()).strip() == UNCOUNTERABLE_LINE
+
+
 _REPLICATE_RE = re.compile(r"^Replicate (?P<cost>(?:\{[^}]+\})+)$")
 
 
@@ -161,7 +181,7 @@ def is_spell_cost_line(line: str) -> bool:
     Overload, additional cost, or "This spell can't be countered.")
     that contributes no ``Effect``."""
     return (
-        line.strip() == UNCOUNTERABLE_LINE
+        _is_uncounterable_line(line)
         or parse_replicate_line(line) is not None
         or parse_teamwork_line(line) is not None
         or parse_alternative_cost_line(line) is not None
@@ -203,7 +223,7 @@ def detect_spell_line_fields(
         fields["alternative_costs"] = alts
     if arms:
         fields["additional_cost_options"] = arms
-    if any(raw.strip() == UNCOUNTERABLE_LINE for raw in text.split("\n")):
+    if any(_is_uncounterable_line(raw) for raw in text.split("\n")):
         fields["spell_is_uncounterable"] = True
     for raw in text.split("\n"):
         rep = parse_replicate_line(raw)

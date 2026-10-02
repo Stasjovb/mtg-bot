@@ -316,6 +316,116 @@ def filter_actions(state: "GameState", player_id: int, actions: list) -> list:
 
 
 # ---------------------------------------------------------------------
+# Activated abilities that target spells, at instant speed
+# ---------------------------------------------------------------------
+
+
+def _targets_spells_only(effect) -> bool:
+    """Whether ``effect``'s targets are objects on the stack (a
+    counterspell ability -- Glen Elendra Guardian's "Counter target
+    noncreature spell. Its controller draws a card.")."""
+    from mtg_bot.effects.generic.counterspells import CounterSpell
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        CounterTargetStackObject,
+        ThenItsControllerDraws,
+    )
+    from mtg_bot.effects.generic.roto_stack import (
+        CounterSpellThenControllerEffect,
+        ExileTargetSpells,
+    )
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+
+    if isinstance(effect, ThenItsControllerDraws):
+        effect = effect.inner
+    return isinstance(effect, (
+        CounterSpell, CounterTargetSpell, CounterSpellThenControllerEffect,
+        ExileTargetSpells, CounterTargetStackObject,
+    ))
+
+
+def _simple_cost(cost) -> bool:
+    """The cost is only mana, ``{T}`` and composable cost atoms."""
+    from dataclasses import replace
+
+    from mtg_bot.effects.base import ActivationCost
+
+    return replace(
+        cost, mana=None, mana_str="", tap_self=False, extra_costs=(),
+    ) == ActivationCost()
+
+
+def instant_speed_spell_targeting_activations(
+    state: "GameState", player_id: int,
+) -> list:
+    """``ActivateAbility`` proposals for battlefield abilities whose
+    targets are spells (counter-a-spell abilities), offered whenever
+    their controller holds priority.
+
+    ``legal.legal_actions`` otherwise offers battlefield activated
+    abilities only in an empty-stack sorcery window, where such an
+    ability can never have a target. Only abilities whose cost is mana,
+    ``{T}`` and composable atoms are offered; restrictions (sorcery
+    speed, "activate only if / during your turn", locks) apply."""
+    from mtg_bot.actions import (
+        ActivateAbility,
+        _effective_ability_mana_cost,
+        can_pay_cost,
+    )
+    from mtg_bot.game import effective_activated_abilities, is_creature_now
+    from mtg_bot.keyword_rules import filter_targetable
+
+    out: list = []
+    if not state.stack:
+        return out  # nothing to target
+    for obj in state.battlefield:
+        if obj.controller_id != player_id or obj.phased_out:
+            continue
+        if not any(
+            _targets_spells_only(a.effect)
+            for a in obj.printing.activated_abilities
+        ):
+            continue
+        abilities = effective_activated_abilities(state, obj)
+        for idx, ability in enumerate(abilities):
+            if not _targets_spells_only(ability.effect):
+                continue
+            if ability.sorcery_speed or ability.is_mana_ability:
+                continue
+            if not _simple_cost(ability.cost):
+                continue
+            if (
+                ability.activate_only_if is not None
+                and not ability.activate_only_if.matches(state, player_id)
+            ):
+                continue
+            if (
+                ability.activate_only_during_your_turn
+                and state.active_player().id != player_id
+            ):
+                continue
+            cost = ability.cost
+            if cost.tap_self and (
+                obj.tapped or (is_creature_now(obj) and obj.summoning_sick)
+            ):
+                continue
+            if any(not a.payable(state, player_id, obj) for a in cost.extra_costs):
+                continue
+            from mtg_bot.creature_statics_wg import ability_cost_increase
+
+            if cost.mana is not None or ability_cost_increase(state, obj, ability):
+                mana = _effective_ability_mana_cost(state, obj, ability)
+                if not can_pay_cost(state, player_id, mana):
+                    continue
+            if not filter_targetable(
+                state, ability.effect.legal_targets(state, player_id),
+                obj, player_id,
+            ):
+                continue
+            out.append(ActivateAbility(source_id=obj.id, ability_index=idx))
+    return out
+
+
+# ---------------------------------------------------------------------
 # Cast origin: exile vs. the top of a library
 # ---------------------------------------------------------------------
 
@@ -340,6 +450,7 @@ __all__ = [
     "apply_minimum_spell_cost",
     "cast_prohibited",
     "filter_actions",
+    "instant_speed_spell_targeting_activations",
     "minimum_spell_cost",
     "roto_spell_tax",
 ]

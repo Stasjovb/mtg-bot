@@ -911,6 +911,10 @@ class GameObject:
     # paid for with mana that makes it uncounterable (Delighted
     # Halfling); honored by ``CounterTargetSpell._is_uncounterable``.
     cast_uncounterable: bool = False
+    # Total mana spent to cast this spell (the paid total cost after
+    # convoke / improvise / delve; 0 for a spell cast without spending
+    # mana) -- "if no mana was spent to cast it" (Vexing Bauble, roto P1).
+    mana_spent_to_cast: int = 0
     # Turn number in which this creature "attacks that player this
     # combat if able" (Ursine Monstrosity); -1 otherwise. Read by
     # ``designations.forced_attackers``.

@@ -351,8 +351,17 @@ def _has_instant_speed_activatable(
     at non-sorcery timing, this is the place to scan permanents — and
     the structural hash already captures permanent shape so the
     cache stays correct.
+
+    The one exception the engine makes: battlefield abilities that
+    target spells (roto P1 -- Glen Elendra Guardian's counter ability)
+    are offered whenever their controller has priority
+    (``roto_restrictions.instant_speed_spell_targeting_activations``).
     """
-    return False
+    from mtg_bot.roto_restrictions import (
+        instant_speed_spell_targeting_activations,
+    )
+
+    return bool(instant_speed_spell_targeting_activations(state, player_id))
 
 
 def _has_sorcery_speed_activatable(

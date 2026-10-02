@@ -315,6 +315,13 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
         condition_phrase = m.group("condition").strip()
         condition = _COST_REDUCTION_CONDITIONS.get(condition_phrase)
         if condition is None:
+            # Roto P1: "it targets a <spell np>" (Mystical Dispute).
+            from mtg_bot.cards.parser.roto_stack import (
+                roto_cost_reduction_condition,
+            )
+
+            condition = roto_cost_reduction_condition(condition_phrase)
+        if condition is None:
             return None
         return CostReduction(
             amount=int(m.group(1)), condition=condition,
