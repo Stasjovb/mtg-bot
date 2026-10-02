@@ -3,8 +3,8 @@
 Line recognizers for the Vintage Roto cards P6 claims
 (``docs/ROTO_COVERAGE_PLAN.md`` section 6). Recognizers are
 parameterized over the printed shape (the two literals say why); the
-engine side lives in ``mtg_bot.conspiracies`` and
-``mtg_bot.opening_hand``.
+engine side lives in ``mtg_bot.conspiracies``, ``mtg_bot.opening_hand``
+and ``mtg_bot.effects.generic.roto_keywords``.
 
 Entry points, each called from one hook:
 
@@ -15,7 +15,10 @@ Entry points, each called from one hook:
   printing-level lines peeled off before the per-type builders run (like
   the cycling family) and attached to the built printing -- pregame
   actions (``opening_hand_action``: Chancellor of the Tangle's
-  opening-hand reveal, Serum Powder's mulligan-window exchange).
+  opening-hand reveal, Serum Powder's mulligan-window exchange) and hand
+  keyword abilities (Transmute).
+* :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
+* :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 """
 
 from __future__ import annotations
@@ -102,6 +105,86 @@ def parse_pregame_line(line: str, card_name: str):
     return None
 
 
+# ── Effect phrases (hooked last into ``effects._parse_effect``) ─────────
+
+_CARD_TYPE_WORDS = {
+    "artifact": "Artifact", "creature": "Creature", "enchantment": "Enchantment",
+    "instant": "Instant", "land": "Land", "planeswalker": "Planeswalker",
+    "sorcery": "Sorcery",
+}
+_LOOK_MAY_REVEAL_RE = re.compile(
+    r"^look at the top card of your library\. you may reveal that card\. "
+    r"if an? (?P<types>[a-z]+(?: or [a-z]+)*) card is revealed this way, "
+    r"(?P<then>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _card_types_phrase(text: str) -> tuple[str, ...] | None:
+    """``"instant or sorcery"`` -> ``("Instant", "Sorcery")``."""
+    words = text.lower().split(" or ")
+    if not all(w in _CARD_TYPE_WORDS for w in words):
+        return None
+    return tuple(_CARD_TYPE_WORDS[w] for w in words)
+
+
+def parse_p6_effect(phrase: str):
+    """A normalized effect phrase (lowercased first letter, no final
+    period) the P6 grammar models, else ``None``."""
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic.card_flow import CardFilter
+    from mtg_bot.effects.generic.roto_keywords import LookAtTopMayRevealIfMatches
+
+    m = _LOOK_MAY_REVEAL_RE.match(phrase)
+    if m is not None:
+        types = _card_types_phrase(m.group("types"))
+        then = _parse_effect(m.group("then"))
+        if types is None or then is None or then.requires_target():
+            return None
+        return LookAtTopMayRevealIfMatches(
+            card_filter=CardFilter(any_types=types), then=then,
+        )
+    return None
+
+
+# ── Hand keyword lines (abilities that work from the hand) ─────────────
+
+_TRANSMUTE_RE = re.compile(r"^Transmute (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def parse_hand_keyword_line(line: str, card: dict):
+    """The hand-activated ``ActivatedAbility`` a keyword line states, or
+    ``None``.
+
+    Transmute {cost} (CR 702.53): "{cost}, Discard this card: Search
+    your library for a card with the same mana value as the discarded
+    card, reveal it, put it into your hand, then shuffle. Transmute only
+    as a sorcery." The discarded card is this card, so its mana value is
+    the printed one."""
+    from mtg_bot.cards.base import ActivatedAbility, ActivationCost, parse_mana_cost
+    from mtg_bot.effects.generic.card_flow import SearchLibrary
+    from mtg_bot.effects.generic.roto_keywords import ManaValueCardFilter
+
+    m = _TRANSMUTE_RE.match(line.strip())
+    if m is not None:
+        cost_str = m.group("cost")
+        mana_value = parse_mana_cost(card.get("mana_cost") or "").total
+        return ActivatedAbility(
+            cost=ActivationCost(
+                mana=parse_mana_cost(cost_str),
+                mana_str=cost_str,
+                discard_self=True,
+            ),
+            effect=SearchLibrary(
+                card_filter=ManaValueCardFilter(mana_value=mana_value),
+                destination="hand",
+                reveal=True,
+            ),
+            sorcery_speed=True,
+        )
+    return None
+
+
 # ── The printing-line pre-pass ─────────────────────────────────────────
 
 def _attach_opening_hand_action(printing, action):
@@ -110,12 +193,24 @@ def _attach_opening_hand_action(printing, action):
     return replace(printing, opening_hand_action=action)
 
 
+def _attach_hand_ability(printing, ability):
+    return replace(
+        printing,
+        hand_activated_abilities=(
+            tuple(printing.hand_activated_abilities) + (ability,)
+        ),
+    )
+
+
 def _line_patch(line: str, card: dict):
     """A ``CardPrinting -> CardPrinting | None`` patch for a P6
     printing-level line, or ``None`` when the line isn't one."""
     action = parse_pregame_line(line, card["name"])
     if action is not None:
         return lambda p: _attach_opening_hand_action(p, action)
+    ability = parse_hand_keyword_line(line, card)
+    if ability is not None:
+        return lambda p: _attach_hand_ability(p, ability)
     return None
 
 
@@ -148,7 +243,8 @@ def _split_p6_lines(card: dict) -> tuple[dict, list]:
 
 def build_with_p6_lines(card: dict, build: Callable[[dict], object]):
     """Build ``card`` with ``build`` after peeling off its P6 printing-
-    level lines (pregame actions), then apply each line's patch. Any patch refusing (``None``) leaves the card
+    level lines (pregame actions, hand keyword abilities), then apply
+    each line's patch. Any patch refusing (``None``) leaves the card
     unclaimed."""
     body, patches = _split_p6_lines(card)
     built = build(body)
@@ -163,5 +259,6 @@ __all__ = [
     "build_with_p6_lines",
     "number_word",
     "parse_conspiracy_rule_line",
+    "parse_hand_keyword_line",
     "parse_pregame_line",
 ]
