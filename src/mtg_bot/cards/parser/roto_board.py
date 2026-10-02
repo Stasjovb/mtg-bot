@@ -47,7 +47,7 @@ class BoardLine:
 
 # Printing fields several lines of one card may each contribute to
 # (concatenated rather than overwritten).
-_ACCUMULATED_FIELDS = frozenset({"board_rules"})
+_ACCUMULATED_FIELDS = frozenset({"board_rules", "enters_with_named_counters"})
 
 
 def merge_board_fields(into: dict, fields: dict) -> None:
@@ -147,6 +147,23 @@ _DESTROY_EACH_AND_LIST = re.compile(
 )
 
 
+# "that player sacrifices a <np> of their choice for each <kind> counter
+# on this <permanent>" (Smokestack) / "that player taps an untapped <np>
+# they control for each <kind> counter on this <permanent>" (Tangle
+# Wire) -- bodies of "At the beginning of each player's upkeep".
+_EVENT_PLAYER_PER_COUNTER = re.compile(
+    r"^that player (?:(?P<sac>sacrifices) an? (?P<sac_np>.+?) of their choice"
+    r"|(?P<tap>taps) an untapped (?P<tap_np>.+?) they control) for each "
+    r"(?P<kind>[a-z]+) counter on this "
+    r"(?:artifact|creature|enchantment|land|permanent)$"
+)
+# "destroy this creature unless you pay <cost>" (the Tabernacle's
+# granted upkeep ability).
+_DESTROY_SELF_UNLESS_PAY = re.compile(
+    r"^destroy this creature unless you pay (?P<cost>(?:\{[^}]+\})+)$"
+)
+
+
 def parse_roto_board_effect(phrase: str) -> Effect | None:
     """Effect phrases of the P5 package (normalized: lower-cased first
     letter, no trailing period, source subject stripped)."""
@@ -163,6 +180,25 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             per_filter=f, multiplier=2 if m.group("twice") else 1,
             label=m.group("np"),
         )
+    m = _EVENT_PLAYER_PER_COUNTER.match(phrase)
+    if m is not None:
+        action = "sacrifice" if m.group("sac") else "tap"
+        np = m.group("sac_np") or m.group("tap_np")
+        f = permanent_phrase(np)
+        if f is None:
+            return None
+        return rb.EventPlayerActsPerSourceCounter(
+            action=action, kind=m.group("kind"), permanent_filter=f, label=np,
+        )
+    m = _DESTROY_SELF_UNLESS_PAY.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.base import parse_mana_cost
+
+        try:
+            parse_mana_cost(m.group("cost"))
+        except ValueError:
+            return None
+        return rb.DestroySourceUnlessPay(cost=m.group("cost"))
     m = _TAP_ALL.match(phrase)
     if m is not None:
         f = permanent_phrase(m.group("np"), plural=True)
@@ -314,9 +350,105 @@ def _cant_attack_or_block(line: str) -> BoardLine | None:
     })
 
 
+_FADING = re.compile(r"^Fading (?P<n>\d+)$")
+
+
+def _fading(line: str) -> BoardLine | None:
+    """``Fading N`` on a non-enchantment permanent (CR 702.32a: enters
+    with N fade counters; at the beginning of your upkeep, remove one,
+    or sacrifice it if you can't) -- Tangle Wire. The cube enchantment
+    builder has its own recognizer for enchantments."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.enchantment_mechanics import (
+        RemoveNamedCounterFromSelfOrSacrifice,
+    )
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    m = _FADING.match(line)
+    if m is None:
+        return None
+    return BoardLine(
+        fields={"enters_with_named_counters": (("fade", int(m.group("n"))),)},
+        triggers=(TriggeredAbility(
+            event=Event.BEGINNING_OF_UPKEEP,
+            predicate=Controlled(YOU),
+            effect=RemoveNamedCounterFromSelfOrSacrifice(kind="fade"),
+        ),),
+    )
+
+
+# 'All creatures have "<triggered ability>".' (The Tabernacle at
+# Pendrell Vale).
+_ALL_CREATURES_HAVE_QUOTED = re.compile(
+    r'^All creatures have "(?P<ability>.+\.)"$'
+)
+
+
+def _all_creatures_have_trigger(line: str) -> BoardLine | None:
+    from mtg_bot import roto_board_statics as rs
+    from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+    from mtg_bot.effects.base import TriggeredAbility
+
+    m = _ALL_CREATURES_HAVE_QUOTED.match(line)
+    if m is None:
+        return None
+    ability = _parse_triggered_ability_line(m.group("ability"))
+    if not isinstance(ability, TriggeredAbility):
+        return None
+    return BoardLine(fields={
+        "board_rules": (rs.GrantsTriggerToCreatures(ability=ability),),
+    })
+
+
+# "<Permanents> don't untap during their controllers' untap steps."
+# (Back to Basics).
+_DONT_UNTAP = re.compile(
+    r"^(?P<np>[A-Z][a-z]+(?: [a-z]+)*) don't untap during their "
+    r"controllers' untap steps\.$"
+)
+# "[As long as this <permanent> is untapped, ]players can't untap more
+# than <n> <permanents> during their untap steps." (Winter Orb).
+_UNTAP_LIMIT = re.compile(
+    r"^(?:As long as this (?P<self>artifact|creature|enchantment|land|"
+    r"permanent) is untapped, )?[Pp]layers can't untap more than "
+    r"(?P<n>one|two|three|\d+) (?P<np>[a-z]+(?: [a-z]+)*) during their "
+    r"untap steps\.$"
+)
+
+
+def _untap_rules(line: str) -> BoardLine | None:
+    from mtg_bot import roto_board_statics as rs
+
+    m = _DONT_UNTAP.match(line)
+    if m is not None:
+        np = m.group("np").lower()
+        f = permanent_phrase(np, plural=True)
+        if f is None:
+            return None
+        return BoardLine(fields={
+            "board_rules": (rs.DoesntUntap(permanent_filter=f, label=np),),
+        })
+    m = _UNTAP_LIMIT.match(line)
+    if m is not None:
+        n = _n(m.group("n"))
+        np = m.group("np")
+        f = permanent_phrase(np, plural=n != 1)
+        if f is None:
+            return None
+        return BoardLine(fields={"board_rules": (rs.UntapLimit(
+            permanent_filter=f, limit=n,
+            while_source_untapped=m.group("self") is not None,
+            label=np,
+        ),)})
+    return None
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
     _cant_attack_or_block,
+    _fading,
+    _all_creatures_have_trigger,
+    _untap_rules,
 )
 
 
@@ -349,6 +481,36 @@ def parse_roto_board_line_into(
         keywords=board.keywords, triggers=board.triggers,
         activated=board.activated, statics=board.statics,
     )
+
+
+def apply_board_fields(printing, fields: dict):
+    """``dataclasses.replace`` for a builder's accumulated P5 fields:
+    accumulated fields extend what the printing already carries."""
+    from dataclasses import replace
+
+    if not fields:
+        return printing
+    updates = {}
+    for name, value in fields.items():
+        if name in _ACCUMULATED_FIELDS:
+            updates[name] = tuple(getattr(printing, name)) + tuple(value)
+        else:
+            updates[name] = value
+    return replace(printing, **updates)
+
+
+def absorb_land_line(line: str, card: dict, fields: dict,
+                     triggered: list, activated: list) -> bool:
+    """The line-composed land builder's fallback for a line its grammar
+    declined. Lands take triggered / activated abilities and printing
+    fields; a line contributing keywords or anthem statics is declined."""
+    board = parse_roto_board_line(line, card)
+    if board is None or board.keywords or board.statics:
+        return False
+    triggered.extend(board.triggers)
+    activated.extend(board.activated)
+    merge_board_fields(fields, board.fields)
+    return True
 
 
 def absorb_enchantment_line(line: str, card: dict, acc) -> bool:

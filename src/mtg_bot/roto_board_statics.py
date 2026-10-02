@@ -15,7 +15,9 @@ what untaps during the untap step, ... Every read goes through
   effects (CR 305.7: it loses the abilities from its rules text).
 
 Consumers (one hook each): ``combat.eligible_attackers`` /
-``combat.eligible_blockers``.
+``combat.eligible_blockers`` (attack / block restrictions),
+``turn.run_untap_step`` (untap limits) and ``actions.dispatch_event``
+(triggered abilities granted to creatures).
 """
 
 from __future__ import annotations
@@ -173,14 +175,196 @@ def filter_blockers(state: "GameState", creatures: list) -> list:
     return _forbidden(state, creatures, CantBlock)
 
 
+# ---------------------------------------------------------------------------
+# Granted triggered abilities (layer 6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GrantsTriggerToCreatures:
+    """'All creatures have "<triggered ability>".' (The Tabernacle at
+    Pendrell Vale): every creature on the battlefield has ``ability``;
+    each creature is the ability's source and its controller the
+    ability's controller."""
+
+    ability: object
+
+    def describe(self) -> str:
+        return f'All creatures have "{self.ability.effect.describe()}".'
+
+
+def _wiped_after(state, creature, timestamp: int) -> bool:
+    """Whether a "loses all abilities" effect with a later timestamp
+    than ``timestamp`` applies to ``creature`` (CR 613.7: within layer
+    6, a later wipe removes an earlier grant; an earlier wipe doesn't
+    remove a later grant)."""
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6 and ce.kind == "lose_all_abilities"
+            and ce.target_id == creature.id and ce.timestamp > timestamp
+        ):
+            return True
+    for o in state.battlefield:
+        if (
+            o.printing.wipes_all_creature_abilities
+            and o.etb_timestamp > timestamp
+        ):
+            return True
+    return False
+
+
+def granted_triggers(state: "GameState") -> list[tuple]:
+    """``(creature, ability)`` for every triggered ability a board rule
+    grants right now."""
+    from mtg_bot.game import is_creature_now
+
+    grants = list(rules_in_play(state, GrantsTriggerToCreatures))
+    if not grants:
+        return []
+    out = []
+    for creature in state.battlefield:
+        if not is_creature_now(creature):
+            continue
+        for src, rule in grants:
+            if _wiped_after(state, creature, src.etb_timestamp):
+                continue
+            out.append((creature, rule.ability))
+    return out
+
+
+def fire_granted_triggers(state, event, subjects, label, push) -> None:
+    """``actions.dispatch_event``'s hook: push every board-rule-granted
+    triggered ability matching ``event`` (``push`` is
+    ``push_triggered_ability``)."""
+    if not any_rules(state):
+        return
+    for creature, ability in granted_triggers(state):
+        if creature not in state.battlefield:
+            continue
+        if not ability.matches_event(event, subjects, creature, state):
+            continue
+        bind = getattr(ability.effect, "targets_from_event", None)
+        push(
+            state, source=creature, ability=ability, ability_index=-1,
+            controller_id=creature.controller_id, label=label,
+            fixed_targets=bind(state, subjects) if bind is not None else None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Untap step
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DoesntUntap:
+    """"<Permanents> don't untap during their controllers' untap steps."
+    (Back to Basics: nonbasic lands)."""
+
+    permanent_filter: object
+    label: str = "permanents"
+
+    def describe(self) -> str:
+        return (
+            f"{self.label.capitalize()} don't untap during their "
+            f"controllers' untap steps."
+        )
+
+
+@dataclass(frozen=True)
+class UntapLimit:
+    """"[As long as this <permanent> is untapped, ]players can't untap
+    more than <n> <permanents> during their untap steps." (Winter Orb:
+    one land, while Winter Orb is untapped)."""
+
+    permanent_filter: object
+    limit: int = 1
+    while_source_untapped: bool = False
+    label: str = "lands"
+
+    def describe(self) -> str:
+        pre = (
+            "As long as this permanent is untapped, "
+            if self.while_source_untapped else ""
+        )
+        return (
+            f"{pre}players can't untap more than {self.limit} "
+            f"{self.label} during their untap steps."
+        )
+
+
+def untap_step_held(
+    state: "GameState", player_id: int, already_held: set,
+) -> set:
+    """Ids of the active player's permanents that stay tapped during
+    this untap step because of board rules (``turn.run_untap_step``'s
+    hook). The candidates are the player's tapped permanents that would
+    otherwise untap -- not stunned, exerted, held by an attached
+    "doesn't untap" effect (``already_held``) or by their own "doesn't
+    untap" rider. For an untap limit the active player chooses which
+    ones untap (CR 502.3) through the ``choose_target`` hook over
+    ``("permanent", id)`` options, one pick per allowed untap."""
+    if not any_rules(state):
+        return set()
+    candidates = [
+        o for o in state.battlefield
+        if o.controller_id == player_id and o.tapped
+        and o.stun_counters == 0 and not o.exerted
+        and o.id not in already_held
+        and not o.printing.doesnt_untap_during_untap_step
+    ]
+    if not candidates:
+        return set()
+    held: set = set()
+    prior = state.resolving_controller_id
+    try:
+        state.resolving_controller_id = player_id
+        for _src, rule in rules_in_play(state, DoesntUntap):
+            for obj in candidates:
+                if rule.permanent_filter.test(obj, state):
+                    held.add(obj.id)
+        limits = [
+            rule for src, rule in rules_in_play(state, UntapLimit)
+            if not (rule.while_source_untapped and src.tapped)
+        ]
+        agent = state.player_by_id(player_id).agent
+        for rule in limits:
+            limited = [
+                o for o in candidates
+                if o.id not in held and rule.permanent_filter.test(o, state)
+            ]
+            allowed: list = []
+            while limited and len(allowed) < rule.limit:
+                pick = limited[0]
+                if agent is not None and len(limited) > 1:
+                    options = [("permanent", o.id) for o in limited]
+                    choice = agent.choose_target(state, player_id, options)
+                    pick = next(
+                        (o for o in limited if choice == ("permanent", o.id)),
+                        limited[0],
+                    )
+                limited.remove(pick)
+                allowed.append(pick)
+            held.update(o.id for o in limited)
+    finally:
+        state.resolving_controller_id = prior
+    return held
+
+
 __all__ = [
     "CantAttack",
     "CantBlock",
+    "DoesntUntap",
+    "GrantsTriggerToCreatures",
     "PowerGreaterThanControllersHandSize",
+    "UntapLimit",
     "WithoutKeyword",
     "abilities_suppressed",
     "any_rules",
     "filter_attackers",
     "filter_blockers",
+    "fire_granted_triggers",
+    "granted_triggers",
     "rules_in_play",
+    "untap_step_held",
 ]

@@ -285,6 +285,7 @@ def _try_build_line_composed_land(
     named_counters: list[tuple[str, int]] = []
     opening_hand_action = None
     gated: tuple[str, str] | None = None  # (counter kind, base color)
+    roto_fields: dict = {}
     self_refs = ("this land", card["name"])
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
@@ -389,6 +390,11 @@ def _try_build_line_composed_land(
             continue
         ability = _parse_activated_ability_line(line)
         if ability is None:
+            # Vintage Roto P5 lines (board rules, land-type grants, ...).
+            from mtg_bot.cards.parser.roto_board import absorb_land_line
+
+            if absorb_land_line(line, card, roto_fields, triggered, activated):
+                continue
             return None
         if ability.is_mana_ability:
             colors = _simple_mana_colors(ability.effect)
@@ -432,7 +438,7 @@ def _try_build_line_composed_land(
             # life-costed ability stays explicit so automatic payment
             # never charges life for the free mana.
             activated.extend(ability for _, _, ability in life_mana)
-    return make_utility_land(
+    printing = make_utility_land(
         card["name"],
         produces=frozenset(produces),
         subtypes_str=" ".join(subtypes),
@@ -451,3 +457,8 @@ def _try_build_line_composed_land(
         produces_with_counter=produces_with_counter,
         opening_hand_action=opening_hand_action,
     )
+    if roto_fields:
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
+    return printing

@@ -162,6 +162,150 @@ class TapAllMatching(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Upkeep prison: "that player" acts once per counter on the source
+# ---------------------------------------------------------------------------
+
+
+def _event_player_id(state, targets) -> int | None:
+    for kind, pid in targets:
+        if kind == "player":
+            return pid
+    return None
+
+
+@dataclass(frozen=True)
+class EventPlayerActsPerSourceCounter(Effect):
+    """"that player sacrifices a <permanent> of their choice for each
+    <kind> counter on this <permanent>" (Smokestack) / "that player taps
+    an untapped <permanent> they control for each <kind> counter on this
+    <permanent>" (Tangle Wire).
+
+    "That player" is the player of the triggering event (each player's
+    upkeep): it is bound as the trigger goes on the stack
+    (``targets_from_event``), so it is not a target. The count is the
+    source's counters as the ability resolves (last-known information
+    once the source is gone). The player picks every permanent first
+    (``choose_sacrifice`` / ``choose_permanent_to_tap``, one per
+    counter), then they are sacrificed / tapped together; with fewer
+    candidates than counters, every candidate is used."""
+
+    action: str  # "sacrifice" | "tap"
+    kind: str
+    permanent_filter: ObjectPredicate
+    label: str = "permanent"
+
+    def __post_init__(self) -> None:
+        if self.action not in ("sacrifice", "tap"):
+            raise ValueError(f"unknown action: {self.action!r}")
+
+    def targets_from_event(self, state, subjects):
+        player = subjects.get("player")
+        if player is None:
+            return None
+        return (("player", player.id),)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import counter_count
+
+        pid = _event_player_id(state, targets)
+        source = state.resolving_source
+        if pid is None or source is None:
+            return
+        n = counter_count(source, self.kind)
+        if n <= 0:
+            return
+        player = state.player_by_id(pid)
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = pid
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == pid
+                and not (self.action == "tap" and o.tapped)
+                and self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        chosen = []
+        while options and len(chosen) < n:
+            pick = options[0]
+            if player.agent is not None and len(options) > 1:
+                ids = [o.id for o in options]
+                if self.action == "tap":
+                    pick_id = player.agent.choose_permanent_to_tap(state, pid, ids)
+                else:
+                    pick_id = player.agent.choose_sacrifice(state, pid, ids)
+                pick = next((o for o in options if o.id == pick_id), options[0])
+            options.remove(pick)
+            chosen.append(pick)
+        if self.action == "tap":
+            from mtg_bot.turn import tap_permanent
+
+            for obj in chosen:
+                if obj in state.battlefield:
+                    state.log.append(f"P{pid} taps {obj.printing.name}")
+                    tap_permanent(state, obj)
+        else:
+            from mtg_bot.turn import sacrifice
+
+            for obj in chosen:
+                if obj in state.battlefield:
+                    state.log.append(f"P{pid} sacrifices {obj.printing.name}")
+                    sacrifice(state, obj)
+
+    def describe(self) -> str:
+        if self.action == "tap":
+            return (
+                f"that player taps an untapped {self.label} they control for "
+                f"each {self.kind} counter on this permanent"
+            )
+        return (
+            f"that player sacrifices a {self.label} of their choice for each "
+            f"{self.kind} counter on this permanent"
+        )
+
+
+@dataclass(frozen=True)
+class DestroySourceUnlessPay(Effect):
+    """"destroy this creature unless you pay <cost>" (the ability The
+    Tabernacle at Pendrell Vale grants every creature). "You" is the
+    ability's controller -- the creature's controller; the payment is
+    offered mid-resolution (``choose_yes_no`` when affordable). The
+    creature may regenerate."""
+
+    cost: str
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards.base import parse_mana_cost
+        from mtg_bot.effects.generic.cheat_into_play import (
+            pay_mana_during_resolution,
+        )
+        from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if pay_mana_during_resolution(
+            state, controller_id, parse_mana_cost(self.cost),
+            f"Pay {self.cost} to keep {source.printing.name}?",
+        ):
+            state.log.append(
+                f"P{controller_id} pays {self.cost} for {source.printing.name}"
+            )
+            return
+        destroy_permanent(state, source)
+
+    def describe(self) -> str:
+        return f"destroy this creature unless you pay {self.cost}"
+
+
+# ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
 
@@ -224,6 +368,8 @@ class RemoveCountersFromAmongPermanentsCost:
 
 __all__ = [
     "DamageEachPlayerPerControlled",
+    "DestroySourceUnlessPay",
+    "EventPlayerActsPerSourceCounter",
     "RemoveCountersFromAmongPermanentsCost",
     "HasManaValueEqualToSourceCounters",
     "IsLegendaryPermanent",

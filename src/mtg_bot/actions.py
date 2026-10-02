@@ -6043,6 +6043,11 @@ def dispatch_event(
                 counter_amount=counter_amount,
                 fixed_targets=fixed_targets,
             )
+    # Triggered abilities a board rule grants every creature (The
+    # Tabernacle at Pendrell Vale; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import fire_granted_triggers
+
+    fire_granted_triggers(state, event, subjects, label, push_triggered_ability)
     _dispatch_graveyard_triggers(state, event, label, subjects)
 
 

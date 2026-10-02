@@ -19676,7 +19676,15 @@ Roto-only cards of package P5 (`docs/ROTO_COVERAGE_PLAN.md` section 3). Grammar:
 
 ### Choice hooks reused for new decisions
 
-The Filigree Sylex's "Remove ten oil counters from among permanents you control" asks the activator's `choose_target` hook over `("permanent", id)` options once per counter (`RemoveCountersFromAmongPermanentsCost`); the default agents take the first holder.
+The Filigree Sylex's "Remove ten oil counters from among permanents you control" asks the activator's `choose_target` hook over `("permanent", id)` options once per counter (`RemoveCountersFromAmongPermanentsCost`); the default agents take the first holder. Winter Orb's untap choice (which land untaps, CR 502.3) is the same hook over the tapped lands (`roto_board_statics.untap_step_held`). Smokestack's and Tangle Wire's per-counter picks use `choose_sacrifice` / `choose_permanent_to_tap`, all chosen before any is sacrificed / tapped. None of these choices is a search decision node (they are made by the seat's agent mid-resolution, like every other in-resolution choice).
+
+### Simultaneous upkeep triggers resolve in printed order
+
+**Where:** `turn.run_beginning_of_upkeep_triggers` -> `actions.dispatch_event` (engine-wide). **What:** CR 603.3b lets a player order their simultaneous triggers; the engine pushes them in printed order, so the last printed resolves first. Smokestack's "each player's upkeep" sacrifice resolves before its "you may put a soot counter" in its controller's upkeep (the newly added counter only counts from the next upkeep), and Tangle Wire's tap trigger resolves before its Fading counter removal (the controller taps one more permanent than an optimal ordering would). **Failure mode:** the Smokestack / Tangle Wire controller can't pick the other order. **Fix scope:** a trigger-ordering decision in `dispatch_event` (engine-wide; shared with the evoke note in the W/G bucket).
+
+### Granted triggered abilities ride a dispatch hook
+
+**Where:** `roto_board_statics.fire_granted_triggers`, called at the end of `actions.dispatch_event`. **What:** The Tabernacle at Pendrell Vale's 'All creatures have "At the beginning of your upkeep, destroy this creature unless you pay {1}."' is a board rule; every creature on the battlefield observes events with the granted ability (source = the creature, controller = its controller, `ability_index=-1` so it has no once-per-turn ledger). Layer-6 timestamps are honoured against "loses all abilities" (a later wipe -- registry entry or Humility-style permanent -- removes the grant, an earlier one doesn't); the grant is not listed by `effective_triggered_abilities`. "Unless you pay {1}" is offered mid-resolution (`pay_mana_during_resolution`, a `choose_yes_no` when affordable; mana abilities are tapped automatically).
 
 ### Combat-only activated abilities stay unclaimed
 

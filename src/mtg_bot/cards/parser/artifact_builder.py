@@ -491,7 +491,9 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     if play_from_top_paying_life:
         printing = replace(printing, grants_play_from_top_paying_life=True)
     if roto_fields:
-        printing = replace(printing, **roto_fields)
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
     if "Vehicle" in subtypes:
         # Vehicles carry printed P/T that applies while they're
         # creatures (crewed / animated).
