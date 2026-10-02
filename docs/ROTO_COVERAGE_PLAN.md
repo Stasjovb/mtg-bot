@@ -1,11 +1,11 @@
 # Vintage Roto coverage plan
 
-Planning doc for claiming the rest of **Retireddevil's Vintage Roto 1.1** (`roto` pool) in the oracle parser. Written 2026-10-02 on `feature/cube-roto-coverage`; the numbers come from `scripts/measure_cube_coverage.py --pool roto` ([`ROTO_POOL_COVERAGE.md`](ROTO_POOL_COVERAGE.md)) and the live bot draft's `state.json` at 365 picks.
+Planning doc for claiming the rest of **Retireddevil's Vintage Roto 1.1** (`roto` pool) in the oracle parser. Written 2026-10-02 on `feature/cube-roto-coverage`; the numbers come from `scripts/measure_cube_coverage.py --pool roto` ([`ROTO_POOL_COVERAGE.md`](ROTO_POOL_COVERAGE.md)) and the live bot draft's `state.json` at 382 picks.
 
 ## Where things stand
 
 - **578 of 865 pool cards claimed (66.8%)**: 860 Scryfall cards from the draft sheet plus the five basics. All 504 cards shared with the PowerLSV cube are claimed; 74 of the 361 roto-only cards are.
-- **287 unclaimed**, of which **85 are already in a drafted pool** of the live draft (marked **(drafted)** below). Those come first inside every package. Drafted = every pick in `roto-bot-draft/state.json` mapped through the sheet list's `scryfall_name`, minus cards sent back by I've Made a Huge Mistake; the draft is still running, so re-derive this before prioritizing.
+- **287 unclaimed**, of which **89 are already in a drafted pool** of the live draft (marked **(drafted)** below). Those come first inside every package. Drafted = every pick in `roto-bot-draft/state.json` mapped through the sheet list's `scryfall_name`, minus cards sent back by I've Made a Huge Mistake; the draft is still running, so re-derive this before prioritizing.
 - 4 custom conspiracies on the sheet have no Scryfall record (Meddling Wizard, Quanitity Over Quality, I've Made a Huge Mistake, ANOTHER HEAD?!). They are listed in `data/cube_roto.meta.json` and the coverage doc, not faked into the pool; see P6.
 - Every unclaimed card's failing oracle lines are in [`ROTO_POOL_COVERAGE.md`](ROTO_POOL_COVERAGE.md) (per-line probe, `mtg_bot.cards.unclaimed_lines`): 278 cards are `lines` (the listed lines are the whole blocker, confirmed by building the card without them) and 9 are `unconfirmed` (multi-face layouts, Conspiracy and Kindred types, snow cost: the card's frame may block too).
 - Enchantments are probed with the `cube_enchantments.CUBE_ENCHANTMENT_NAMES` gate opened: a roto enchantment also needs its name opted in when its lines land. Eleven roto cards are EoE-era printings outside the cube (`is_eoe_only_printing` pins them off the cube-creature grammar); the pin changes no roto claim today.
@@ -16,12 +16,12 @@ Card lists are separated by semicolons (card names contain commas). Ordered by d
 
 | # | Package | Cards | Drafted | Families (S/M/L) | New subsystems |
 |---|---|---:|---:|---|---|
-| 1 | P1 Stack & restrictions | 40 | 24 | 7 (1/5/1) | Name a card + named restrictions; Activation prohibitions; Counter triggered abilities |
+| 1 | P1 Stack & restrictions | 40 | 26 | 7 (1/5/1) | Name a card + named restrictions; Activation prohibitions; Counter triggered abilities |
 | 2 | P2 Library, graveyard & hand | 70 | 20 | 9 (1/7/1) | Graveyard hate & exile-instead replacement; Draw replacement: dredge & Chains; Library-search hooks & tracking |
-| 3 | P5 Board-state prison & layers | 65 | 15 | 8 (5/2/1) | Combat restrictions; Untap & upkeep prison |
+| 3 | P5 Board-state prison & layers | 65 | 16 | 8 (5/2/1) | Combat restrictions; Untap & upkeep prison |
 | 4 | P3 Mana, costs & cast permissions | 45 | 10 | 9 (4/4/1) | Cast permissions & free casts; Snow |
 | 5 | P4 Planeswalkers, copies, control & turns | 36 | 9 | 6 (0/2/4) | Wish (outside the game); Turn structure: draw skips, extra/ended turns; Borrowed activated abilities |
-| 6 | P6 Keyword mechanics, face-changing & pregame | 31 | 7 | 7 (1/5/1) | Split second; Keyword mechanics (one-card keywords); Opening hand, pregame & conspiracies |
+| 6 | P6 Keyword mechanics, face-changing & pregame | 31 | 8 | 7 (1/5/1) | Split second; Keyword mechanics (one-card keywords); Opening hand, pregame & conspiracies |
 
 ## Working rules for the parallel branches
 
@@ -34,7 +34,7 @@ Card lists are separated by semicolons (card names contain commas). Ordered by d
 
 ## Packages
 
-### 1. P1: Stack & restrictions (40 cards, 24 drafted)
+### 1. P1: Stack & restrictions (40 cards, 26 drafted)
 
 Model the effects that police the stack: spell and ability taxes (Sphere/Thorn/Defense Grid/Trinisphere, Aven Interrupter), casting and activation prohibitions (Null Rod, Stony Silence, Silence, Orim's Chant, Ranger-Captain, High Noon, Lavinia), the as-enters 'choose a card name' family (Pithing Needle, Revoker, Disruptor Flute, Meddling Mage), counterspell variants (MV-N counters, type-restricted counters that hand the controller a Bird, Spellstutter's X, Glen Elendra, Venser's spell-or-permanent bounce, Long Goodbye's uncounterability line, Mindbreak Trap) and cast triggers (Chalice, Eidolon, Vexing Bauble, Mystic Remora's cumulative upkeep + 'unless that player pays', Esper Sentinel, Nether Void, Chancellor of the Annex -- its opening-hand reveal uses the same hook P6 builds; coordinate or add the minimal hook in `opening_hand.py`). Countering *triggered abilities* (Consign to Memory, Strict Proctor) is the one L item: triggered abilities must become targetable/counterable stack objects. Start from `creature_statics_wg.spell_cost_increase` / `opponents_cant_cast_spells_during_your_turn` and the existing counterspell effects; the name choice must be a real decision the search enumerates over (names in the opponent's known card pool), not a fixed pick.
 
@@ -44,9 +44,9 @@ Model the effects that police the stack: spell and ability taxes (Sphere/Thorn/D
 
 | Family | Size | Engine work | Cards |
 |---|---|---|---|
-| F05 Counterspell variants | M | grammar on existing support | **Glen Elendra Guardian** (drafted); **Long Goodbye** (drafted); **Mental Misstep** (drafted); **Mindbreak Trap** (drafted); **Mystical Dispute** (drafted); **Spell Snare** (drafted); **Spellstutter Sprite** (drafted); **Stubborn Denial** (drafted); **Swan Song** (drafted); **Venser, Shaper Savant** (drafted); Strix Serenade |
+| F05 Counterspell variants | M | grammar on existing support | **Glen Elendra Guardian** (drafted); **Long Goodbye** (drafted); **Mental Misstep** (drafted); **Mindbreak Trap** (drafted); **Mystical Dispute** (drafted); **Spell Snare** (drafted); **Spellstutter Sprite** (drafted); **Strix Serenade** (drafted); **Stubborn Denial** (drafted); **Swan Song** (drafted); **Venser, Shaper Savant** (drafted) |
+| F07 Cast triggers: unless-pays, counters, spell counts | M | partial: 'unless pays' exists for some spells; needs it on triggers, first-spell-each-turn, spells-cast-this-turn count, no-mana-spent check | **Chalice of the Void** (drafted); **Eidolon of the Great Revel** (drafted); **Esper Sentinel** (drafted); **Mystic Remora** (drafted); **Vexing Bauble** (drafted); Aetherflux Reservoir; Chancellor of the Annex; Harsh Mentor; Jeskai Ascendancy; Nether Void; The Queen of Dale |
 | F01 Cost taxes | M | partial: extend spell_cost_increases (Thalia-style) with turn condition, zone-of-cast filter and Trinisphere's minimum-cost floor | **Defense Grid** (drafted); **Sphere of Resistance** (drafted); **Thorn of Amethyst** (drafted); **Trinisphere** (drafted); Aven Interrupter |
-| F07 Cast triggers: unless-pays, counters, spell counts | M | partial: 'unless pays' exists for some spells; needs it on triggers, first-spell-each-turn, spells-cast-this-turn count, no-mana-spent check | **Chalice of the Void** (drafted); **Eidolon of the Great Revel** (drafted); **Mystic Remora** (drafted); **Vexing Bauble** (drafted); Aetherflux Reservoir; Chancellor of the Annex; Esper Sentinel; Harsh Mentor; Jeskai Ascendancy; Nether Void; The Queen of Dale |
 | F02 Name a card + named restrictions | M | NEW: as-enters 'choose a card name' choice stored on the permanent; can't-cast / can't-activate / tax keyed on it (search must enumerate legal names) | **Phyrexian Revoker** (drafted); **Pithing Needle** (drafted); Disruptor Flute; Meddling Mage |
 | F03 Activation prohibitions | S | NEW (small): static 'activated abilities of <filter> can't be activated' consulted by legal.py | **Null Rod** (drafted); **Stony Silence** (drafted) |
 | F04 Can't-cast restrictions | M | partial: opponents_cant_cast exists; needs UEOT player-scoped emblems, one-spell-per-turn, MV-vs-lands cap | **Orim's Chant** (drafted); High Noon; Lavinia, Azorius Renegade; Ranger-Captain of Eos; Silence |
@@ -72,7 +72,7 @@ Everything that moves cards between library, graveyard and hand. Most of it is g
 | F14 Graveyard-zone triggers & tracking | M | partial: triggers on cards in graveyard / from library to graveyard / 'a card left your graveyard this turn' | Bridge from Below; Gaea's Blessing; Gau, Feral Youth; Kishla Skimmer; Narcomoeba; Slogurk, the Overslime |
 | F17 Put permanents from hand (each player) | S | grammar on existing support | Eureka; Show and Tell; Stronghold Gambit |
 
-### 3. P5: Board-state prison & layers (65 cards, 15 drafted)
+### 3. P5: Board-state prison & layers (65 cards, 16 drafted)
 
 Permanents that change the board's rules: combat restrictions (Moat, Ensnaring Bridge, can't-block, 'creature it's blocking'), untap and upkeep prison (Winter Orb, Back to Basics, Tangle Wire's Fading on an artifact, Smokestack, the Tabernacle's granted upkeep tax, Drop of Honey), type and ability changes across layers 4-6 (Blood Moon, Urborg, Yavimaya, Mycosynth Lattice, Dress Down, Liquimetal Coating, Unable to Scream, Heliod's devotion clause, Scale Up, Tarmogoyf Nest's Kindred Aura), static and dynamic P/T, tap/untap effects and new cost atoms ('tap an untapped creature you control', 'put a -1/-1 counter on this', 'sacrifice a permanent'), mass removal keyed on mana value or counters (Pernicious Deed, Engineered Explosives, Filigree Sylex, Aether Vial's put-onto-battlefield, Temporary Lockdown), the charm/command modal spells, and a tail of one-off effects. Most enchantments here also need their name added to `cube_enchantments.CUBE_ENCHANTMENT_NAMES`.
 
@@ -89,7 +89,7 @@ Permanents that change the board's rules: combat restrictions (Moat, Ensnaring B
 | F46 Modal spells (charms & commands) | S | grammar on existing support | **Cryptic Command** (drafted); **Kozilek's Command** (drafted); Boros Charm; Emerald Charm; Prismari Charm |
 | F43 Static & dynamic P/T | S | grammar on existing support | **Nethergoyf** (drafted); Berserk; Craterhoof Behemoth; Elvish Reclaimer; Embiggen; Kaheera, the Orphanguard; Knight of the Reliquary; Might of Old Krosa |
 | F44 Tap/untap effects & cost atoms | S | grammar on existing support | **Umezawa's Jitte** (drafted); Claws of Gix; Deceiver Exarch; Devoted Druid; Earthcraft; Hawkeye's Bow; Ichorclaw Myr; Lavaspur Boots; Minamo, School at Water's Edge; Opposition; Pendelhaven; Turnabout |
-| F45 Mass removal & MV/counter-keyed permanents | S | grammar on existing support | Aang's Iceberg; Aether Vial; Engineered Explosives; Pernicious Deed; Seal of Cleansing; Temporary Lockdown; Terastodon; The Filigree Sylex |
+| F45 Mass removal & MV/counter-keyed permanents | S | grammar on existing support | **Engineered Explosives** (drafted); Aang's Iceberg; Aether Vial; Pernicious Deed; Seal of Cleansing; Temporary Lockdown; Terastodon; The Filigree Sylex |
 
 ### 4. P3: Mana, costs & cast permissions (45 cards, 10 drafted)
 
@@ -128,7 +128,7 @@ The 14 unclaimed planeswalkers plus the machinery several of them share with oth
 | F33 Control change & flicker | M | partial: exchange-control exists (cube glue); spell-control (Commandeer) is new | **Gilded Drake** (drafted); Bilbo, Luckwearer // Burglar's Plot; Commandeer; Ephemerate; Felidar Guardian; Zealous Conscripts |
 | F35 Borrowed activated abilities | L | NEW: a permanent gaining all activated abilities of another object/card | Agatha's Soul Cauldron; Scheming Fence |
 
-### 6. P6: Keyword mechanics, face-changing & pregame (31 cards, 7 drafted)
+### 6. P6: Keyword mechanics, face-changing & pregame (31 cards, 8 drafted)
 
 Keyword mechanics and pregame rules. Split second (Angel's Grace, Legolas's Quick Reflexes) restricts what players may do while the spell is on the stack. Damage prevention / redirection (Maze of Ith, Cephalid Illusionist, Nomads en-Kor, Black Panther, Impractical Joke's 'can't be prevented') and Vizier of Remedies' counter replacement; becomes-the-target triggers; face-down / transform / flip (Morph on Aphetto Alchemist, cloak on Cryptic Coat, Delver, Erayo's flip layout, the Hidetsugu saga); one-card keywords (Echo, Cipher, Transmute, Cleave, Spree modes, Plot on a creature, Swampwalk, cycling paid in life, Start your engines!/speed, Regenerate); designations (monarch, the Ring tempts you, venture); and the opening-hand / conspiracy pregame (Chancellor of the Tangle, Serum Powder, Power Play, Advantageous Proclamation). The four custom conspiracies have no Scryfall record and sit outside the pool; only Meddling Wizard (opponent reveals their hand after mulligans) affects a game, and modeling it needs the user's go-ahead on a hand-authored record.
 
@@ -138,7 +138,7 @@ Keyword mechanics and pregame rules. Split second (Angel's Grace, Legolas's Quic
 
 | Family | Size | Engine work | Cards |
 |---|---|---|---|
-| F51 Damage prevention, redirection & replacement | M | partial: prevention exists; redirection, 'can't be prevented', +N damage, -1/-1-counter replacement | **Cephalid Illusionist** (drafted); **Nomads en-Kor** (drafted); Impractical Joke; King T'Challa // Black Panther, Hope Enduring; Maze of Ith; Vizier of Remedies |
+| F51 Damage prevention, redirection & replacement | M | partial: prevention exists; redirection, 'can't be prevented', +N damage, -1/-1-counter replacement | **Cephalid Illusionist** (drafted); **Maze of Ith** (drafted); **Nomads en-Kor** (drafted); Impractical Joke; King T'Challa // Black Panther, Hope Enduring; Vizier of Remedies |
 | F54 Keyword mechanics (one-card keywords) | L | NEW per keyword: Echo, Cipher, Transmute (tutor exists), Cleave, Plot on creatures, Swampwalk + Cycling with a life cost, Start your engines!/speed; Regenerate and Spree need only grammar (the regeneration shield and Spree casting exist; Requisition Raid's '+ {1} --' modes don't parse) | **Muddle the Mixture** (drafted); **Tolaria West** (drafted); Blight Mamba; Hidden Strings; Karmic Guide; Momentum Breaker; Requisition Raid; Slickshot Show-Off; Street Wraith |
 | F56 Opening hand, pregame & conspiracies | M | NEW: opening-hand actions (reveal / put onto battlefield / mulligan exile) + conspiracy command zone (starting player, deck-size rules) | **Advantageous Proclamation** (drafted); **Power Play** (drafted); Chancellor of the Tangle; Serum Powder |
 | F53 Face-down, transform & flip | M | partial: morph/cloak exist; flip layout and Delver/Erayo transform conditions | **Delver of Secrets // Insectile Aberration** (drafted); Aphetto Alchemist; Cryptic Coat; Erayo, Soratami Ascendant // Erayo's Essence; Hidetsugu Consumes All // Vessel of the All-Consuming |
@@ -148,14 +148,14 @@ Keyword mechanics and pregame rules. Split second (Angel's Grace, Legolas's Quic
 
 ## Drafted unclaimed cards
 
-As of 365 picks, 85 unclaimed cards are in drafted pools:
+As of 382 picks, 89 unclaimed cards are in drafted pools:
 
-- **P1:** Chalice of the Void (F07); Consign to Memory (F06); Defense Grid (F01); Eidolon of the Great Revel (F07); Glen Elendra Guardian (F05); Long Goodbye (F05); Mental Misstep (F05); Mindbreak Trap (F05); Mystic Remora (F07); Mystical Dispute (F05); Null Rod (F03); Orim's Chant (F04); Phyrexian Revoker (F02); Pithing Needle (F02); Spell Snare (F05); Spellstutter Sprite (F05); Sphere of Resistance (F01); Stony Silence (F03); Stubborn Denial (F05); Swan Song (F05); Thorn of Amethyst (F01); Trinisphere (F01); Venser, Shaper Savant (F05); Vexing Bauble (F07)
+- **P1:** Chalice of the Void (F07); Consign to Memory (F06); Defense Grid (F01); Eidolon of the Great Revel (F07); Esper Sentinel (F07); Glen Elendra Guardian (F05); Long Goodbye (F05); Mental Misstep (F05); Mindbreak Trap (F05); Mystic Remora (F07); Mystical Dispute (F05); Null Rod (F03); Orim's Chant (F04); Phyrexian Revoker (F02); Pithing Needle (F02); Spell Snare (F05); Spellstutter Sprite (F05); Sphere of Resistance (F01); Stony Silence (F03); Strix Serenade (F05); Stubborn Denial (F05); Swan Song (F05); Thorn of Amethyst (F01); Trinisphere (F01); Venser, Shaper Savant (F05); Vexing Bauble (F07)
 - **P2:** Beseech the Mirror (F10); Bojuka Bog (F12); Cabal Therapy (F16); Chains of Mephistopheles (F15); Fabled Passage (F10); Gamble (F10); Ghost Quarter (F10); Goblin Guide (F11); Imperial Recruiter (F10); Kitesail Freebooter (F16); Leyline of the Void (F12); Opposition Agent (F18); Protean Hulk (F10); Recurring Nightmare (F13); Rest in Peace (F12); Smallpox (F16); Stinkweed Imp (F15); Takenuma, Abandoned Mire (F13); Unmarked Grave (F10); Vendilion Clique (F16)
-- **P5:** Argentum Masticore (F47); Carrion Feeder (F40); Cryptic Command (F46); Ensnaring Bridge (F40); Kozilek's Command (F46); Mycosynth Lattice (F42); Nethergoyf (F43); Paradoxical Outcome (F47); Price of Progress (F47); Smokestack (F41); Tangle Wire (F41); The Tabernacle at Pendrell Vale (F41); Umezawa's Jitte (F44); Urborg, Tomb of Yawgmoth (F42); Veil of Summer (F47)
+- **P5:** Argentum Masticore (F47); Carrion Feeder (F40); Cryptic Command (F46); Engineered Explosives (F45); Ensnaring Bridge (F40); Kozilek's Command (F46); Mycosynth Lattice (F42); Nethergoyf (F43); Paradoxical Outcome (F47); Price of Progress (F47); Smokestack (F41); Tangle Wire (F41); The Tabernacle at Pendrell Vale (F41); Umezawa's Jitte (F44); Urborg, Tomb of Yawgmoth (F42); Veil of Summer (F47)
 - **P3:** Cavern of Souls (F21); Dark Depths (F28); Dreadhorde Arcanist (F23); Force of Despair (F22); Jeska's Will (F20); Lotus Bloom (F27); Mystic Forge (F23); Rite of Flame (F20); Spire of Industry (F20); The Mightstone and Weakstone (F21)
 - **P4:** Burning Wish (F31); Gilded Drake (F33); Jace, the Perfected Mind (F30); Karn, the Great Creator (F30); Liliana of the Veil (F30); Necropotence (F34); Phantasmal Image (F32); Ugin, the Spirit Dragon (F30); Yawgmoth's Bargain (F34)
-- **P6:** Advantageous Proclamation (F56); Cephalid Illusionist (F51); Delver of Secrets // Insectile Aberration (F53); Muddle the Mixture (F54); Nomads en-Kor (F51); Power Play (F56); Tolaria West (F54)
+- **P6:** Advantageous Proclamation (F56); Cephalid Illusionist (F51); Delver of Secrets // Insectile Aberration (F53); Maze of Ith (F51); Muddle the Mixture (F54); Nomads en-Kor (F51); Power Play (F56); Tolaria West (F54)
 
 Drafted custom conspiracies (no Scryfall record, outside the pool): ANOTHER HEAD?!, I've Made a Huge Mistake, Meddling Wizard, Quanitity Over Quality.
 
