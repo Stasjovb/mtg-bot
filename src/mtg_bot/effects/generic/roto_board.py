@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.object_predicates import ObjectPredicate
 
 if TYPE_CHECKING:
@@ -535,6 +536,404 @@ class EventSubjectDealsDamageToEachOpponent(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Conditions over the controller's graveyard (static P/T)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CardsInYourGraveyard(Condition):
+    """"there are N or more <type> cards in your graveyard" (Elvish
+    Reclaimer: three land cards) and, as a variable amount, "for each
+    <type> card in your graveyard" (Knight of the Reliquary).
+    ``matches`` is "at least ``at_least``"; ``multiplier`` is the count."""
+
+    card_filter: object
+    at_least: int = 1
+
+    def _count(self, state, viewer_id) -> int:
+        p = state.player_by_id(viewer_id)
+        return sum(1 for c in p.graveyard if self.card_filter.matches(c.printing))
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return self._count(state, viewer_id) >= self.at_least
+
+    def multiplier(self, state, viewer_id, chosen_targets=None):
+        return self._count(state, viewer_id)
+
+
+# ---------------------------------------------------------------------------
+# One-off resolutions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReturnPermanentYouControlToHand(Effect):
+    """"return a <permanent> you control to its owner's hand" -- not
+    targeted: the controller picks one as the ability resolves (the
+    ``choose_target`` hook over their matching permanents; Shrieking
+    Drake may return itself). Nothing happens when they control none."""
+
+    permanent_filter: ObjectPredicate
+    label: str = "creature"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
+        from mtg_bot.game import is_creature_now
+
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            options = [
+                o for o in state.battlefield
+                if o.controller_id == controller_id
+                and self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        if not options:
+            state.log.append(f"P{controller_id} controls no {self.label} to return")
+            return
+        pick = options[0]
+        agent = state.player_by_id(controller_id).agent
+        if agent is not None and len(options) > 1:
+            pool = [
+                ("creature" if is_creature_now(o) else "permanent", o.id)
+                for o in options
+            ]
+            choice = agent.choose_target(state, controller_id, pool)
+            pick = next((o for o in options if choice and o.id == choice[1]), pick)
+        _bounce_to_hand(state, pick)
+
+    def describe(self) -> str:
+        return f"return a {self.label} you control to its owner's hand"
+
+
+@dataclass(frozen=True)
+class PumpEachYouControlByCountUEOT(Effect):
+    """"<creatures> you control gain <keywords> and get +X/+X until end
+    of turn, where X is the number of <permanents> you control"
+    (Craterhoof Behemoth). X is counted and the affected set fixed as the
+    ability resolves (CR 608.2h / 611.2c)."""
+
+    permanent_filter: ObjectPredicate
+    count_filter: ObjectPredicate
+    keywords: frozenset = frozenset()
+    label: str = "creatures you control"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            x = sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id
+                and self.count_filter.test(o, state)
+            )
+            affected = [
+                o for o in state.battlefield
+                if o.controller_id == controller_id
+                and self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        src = state.resolving_source or state.resolving_spell
+        sid = src.id if src is not None else -1
+        for obj in affected:
+            state.grant_pt_pump_ueot(
+                source_id=sid, target_id=obj.id, power=x, toughness=x,
+                description=f"{obj.printing.name} gets +{x}/+{x} UEOT",
+            )
+            for kw in sorted(self.keywords):
+                state.add_continuous_effect(
+                    source_id=sid, layer=6, kind="grant_keyword",
+                    target_id=obj.id, params=(kw,), expires_at="cleanup",
+                    description=f"{obj.printing.name} gains {kw} UEOT",
+                )
+        state.log.append(
+            f"{len(affected)} {self.label} get +{x}/+{x}"
+            + (f" and gain {', '.join(sorted(self.keywords))}" if self.keywords else "")
+        )
+
+    def describe(self) -> str:
+        kw = f"gain {', '.join(sorted(self.keywords))} and " if self.keywords else ""
+        return (
+            f"{self.label} {kw}get +X/+X until end of turn, where X is the "
+            f"number of creatures you control"
+        )
+
+
+@dataclass(frozen=True)
+class IfResolvingInYourMainPhase(Effect):
+    """"<effect>. If you cast this spell during your main phase,
+    <stronger effect> instead." (Might of Old Krosa). A step never ends
+    with an object on the stack (CR 500.2), so a spell cast during its
+    controller's main phase resolves during that same main phase and the
+    cast-time condition is read on resolution. Both effects share the
+    spell's one target."""
+
+    main_phase: Effect
+    otherwise: Effect
+
+    @property
+    def targets(self):  # type: ignore[override]
+        return self.otherwise.targets
+
+    def requires_target(self) -> bool:
+        return self.otherwise.requires_target()
+
+    def legal_targets(self, state, controller_id):
+        return self.otherwise.legal_targets(state, controller_id)
+
+    def target_count_range(self):
+        return self.otherwise.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import MAIN_STEPS
+
+        in_main = (
+            state.step in MAIN_STEPS
+            and state.active_player().id == controller_id
+        )
+        (self.main_phase if in_main else self.otherwise).resolve(
+            state, controller_id, targets,
+        )
+
+    def describe(self) -> str:
+        return (
+            f"{self.otherwise.describe()}; if cast during your main phase, "
+            f"{self.main_phase.describe()} instead"
+        )
+
+
+@dataclass(frozen=True)
+class PutCreatureWithMVEqualToCountersFromHand(Effect):
+    """"You may put a creature card with mana value equal to the number
+    of <kind> counters on this <permanent> from your hand onto the
+    battlefield." (Aether Vial). The card is picked with
+    ``choose_card_from_hand`` (``None`` declines); the count is the
+    source's counters on resolution (last-known information)."""
+
+    kind: str = "charge"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.effects.value_predicates import mana_value_of
+        from mtg_bot.game import counter_count
+
+        source = state.resolving_source
+        if source is None:
+            return
+        n = counter_count(source, self.kind)
+        p = state.player_by_id(controller_id)
+        options = [
+            c for c in p.hand
+            if c.printing.is_creature and mana_value_of(c) == n
+        ]
+        if not options or p.agent is None:
+            return
+        picked = p.agent.choose_card_from_hand(
+            state, controller_id, [c.id for c in options],
+        )
+        card = next((c for c in options if c.id == picked), None)
+        if card is None:
+            state.log.append(f"P{controller_id} puts nothing onto the battlefield")
+            return
+        p.hand.remove(card)
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the battlefield"
+        )
+        put_into_battlefield(state, card, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"you may put a creature card with mana value equal to the "
+            f"number of {self.kind} counters on this permanent from your "
+            f"hand onto the battlefield"
+        )
+
+
+@dataclass(frozen=True)
+class DestroyTargetsControllersGetTokens(Effect):
+    """"[You may ]destroy up to N target <permanents>. For each
+    permanent put into a graveyard this way, its controller creates
+    <token>." (Terastodon). Each still-legal target is destroyed; for
+    each one that actually went to a graveyard (not indestructible, not
+    regenerated) its controller -- as it last existed -- creates the
+    token."""
+
+    target_filter: ObjectPredicate
+    token_printing: object
+    count_min: int = 0
+    count_max: int = 1
+    tokens_each: int = 1
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        from mtg_bot.effects.targets import TargetSpec
+
+        object.__setattr__(self, "targets", (TargetSpec(
+            self.target_filter, count_min=self.count_min,
+            count_max=self.count_max,
+        ),))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        slot = self.targets[0]
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = []
+            for chosen in targets:
+                if _slot_target_still_legal(state, slot, chosen):
+                    obj = next(
+                        (o for o in state.battlefield if o.id == chosen[1]), None,
+                    )
+                    if obj is not None:
+                        legal.append(obj)
+                else:
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="destroy")
+                    )
+        finally:
+            state.resolving_controller_id = prior
+        for obj in legal:
+            owner_side = obj.controller_id
+            if destroy_permanent(state, obj):
+                CreateToken(
+                    token_printing=self.token_printing, count=self.tokens_each,
+                ).resolve(state, owner_side)
+
+    def describe(self) -> str:
+        return (
+            f"destroy up to {self.count_max} target permanents; for each put "
+            f"into a graveyard this way, its controller creates "
+            f"{self.tokens_each} {self.token_printing.name} token(s)"
+        )
+
+
+@dataclass(frozen=True)
+class ExileEachUntilSourceLeaves(Effect):
+    """"exile each <permanent> until this <permanent> leaves the
+    battlefield" (Temporary Lockdown). Every matching permanent is
+    exiled with the Oblivion Ring bookkeeping (``exiled_by_source``) and
+    returns when the source leaves; nothing is exiled if the source left
+    before this resolved (CR 610.3c)."""
+
+    permanent_filter: ObjectPredicate
+    label: str = "permanents"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import move_off_battlefield
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            victims = [
+                o for o in state.battlefield
+                if self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        for obj in victims:
+            if obj not in state.battlefield:
+                continue
+            obj.exiled_by_source = source.id
+            state.log.append(f"{obj.printing.name} is exiled")
+            move_off_battlefield(state, obj, destination="exile")
+
+    def describe(self) -> str:
+        return f"exile each {self.label} until this permanent leaves the battlefield"
+
+
+@dataclass(frozen=True)
+class TapOrUntapAllOfChosenType(Effect):
+    """"Choose <type>, <type>, or <type>. Tap all untapped permanents of
+    the chosen type target player controls, or untap all tapped
+    permanents of that type that player controls." (Turnabout). The type
+    and the tap / untap choice are made as the spell resolves (two
+    ``choose_mode`` calls)."""
+
+    types: tuple[str, ...] = ("Artifact", "Creature", "Land")
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self):
+        return (1, 1)
+
+    def legal_targets(self, state, controller_id):
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_creature_now
+        from mtg_bot.turn import tap_permanent
+
+        pid = _event_player_id(state, targets)
+        if pid is None or state.player_by_id(pid).has_lost:
+            return
+        agent = state.player_by_id(controller_id).agent
+        t_idx, verb = 0, 0
+        if agent is not None:
+            t_idx = agent.choose_mode(
+                state, controller_id, [t.lower() for t in self.types],
+            )
+            verb = agent.choose_mode(state, controller_id, ["tap", "untap"])
+        t_idx = max(0, min(t_idx, len(self.types) - 1))
+        card_type = self.types[t_idx]
+
+        def has_type(o) -> bool:
+            if card_type == "Creature":
+                return is_creature_now(o)
+            return card_type in o.printing.card_types
+
+        mine = [o for o in state.battlefield if o.controller_id == pid and has_type(o)]
+        if verb == 1:
+            for o in mine:
+                o.tapped = False
+            state.log.append(f"untap all {card_type.lower()}s P{pid} controls")
+        else:
+            for o in mine:
+                if o in state.battlefield:
+                    tap_permanent(state, o)
+            state.log.append(f"tap all {card_type.lower()}s P{pid} controls")
+
+    def describe(self) -> str:
+        return (
+            "choose artifact, creature, or land; tap all untapped or untap "
+            "all tapped permanents of that type target player controls"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
 
@@ -595,7 +994,38 @@ class RemoveCountersFromAmongPermanentsCost:
         )
 
 
+@dataclass(frozen=True)
+class PutMinusOneCounterOnSelfCost:
+    """"Put a -1/-1 counter on this creature" as a cost (Devoted Druid).
+    Always payable while the source is on the battlefield -- even when
+    the counter will kill it (the ability still resolves)."""
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return source is not None and source in state.battlefield
+
+    def pay(self, state, player_id: int, source) -> list:
+        from mtg_bot.game import add_minus_one_counters
+
+        add_minus_one_counters(state, source, 1)
+        state.log.append(
+            f"P{player_id} puts a -1/-1 counter on {source.printing.name} (cost)"
+        )
+        return []
+
+    def describe(self) -> str:
+        return "Put a -1/-1 counter on ~"
+
+
 __all__ = [
+    "CardsInYourGraveyard",
+    "DestroyTargetsControllersGetTokens",
+    "ExileEachUntilSourceLeaves",
+    "IfResolvingInYourMainPhase",
+    "PumpEachYouControlByCountUEOT",
+    "PutCreatureWithMVEqualToCountersFromHand",
+    "PutMinusOneCounterOnSelfCost",
+    "ReturnPermanentYouControlToHand",
+    "TapOrUntapAllOfChosenType",
     "DamageEachPlayerPerControlled",
     "DealDamageToEachTarget",
     "GrantKeywordsToEachUEOT",

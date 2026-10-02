@@ -63,6 +63,7 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # Cards claimed through this builder. Explicit opt-in per name, like
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
+    "Aang's Iceberg",
     "Animate Dead",
     "Back to Basics",
     "Blood Moon",
@@ -79,6 +80,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Seal of Cleansing",
     "Sneak Attack",
     "Squandered Resources",
+    "Temporary Lockdown",
     "Touch the Spirit Realm",
     "Underworld Breach",
 })

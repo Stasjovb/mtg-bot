@@ -204,6 +204,65 @@ _DAMAGE_EACH_OF_TARGETS = re.compile(
 _DESTROY_TARGET = re.compile(r"^destroy target (?P<np>.+)$")
 
 
+# "return a <permanent> you control to its owner's hand" -- not
+# targeted (Shrieking Drake).
+_RETURN_ONE_YOU_CONTROL = re.compile(
+    r"^return an? (?P<np>[a-z]+) you control to its owner's hand$"
+)
+# "<plural np> you control gain <keywords> and get +X/+X until end of
+# turn, where X is the number of <plural np> you control" (Craterhoof).
+_EACH_GAINS_AND_GETS_X = re.compile(
+    r"^(?P<np>[a-z]+) you control gain (?P<kws>[a-z ,]+?) and get \+X/\+X "
+    r"until end of turn, where X is the number of (?P<count>[a-z]+) you "
+    r"control$"
+)
+# "<pump>. If you cast this spell during your main phase, that
+# creature gets +P/+T until end of turn instead" (Might of Old Krosa).
+_MAIN_PHASE_INSTEAD = re.compile(
+    r"^(?P<base>target (?P<np>.+?) gets \+\d+/\+\d+ until end of turn)\. If "
+    r"you cast this spell during your main phase, that creature gets "
+    r"(?P<pt>\+\d+/\+\d+) until end of turn instead$"
+)
+# "you may put a creature card with mana value equal to the number of
+# <kind> counters on this <permanent> from your hand onto the battlefield"
+# (Aether Vial).
+_PUT_MV_EQUAL_COUNTERS_FROM_HAND = re.compile(
+    r"^you may put a creature card with mana value equal to the number of "
+    r"(?P<kind>[a-z]+) counters on this (?:artifact|creature|enchantment|"
+    r"land|permanent) from your hand onto the battlefield$"
+)
+# "[you may ]destroy [up to N ]target <np>. For each permanent put into
+# a graveyard this way, its controller creates <token>" (Terastodon).
+_DESTROY_THEN_CONTROLLER_TOKENS = re.compile(
+    r"^(?P<may>you may )?destroy (?:up to (?P<n>one|two|three|four) )?target "
+    r"(?P<np>.+?)\. For each permanent put into a graveyard this way, its "
+    r"controller creates (?P<tok>.+)$"
+)
+_SELF_NOUN_LEAVES = (
+    r"until this (?:enchantment|artifact|creature|permanent) leaves the "
+    r"battlefield$"
+)
+# "exile [up to one ][other ]target <np> until this <permanent> leaves
+# the battlefield" over the extended grammar (Aang's Iceberg).
+_EXILE_TARGET_UNTIL_LEAVES = re.compile(
+    r"^exile (?P<upto>up to one )?(?P<other>other )?target (?P<np>.+?) "
+    + _SELF_NOUN_LEAVES
+)
+# "exile each <np> until this <permanent> leaves the battlefield"
+# (Temporary Lockdown).
+_EXILE_EACH_UNTIL_LEAVES = re.compile(
+    r"^exile each (?P<np>.+?) " + _SELF_NOUN_LEAVES
+)
+# Turnabout: "choose <t1>, <t2>, or <t3>. Tap all untapped permanents of
+# the chosen type target player controls, or untap all tapped permanents
+# of that type that player controls".
+_TAP_OR_UNTAP_CHOSEN_TYPE = re.compile(
+    r"^choose (?P<types>[a-z]+, [a-z]+, or [a-z]+)\. Tap all untapped "
+    r"permanents of the chosen type target player controls, or untap all "
+    r"tapped permanents of that type that player controls$"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -305,6 +364,88 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _RETURN_ONE_YOU_CONTROL.match(phrase)
+    if m is not None:
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.ReturnPermanentYouControlToHand(
+            permanent_filter=f, label=m.group("np"),
+        )
+    m = _EACH_GAINS_AND_GETS_X.match(phrase)
+    if m is not None:
+        f = permanent_phrase(m.group("np"), plural=True)
+        count = permanent_phrase(m.group("count"), plural=True)
+        kws = _keyword_list(m.group("kws"))
+        if f is None or count is None or kws is None:
+            return None
+        return rb.PumpEachYouControlByCountUEOT(
+            permanent_filter=f, count_filter=count, keywords=kws,
+            label=f"{m.group('np')} you control",
+        )
+    m = _MAIN_PHASE_INSTEAD.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        base = _parse_effect(m.group("base"))
+        stronger = _parse_effect(
+            f"target {m.group('np')} gets {m.group('pt')} until end of turn"
+        )
+        if base is None or stronger is None or type(base) is not type(stronger):
+            return None
+        return rb.IfResolvingInYourMainPhase(main_phase=stronger, otherwise=base)
+    m = _PUT_MV_EQUAL_COUNTERS_FROM_HAND.match(phrase)
+    if m is not None:
+        return rb.PutCreatureWithMVEqualToCountersFromHand(kind=m.group("kind"))
+    m = _DESTROY_THEN_CONTROLLER_TOKENS.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.combinators import MayDo
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        f = permanent_phrase(m.group("np"), plural=m.group("n") is not None)
+        token = _parse_effect(f"create {m.group('tok')}")
+        if f is None or not isinstance(token, CreateToken):
+            return None
+        n = _NUMBER_WORDS[m.group("n")] if m.group("n") else 1
+        eff = rb.DestroyTargetsControllersGetTokens(
+            target_filter=f, token_printing=token.token_printing,
+            count_min=0 if m.group("n") else 1, count_max=n,
+            tokens_each=token.count,
+        )
+        return MayDo(inner=eff) if m.group("may") else eff
+    m = _EXILE_TARGET_UNTIL_LEAVES.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.enchantment_mechanics import (
+            ExileTargetUntilSourceLeaves,
+        )
+        from mtg_bot.effects.object_predicates import IsSource
+        from mtg_bot.effects.targets import TargetSpec
+
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        if m.group("other"):
+            f = f & ~IsSource()
+        return ExileTargetUntilSourceLeaves(targets=(TargetSpec(
+            f, count_min=0 if m.group("upto") else 1, count_max=1,
+        ),))
+    m = _EXILE_EACH_UNTIL_LEAVES.match(phrase)
+    if m is not None:
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.ExileEachUntilSourceLeaves(
+            permanent_filter=f, label=m.group("np"),
+        )
+    m = _TAP_OR_UNTAP_CHOSEN_TYPE.match(phrase)
+    if m is not None:
+        types = tuple(
+            t.capitalize() for t in re.split(r", or |, ", m.group("types"))
+        )
+        if not all(t in ("Artifact", "Creature", "Land", "Enchantment") for t in types):
+            return None
+        return rb.TapOrUntapAllOfChosenType(types=types)
     m = _LOSES_KEYWORD_UEOT.match(phrase)
     if m is not None:
         from mtg_bot.effects.targets import TargetSpec
@@ -457,6 +598,9 @@ def parse_roto_cost_piece(piece: str):
         return _CostPiece(kind="extra", atom=rb.RemoveCountersFromAmongPermanentsCost(
             kind=m.group("kind"), count=_n(m.group("n")),
         ))
+    if piece == "Put a -1/-1 counter on this creature":
+        # Devoted Druid.
+        return _CostPiece(kind="extra", atom=rb.PutMinusOneCounterOnSelfCost())
     if piece in _SACRIFICE_SELF_PIECES:
         # "Sacrifice this enchantment" (Seal of Cleansing, Pernicious
         # Deed): the enchantment self-reference of ``sacrifice_self``.
@@ -707,8 +851,101 @@ def _equipped_it_trigger(line: str) -> BoardLine | None:
     ),))
 
 
+# "This creature gets +P/+T as long as there are N or more <type> cards
+# in your graveyard." (Elvish Reclaimer) / "This creature gets +P/+T for
+# each <type> card in your graveyard." (Knight of the Reliquary).
+_SELF_GETS_PER_GRAVEYARD = re.compile(
+    r"^[Tt]his creature gets \+(?P<p>\d+)/\+(?P<t>\d+) (?:as long as there "
+    r"are (?P<n>\w+) or more (?P<desc>[a-z]+) cards in your graveyard|for "
+    r"each (?P<each>[a-z]+) card in your graveyard)\.$"
+)
+# "Each other creature you control that's a <T1>, <T2>, or <T3> gets
+# +P/+T and has <keyword>." (Kaheera, the Orphanguard).
+_OTHER_SUBTYPE_LIST_ANTHEM = re.compile(
+    r"^Each other creature you control that's an? (?P<subs>[A-Z][a-z]+"
+    r"(?:, [A-Z][a-z]+)*,? or [A-Z][a-z]+) gets \+(?P<p>\d+)/\+(?P<t>\d+)"
+    r"(?: and has (?P<kw>[a-z ]+))?\.$"
+)
+
+
+def _graveyard_pt_static(line: str) -> BoardLine | None:
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.base import StaticAbility, StaticScope
+    from mtg_bot.effects.generic import roto_board as rb
+    from mtg_bot.effects.modifiers import ContinuousModifier, PowerToughnessBonus
+
+    m = _SELF_GETS_PER_GRAVEYARD.match(line)
+    if m is None:
+        return None
+    desc = m.group("desc") or m.group("each")
+    card_filter = parse_card_descriptor(f"a {desc} card")
+    if card_filter is None:
+        return None
+    p, t = int(m.group("p")), int(m.group("t"))
+    if m.group("each"):
+        return BoardLine(statics=(StaticAbility(
+            scope=StaticScope.SELF, power_bonus=p, toughness_bonus=t,
+            bonus_per_condition_count=True,
+            condition=rb.CardsInYourGraveyard(card_filter=card_filter),
+        ),))
+    n = m.group("n")
+    if not (n.isdigit() or n in _NUMBER_WORDS):
+        return None
+    return BoardLine(statics=(StaticAbility(
+        scope=StaticScope.SELF,
+        condition=rb.CardsInYourGraveyard(
+            card_filter=card_filter, at_least=_n(n),
+        ),
+        continuous_effect=ContinuousModifier(
+            layer=7, payload=PowerToughnessBonus(power_bonus=p, toughness_bonus=t),
+        ),
+    ),))
+
+
+def _other_subtype_list_anthem(line: str) -> BoardLine | None:
+    from mtg_bot.effects.base import StaticAbility, StaticScope
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier,
+        GrantKeyword,
+        PowerToughnessBonus,
+    )
+    from mtg_bot.effects.object_predicates import HasSubtype
+
+    m = _OTHER_SUBTYPE_LIST_ANTHEM.match(line)
+    if m is None:
+        return None
+    subs = [s for s in re.split(r",? or |, ", m.group("subs")) if s]
+    subject = HasSubtype(subs[0])
+    for sub in subs[1:]:
+        subject = subject | HasSubtype(sub)
+    statics = [StaticAbility(
+        scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+        continuous_effect=ContinuousModifier(
+            layer=7,
+            payload=PowerToughnessBonus(
+                power_bonus=int(m.group("p")), toughness_bonus=int(m.group("t")),
+            ),
+            subject_filter=subject,
+        ),
+    )]
+    if m.group("kw"):
+        kws = _keyword_list(m.group("kw"))
+        if kws is None:
+            return None
+        for kw in sorted(kws):
+            statics.append(StaticAbility(
+                scope=StaticScope.OTHER_CREATURES_YOU_CONTROL,
+                continuous_effect=ContinuousModifier(
+                    layer=6, payload=GrantKeyword(kw), subject_filter=subject,
+                ),
+            ))
+    return BoardLine(statics=tuple(statics))
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _graveyard_pt_static,
+    _other_subtype_list_anthem,
     _equipped_it_trigger,
     _each_land_is_type,
     _nonbasic_lands_are_mountains,
