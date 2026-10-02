@@ -323,6 +323,15 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     sunburst: bool = False
     look_at_top: bool = False
     play_from_top_paying_life: bool = False
+    # Vintage Roto P3: modal triggered abilities ("When ~ enters, choose
+    # one —" + bullet modes) are lifted out as whole blocks.
+    from mtg_bot.cards.parser.roto_mana import extract_modal_trigger_blocks
+
+    extracted = extract_modal_trigger_blocks(text, card["name"])
+    if extracted is None:
+        return None
+    text, modal_triggers = extracted
+    triggers.extend(modal_triggers)
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)

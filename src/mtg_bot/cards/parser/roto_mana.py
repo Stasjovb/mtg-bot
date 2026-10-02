@@ -78,6 +78,15 @@ _DESTROY_ALL_ENTERED_THIS_TURN_RE = re.compile(
 _ADD_PER_CARD_IN_TARGET_OPPONENTS_HAND_RE = re.compile(
     r"^add \{(?P<c>[WUBRGC])\} for each card in target opponent's hand$"
 )
+# "add {C}{C}. This mana can't be spent to cast <kind> spells" -- a
+# negative spend restriction (The Mightstone and Weakstone: nonartifact).
+_ADD_MANA_CANT_BE_SPENT_ON_RE = re.compile(
+    r"^add (?P<mana>(?:\{[WUBRGC]\})+)\. This mana can't be spent to cast "
+    r"(?P<kind>[a-z]+) spells$"
+)
+# Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
+# (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
+_CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
 
 
 def parse_roto_mana_effect(phrase: str) -> Effect | None:
@@ -112,7 +121,69 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
     m = _ADD_PER_CARD_IN_TARGET_OPPONENTS_HAND_RE.match(phrase)
     if m is not None:
         return rm.AddManaPerCardInTargetOpponentsHand(color=m.group("c"))
+    m = _ADD_MANA_CANT_BE_SPENT_ON_RE.match(phrase)
+    if m is not None:
+        tag = _CANT_BE_SPENT_ON_KIND_TAGS.get(m.group("kind"))
+        if tag is None:
+            return None
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        colors = re.findall(r"\{([WUBRGC])\}", m.group("mana"))
+        return AddManaToPool(
+            produces=tuple((c, 1) for c in colors), spend_restriction=tag,
+        )
     return None
+
+
+# ---------------------------------------------------------------------------
+# Modal triggered abilities on noncreature permanents
+# ---------------------------------------------------------------------------
+
+
+def extract_modal_trigger_blocks(text: str, name: str):
+    """Pull every ``When/Whenever <event>, choose one —`` header and its
+    ``• <mode>`` lines out of a noncreature permanent's oracle ``text``
+    (The Mightstone and Weakstone), parsing each block with the creature
+    builder's modal-trigger grammar.
+
+    Returns ``(remaining_text, triggers)``; ``None`` when a block is
+    present but doesn't parse (the card stays unclaimed). Text without a
+    block comes back unchanged with no triggers."""
+    if _disabled():
+        return text, ()
+    from mtg_bot.cards.parser.creature_builder import (
+        _MODAL_CHOOSE_ONE_SUFFIX,
+        _MODAL_MODE_PREFIX,
+        _parse_modal_trigger_block,
+    )
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+
+    lines = text.split("\n")
+    kept: list[str] = []
+    triggers = []
+    i = 0
+    while i < len(lines):
+        line = _strip_reminder_text(lines[i])
+        if line.endswith(_MODAL_CHOOSE_ONE_SUFFIX) and line.startswith(
+            ("When ", "Whenever "),
+        ):
+            modes = []
+            j = i + 1
+            while j < len(lines) and _strip_reminder_text(lines[j]).startswith(
+                _MODAL_MODE_PREFIX,
+            ):
+                modes.append(_strip_reminder_text(lines[j]))
+                j += 1
+            if modes:
+                trig = _parse_modal_trigger_block(line, modes, name=name)
+                if trig is None:
+                    return None
+                triggers.append(trig)
+                i = j
+                continue
+        kept.append(lines[i])
+        i += 1
+    return "\n".join(kept), tuple(triggers)
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +213,7 @@ def rewrite_spell_clauses(clauses: list[str]) -> list[str]:
 
 
 __all__ = [
+    "extract_modal_trigger_blocks",
     "rewrite_spell_clauses",
     "parse_activate_only_if_condition",
     "parse_roto_mana_effect",

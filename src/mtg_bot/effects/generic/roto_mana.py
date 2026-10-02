@@ -58,6 +58,30 @@ class EnteredThisTurn(ObjectPredicate):
 
 
 # ---------------------------------------------------------------------------
+# Spend restrictions (``ManaCoin.spend_restriction`` tags of this bucket)
+# ---------------------------------------------------------------------------
+
+# Payment-context tags (``actions._coin_satisfies_context``) that mark a
+# payment as something other than casting a spell: activating an
+# ability (``legal`` / ``actions._activate_ability`` add
+# "activated_ability") or turning a face-down creature up.
+_NON_SPELL_CONTEXTS = frozenset({"activated_ability"})
+
+
+def roto_coin_satisfies(coin, kinds: "frozenset[str]") -> bool:
+    """Whether a coin carrying one of this bucket's restriction tags may
+    pay in the payment context ``kinds``.
+
+    - ``"not_nonartifact_spell"``: "This mana can't be spent to cast
+      nonartifact spells." (The Mightstone and Weakstone) -- it pays for
+      artifact spells and for anything that isn't casting a spell.
+    """
+    if coin.spend_restriction == "not_nonartifact_spell":
+        return "artifact_spell" in kinds or bool(kinds & _NON_SPELL_CONTEXTS)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Mana effects
 # ---------------------------------------------------------------------------
 

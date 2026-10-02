@@ -392,7 +392,10 @@ def _coin_satisfies_context(
         and "cast_from_outside_hand" in kinds
     ):
         return True
-    return False
+    # Vintage Roto P3 restriction tags (The Mightstone and Weakstone, ...).
+    from mtg_bot.effects.generic.roto_mana import roto_coin_satisfies
+
+    return roto_coin_satisfies(coin, kinds)
 
 
 def effective_warp_cost(
@@ -3616,7 +3619,9 @@ def _activate_ability(
         # Heroes's third mana ability ("among legendary permanents you
         # control") is read as "spend only to activate abilities of
         # legendary permanents you control".
-        ability_spell_kinds: set[str] = {"spell"}
+        # "activated_ability" marks the payment as an activation, not a
+        # cast (The Mightstone and Weakstone's mana pays for it).
+        ability_spell_kinds: set[str] = {"spell", "activated_ability"}
         if (
             "Eldrazi" in source.printing.subtypes
             and not source.printing.mana_cost.colored

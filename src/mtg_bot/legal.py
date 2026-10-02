@@ -1400,7 +1400,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
                 # tags this source qualifies for so coins with any of
                 # those restrictions are usable. Mirrors
                 # actions._activate_ability.
-                ability_kinds: set[str] = {"spell"}
+                ability_kinds: set[str] = {"spell", "activated_ability"}
                 if (
                     "Eldrazi" in obj.printing.subtypes
                     and not obj.printing.mana_cost.colored
