@@ -300,7 +300,10 @@ def _land_tap_life_cost(state: GameState, land: GameObject) -> int:
 
 
 def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
-    """True if ``coin`` can pay for a ``{color}`` requirement."""
+    """True if ``coin`` can pay for a ``{color}`` requirement (``"S"``:
+    an {S} pip, paid only by snow mana)."""
+    if color == "S":
+        return coin.snow
     if coin.color == "any":
         return True
     return coin.color == color
@@ -641,6 +644,17 @@ def _virtual_pretap(state, usable_pool, lands, extra, n_tapped):
     return pool, [l for l in lands if l.id not in ids]
 
 
+def _snow_mana_lands(state, lands, used_lands) -> list:
+    """Untapped snow lands that make mana -- the lands that can pay an
+    {S} pip (CR 107.4h; Vintage Roto P3)."""
+    return [
+        l for l in lands
+        if "Snow" in l.printing.supertypes
+        and effective_land_produces(state, l)
+        and l.id not in used_lands
+    ]
+
+
 def _can_pay_from(
     state: GameState, cost: ManaCost, usable_pool: list, lands: list,
 ) -> bool:
@@ -660,11 +674,14 @@ def _can_pay_from(
                     break
         if need == 0:
             continue
-        matching = [
-            l for l in lands
-            if color in effective_land_produces(state, l)
-            and l.id not in used_lands
-        ]
+        if color == "S":
+            matching = _snow_mana_lands(state, lands, used_lands)
+        else:
+            matching = [
+                l for l in lands
+                if color in effective_land_produces(state, l)
+                and l.id not in used_lands
+            ]
         if len(matching) < need:
             return False
         for l in matching[:need]:
@@ -1133,6 +1150,8 @@ def _produces_satisfies(
     a colored requirement is satisfied only by exact match or "any";
     a generic requirement (color="" / None) is satisfied by any output.
     """
+    if color == "S":
+        return False  # sacrifice-for-mana sources aren't snow
     for c, n in produces:
         if n <= 0:
             continue
@@ -1333,16 +1352,22 @@ def auto_tap_for_cost(
                     break
         if need == 0:
             continue
-        matching = [
-            l for l in lands
-            if color in effective_land_produces(state, l)
-            and l.id not in used_lands
-        ]
+        if color == "S":
+            matching = _snow_mana_lands(state, lands, used_lands)
+        else:
+            matching = [
+                l for l in lands
+                if color in effective_land_produces(state, l)
+                and l.id not in used_lands
+            ]
         for l in matching[:need]:
             used_lands.add(l.id)
             tapped.append(l)
             if track:
-                color_sources.append(frozenset({color}))
+                color_sources.append(
+                    frozenset(effective_land_produces(state, l)) & _WUBRG_SET
+                    if color == "S" else frozenset({color})
+                )
     # Generic cost (including hybrid pips, treated as generic-1 per
     # the engine simplification): pool first, then lands. The hybrid
     # contribution to the bound was missing here, mirroring the same
@@ -4378,6 +4403,7 @@ def _activate_ability(
     # so the cost-paid objects need to be visible to the resolving
     # body via state.resolving_cost_paid_objects.
     if ability.is_mana_ability:
+        pool_before = len(state.player_by_id(player_id).mana_pool)
         state.resolving_source = source
         state.resolving_cost_paid_objects = tuple(cost_paid_objects)
         # Mana abilities with an {X} cost (Wizard's Rockets' "Add X
@@ -4395,6 +4421,11 @@ def _activate_ability(
         state.log.append(
             f"P{player_id} activates {source.printing.name}'s mana ability"
         )
+        # Vintage Roto P3: what the mana ability just produced (snow
+        # mana from a snow source, ...).
+        from mtg_bot.effects.generic.roto_mana import after_mana_ability
+
+        after_mana_ability(state, player_id, source, pool_before)
         if ability.cost.tap_self:
             # "Whenever you tap a creature for mana, add an additional
             # {G}." (Badgermole Cub; a triggered mana ability).

@@ -699,8 +699,153 @@ def push_suspend_upkeep_triggers(state: "GameState") -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Counters and state triggers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RemoveCountersFromSource(Effect):
+    """"Remove a[n] <kind> counter from this <permanent>." (Dark Depths'
+    ``{3}`` ability) -- from the resolving source, if it's still on the
+    battlefield."""
+
+    kind: str = ""
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import remove_counters
+
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        n = remove_counters(src, self.kind, self.amount)
+        state.log.append(
+            f"{src.printing.name}: {n} {self.kind} counter(s) removed"
+        )
+
+    def describe(self) -> str:
+        return f"remove {self.amount} {self.kind} counter(s) from this"
+
+
+@dataclass(frozen=True)
+class HasNoCountersOfKind:
+    """State-trigger condition: the source has no ``kind`` counters."""
+
+    kind: str
+
+    def holds(self, state: "GameState", obj) -> bool:
+        from mtg_bot.game import counter_count
+
+        return counter_count(obj, self.kind) == 0
+
+
+@dataclass(frozen=True)
+class StateTrigger:
+    """A state-triggered ability (CR 603.8): it triggers whenever
+    ``condition`` holds for its permanent, and doesn't trigger again
+    while an instance of it is on the stack."""
+
+    condition: object
+    effect: Effect
+
+    def ability(self):
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.predicates import Always, Event
+
+        # The event is bookkeeping only: state triggers are pushed by
+        # ``check_state_triggers``, never by event dispatch.
+        return TriggeredAbility(
+            event=Event.LEAVES_BATTLEFIELD, predicate=Always(),
+            effect=self.effect,
+        )
+
+
+def check_state_triggers(state: "GameState") -> None:
+    """Push every state trigger whose condition holds and that isn't
+    already waiting on the stack (called with the state-based actions)."""
+    from mtg_bot.actions import push_triggered_ability
+
+    for obj in state.battlefield:
+        sts = obj.printing.state_triggers
+        if not sts:
+            continue
+        for st in sts:
+            if not st.condition.holds(state, obj):
+                continue
+            if any(
+                item.source is obj and item.ability is not None
+                and item.ability.effect == st.effect
+                for item in state.stack
+            ):
+                continue
+            push_triggered_ability(
+                state, source=obj, ability=st.ability(), ability_index=-1,
+                controller_id=obj.controller_id, label="state",
+            )
+
+
+@dataclass(frozen=True)
+class SacrificeSourceThen(Effect):
+    """"Sacrifice it. If you do, <effect>." -- the resolving source is
+    sacrificed if its controller still controls it on the battlefield;
+    only then does ``then_effect`` happen (Dark Depths' Marit Lage)."""
+
+    then_effect: Effect = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice
+
+        src = state.resolving_source
+        if (
+            src is None or src not in state.battlefield
+            or src.controller_id != controller_id
+        ):
+            state.log.append("nothing to sacrifice")
+            return
+        sacrifice(state, src)
+        if src in state.battlefield:  # pragma: no cover - sacrifice can't fail
+            return
+        self.then_effect.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"sacrifice it; if you do, {self.then_effect.describe()}"
+
+
+# ---------------------------------------------------------------------------
+# Mana abilities: what they produced
+# ---------------------------------------------------------------------------
+
+
+def after_mana_ability(
+    state: "GameState", player_id: int, source, pool_before: int,
+) -> None:
+    """Called by ``actions._activate_ability`` right after a mana ability
+    of ``source`` resolved; the coins from index ``pool_before`` on are
+    what it produced. Mana from a snow source is snow mana (CR 107.4h,
+    paying {S})."""
+    if "Snow" not in source.printing.supertypes:
+        return
+    from dataclasses import replace
+
+    pool = state.player_by_id(player_id).mana_pool
+    for i in range(pool_before, len(pool)):
+        pool[i] = replace(pool[i], snow=True)
+
+
 __all__ = [
+    "after_mana_ability",
     "AddAnyColorManaForChosenCreatureType",
+    "HasNoCountersOfKind",
+    "RemoveCountersFromSource",
+    "SacrificeSourceThen",
+    "StateTrigger",
     "CastSuspendedSourceFree",
     "RemoveTimeCounterFromSuspendedSource",
     "ExileHandDrawThatManyMayPlayThem",

@@ -541,7 +541,9 @@ def test_restricted_mana_stays_explicit_only():
 
 @pytest.mark.parametrize(
     "type_line",
-    ["Artifact Land", "Snow Land", "Basic Land — Plains", "Creature — Elf"],
+    # A Snow Land builds since the Vintage Roto P3 snow support (it keeps
+    # its Snow supertype; ``test_snow_land_keeps_its_supertype`` below).
+    ["Artifact Land", "Basic Land — Plains", "Creature — Elf"],
 )
 def test_non_plain_land_type_lines_fall_through(type_line):
     card = _land("X", type_line, "{T}: Add {W}.")
@@ -551,6 +553,18 @@ def test_non_plain_land_type_lines_fall_through(type_line):
     assert _try_build_line_composed_land(
         card, card["oracle_text"], supertypes, card_types, subtypes,
     ) is None
+
+
+def test_snow_land_keeps_its_supertype():
+    from mtg_bot.cards.parser.type_line import _parse_type_line
+
+    card = _land("X", "Snow Land", "{T}: Add {W}.")
+    supertypes, card_types, subtypes = _parse_type_line("Snow Land")
+    p = _try_build_line_composed_land(
+        card, card["oracle_text"], supertypes, card_types, subtypes,
+    )
+    assert p.supertypes == ("Snow",) and p.type_line == "Snow Land"
+    assert p.produces == frozenset({"W"})
 
 
 def test_empty_text_falls_through():

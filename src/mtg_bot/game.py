@@ -3215,6 +3215,9 @@ class ManaCoin:
     # can't be countered." (Delighted Halfling) -- the spell it pays for
     # becomes uncounterable.
     makes_spell_uncounterable: bool = False
+    # Snow mana (CR 107.4h): produced by a snow source; only such coins
+    # pay an {S} pip (Vintage Roto P3: Arcum's Astrolabe).
+    snow: bool = False
 
 
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)

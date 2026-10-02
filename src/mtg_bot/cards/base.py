@@ -297,7 +297,7 @@ class ManaCost:
             c for pair in self.hybrid for c in pair
         )
         return (
-            frozenset(c for c, _ in self.colored) | hybrid_colors
+            frozenset(c for c, _ in self.colored if c != "S") | hybrid_colors
             | frozenset(self.phyrexian)
         )
 
@@ -387,6 +387,12 @@ def parse_mana_cost(s: str) -> ManaCost:
             colored[sym] = colored.get(sym, 0) + 1
         elif sym == "C":
             generic += 1
+        elif sym == "S":
+            # Snow mana {S} (CR 107.4h): one mana from a snow source.
+            # Carried as the pseudo-color "S" in ``colored`` (payment:
+            # ``actions._coin_matches_color`` / the snow-land branch);
+            # it is not a color (``ManaCost.colors`` skips it).
+            colored["S"] = colored.get("S", 0) + 1
         elif sym == "X":
             x_pips += 1
         elif "/" in sym:
@@ -1582,6 +1588,10 @@ class CardPrinting:
     # cast by paying its mana cost (CR 202.1b / 601.2f), only through an
     # alternative cost such as "without paying its mana cost".
     has_no_mana_cost: bool = False
+    # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
+    # entries checked with the state-based actions ("When Dark Depths has
+    # no ice counters on it, ...").
+    state_triggers: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

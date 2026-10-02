@@ -266,7 +266,13 @@ def _try_build_line_composed_land(
     unrecognized."""
     if tuple(card_types) != ("Land",):
         return None
-    if set(supertypes) - {"Legendary"}:
+    from mtg_bot.cards.parser.roto_mana import (
+        extra_land_supertypes,
+        parse_roto_land_line,
+    )
+
+    # Snow (Vintage Roto P3, Dark Depths) rides the printing's supertypes.
+    if set(supertypes) - {"Legendary"} - extra_land_supertypes():
         return None
     raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     if not raw_lines:
@@ -375,12 +381,11 @@ def _try_build_line_composed_land(
             # Hideaway N (Shelldock Isle; cube glue bucket).
             triggered.append(keyword_trigger)
             continue
-        from mtg_bot.cards.parser.roto_mana import parse_roto_land_line
-
-        roto = parse_roto_land_line(line)
+        roto = parse_roto_land_line(line, card["name"])
         if roto is not None:
-            # Vintage Roto P3 (Cavern of Souls' creature-type choice).
-            roto_fields.update(roto)
+            # Vintage Roto P3 lines (Cavern of Souls, Dark Depths).
+            roto_fields.update(roto.fields)
+            activated.extend(roto.activated)
             continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
         if m is not None:
@@ -459,6 +464,9 @@ def _try_build_line_composed_land(
         produces_with_counter=produces_with_counter,
         opening_hand_action=opening_hand_action,
     )
+    if "Snow" in supertypes:
+        roto_fields["supertypes"] = tuple(supertypes)
+        roto_fields["type_line"] = card["type_line"]
     if roto_fields:
         from dataclasses import replace
 

@@ -12,6 +12,7 @@ change. Engine effects live in ``effects/generic/roto_mana.py``.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from mtg_bot.effects.base import Effect
 
@@ -121,6 +122,12 @@ _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE = (
     "exile all the cards from your hand, then draw that many cards. Until "
     "the end of your next turn, you may play cards exiled this way"
 )
+# "remove a[n] <kind> counter from this <permanent>" (Dark Depths, its
+# self-name rewritten by the land-line hook).
+_REMOVE_COUNTERS_FROM_SELF_RE = re.compile(
+    r"^remove (?P<n>an?|[a-z]+) (?P<kind>[a-z]+) counters? from this "
+    r"(?:land|artifact|creature|enchantment|permanent)$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -187,6 +194,12 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return ShuffleThenExileTopMayPlayFree()
     if phrase == _EXILE_HAND_DRAW_THAT_MANY_PLAY_LINE:
         return rm.ExileHandDrawThatManyMayPlayThem()
+    m = _REMOVE_COUNTERS_FROM_SELF_RE.match(phrase)
+    if m is not None:
+        n = 1 if m.group("n") in ("a", "an") else _COUNT_WORDS.get(m.group("n"))
+        if n is None:
+            return None
+        return rm.RemoveCountersFromSource(kind=m.group("kind"), amount=n)
     m = _EXILE_TOP_OF_YOUR_LIBRARY_RE.match(phrase)
     if m is not None:
         n = _COUNT_WORDS.get(m.group("n") or "one")
@@ -218,14 +231,96 @@ _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE = re.compile(
 )
 
 
-def parse_roto_land_line(line: str) -> dict | None:
-    """``CardPrinting`` field updates for a land line of this bucket, or
-    ``None`` (the line-composed land grammar then tries its own)."""
+@dataclass(frozen=True)
+class RotoLandLine:
+    """What one land line contributes: ``CardPrinting`` field updates
+    and/or activated abilities."""
+
+    fields: dict = field(default_factory=dict)
+    activated: tuple = ()
+
+
+def extra_land_supertypes() -> frozenset[str]:
+    """Supertypes beyond Legendary the line-composed land builder accepts
+    (Snow: Dark Depths)."""
+    return frozenset() if _disabled() else frozenset({"Snow"})
+
+
+# "<Self> enters with <N> <kind> counters on it." in the old self-named
+# wording (Dark Depths); "This land enters with ..." is the land
+# grammar's own line.
+_SELF_ENTERS_WITH_COUNTERS_RE = re.compile(
+    r"^(?P<self>.+?) enters with (?P<n>[a-z]+|\d+) (?P<kind>[a-z]+) "
+    r"counters? on it\.$"
+)
+# "When <self> has no <kind> counters on it, <effect>." -- a state
+# trigger (CR 603.8; Dark Depths).
+_STATE_TRIGGER_NO_COUNTERS_RE = re.compile(
+    r"^When (?P<self>.+?) has no (?P<kind>[a-z]+) counters on it, "
+    r"(?P<eff>.+)\.$"
+)
+
+
+def _self_ref(text: str, name: str) -> bool:
+    return text in (name, "this land", "this permanent")
+
+
+def parse_roto_land_line(line: str, name: str = "") -> RotoLandLine | None:
+    """A land line of this bucket, or ``None`` (the line-composed land
+    grammar then tries its own)."""
     if _disabled():
         return None
     if _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE.match(line):
-        return {"enters_choosing_creature_type": True}
+        return RotoLandLine(fields={"enters_choosing_creature_type": True})
+    m = _SELF_ENTERS_WITH_COUNTERS_RE.match(line)
+    if m is not None and _self_ref(m.group("self"), name):
+        n = _COUNT_WORDS.get(m.group("n"))
+        if m.group("n").isdigit():
+            n = int(m.group("n"))
+        if n is None:
+            return None
+        return RotoLandLine(
+            fields={"enters_with_named_counters": ((m.group("kind"), n),)},
+        )
+    m = _STATE_TRIGGER_NO_COUNTERS_RE.match(line)
+    if m is not None and _self_ref(m.group("self"), name):
+        trig = _parse_state_trigger_effect(m.group("eff"))
+        if trig is None:
+            return None
+        from mtg_bot.effects.generic.roto_mana import (
+            HasNoCountersOfKind,
+            StateTrigger,
+        )
+
+        return RotoLandLine(fields={"state_triggers": (StateTrigger(
+            condition=HasNoCountersOfKind(m.group("kind")), effect=trig,
+        ),)})
+    if name and name in line:
+        # An activated ability naming the land itself ("{3}: Remove an
+        # ice counter from Dark Depths.").
+        from mtg_bot.cards.parser.activated import (
+            _parse_activated_ability_line,
+        )
+
+        ability = _parse_activated_ability_line(line.replace(name, "this land"))
+        if ability is not None:
+            return RotoLandLine(activated=(ability,))
     return None
+
+
+# "sacrifice it. If you do, <effect>" -- the state trigger's body.
+_SACRIFICE_IT_IF_YOU_DO_RE = re.compile(r"^sacrifice it\. If you do, (?P<then>.+)$")
+
+
+def _parse_state_trigger_effect(phrase: str):
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    m = _SACRIFICE_IT_IF_YOU_DO_RE.match(phrase)
+    if m is not None:
+        then = _parse_effect(m.group("then"))
+        return None if then is None else rm.SacrificeSourceThen(then_effect=then)
+    return _parse_effect(phrase)
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +424,15 @@ def split_roto_card_lines(card: dict) -> tuple[dict, dict]:
     fields: dict = {}
     if not card.get("mana_cost") and "Land" not in card.get("type_line", ""):
         fields["has_no_mana_cost"] = True
+    from mtg_bot.cards.base import _parse_type_line
+
+    supertypes = _parse_type_line(card.get("type_line", ""))[0]
+    if "Snow" in supertypes:
+        # The per-type builders rebuild the type line from their own
+        # flags (Legendary only): keep the printed supertypes so a snow
+        # permanent is a snow source (CR 205.4g, 107.4h).
+        fields["supertypes"] = tuple(supertypes)
+        fields["type_line"] = card["type_line"]
     text = card.get("oracle_text") or ""
     kept: list[str] = []
     for raw in text.split("\n"):
