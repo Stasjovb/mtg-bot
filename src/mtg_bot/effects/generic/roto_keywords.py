@@ -350,6 +350,76 @@ class DealDamageToPlayerEqualToTheirHandSize(Effect):
         )
 
 
+# ------------------------------------------------------------ echo (702.30)
+
+ECHO_PAID_KIND = "echo_upkeep_seen"
+
+
+def _echo_seen(state: "GameState", obj, controller_id: int) -> bool:
+    return any(
+        ce.kind == ECHO_PAID_KIND and ce.target_id == obj.id
+        and ce.params == (controller_id,)
+        for ce in state.continuous_effects
+    )
+
+
+@dataclass(frozen=True)
+class EchoDue(TriggerPredicate):
+    """Echo's "if this permanent came under your control since the
+    beginning of your last upkeep": the permanent hasn't yet met an
+    upkeep of its current controller's (no ``ECHO_PAID_KIND`` mark for
+    that controller; the mark is a ``layer=0`` registry entry the echo
+    trigger leaves, dropped when the permanent leaves the
+    battlefield)."""
+
+    def matches(self, state, subjects, source):
+        return source is not None and not _echo_seen(
+            state, source, source.controller_id,
+        )
+
+
+@dataclass(frozen=True)
+class EchoUpkeep(Effect):
+    """Echo (CR 702.30a): "sacrifice it unless you pay <cost>." The
+    controller may pay (``Agent.choose_yes_no``, only when affordable);
+    either way the permanent is marked as having met this controller's
+    upkeep, so echo is asked once."""
+
+    cost_str: str = ""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards.base import parse_mana_cost
+        from mtg_bot.effects.generic.cheat_into_play import pay_mana_during_resolution
+        from mtg_bot.turn import sacrifice
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if _echo_seen(state, source, controller_id):
+            return  # intervening "if" (CR 603.4) rechecked
+        state.add_continuous_effect(
+            source_id=source.id, layer=0, kind=ECHO_PAID_KIND,
+            target_id=source.id, params=(controller_id,),
+            description=f"{source.printing.name}: echo met",
+        )
+        if pay_mana_during_resolution(
+            state, controller_id, parse_mana_cost(self.cost_str),
+            f"pay echo {self.cost_str} for {source.printing.name}",
+        ):
+            state.log.append(
+                f"P{controller_id} pays echo for {source.printing.name}"
+            )
+            return
+        state.log.append(f"{source.printing.name}: echo unpaid; sacrificed")
+        sacrifice(state, source)
+
+    def describe(self) -> str:
+        return f"sacrifice it unless you pay {self.cost_str} (echo)"
+
+
 # ------------------------------------------------- flip cards (CR 710/701.29)
 
 
@@ -672,6 +742,13 @@ def apply_toxic(state: "GameState", sources_hit_player) -> None:
 
 
 __all__ = [
+    "ECHO_PAID_KIND",
+    "EchoDue",
+    "EchoUpkeep",
+    "CastersNthSpellThisTurn",
+    "CounterThatSpell",
+    "FlipSource",
+    "NthSpellOfTurn",
     "SPLIT_SECOND",
     "SourceDealsDamageEqualToItsPowerToTarget",
     "UntapTargetThenGrantUntilEndOfTurn",

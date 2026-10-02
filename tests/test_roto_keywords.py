@@ -313,3 +313,86 @@ def test_swampwalk_unblockable_against_a_swamp():
     assert can_block(s, blocker, wraith)
     # A creature without landwalk is never affected.
     assert not blocked_by_landwalk(s, blocker, wraith)
+
+
+# ------------------------------------------------------ Echo (Karmic Guide)
+
+GUIDE = "Karmic Guide"
+
+
+def _guide_upkeep(*, plains=5, yes=True, active=0):
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers
+
+    s = arena(active=active)
+    guide = put(s, printing(GUIDE), 0)
+    for _ in range(plains):
+        put(s, _default("Plains"), 0)
+    s.players[0].agent.yes = yes
+    run_beginning_of_upkeep_triggers(s)
+    return s, guide
+
+
+def test_karmic_guide_parse():
+    from mtg_bot.effects.generic.roto_keywords import EchoDue, EchoUpkeep
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    p = printing(GUIDE)
+    assert {"flying", "protection from black"} <= p.keywords
+    echo = next(t for t in p.triggered_abilities if t.event == Event.BEGINNING_OF_UPKEEP)
+    assert echo.effect == EchoUpkeep(cost_str="{3}{W}{W}")
+    assert echo.predicate == Controlled(YOU) & EchoDue()
+    assert "echo" in echo.effect.describe()
+
+
+def test_echo_paid_once_then_never_again():
+    from mtg_bot.turn import run_beginning_of_upkeep_triggers
+
+    s, guide = _guide_upkeep()
+    assert len(s.stack) == 1
+    resolve_top_of_stack(s)
+    assert guide in s.battlefield
+    assert sum(o.tapped for o in s.battlefield) == 5
+    for o in s.battlefield:
+        o.tapped = False
+    run_beginning_of_upkeep_triggers(s)
+    assert s.stack == []
+
+
+def test_echo_unpaid_sacrifices():
+    s, guide = _guide_upkeep(plains=4)  # can't afford {3}{W}{W}
+    resolve_top_of_stack(s)
+    assert guide in s.players[0].graveyard
+    s, guide = _guide_upkeep(yes=False)  # declines
+    resolve_top_of_stack(s)
+    assert guide in s.players[0].graveyard
+
+
+def test_echo_is_due_again_after_leaving_and_returning():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.turn import move_off_battlefield, run_beginning_of_upkeep_triggers
+
+    s, guide = _guide_upkeep()
+    resolve_top_of_stack(s)
+    move_off_battlefield(s, guide, destination="graveyard")
+    s.players[0].graveyard.remove(guide)
+    put_into_battlefield(s, guide, 0)
+    s.stack.clear()  # its ETB trigger
+    for o in s.battlefield:
+        o.tapped = False
+    run_beginning_of_upkeep_triggers(s)
+    assert len(s.stack) == 1
+
+
+def test_echo_not_on_opponents_upkeep_and_rechecked_on_resolution():
+    from mtg_bot.effects.generic.roto_keywords import EchoUpkeep
+
+    s, guide = _guide_upkeep(active=1)
+    assert s.stack == []
+    # Intervening "if": already met -> nothing on resolution.
+    s, guide = _guide_upkeep()
+    resolve_top_of_stack(s)
+    s.resolving_source = guide
+    EchoUpkeep(cost_str="{3}{W}{W}").resolve(s, 0)
+    assert guide in s.battlefield
+    s.resolving_source = None
+    EchoUpkeep(cost_str="{1}").resolve(s, 0)

@@ -19,7 +19,7 @@ Entry points, each called from one hook:
   exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
   prevention / replacement statics ("Prevent all damage that would be
   dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one"),
-  Plot on a permanent card, Toxic N and Split second.
+  Plot on a permanent card, Toxic N, Split second and Echo.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -571,6 +571,29 @@ def _attach_hand_ability(printing, ability):
 _PLOT_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
 _TOXIC_RE = re.compile(r"^Toxic (?P<n>\d+)$")
 _SPLIT_SECOND_LINE = "Split second"
+_ECHO_RE = re.compile(r"^Echo (?P<cost>(?:\{[^}]+\})+)$")
+
+
+def _attach_trigger(printing, trigger):
+    return replace(
+        printing,
+        triggered_abilities=tuple(printing.triggered_abilities) + (trigger,),
+    )
+
+
+def _echo_trigger(cost: str):
+    """Echo {cost} (CR 702.30a): "At the beginning of your upkeep, if this
+    permanent came under your control since the beginning of your last
+    upkeep, sacrifice it unless you pay {cost}." """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.roto_keywords import EchoDue, EchoUpkeep
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    return TriggeredAbility(
+        event=Event.BEGINNING_OF_UPKEEP,
+        predicate=Controlled(YOU) & EchoDue(),
+        effect=EchoUpkeep(cost_str=cost),
+    )
 
 
 def _attach_keyword(printing, keyword: str):
@@ -611,6 +634,10 @@ def _line_patch(line: str, card: dict):
         # instants' and sorceries' Plot lines.
         cost = m.group("cost")
         return lambda p: _attach_plot(p, cost)
+    m = _ECHO_RE.match(line.strip())
+    if m is not None and "Instant" not in type_line and "Sorcery" not in type_line:
+        trigger = _echo_trigger(m.group("cost"))
+        return lambda p: _attach_trigger(p, trigger)
     if line.strip() == _SPLIT_SECOND_LINE:
         # Split second (CR 702.61): ``roto_keywords.filter_split_second``.
         return lambda p: _attach_keyword(p, "split second")
