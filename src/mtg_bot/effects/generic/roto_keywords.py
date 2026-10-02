@@ -350,6 +350,105 @@ class DealDamageToPlayerEqualToTheirHandSize(Effect):
         )
 
 
+# ------------------------------------------------- flip cards (CR 710/701.29)
+
+
+@dataclass(frozen=True)
+class FlipSource(Effect):
+    """"Flip <this permanent>." (CR 701.29): the resolving ability's
+    source, if it's still on the battlefield and unflipped, takes its
+    flipped characteristics (``flipped``, the card's other half with the
+    card's own mana cost -- CR 710.1c). It stays the same object; the
+    unflipped printing is kept in ``mdfc_front_printing`` the way a
+    transformed permanent keeps its front, so the card is unflipped again
+    once it leaves the battlefield. Flipping is not transforming: no
+    ``TRANSFORMS`` event, and transform effects can't flip it back.
+    Built only by ``cards.parser.flip_builder`` (which supplies
+    ``flipped``)."""
+
+    flipped: "object" = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.flipped is None:
+            raise ValueError("FlipSource without a flipped face")
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if source.mdfc_front_printing is not None:
+            return  # already flipped
+        source.mdfc_front_printing = source.printing
+        source.printing = self.flipped
+        state.log.append(
+            f"{source.mdfc_front_printing.name} flips into "
+            f"{self.flipped.name}"
+        )
+
+    def describe(self) -> str:
+        return "flip this permanent"
+
+
+@dataclass(frozen=True)
+class NthSpellOfTurn(TriggerPredicate):
+    """``IS_CAST``: the spell just cast is the ``n``-th spell any player
+    cast this turn ("Whenever the fourth spell of a turn is cast")."""
+
+    n: int = 1
+
+    def matches(self, state, subjects, source):
+        return sum(p.spells_cast_this_turn for p in state.players) == self.n
+
+
+@dataclass(frozen=True)
+class CastersNthSpellThisTurn(TriggerPredicate):
+    """``IS_CAST``: the spell is its caster's ``n``-th spell this turn
+    ("an opponent casts their first spell each turn")."""
+
+    n: int = 1
+
+    def matches(self, state, subjects, source):
+        caster = subjects.get("controller")
+        return caster is not None and caster.spells_cast_this_turn == self.n
+
+
+@dataclass(frozen=True)
+class CounterThatSpell(Effect):
+    """"Counter that spell." -- the spell the triggering ``IS_CAST``
+    event names (bound through ``event_subject_id``). Spells that can't
+    be countered aren't."""
+
+    def event_subject_id(self, subjects) -> int:
+        spell = subjects.get("spell")
+        return spell.id if spell is not None else -1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+
+        spell_id = state.resolving_event_subject_id
+        item = next(
+            (
+                i for i in state.stack
+                if i.ability is None and i.source.id == spell_id
+            ),
+            None,
+        )
+        if item is None or item.countered:
+            return
+        if CounterTargetSpell._is_uncounterable(state, item):
+            state.log.append(f"{item.source.printing.name} can't be countered")
+            return
+        item.countered = True
+        state.log.append(f"{item.source.printing.name} is countered")
+
+    def describe(self) -> str:
+        return "counter that spell"
+
+
 # ----------------------------------------------------------- split second
 
 SPLIT_SECOND = "split second"

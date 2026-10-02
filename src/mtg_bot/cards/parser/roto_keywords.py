@@ -323,6 +323,23 @@ def _parse_untap_then_grant(phrase: str):
     )
 
 
+def _parse_flip_and_counter_phrase(phrase: str):
+    """"flip this creature" -- only while ``flip_builder`` builds a flip
+    card's top half (it knows the flipped half); "counter that spell" --
+    the triggering cast's spell."""
+    from mtg_bot.effects.generic.roto_keywords import CounterThatSpell, FlipSource
+
+    p = phrase.strip().lower()
+    if p in ("flip this creature", "flip this permanent"):
+        from mtg_bot.cards.parser.flip_builder import current_flipped_face
+
+        flipped = current_flipped_face()
+        return None if flipped is None else FlipSource(flipped=flipped)
+    if p == "counter that spell":
+        return CounterThatSpell()
+    return None
+
+
 def parse_p6_effect(phrase: str):
     """A normalized effect phrase (lowercased first letter, no final
     period) the P6 grammar models, else ``None``."""
@@ -343,12 +360,24 @@ def parse_p6_effect(phrase: str):
         _parse_damage_phrase(phrase)
         or _parse_keyword_action_phrase(phrase)
         or _parse_untap_then_grant(phrase)
+        or _parse_flip_and_counter_phrase(phrase)
     )
 
 
 # ── Trigger conditions (hooked last into ``triggers``) ─────────────────
 
 
+_ORDINALS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+}
+_NTH_SPELL_OF_A_TURN_RE = re.compile(
+    r"^the (?P<nth>[a-z]+) spell of a turn is cast$"
+)
+_CASTS_NTH_SPELL_EACH_TURN_RE = re.compile(
+    r"^(?P<who>an opponent|a player) casts their (?P<nth>[a-z]+) spell "
+    r"each turn$"
+)
 _BECOMES_TARGET_RE = re.compile(
     r"^(?P<who>this creature|a player or permanent|a creature you control) "
     r"becomes the target of (?P<what>a spell or ability|a spell|an ability)"
@@ -370,7 +399,9 @@ def parse_p6_trigger_phrase(phrase: str):
     event's ``targeting`` / ``controller`` subjects.
 
     "an opponent attacks you" -> the opponent's ``YOU_ATTACK``
-    (Emberwilde Captain).
+    (Emberwilde Captain). "the <nth> spell of a turn is cast" and "<an
+    opponent | a player> casts their <nth> spell each turn" -> ``IS_CAST``
+    with a turn-wide / per-caster count (Erayo).
     """
     from mtg_bot.effects.generic.roto_keywords import (
         TargetIsPlayerOrPermanent,
@@ -381,6 +412,21 @@ def parse_p6_trigger_phrase(phrase: str):
         OPPONENT, YOU, Controlled, Event, IsSelf, Subject,
     )
 
+    m = _NTH_SPELL_OF_A_TURN_RE.match(phrase)
+    if m is not None and m.group("nth") in _ORDINALS:
+        # Erayo, Soratami Ascendant: counts every player's spells.
+        from mtg_bot.effects.generic.roto_keywords import NthSpellOfTurn
+
+        return (Event.IS_CAST, NthSpellOfTurn(_ORDINALS[m.group("nth")]))
+    m = _CASTS_NTH_SPELL_EACH_TURN_RE.match(phrase)
+    if m is not None and m.group("nth") in _ORDINALS:
+        # Erayo's Essence: the caster's own count.
+        from mtg_bot.effects.generic.roto_keywords import CastersNthSpellThisTurn
+
+        pred = CastersNthSpellThisTurn(_ORDINALS[m.group("nth")])
+        if m.group("who") == "an opponent":
+            pred = Controlled(OPPONENT, subject="controller") & pred
+        return (Event.IS_CAST, pred)
     if phrase == "an opponent attacks you":
         # The engine's attackers always attack the defending player
         # (no planeswalker / battle attacks), so an opponent's attack is

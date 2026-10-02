@@ -15,7 +15,9 @@ see exactly the cards they saw before:
 * levelers (``layout == "leveler"``) --
   :mod:`mtg_bot.cards.parser.leveler_builder`;
 * adventurer and preparation cards (``layout`` ``adventure`` /
-  ``prepare``) -- :mod:`mtg_bot.cards.parser.adventure_builder`.
+  ``prepare``) -- :mod:`mtg_bot.cards.parser.adventure_builder`;
+* flip cards (``layout == "flip"``; roto P6) --
+  :mod:`mtg_bot.cards.parser.flip_builder`.
 
 A multi-face card of any other layout (or one whose faces don't build) is
 never claimed by the single-face builders: its top-level record has no
@@ -38,11 +40,13 @@ def _build_layout_printing(card: dict) -> CardPrinting | None:
     from mtg_bot.cards.parser.leveler_builder import _build_leveler_printing
     from mtg_bot.cards.parser.saga_builder import _build_saga_printing
     from mtg_bot.cards.parser.split_builder import _build_split_printing
+    from mtg_bot.cards.parser.flip_builder import _build_flip_printing
 
     for builder in (
         _build_dfc_printing, _build_split_printing, _build_saga_printing,
         _build_class_printing, _build_leveler_printing,
         _build_adventure_printing, _build_prepare_printing,
+        _build_flip_printing,
     ):
         built = builder(card)
         if built is not None:
