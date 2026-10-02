@@ -831,3 +831,597 @@ class EachOpponentExilesCardsFromHand(Effect):
     def describe(self) -> str:
         n = "a card" if self.count == 1 else f"{self.count} cards"
         return f"each opponent exiles {n} from their hand"
+
+
+# ---------------------------------------------------------------------------
+# Counts ("equal to the number of ...", "where X is ...")
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CardsInYourZone:
+    """Formula: the number of cards in the controller's ``zone``
+    ("library" / "graveyard" / "hand") matching ``card_filter`` (``None``
+    = any card) -- "the number of cards in your library" (Enter the
+    Infinite), "the number of creature cards in your graveyard" (Grist)."""
+
+    zone: str = "library"
+    card_filter: object = None
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        cards = getattr(state.player_by_id(controller_id), self.zone)
+        if self.card_filter is None:
+            return len(cards)
+        return sum(1 for c in cards if self.card_filter.matches(c.printing))
+
+
+@dataclass(frozen=True)
+class SourceLoyalty:
+    """Formula: the resolving source's loyalty ("where X is Nissa's
+    loyalty") -- its current loyalty counters, or the last value it had
+    if it has left the battlefield."""
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        src = state.resolving_source
+        return max(0, src.loyalty_counters) if src is not None else 0
+
+
+@dataclass(frozen=True)
+class DrawCardsEqualTo(Effect):
+    """"Draw cards equal to <count>." (Enter the Infinite)."""
+
+    count: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import draw_n_cards
+
+        n = max(0, self.count.value(state, controller_id))
+        drawn = draw_n_cards(state, controller_id, n)
+        state.log.append(f"P{controller_id} draws {drawn} card(s)")
+
+    def describe(self) -> str:
+        return "draw cards equal to a count"
+
+
+@dataclass(frozen=True)
+class EachOpponentLosesLifeEqualTo(Effect):
+    """"Each opponent loses life equal to <count>." (Grist's -5)."""
+
+    count: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        n = max(0, self.count.value(state, controller_id))
+        for p in state.players:
+            if p.id != controller_id and not p.has_lost and n:
+                p.life -= n
+                state.log.append(f"P{p.id} loses {n} life")
+
+    def describe(self) -> str:
+        return "each opponent loses life equal to a count"
+
+
+@dataclass(frozen=True)
+class CreateTokenWithPTEqualTo(Effect):
+    """"Create an X/X <token>, where X is <count>." (Nissa, Ascended
+    Animist's +1): the parsed token printing with power and toughness
+    set to the count at resolution."""
+
+    token_printing: object = None
+    count: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        import dataclasses as _dc
+
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        x = max(0, self.count.value(state, controller_id))
+        printing = _dc.replace(self.token_printing, power=x, toughness=x)
+        CreateToken(token_printing=printing).resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        return f"create an X/X {self.token_printing.name} token"
+
+
+@dataclass(frozen=True)
+class NoMaximumHandSizeUntilYourNextTurn(Effect):
+    """"You have no maximum hand size until your next turn." (Enter the
+    Infinite): an emblem carrying the "no maximum hand size" static
+    (read by ``turn.run_cleanup_step``) that expires as its controller's
+    next turn begins (``GameObject.expires_at_untap_of``)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.cards.base import make_emblem
+        from mtg_bot.effects.base import StaticAbility, StaticScope
+        from mtg_bot.game import Zone
+
+        printing = make_emblem(
+            name="no maximum hand size",
+            static_abilities=(StaticAbility(
+                scope=StaticScope.SELF, grants_no_max_hand_size=True,
+            ),),
+        )
+        holder = state.new_object(
+            printing, owner_id=controller_id, zone=Zone.COMMAND,
+        )
+        holder.expires_at_untap_of = controller_id
+        state.emblems.append(holder)
+        state.log.append(
+            f"P{controller_id} has no maximum hand size until their next turn"
+        )
+
+    def describe(self) -> str:
+        return "you have no maximum hand size until your next turn"
+
+
+@dataclass(frozen=True)
+class PumpCreaturesYouControlPerCount(Effect):
+    """"Until end of turn, creatures you control get +P/+T for each
+    <count> and gain <keywords>." (Nissa, Ascended Animist's -7): the
+    creatures you control as it resolves (CR 611.2c) get until-end-of-
+    turn bonuses (``temp_power_bonus`` / ``temp_toughness_bonus``) and
+    cleanup-expiring layer-6 keyword grants."""
+
+    power: int = 0
+    toughness: int = 0
+    count: object = None
+    keywords: frozenset = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import is_creature_now
+
+        n = max(0, self.count.value(state, controller_id))
+        src = state.resolving_source
+        for obj in list(state.battlefield):
+            if obj.controller_id != controller_id or not is_creature_now(obj):
+                continue
+            sid = src.id if src is not None else obj.id
+            # UEOT P/T bonuses ride the cleanup-cleared temp fields (the
+            # engine's until-end-of-turn pump path).
+            obj.temp_power_bonus += self.power * n
+            obj.temp_toughness_bonus += self.toughness * n
+            for kw in sorted(self.keywords):
+                state.add_continuous_effect(
+                    source_id=sid, layer=6, kind="grant_keyword",
+                    target_id=obj.id, params=(kw,), expires_at="cleanup",
+                    description=f"{obj.printing.name} gains {kw}",
+                )
+        state.log.append(
+            f"creatures P{controller_id} controls get +{self.power * n}/"
+            f"+{self.toughness * n} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return "creatures you control get a per-count bonus until end of turn"
+
+
+@dataclass(frozen=True)
+class GrantKeywordsUntilYourNextTurn(Effect):
+    """"[Up to one ]target <np> gains <keywords> until your next turn."
+    (Dihada, Binder of Wills' +2): layer-6 grants that expire as the
+    controller's next turn begins (``expires_at="controller_untap"``)."""
+
+    targets: tuple = ()
+    keywords: frozenset = frozenset()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+
+        src = state.resolving_source
+        for slot, chosen in zip(self.targets, targets):
+            prior = state.resolving_controller_id
+            try:
+                state.resolving_controller_id = controller_id
+                legal = _slot_target_still_legal(state, slot, chosen)
+            finally:
+                state.resolving_controller_id = prior
+            if not legal:
+                state.log.append(_fizzle_message(state, chosen))
+                continue
+            obj = next((o for o in state.battlefield if o.id == chosen[1]), None)
+            if obj is None:  # pragma: no cover - legality checked above
+                continue
+            for kw in sorted(self.keywords):
+                state.add_continuous_effect(
+                    source_id=src.id if src is not None else obj.id,
+                    layer=6, kind="grant_keyword", target_id=obj.id,
+                    params=(kw,), expires_at="controller_untap",
+                    expires_at_player_id=controller_id,
+                    description=f"{obj.printing.name} gains {kw}",
+                )
+            state.log.append(
+                f"{obj.printing.name} gains {', '.join(sorted(self.keywords))} "
+                "until your next turn"
+            )
+
+    def describe(self) -> str:
+        return (
+            f"target gains {', '.join(sorted(self.keywords))} until your "
+            "next turn"
+        )
+
+
+@dataclass(frozen=True)
+class GainControlOfAllUntapHasteUEOT(Effect):
+    """"Gain control of all <np> until end of turn. Untap them. They gain
+    haste until end of turn." (Dihada, Binder of Wills' -11): the
+    Threaten shape over every matching permanent."""
+
+    permanent_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            victims = [
+                o for o in state.battlefield
+                if self.permanent_filter.test(o, state)
+            ]
+        finally:
+            state.resolving_controller_id = prior
+        src = state.resolving_source
+        for obj in victims:
+            sid = src.id if src is not None else obj.id
+            if obj.controller_id != controller_id:
+                state.grant_control_change_ueot(
+                    source_id=sid, target_id=obj.id,
+                    new_controller_id=controller_id,
+                    description=(
+                        f"P{controller_id} controls {obj.printing.name} until "
+                        "end of turn"
+                    ),
+                )
+            obj.tapped = False
+            state.add_continuous_effect(
+                source_id=sid, layer=6, kind="grant_keyword",
+                target_id=obj.id, params=("haste",), expires_at="cleanup",
+                description=f"{obj.printing.name} gains haste",
+            )
+        state.log.append(
+            f"P{controller_id} gains control of {len(victims)} permanent(s) "
+            "until end of turn"
+        )
+
+    def describe(self) -> str:
+        return "gain control of all matching permanents until end of turn"
+
+
+@dataclass(frozen=True)
+class RevealTopPutMatchingInHandRestInGraveyard(Effect):
+    """"Reveal the top <N> cards of your library. Put any number of
+    <filter> cards from among them into your hand and the rest into your
+    graveyard. [Create a Treasure token for each card put into your
+    graveyard this way.]" (Dihada, Binder of Wills' -3). The controller
+    picks the hand cards one at a time (``choose_card_from_library``;
+    ``None`` stops)."""
+
+    count: int = 1
+    card_filter: object = None
+    treasure_per_graveyard_card: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, reveal_to_all
+
+        p = state.player_by_id(controller_id)
+        revealed = list(p.library[: self.count])
+        for c in revealed:
+            reveal_to_all(state, c)
+        keep: list = []
+        while p.agent is not None:
+            options = [
+                c for c in revealed
+                if c not in keep and self.card_filter.matches(c.printing)
+            ]
+            if not options:
+                break
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            card = next((c for c in options if c.id == pick), None)
+            if card is None:
+                break
+            keep.append(card)
+        binned = 0
+        for c in revealed:
+            p.library.remove(c)
+            if c in keep:
+                c.zone = Zone.HAND
+                p.hand.append(c)
+            else:
+                c.zone = Zone.GRAVEYARD
+                p.graveyard.append(c)
+                binned += 1
+        state.log.append(
+            f"P{controller_id} reveals {len(revealed)}: {len(keep)} to hand, "
+            f"{binned} to the graveyard"
+        )
+        if self.treasure_per_graveyard_card and binned:
+            from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+            from mtg_bot.effects.generic.tokens import CreateToken
+
+            CreateToken(
+                token_printing=TOKEN_PRINTINGS["Treasure"], count=binned,
+            ).resolve(state, controller_id, ())
+
+    def describe(self) -> str:
+        rider = "; a Treasure for each card put into your graveyard" if (
+            self.treasure_per_graveyard_card
+        ) else ""
+        return (
+            f"reveal the top {self.count} cards; put any number of "
+            f"{self.card_filter.describe()}s into your hand and the rest into "
+            f"your graveyard{rider}"
+        )
+
+
+@dataclass(frozen=True)
+class EachOpponentMayScry(Effect):
+    """"Each opponent may scry <N>." (Kaya, Intangible Slayer's 0): each
+    opponent agrees through ``choose_yes_no`` and scries with the real
+    keep / bottom decision (``Scry(bottom_choice=True)``)."""
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.library_lookat import Scry
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            if p.agent is not None and not p.agent.choose_yes_no(
+                state, p.id, f"Scry {self.amount}?",
+            ):
+                continue
+            Scry(amount=self.amount, bottom_choice=True).resolve(state, p.id)
+
+    def describe(self) -> str:
+        return f"each opponent may scry {self.amount}"
+
+
+# ---------------------------------------------------------------------------
+# Token copies with "except" riders (Saheeli Rai, Kaya, Intangible Slayer)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CopyExceptions:
+    """The "except ..." riders of a token copy (CR 707.9b: they become
+    part of the copiable values): added card types / subtypes, a set
+    base P/T, a set color, added keywords."""
+
+    add_types: tuple = ()
+    add_subtypes: tuple = ()
+    base_pt: "tuple | None" = None
+    colors: "frozenset | None" = None
+    add_keywords: frozenset = frozenset()
+
+    def apply(self, base):
+        import dataclasses as _dc
+
+        changes: dict = {
+            "supertypes": tuple(base.supertypes) + (
+                () if "Token" in base.supertypes else ("Token",)
+            ),
+            "transform_back_face": None,
+            "mdfc_back_face": None,
+        }
+        extra_types = tuple(t for t in self.add_types if t not in base.card_types)
+        if extra_types:
+            changes["card_types"] = tuple(base.card_types) + extra_types
+        extra_subs = tuple(
+            s for s in self.add_subtypes if s not in base.subtypes
+        )
+        if extra_subs:
+            changes["subtypes"] = tuple(base.subtypes) + extra_subs
+        if self.base_pt is not None:
+            changes["power"], changes["toughness"] = self.base_pt
+        if self.colors is not None:
+            changes["face_colors"] = self.colors
+            changes["color_indicator"] = frozenset()
+        if self.add_keywords:
+            changes["keywords"] = frozenset(base.keywords) | self.add_keywords
+        return _dc.replace(base, **changes)
+
+
+def _create_token_copy(state, controller_id, base, exceptions):
+    """Create one token copy of ``base`` (a printing) with
+    ``exceptions``; returns the new token object (or ``None``)."""
+    from mtg_bot.effects.generic.tokens import CreateToken
+
+    printing = exceptions.apply(base)
+    before = {o.id for o in state.battlefield}
+    CreateToken(token_printing=printing).resolve(state, controller_id, ())
+    return next(
+        (o for o in state.battlefield if o.id not in before), None,
+    )
+
+
+@dataclass(frozen=True)
+class CreateTokenCopyOfTargetWithExceptions(Effect):
+    """"Create a token that's a copy of target <np>, except <riders>.
+    [That token gains haste.] [Exile it at the beginning of the next end
+    step.]" (Saheeli Rai's -2). Haste is a permanent self-sourced grant
+    (it lasts as long as the token); the exile is a delayed "next end
+    step" trigger."""
+
+    targets: tuple = ()
+    exceptions: CopyExceptions = CopyExceptions()
+    gains_haste: bool = False
+    exile_at_next_end_step: bool = False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.delayed_actions import (
+            ExileSourceDelayed,
+            schedule_at_next_end_step,
+        )
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+
+        if not targets or not self.targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, targets[0]))
+            return
+        target = next(
+            (o for o in state.battlefield if o.id == targets[0][1]), None,
+        )
+        if target is None:  # pragma: no cover - legality checked above
+            return
+        token = _create_token_copy(
+            state, controller_id, target.printing, self.exceptions,
+        )
+        if token is None:
+            return
+        if self.gains_haste:
+            state.add_continuous_effect(
+                source_id=token.id, layer=6, kind="grant_keyword",
+                target_id=token.id, params=("haste",),
+                description=f"{token.printing.name} gains haste",
+            )
+        if self.exile_at_next_end_step:
+            schedule_at_next_end_step(
+                state, controller_id, token.id, ExileSourceDelayed(),
+            )
+
+    def describe(self) -> str:
+        return "create a token that's a copy of target permanent, except ..."
+
+
+@dataclass(frozen=True)
+class ExileTargetThenTokenCopyUnlessAura(Effect):
+    """"Exile target <np>. If it wasn't an Aura, create a token that's a
+    copy of it, except <riders>." (Kaya, Intangible Slayer's -3). The
+    token copies the exiled card's copiable values (its printing as it
+    sits in exile); "it wasn't an Aura" reads the permanent as it last
+    existed on the battlefield."""
+
+    targets: tuple = ()
+    exceptions: CopyExceptions = CopyExceptions()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _fizzle_message,
+            _slot_target_still_legal,
+        )
+        from mtg_bot.game import effective_subtypes
+        from mtg_bot.turn import move_off_battlefield
+
+        if not targets or not self.targets:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = _slot_target_still_legal(state, self.targets[0], targets[0])
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append(_fizzle_message(state, targets[0]))
+            return
+        obj = next((o for o in state.battlefield if o.id == targets[0][1]), None)
+        if obj is None:  # pragma: no cover - legality checked above
+            return
+        was_aura = "Aura" in effective_subtypes(state, obj)
+        move_off_battlefield(state, obj, destination="exile")
+        if was_aura:
+            return
+        _create_token_copy(state, controller_id, obj.printing, self.exceptions)
+
+    def describe(self) -> str:
+        return (
+            "exile target permanent; if it wasn't an Aura, create a token "
+            "copy of it, except ..."
+        )
+
+
+@dataclass(frozen=True)
+class SearchUpToNDifferentNamesOntoBattlefield(Effect):
+    """"Search your library for up to <N> <filter> cards with different
+    names, put them onto the battlefield, then shuffle." (Saheeli Rai's
+    -7). Cards are picked one at a time (``choose_card_from_library``;
+    ``None`` stops), each with a name not picked yet."""
+
+    count: int = 1
+    card_filter: object = None
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+        from mtg_bot.game import shuffle_library
+
+        p = state.player_by_id(controller_id)
+        chosen: list = []
+        while len(chosen) < self.count and p.agent is not None:
+            names = {c.printing.name for c in chosen}
+            options = [
+                c for c in p.library
+                if c not in chosen and c.printing.name not in names
+                and self.card_filter.matches(c.printing)
+            ]
+            if not options:
+                break
+            pick = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+            card = next((c for c in options if c.id == pick), None)
+            if card is None:
+                break
+            chosen.append(card)
+        for card in chosen:
+            p.library.remove(card)
+            state.log.append(
+                f"P{controller_id} puts {card.printing.name} onto the "
+                "battlefield"
+            )
+            put_into_battlefield(state, card, controller_id)
+        shuffle_library(state, controller_id)
+
+    def describe(self) -> str:
+        return (
+            f"search for up to {self.count} {self.card_filter.describe()}s "
+            "with different names and put them onto the battlefield"
+        )

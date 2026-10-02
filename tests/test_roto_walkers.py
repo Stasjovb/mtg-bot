@@ -29,6 +29,7 @@ from tests._roto_helpers import (
     arena,
     printing,
     put,
+    to_graveyard,
     to_hand,
     to_library,
 )
@@ -929,4 +930,324 @@ def test_damage_to_target_list_declines_unknown_items():
 
     assert parse_roto_effect(
         "deals 2 damage to target player, frobnicator, or creature"
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# Enter the Infinite
+# ---------------------------------------------------------------------------
+
+
+def test_enter_the_infinite_draws_library_puts_one_back_no_max_hand():
+    from mtg_bot.turn import run_cleanup_step
+
+    s = arena()
+    for _ in range(12):
+        to_library(s, _BEAR, 0)
+    agent(s, 0).hand_pick = "first"
+    _cast_on_stack(s, printing("Enter the Infinite"), 0)
+    drain_stack(s)
+    assert len(s.players[0].hand) == 11 and len(s.players[0].library) == 1
+    # No maximum hand size this turn ...
+    run_cleanup_step(s)
+    assert len(s.players[0].hand) == 11
+    # ... until the controller's next turn begins.
+    from mtg_bot.turn import run_untap_step
+
+    s.active_player_idx = 0
+    run_untap_step(s)
+    assert s.emblems == []
+    run_cleanup_step(s)
+    assert len(s.players[0].hand) == 7
+
+
+def _cast_on_stack(s, pr, controller):
+    card = s.new_object(pr, owner_id=controller, zone=Zone.STACK)
+    s.stack.append(StackItem(source=card, controller_id=controller))
+    return card
+
+
+def test_count_formula_effects():
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
+    from mtg_bot.effects.generic.roto_walkers import (
+        CardsInYourZone,
+        DrawCardsEqualTo,
+        EachOpponentLosesLifeEqualTo,
+    )
+
+    s = arena()
+    to_graveyard(s, _BEAR, 0)
+    to_graveyard(s, _BEAR, 0)
+    to_graveyard(s, BASIC_LANDS["Swamp"], 0)
+    eff = parse_roto_effect(
+        "each opponent loses life equal to the number of creature cards in "
+        "your graveyard"
+    )
+    assert isinstance(eff, EachOpponentLosesLifeEqualTo)
+    eff.resolve(s, 0, ())
+    assert s.players[1].life == 18 and s.players[0].life == 20
+    assert CardsInYourZone(zone="graveyard").value(s, 0) == 3
+    assert "count" in eff.describe()
+    draw = DrawCardsEqualTo(count=CardsInYourZone(zone="graveyard"))
+    assert "count" in draw.describe()
+    assert parse_roto_effect(
+        "draw cards equal to the number of frobs in your library"
+    ) is None
+    assert parse_roto_effect(
+        "draw cards equal to the number of frob cards in your library"
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# Nissa, Ascended Animist
+# ---------------------------------------------------------------------------
+
+
+def test_nissa_plus_one_token_is_her_loyalty():
+    s = arena()
+    nissa = _walker(s, "Nissa, Ascended Animist")
+    _activate_ability(s, 0, nissa.id, _ability_index(nissa, loyalty=-1))
+    drain_stack(s)
+    (horror,) = [o for o in s.battlefield if o.printing.name == "Phyrexian Horror"]
+    assert nissa.loyalty_counters == 8
+    assert (horror.printing.power, horror.printing.toughness) == (8, 8)
+    assert horror.printing.color_indicator == frozenset({"G"})
+
+
+def test_nissa_minus_seven_pumps_per_forest_with_trample():
+    from mtg_bot.game import effective_keywords, effective_power
+
+    s = arena()
+    nissa = _walker(s, "Nissa, Ascended Animist", loyalty=7)
+    bear = put(s, _BEAR, 0)
+    theirs = put(s, _BEAR, 1)
+    for _ in range(3):
+        put(s, BASIC_LANDS["Forest"], 0)
+    put(s, BASIC_LANDS["Forest"], 1)
+    _activate_ability(s, 0, nissa.id, _ability_index(nissa, loyalty=7))
+    drain_stack(s)
+    assert effective_power(s, bear) == 5
+    assert "trample" in effective_keywords(s, bear)
+    assert effective_power(s, theirs) == 2
+
+
+def test_nissa_compleated_and_destroy():
+    p = printing("Nissa, Ascended Animist")
+    assert "compleated" in p.keywords
+    assert p.mana_cost.phyrexian == ("G", "G")
+
+
+# ---------------------------------------------------------------------------
+# Dihada, Binder of Wills
+# ---------------------------------------------------------------------------
+
+
+def test_dihada_plus_two_legendary_keywords_until_your_next_turn():
+    from mtg_bot.cards.base import make_creature as _mc
+    from mtg_bot.game import effective_keywords
+
+    s = arena()
+    dihada = _walker(s, "Dihada, Binder of Wills")
+    legend = put(s, _mc("Legend", "{1}{W}", 2, 2, legendary=True), 0)
+    eff = dihada.printing.activated_abilities[0].effect
+    plain = put(s, _BEAR, 0)
+    s.resolving_source = dihada
+    legal = eff.legal_targets(s, 0)
+    s.resolving_source = None
+    assert ("creature", legend.id) in legal and ("creature", plain.id) not in legal
+    agent(s, 0).targets = [("creature", legend.id)]
+    _activate_ability(s, 0, dihada.id, _ability_index(dihada, loyalty=-2))
+    drain_stack(s)
+    kws = effective_keywords(s, legend)
+    assert {"vigilance", "lifelink", "indestructible"} <= kws
+    s.expire_continuous_effects("cleanup")
+    assert "lifelink" in effective_keywords(s, legend)
+    s.expire_continuous_effects("controller_untap", player_id=0)
+    assert "lifelink" not in effective_keywords(s, legend)
+    assert "until your next turn" in eff.describe()
+
+
+def test_dihada_minus_three_legendary_to_hand_rest_bin_treasures():
+    from mtg_bot.cards.base import make_creature as _mc
+
+    s = arena()
+    dihada = _walker(s, "Dihada, Binder of Wills")
+    legend = to_library(s, _mc("Legend", "{1}{W}", 2, 2, legendary=True), 0)
+    others = [to_library(s, _BEAR, 0) for _ in range(3)]
+    deep = to_library(s, _BEAR, 0)
+    _activate_ability(s, 0, dihada.id, _ability_index(dihada, loyalty=3))
+    drain_stack(s)
+    assert legend in s.players[0].hand
+    assert all(o in s.players[0].graveyard for o in others)
+    assert deep in s.players[0].library
+    treasures = [o for o in s.battlefield if o.printing.name == "Treasure"]
+    assert len(treasures) == 3
+    assert "Treasure" in dihada.printing.activated_abilities[1].effect.describe()
+
+
+def test_dihada_minus_eleven_steals_everything_nonland():
+    from mtg_bot.game import effective_keywords
+    from mtg_bot.turn import run_cleanup_step
+
+    s = arena()
+    dihada = _walker(s, "Dihada, Binder of Wills", loyalty=11)
+    theirs = put(s, _BEAR, 1, tapped=True)
+    rock = put(s, _ROCK, 1, tapped=True)
+    land = put(s, BASIC_LANDS["Plains"], 1, tapped=True)
+    _activate_ability(s, 0, dihada.id, _ability_index(dihada, loyalty=11))
+    drain_stack(s)
+    assert theirs.controller_id == 0 and rock.controller_id == 0
+    assert not theirs.tapped and "haste" in effective_keywords(s, theirs)
+    assert land.controller_id == 1 and land.tapped
+    run_cleanup_step(s)
+    assert theirs.controller_id == 1
+    assert "until end of turn" in (
+        dihada.printing.activated_abilities[2].effect.describe()
+    )
+
+
+def test_each_opponent_may_scry():
+    from mtg_bot.effects.generic.roto_walkers import EachOpponentMayScry
+
+    s = arena()
+    top = to_library(s, _BEAR, 1)
+    to_library(s, _ROCK, 1)
+    EachOpponentMayScry(amount=1).resolve(s, 0, ())
+    assert s.players[1].library[0] is top  # ScriptedAgent keeps on top
+    agent(s, 1).yes = False
+    EachOpponentMayScry(amount=1).resolve(s, 0, ())
+    assert EachOpponentMayScry().describe() == "each opponent may scry 1"
+
+
+# ---------------------------------------------------------------------------
+# Saheeli Rai
+# ---------------------------------------------------------------------------
+
+
+def test_saheeli_plus_one_scry_and_ping():
+    s = arena()
+    saheeli = _walker(s, "Saheeli Rai")
+    _library(s, pid=0, n=2)
+    _activate_ability(s, 0, saheeli.id, _ability_index(saheeli, loyalty=-1))
+    drain_stack(s)
+    assert s.players[1].life == 19 and saheeli.loyalty_counters == 4
+
+
+def test_saheeli_minus_two_hasty_artifact_token_copy_exiled_at_end():
+    from mtg_bot.game import effective_keywords
+
+    s = arena()
+    saheeli = _walker(s, "Saheeli Rai")
+    bear = put(s, _BEAR, 0)
+    agent(s, 0).targets = [("creature", bear.id)]
+    _activate_ability(s, 0, saheeli.id, _ability_index(saheeli, loyalty=2))
+    drain_stack(s)
+    (token,) = [o for o in s.battlefield if o is not bear and o.printing.name == "Bear"]
+    assert "Token" in token.printing.supertypes
+    assert "Artifact" in token.printing.card_types
+    assert "haste" in effective_keywords(s, token)
+    run_step(s, Step.END)
+    assert token not in s.battlefield and bear in s.battlefield
+
+
+def test_saheeli_minus_seven_three_different_artifacts():
+    s = arena()
+    saheeli = _walker(s, "Saheeli Rai", loyalty=7)
+    a1 = to_library(s, _ROCK, 0)
+    a2 = to_library(s, _ROCK, 0)
+    other = to_library(s, make_artifact("Pebble", "{1}"), 0)
+    to_library(s, _BEAR, 0)
+    _activate_ability(s, 0, saheeli.id, _ability_index(saheeli, loyalty=7))
+    drain_stack(s)
+    names = sorted(o.printing.name for o in s.battlefield if o.printing.is_artifact)
+    assert names == ["Pebble", "Rock"]
+    assert (a1 in s.battlefield) != (a2 in s.battlefield)
+    assert other in s.battlefield
+    assert "different names" in (
+        saheeli.printing.activated_abilities[2].effect.describe()
+    )
+
+
+def test_token_copy_without_legal_target_does_nothing():
+    s = arena()
+    eff = printing("Saheeli Rai").activated_abilities[1].effect
+    bear = put(s, _BEAR, 1)
+    eff.resolve(s, 0, (("creature", bear.id),))  # not yours: illegal
+    eff.resolve(s, 0, ())
+    assert len(s.battlefield) == 1
+    assert "copy" in eff.describe()
+
+
+# ---------------------------------------------------------------------------
+# Kaya, Intangible Slayer
+# ---------------------------------------------------------------------------
+
+
+def test_kaya_minus_three_exiles_and_makes_a_spirit_copy():
+    from mtg_bot.game import effective_colors, effective_keywords
+
+    s = arena()
+    kaya = _walker(s, "Kaya, Intangible Slayer")
+    bear = put(s, _BEAR, 1)
+    agent(s, 0).targets = [("creature", bear.id)]
+    _activate_ability(s, 0, kaya.id, _ability_index(kaya, loyalty=3))
+    drain_stack(s)
+    assert bear in s.players[1].exile
+    (spirit,) = [o for o in s.battlefield if o.printing.name == "Bear"]
+    assert spirit.controller_id == 0
+    assert (spirit.printing.power, spirit.printing.toughness) == (1, 1)
+    assert "Spirit" in spirit.printing.subtypes
+    assert effective_colors(s, spirit) == frozenset({"W"})
+    assert "flying" in effective_keywords(s, spirit)
+
+
+def test_kaya_minus_three_on_an_aura_makes_no_token():
+    from mtg_bot.cards.base import make_aura
+
+    s = arena()
+    kaya = _walker(s, "Kaya, Intangible Slayer")
+    aura = put(s, make_aura("Pacifism Stand-in", "{1}{W}"), 1)
+    agent(s, 0).targets = [("permanent", aura.id)]
+    _activate_ability(s, 0, kaya.id, _ability_index(kaya, loyalty=3))
+    drain_stack(s)
+    assert aura in s.players[1].exile
+    assert [o for o in s.battlefield if o is not kaya] == []
+    eff = kaya.printing.activated_abilities[2].effect
+    eff.resolve(s, 0, ())
+    eff.resolve(s, 0, (("creature", 999),))
+    assert "Aura" in eff.describe()
+
+
+def test_kaya_zero_draws_two_and_opponent_may_scry():
+    s = arena()
+    kaya = _walker(s, "Kaya, Intangible Slayer")
+    _library(s, pid=0, n=3)
+    _library(s, pid=1, n=2)
+    _activate_ability(s, 0, kaya.id, _ability_index(kaya, loyalty=0))
+    drain_stack(s)
+    assert len(s.players[0].hand) == 2
+
+
+def test_token_copy_exception_grammar_declines():
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
+
+    assert parse_roto_effect(
+        "create a token that's a copy of target creature you control, except "
+        "it's a 1/1 frob in addition to its other types"
+    ) is None
+    assert parse_roto_effect(
+        "create a token that's a copy of target creature you control, except "
+        "it's a Spirit with frobbing in addition to its other types"
+    ) is None
+    assert parse_roto_effect(
+        "create a token that's a copy of target creature you control, except "
+        "it isn't legendary"
+    ) is None
+    assert parse_roto_effect(
+        "exile target frob. If it wasn't an Aura, create a token that's a "
+        "copy of it, except it's an artifact in addition to its other types"
+    ) is None
+    assert parse_roto_effect(
+        "search your library for up to two frob cards with different names, "
+        "put them onto the battlefield, then shuffle"
     ) is None

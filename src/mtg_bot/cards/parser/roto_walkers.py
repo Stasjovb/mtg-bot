@@ -413,6 +413,10 @@ _LITERAL_PHRASES = {
     "end the turn": "EndTheTurn",
     # CR 104.3d (Final Fortune's delayed trigger).
     "you lose the game": "LoseTheGame",
+    # Enter the Infinite (a "no maximum hand size" emblem until your turn).
+    "you have no maximum hand size until your next turn": (
+        "NoMaximumHandSizeUntilYourNextTurn"
+    ),
 }
 _PHRASE_RECOGNIZERS = (
     (_IF_YOUR_TURN_RE, _if_your_turn),
@@ -445,7 +449,9 @@ def parse_roto_effect(phrase: str):
         from mtg_bot.effects.generic import roto_walkers as rw
 
         return getattr(rw, literal)()
-    for pattern, build in _PHRASE_RECOGNIZERS:
+    for pattern, build in (
+        *_PHRASE_RECOGNIZERS, *_PHRASE_RECOGNIZERS_2, *_PHRASE_RECOGNIZERS_3,
+    ):
         m = pattern.match(phrase)
         if m is not None:
             return build(m)
@@ -631,3 +637,378 @@ def parse_roto_casting_keyword(clause: str) -> dict | None:
     if clause == "Rebound":
         return {"rebound": True}
     return None
+
+
+# ---------------------------------------------------------------------------
+# Counts, hand size, token sizes, mass control (second batch)
+# ---------------------------------------------------------------------------
+
+_ZONES = r"(?P<zone>library|graveyard|hand)"
+
+
+def _zone_count(what: str, zone: str):
+    """``CardsInYourZone`` for "the number of <cards> in your <zone>"."""
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    if what == "cards":
+        return rw.CardsInYourZone(zone=zone)
+    if not what.endswith(" cards"):
+        return None
+    card_filter = parse_card_descriptor(f"a {what[: -len(' cards')]} card")
+    if card_filter is None:
+        return None
+    return rw.CardsInYourZone(zone=zone, card_filter=card_filter)
+
+
+# "draw cards equal to the number of <cards> in your <zone>" (Enter the
+# Infinite).
+_DRAW_EQUAL_TO_ZONE_COUNT_RE = re.compile(
+    rf"^draw cards equal to the number of (?P<what>.+?) in your {_ZONES}$"
+)
+
+
+def _draw_equal_to_zone_count(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    count = _zone_count(m.group("what"), m.group("zone"))
+    return None if count is None else rw.DrawCardsEqualTo(count=count)
+
+
+# "each opponent loses life equal to the number of <cards> in your <zone>"
+# (Grist, the Hunger Tide's -5).
+_OPPONENTS_LOSE_LIFE_EQUAL_TO_ZONE_COUNT_RE = re.compile(
+    rf"^each opponent loses life equal to the number of (?P<what>.+?) in "
+    rf"your {_ZONES}$"
+)
+
+
+def _opponents_lose_life_equal_to_zone_count(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    count = _zone_count(m.group("what"), m.group("zone"))
+    return None if count is None else rw.EachOpponentLosesLifeEqualTo(count=count)
+
+
+# "put a card from your hand on top of your library" -- the single-card
+# form of Brainstorm's put-back, printed without "in any order" (Enter the
+# Infinite); ``effects_ext._PUT_CARDS_FROM_HAND_ON_TOP`` requires the
+# ordering clause and is left as is so the EoE-era pools' parses can't
+# move.
+_PUT_A_CARD_FROM_HAND_ON_TOP_RE = re.compile(
+    r"^put (?:a|one) card from your hand on top of your library$"
+)
+
+
+def _put_a_card_from_hand_on_top(m):
+    from mtg_bot.effects.generic.cube_walkers import (
+        PutCardsFromHandOnTopOfLibrary,
+    )
+
+    return PutCardsFromHandOnTopOfLibrary(amount=1)
+
+
+# "create an X/X <token>, where X is this planeswalker's loyalty" (Nissa,
+# Ascended Animist; the planeswalker builder rewrites the walker's name).
+_CREATE_X_X_TOKEN_LOYALTY_RE = re.compile(
+    r"^create an X/X (?P<tok>.+? creature token), where X is this "
+    r"(?:planeswalker|permanent)'s loyalty$"
+)
+
+
+def _create_x_x_token_loyalty(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.generic.tokens import CreateToken
+
+    base = _effect(f"create a 0/0 {m.group('tok')}")
+    if not isinstance(base, CreateToken) or base.count != 1:
+        return None
+    return rw.CreateTokenWithPTEqualTo(
+        token_printing=base.token_printing, count=rw.SourceLoyalty(),
+    )
+
+
+# "until end of turn, <effect>" -- the leading form of "<effect> until
+# end of turn" (Nissa, Ascended Animist's -7).
+_UNTIL_EOT_LEADING_RE = re.compile(r"^until end of turn, (?P<eff>.+)$")
+
+
+def _until_eot_leading(m):
+    return _effect(f"{m.group('eff')} until end of turn")
+
+
+def _keywords(text: str) -> frozenset | None:
+    """"vigilance, lifelink, and indestructible" -> keyword set."""
+    from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+    out: set = set()
+    for word in re.split(r", and |, | and ", text):
+        kws = _parse_keyword_grant_body(word)
+        if not kws:
+            return None
+        out.update(kws)
+    return frozenset(out)
+
+
+# "creatures you control get +P/+T for each <Subtype | noun> you control[
+# and gain <keywords>] until end of turn" (Nissa, Ascended Animist).
+_PUMP_PER_CONTROLLED_RE = re.compile(
+    r"^creatures you control get \+(?P<p>\d+)/\+(?P<t>\d+) for each "
+    r"(?P<what>.+?) you control(?: and gain (?P<kws>.+?))? until end of turn$"
+)
+
+
+def _controlled_noun(what: str):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.object_predicates import HasSubtype
+
+    if re.fullmatch(r"[A-Z][a-z]+", what):
+        return HasSubtype(what)
+    return parse_permanent_phrase(what)
+
+
+def _pump_per_controlled(m):
+    from mtg_bot.effects.formulas import CountControlledMatching
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    pred = _controlled_noun(m.group("what"))
+    if pred is None:
+        return None
+    kws: frozenset = frozenset()
+    if m.group("kws"):
+        kws = _keywords(m.group("kws"))
+        if kws is None:
+            return None
+    return rw.PumpCreaturesYouControlPerCount(
+        power=int(m.group("p")), toughness=int(m.group("t")),
+        count=CountControlledMatching(predicate=pred), keywords=kws,
+    )
+
+
+# "[up to one ]target <np> gains <keywords> until your next turn" (Dihada).
+_GAINS_UNTIL_YOUR_NEXT_TURN_RE = re.compile(
+    r"^(?P<upto>up to one )?target (?P<np>.+?) gains (?P<kws>.+?) until your "
+    r"next turn$"
+)
+
+
+def _target_noun(np: str):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.object_predicates import IsLegendary
+
+    if np.startswith("legendary "):
+        rest = parse_permanent_phrase(np[len("legendary "):])
+        return None if rest is None else rest & IsLegendary()
+    return parse_permanent_phrase(np)
+
+
+def _gains_until_your_next_turn(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.targets import TargetSpec
+
+    target_filter = _target_noun(m.group("np"))
+    kws = _keywords(m.group("kws"))
+    if target_filter is None or kws is None:
+        return None
+    spec = TargetSpec(
+        filter=target_filter, count_min=0 if m.group("upto") else 1,
+    )
+    return rw.GrantKeywordsUntilYourNextTurn(targets=(spec,), keywords=kws)
+
+
+# "gain control of all <np> until end of turn. Untap them. They gain haste
+# until end of turn" (Dihada, Binder of Wills' -11).
+_GAIN_CONTROL_OF_ALL_RE = re.compile(
+    r"^gain control of all (?P<np>.+?) until end of turn\. Untap them\. They "
+    r"gain haste until end of turn$"
+)
+
+
+def _gain_control_of_all(m):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    pred = parse_permanent_phrase(m.group("np"), plural=True)
+    if pred is None:
+        return None
+    return rw.GainControlOfAllUntapHasteUEOT(permanent_filter=pred)
+
+
+# "reveal the top <N> cards of your library. Put any number of <desc>
+# cards from among them into your hand and the rest into your graveyard[.
+# Create a Treasure token for each card put into your graveyard this
+# way]" (Dihada, Binder of Wills' -3).
+_REVEAL_TOP_ANY_NUMBER_RE = re.compile(
+    rf"^reveal the top (?P<n>{_N}) cards of your library\. Put any number of "
+    r"(?P<desc>.+?) cards from among them into your hand and the rest into "
+    r"your graveyard(?P<treasure>\. Create a Treasure token for each card put "
+    r"into your graveyard this way)?$"
+)
+
+
+def _reveal_top_any_number(m):
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+    if card_filter is None:
+        return None
+    return rw.RevealTopPutMatchingInHandRestInGraveyard(
+        count=_n(m.group("n")), card_filter=card_filter,
+        treasure_per_graveyard_card=bool(m.group("treasure")),
+    )
+
+
+# "each opponent may scry <N>" (Kaya, Intangible Slayer).
+_EACH_OPPONENT_MAY_SCRY_RE = re.compile(rf"^each opponent may scry (?P<n>{_N})$")
+
+
+def _each_opponent_may_scry(m):
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    return rw.EachOpponentMayScry(amount=_n(m.group("n")))
+
+
+_PHRASE_RECOGNIZERS_2 = (
+    (_DRAW_EQUAL_TO_ZONE_COUNT_RE, _draw_equal_to_zone_count),
+    (_OPPONENTS_LOSE_LIFE_EQUAL_TO_ZONE_COUNT_RE,
+     _opponents_lose_life_equal_to_zone_count),
+    (_PUT_A_CARD_FROM_HAND_ON_TOP_RE, _put_a_card_from_hand_on_top),
+    (_CREATE_X_X_TOKEN_LOYALTY_RE, _create_x_x_token_loyalty),
+    (_UNTIL_EOT_LEADING_RE, _until_eot_leading),
+    (_PUMP_PER_CONTROLLED_RE, _pump_per_controlled),
+    (_GAINS_UNTIL_YOUR_NEXT_TURN_RE, _gains_until_your_next_turn),
+    (_GAIN_CONTROL_OF_ALL_RE, _gain_control_of_all),
+    (_REVEAL_TOP_ANY_NUMBER_RE, _reveal_top_any_number),
+    (_EACH_OPPONENT_MAY_SCRY_RE, _each_opponent_may_scry),
+)
+
+
+# ---------------------------------------------------------------------------
+# Token copies with "except" riders; searches (third batch)
+# ---------------------------------------------------------------------------
+
+_COLOR_WORDS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+_CARD_TYPE_WORDS = {
+    "artifact": "Artifact", "creature": "Creature",
+    "enchantment": "Enchantment", "land": "Land",
+}
+# "it's an? [<P>/<T> ][<color> ]<types>[ with <keywords>] in addition to
+# its other types"
+_TOKEN_COPY_EXCEPTION_RE = re.compile(
+    r"^it's an? (?:(?P<p>\d+)/(?P<t>\d+) )?(?:(?P<color>white|blue|black|red|"
+    r"green) )?(?P<types>[A-Za-z ]+?)(?: with (?P<kws>[a-z, ]+?))? in "
+    r"addition to its other types$"
+)
+
+
+def _token_copy_exceptions(text: str):
+    """``CopyExceptions`` for a token copy's "except ..." rider."""
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    m = _TOKEN_COPY_EXCEPTION_RE.match(text)
+    if m is None:
+        return None
+    add_types: list = []
+    add_subtypes: list = []
+    for word in m.group("types").split(" "):
+        if word in _CARD_TYPE_WORDS:
+            add_types.append(_CARD_TYPE_WORDS[word])
+        elif re.fullmatch(r"[A-Z][a-z]+", word):
+            add_subtypes.append(word)
+        else:
+            return None
+    kws: frozenset = frozenset()
+    if m.group("kws"):
+        kws = _keywords(m.group("kws"))
+        if kws is None:
+            return None
+    return rw.CopyExceptions(
+        add_types=tuple(add_types),
+        add_subtypes=tuple(add_subtypes),
+        base_pt=(int(m.group("p")), int(m.group("t"))) if m.group("p") else None,
+        colors=(
+            frozenset({_COLOR_WORDS[m.group("color")]}) if m.group("color")
+            else None
+        ),
+        add_keywords=kws,
+    )
+
+
+# "create a token that's a copy of target <np>, except <rider>[. That
+# token gains haste][. Exile it at the beginning of the next end step]"
+# (Saheeli Rai's -2).
+_TOKEN_COPY_OF_TARGET_EXCEPT_RE = re.compile(
+    r"^create a token that's a copy of target (?P<np>.+?), except "
+    r"(?P<exc>.+?)(?P<haste>\. That token gains haste)?(?P<exile>\. Exile "
+    r"it at the beginning of the next end step)?$"
+)
+
+
+def _token_copy_of_target_except(m):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.targets import TargetSpec
+
+    target_filter = parse_permanent_phrase(m.group("np"))
+    exc = _token_copy_exceptions(m.group("exc"))
+    if target_filter is None or exc is None:
+        return None
+    return rw.CreateTokenCopyOfTargetWithExceptions(
+        targets=(TargetSpec(filter=target_filter),),
+        exceptions=exc,
+        gains_haste=bool(m.group("haste")),
+        exile_at_next_end_step=bool(m.group("exile")),
+    )
+
+
+# "exile target <np>. If it wasn't an Aura, create a token that's a copy
+# of it, except <rider>" (Kaya, Intangible Slayer's -3).
+_EXILE_THEN_COPY_UNLESS_AURA_RE = re.compile(
+    r"^exile target (?P<np>.+?)\. If it wasn't an Aura, create a token that's "
+    r"a copy of it, except (?P<exc>.+)$"
+)
+
+
+def _exile_then_copy_unless_aura(m):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.targets import TargetSpec
+
+    target_filter = parse_permanent_phrase(m.group("np"))
+    exc = _token_copy_exceptions(m.group("exc"))
+    if target_filter is None or exc is None:
+        return None
+    return rw.ExileTargetThenTokenCopyUnlessAura(
+        targets=(TargetSpec(filter=target_filter),), exceptions=exc,
+    )
+
+
+# "search your library for up to <N> <desc> cards with different names,
+# put them onto the battlefield, then shuffle" (Saheeli Rai's -7).
+_SEARCH_DIFFERENT_NAMES_ONTO_BATTLEFIELD_RE = re.compile(
+    rf"^search your library for up to (?P<n>{_N}) (?P<desc>.+?) cards with "
+    r"different names, put them onto the battlefield, then shuffle$"
+)
+
+
+def _search_different_names_onto_battlefield(m):
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+    if card_filter is None:
+        return None
+    return rw.SearchUpToNDifferentNamesOntoBattlefield(
+        count=_n(m.group("n")), card_filter=card_filter,
+    )
+
+
+_PHRASE_RECOGNIZERS_3 = (
+    (_TOKEN_COPY_OF_TARGET_EXCEPT_RE, _token_copy_of_target_except),
+    (_EXILE_THEN_COPY_UNLESS_AURA_RE, _exile_then_copy_unless_aura),
+    (_SEARCH_DIFFERENT_NAMES_ONTO_BATTLEFIELD_RE,
+     _search_different_names_onto_battlefield),
+)
