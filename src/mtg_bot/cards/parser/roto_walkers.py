@@ -1132,7 +1132,27 @@ def _x_damage_each_of_up_to_n(m):
     )
 
 
+# "exchange control of two target <np> that share a card type" (Bilbo,
+# Luckwearer // Burglar's Plot).
+_EXCHANGE_TWO_SHARING_TYPE_RE = re.compile(
+    r"^exchange control of two target (?P<np>.+?) that share a card type$"
+)
+
+
+def _exchange_two_sharing_type(m):
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_walkers as rw
+    from mtg_bot.effects.targets import TargetSpec
+
+    target_filter = parse_permanent_phrase(m.group("np"), plural=True)
+    if target_filter is None:
+        return None
+    spec = TargetSpec(filter=target_filter)
+    return rw.ExchangeControlOfTwoTargetsSharingCardType(targets=(spec, spec))
+
+
 _PHRASE_RECOGNIZERS_3 = (
+    (_EXCHANGE_TWO_SHARING_TYPE_RE, _exchange_two_sharing_type),
     (_COPY_CAST_SPELL_RE, _copy_cast_spell),
     (_EXILE_TOP_CAST_ONE_RE, _exile_top_cast_one),
     (_X_DAMAGE_EACH_OF_UP_TO_N_RE, _x_damage_each_of_up_to_n),

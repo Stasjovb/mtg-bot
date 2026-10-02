@@ -1937,8 +1937,23 @@ def _select_spell_targets(
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
             slot_kinds = spell_effect.target_slot_kinds()
+            # A later target that depends on an earlier one ("two target
+            # permanents that share a card type" -- roto P4's Bilbo).
+            per_slot = getattr(spell_effect, "legal_targets_for_slot", None)
+            if not getattr(
+                spell_effect, "slot_targets_depend_on_chosen", False,
+            ):
+                per_slot = None
             for slot_idx in range(max_t):
-                if slot_kinds and slot_idx < len(slot_kinds):
+                if per_slot is not None:
+                    pool = [
+                        t for t in per_slot(
+                            state, player_id, slot_idx,
+                            chosen=tuple(chosen_list),
+                        )
+                        if t in remaining
+                    ]
+                elif slot_kinds and slot_idx < len(slot_kinds):
                     needed = slot_kinds[slot_idx]
                     pool = [t for t in remaining if t[0] == needed]
                 else:

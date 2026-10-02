@@ -1795,3 +1795,111 @@ class TargetOpponentLosesThatMuchLife(Effect):
 
     def describe(self) -> str:
         return "target opponent loses that much life"
+
+
+# ---------------------------------------------------------------------------
+# "Exchange control of two target <np> that share a card type." (Bilbo)
+# ---------------------------------------------------------------------------
+
+
+def _current_card_types(obj) -> frozenset:
+    from mtg_bot.game import is_creature_now
+
+    types = set(obj.printing.card_types)
+    if is_creature_now(obj):
+        types.add("Creature")
+    else:
+        types.discard("Creature")
+    return frozenset(types)
+
+
+@dataclass(frozen=True)
+class ExchangeControlOfTwoTargetsSharingCardType(Effect):
+    """"Exchange control of two target <np> that share a card type."
+    (Bilbo, Luckwearer's Burglar's Plot). The second target must share a
+    card type with the first (``legal_targets_for_slot`` with
+    ``slot_targets_depend_on_chosen``, honoured by both the spell and
+    the ability target pickers). On resolution both must still be legal
+    and share a card type; the exchange sets ``controller_id`` directly
+    (the Oko precedent) and does nothing when they have one controller
+    (CR 701.10)."""
+
+    targets: tuple = ()
+    slot_targets_depend_on_chosen = True
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self) -> tuple[int, int]:
+        return (2, 2)
+
+    def _pool(self, state, controller_id):
+        return self._enumerate_for_filter(
+            state, controller_id, self.targets[0].filter,
+        )
+
+    def legal_targets(self, state, controller_id):
+        pool = self._pool(state, controller_id)
+        by_id = {o.id: o for o in state.battlefield}
+        return [
+            t for t in pool
+            if any(
+                u != t and _current_card_types(by_id[t[1]])
+                & _current_card_types(by_id[u[1]])
+                for u in pool
+            )
+        ]
+
+    def legal_targets_for_slot(self, state, controller_id, slot_idx, chosen=()):
+        if slot_idx == 0 or not chosen:
+            return self.legal_targets(state, controller_id)
+        by_id = {o.id: o for o in state.battlefield}
+        first = by_id.get(chosen[0][1])
+        if first is None:
+            return []
+        return [
+            t for t in self._pool(state, controller_id)
+            if t != chosen[0]
+            and _current_card_types(by_id[t[1]]) & _current_card_types(first)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+
+        if len(targets) < 2 or targets[0] == targets[1]:
+            return
+        prior = state.resolving_controller_id
+        try:
+            state.resolving_controller_id = controller_id
+            legal = all(
+                _slot_target_still_legal(state, self.targets[0], t)
+                for t in targets[:2]
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append("exchange of control fizzles")
+            return
+        a = next(o for o in state.battlefield if o.id == targets[0][1])
+        b = next(o for o in state.battlefield if o.id == targets[1][1])
+        if not (_current_card_types(a) & _current_card_types(b)):
+            state.log.append("no exchange: they no longer share a card type")
+            return
+        if a.controller_id == b.controller_id:
+            return
+        a.controller_id, b.controller_id = b.controller_id, a.controller_id
+        a.summoning_sick = True
+        b.summoning_sick = True
+        state.log.append(
+            f"{a.printing.name} and {b.printing.name} exchange controllers"
+        )
+
+    def describe(self) -> str:
+        return (
+            "exchange control of two target permanents that share a card type"
+        )

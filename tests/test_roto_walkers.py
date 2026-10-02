@@ -1531,3 +1531,73 @@ def test_life_gain_event_without_listeners_and_zero_amount():
     assert s.players[1].life == 20 and "no amount" in s.log[-1]
     eff.resolve(s, 0, ())
     assert eff.describe() == "target opponent loses that much life"
+
+
+# ---------------------------------------------------------------------------
+# Bilbo, Luckwearer // Burglar's Plot
+# ---------------------------------------------------------------------------
+
+
+def _bilbo_arena():
+    s = arena()
+    for _ in range(5):
+        put(s, BASIC_LANDS["Island"], 0)
+    bilbo = to_hand(s, printing("Bilbo, Luckwearer // Burglar's Plot"), 0)
+    return s, bilbo
+
+
+def test_bilbo_creature_face():
+    from mtg_bot.effects.predicates import Event as _Ev
+
+    p = printing("Bilbo, Luckwearer // Burglar's Plot")
+    (trig,) = p.triggered_abilities
+    assert trig.event == _Ev.DEALS_COMBAT_DAMAGE
+    assert p.adventure_face is not None
+
+
+def test_burglars_plot_exchanges_two_permanents_sharing_a_type():
+    s, bilbo = _bilbo_arena()
+    mine = put(s, _ROCK, 0)
+    theirs = put(s, make_artifact("Pebble", "{1}"), 1)
+    their_bear = put(s, _BEAR, 1)
+    # Second target must share a card type with the first: the Bear
+    # isn't offered once the Rock is chosen.
+    agent(s, 0).targets = [("permanent", mine.id), ("creature", their_bear.id),
+                           ("permanent", theirs.id)]
+    apply_action(s, 0, CastSpell(bilbo.id, cast_face="Burglar's Plot"))
+    assert s.stack[-1].targets == (
+        ("permanent", mine.id), ("permanent", theirs.id),
+    )
+    drain_stack(s)
+    assert mine.controller_id == 1 and theirs.controller_id == 0
+    assert their_bear.controller_id == 1
+    # The adventurer is exiled, castable later as Bilbo.
+    assert bilbo in s.players[0].exile
+
+
+def test_exchange_sharing_type_resolution_checks():
+    from mtg_bot.effects.generic.roto_walkers import (
+        ExchangeControlOfTwoTargetsSharingCardType,
+    )
+
+    eff = printing("Bilbo, Luckwearer // Burglar's Plot").adventure_face.spell_effect
+    assert isinstance(eff, ExchangeControlOfTwoTargetsSharingCardType)
+    assert eff.target_count_range() == (2, 2)
+    s = arena()
+    a = put(s, _ROCK, 0)
+    b = put(s, _ROCK, 0)
+    c = put(s, _BEAR, 1)
+    land = put(s, BASIC_LANDS["Island"], 1)
+    legal = eff.legal_targets(s, 0)
+    assert ("creature", c.id) not in legal  # no other creature to pair
+    assert ("permanent", land.id) not in legal  # nonland only
+    assert eff.legal_targets_for_slot(s, 0, 1, chosen=(("permanent", 999),)) == []
+    # Same controller: no exchange; fewer than two targets: nothing.
+    eff.resolve(s, 0, (("permanent", a.id), ("permanent", b.id)))
+    assert a.controller_id == 0 and b.controller_id == 0
+    eff.resolve(s, 0, (("permanent", a.id),))
+    # No longer sharing a type (a target illegal / types differ).
+    eff.resolve(s, 0, (("permanent", a.id), ("creature", c.id)))
+    assert a.controller_id == 0 and c.controller_id == 1
+    eff.resolve(s, 0, (("permanent", a.id), ("permanent", 999)))
+    assert "share a card type" in eff.describe()
