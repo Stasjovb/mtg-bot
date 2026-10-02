@@ -25,9 +25,10 @@ Alternative-cost components (combined with "and"):
 - ``exile_card_color``: exile a card of this color from your hand
   (other than the spell being cast)
 - ``return_subtype``: return a permanent you control with this subtype
-  to its owner's hand (Daze)
+  to its owner's hand (Daze); ``return_count`` of them (Gush: two)
 - ``sacrifice_subtype``: sacrifice a permanent with this subtype
-  (Mine Collapse)
+  (Mine Collapse); ``sacrifice_count`` of them (Fireblast: two)
+- ``opponent_gains_life``: an opponent gains N life (Invigorate)
 
 and optional gates: ``turn`` ("yours" / "not_yours"),
 ``requires_control_subtype`` ("If you control a Swamp, ...").
@@ -57,6 +58,12 @@ def _controls_subtype(state: "GameState", player_id: int, subtype: str) -> list:
     ]
 
 
+def _opponents(state: "GameState", player_id: int) -> list:
+    return [
+        p for p in state.players if p.id != player_id and not p.has_lost
+    ]
+
+
 def _pick(agent, state, player_id, options: list):
     """Ask the player's agent to pick one permanent from ``options``
     (``choose_sacrifice`` — the "which permanent do I give up" hook)."""
@@ -80,6 +87,9 @@ class AlternativeCost:
     sacrifice_subtype: str = ""
     turn: str = ""
     requires_control_subtype: str = ""
+    return_count: int = 1
+    sacrifice_count: int = 1
+    opponent_gains_life: int = 0
     # Overload (CR 702.96): casting for this cost changes "target" in
     # the spell's text to "each". The printing's ``spell_effect`` is an
     # ``IfConditionElse(AlternativeCostWasPaid(), <each-version>,
@@ -100,13 +110,24 @@ class AlternativeCost:
         if self.exile_card_color:
             color = _COLOR_WORDS[self.exile_card_color]
             parts.append(f"exile a {color} card from your hand")
-        if self.return_subtype:
+        if self.return_subtype and self.return_count > 1:
+            parts.append(
+                f"return {self.return_count} {self.return_subtype}s you "
+                f"control to their owner's hand"
+            )
+        elif self.return_subtype:
             parts.append(
                 f"return a {self.return_subtype} you control to its "
                 f"owner's hand"
             )
-        if self.sacrifice_subtype:
+        if self.sacrifice_subtype and self.sacrifice_count > 1:
+            parts.append(
+                f"sacrifice {self.sacrifice_count} {self.sacrifice_subtype}s"
+            )
+        elif self.sacrifice_subtype:
             parts.append(f"sacrifice a {self.sacrifice_subtype}")
+        if self.opponent_gains_life:
+            parts.append(f"an opponent gains {self.opponent_gains_life} life")
         text = " and ".join(parts)
         if self.overload:
             text += " (overload: \"target\" becomes \"each\")"
@@ -153,13 +174,15 @@ def alternative_cost_payable(
         state, player_id, card, alt.exile_card_color,
     ):
         return False
-    if alt.return_subtype and not _controls_subtype(
+    if alt.return_subtype and len(_controls_subtype(
         state, player_id, alt.return_subtype,
-    ):
+    )) < alt.return_count:
         return False
-    if alt.sacrifice_subtype and not _controls_subtype(
+    if alt.sacrifice_subtype and len(_controls_subtype(
         state, player_id, alt.sacrifice_subtype,
-    ):
+    )) < alt.sacrifice_count:
+        return False
+    if alt.opponent_gains_life and not _opponents(state, player_id):
         return False
     if alt.mana:
         cost = apply_cost_reductions(
@@ -238,7 +261,7 @@ def pay_alternative_cost_components(
             f"alternative cost: P{player_id} exiles {chosen.printing.name} "
             f"from hand"
         )
-    if alt.return_subtype:
+    for _ in range(alt.return_count if alt.return_subtype else 0):
         options = _controls_subtype(state, player_id, alt.return_subtype)
         chosen = _pick(p.agent, state, player_id, options)
         state.log.append(
@@ -246,13 +269,22 @@ def pay_alternative_cost_components(
             f"to hand"
         )
         _bounce_to_hand(state, chosen)
-    if alt.sacrifice_subtype:
+    for _ in range(alt.sacrifice_count if alt.sacrifice_subtype else 0):
         options = _controls_subtype(state, player_id, alt.sacrifice_subtype)
         chosen = _pick(p.agent, state, player_id, options)
         state.log.append(
             f"alternative cost: P{player_id} sacrifices {chosen.printing.name}"
         )
         sacrifice(state, chosen)
+    if alt.opponent_gains_life:
+        # "have an opponent gain N life" (Invigorate): the caster picks
+        # the opponent (the only one in a two-player game).
+        opp = _opponents(state, player_id)[0]
+        opp.life += alt.opponent_gains_life
+        state.log.append(
+            f"alternative cost: P{opp.id} gains {alt.opponent_gains_life} "
+            f"life (life: {opp.life})"
+        )
 
 
 # ---------------------------------------------------------------------------
