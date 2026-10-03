@@ -2236,17 +2236,19 @@ def effective_land_produces(
         # (Gemstone Caverns' luck counter).
         base = gated[1]
     if produced:
-        # Rules-text mana (anything the printed basic land types don't
-        # explain) survives a type ADDED "in addition to its other
-        # types" (Urborg / Yavimaya / Dryad: Wasteland keeps {C} and
-        # gains {B}); a type SET by Blood Moon / Magus removes it (CR
-        # 305.7). Basic lands and typed duals have no such mana, so the
-        # set-effect scan is skipped for them.
-        rules_text = base - {
-            _BASIC_LAND_TYPE_TO_COLOR[s]
-            for s in land_obj.printing.subtypes
-            if s in _BASIC_LAND_TYPE_TO_COLOR
-        }
+        # Rules-text mana (anything a NONBASIC land's printed basic land
+        # types don't explain) survives a type ADDED "in addition to its
+        # other types" (Urborg / Yavimaya / Dryad: Wasteland keeps {C}
+        # and gains {B}); a type SET by Blood Moon / Magus removes it
+        # (CR 305.7). A basic land has no rules text: all its mana comes
+        # from its types (CR 305.6), so it never contributes here.
+        rules_text = frozenset() if land_obj.printing.is_basic_land else (
+            base - {
+                _BASIC_LAND_TYPE_TO_COLOR[s]
+                for s in land_obj.printing.subtypes
+                if s in _BASIC_LAND_TYPE_TO_COLOR
+            }
+        )
         if rules_text and not _has_basic_land_type_set_effect(state, land_obj):
             produced |= rules_text
         return frozenset(produced) | _granted_tap_mana(state, land_obj)

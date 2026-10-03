@@ -259,12 +259,18 @@ def test_parse_spell_effect_phrase_recognizes_tap_artifact_or_creature():
     ) == TapTargetArtifactOrCreature()
 
 
-def test_parse_effect_returns_none_for_tap_only_creature_phrase():
-    # ``tap target creature`` without the ``artifact or`` prefix is a
-    # different (currently unsupported) primitive; no EoE card prints
-    # it as a standalone clause but the grammar stays narrow by
-    # rejecting it explicitly.
-    assert _parse_effect("tap target creature") is None
+def test_parse_effect_tap_only_creature_phrase_is_the_generic_tap():
+    # ``tap target creature`` without the ``artifact or`` prefix is the
+    # generic ``Tap`` over the composed noun phrase (Vintage Roto P5's
+    # "[un]tap target <np>" fallback; switched off for EoE-only
+    # printings, so no EoE parse changes).
+    from mtg_bot.effects.generic.tap import Tap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+
+    assert _parse_effect("tap target creature") == Tap(
+        targets=(TargetSpec(IsCreature()),),
+    )
 
 
 # ---------- discard a card ----------
