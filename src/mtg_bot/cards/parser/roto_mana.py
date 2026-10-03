@@ -241,6 +241,14 @@ _CONVERGE_DRAW_DAMAGE_LIFE_RE = re.compile(
     r"damage to any target, and you gain X life, where X is the number of "
     r"colors of mana spent to cast this spell$"
 )
+# "you may copy the exiled card. If you do, you may cast the copy without
+# paying its mana cost" (Isochron Scepter). A literal: the only card in
+# the pools with this copy-and-cast; broader grammar deferred until a
+# second example exists.
+_COPY_EXILED_CAST_FREE_LINE = (
+    "you may copy the exiled card. If you do, you may cast the copy "
+    "without paying its mana cost"
+)
 # "return target creature card with mana value X from your graveyard to
 # the battlefield" (Chthonian Nightmare, X paid in energy). A literal: the
 # only card in the pools with this X-matched reanimation; broader grammar
@@ -387,6 +395,8 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
             total_power=int(m.group("n")),
         )
+    if phrase == _COPY_EXILED_CAST_FREE_LINE:
+        return rm.CopyImprintedCardMayCastFree()
     if phrase == _RETURN_GRAVEYARD_CREATURE_MV_X_LINE:
         return rm.ReturnTargetGraveyardCreatureWithMVX()
     m = _UNTAP_EACH_YOU_CONTROL_RE.match(phrase)

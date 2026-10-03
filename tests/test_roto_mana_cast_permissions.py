@@ -244,3 +244,76 @@ def test_hex_magic_exiles_the_hand_draws_that_many_and_plays_them_later():
     perm = hand[0].exile_play_permission
     assert perm.duration == UNTIL_END_OF_YOUR_NEXT_TURN and not perm.free
     assert "exile your hand" in rm.ExileHandDrawThatManyMayPlayThem().describe()
+
+
+# ---------------------------------------------------------------------------
+# Isochron Scepter
+# ---------------------------------------------------------------------------
+
+
+def _scepter_with_bolt():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.cards.base import make_basic_land
+
+    s = arena()
+    for _ in range(2):
+        put(s, make_basic_land("Mountain", "R"), 0)
+    bolt = to_hand(s, printing("Lightning Bolt"), 0)
+    to_hand(s, printing("Counterspell"), 0)  # mana value 2 instant too
+    scepter = s.new_object(printing("Isochron Scepter"), owner_id=0, zone=Zone.STACK)
+    s.players[0].agent.hand_pick = bolt.id
+    put_into_battlefield(s, scepter, 0)
+    drain_stack(s)
+    return s, scepter, bolt
+
+
+def test_isochron_scepter_imprints_a_cheap_instant():
+    s, scepter, bolt = _scepter_with_bolt()
+    assert bolt in s.players[0].exile
+    from mtg_bot.effects.generic.artifact_mechanics import imprinted_cards
+
+    assert imprinted_cards(s, scepter) == [bolt]
+
+
+def test_isochron_scepter_casts_a_copy_and_the_card_stays_exiled():
+    from mtg_bot.actions import _activate_ability
+
+    s, scepter, bolt = _scepter_with_bolt()
+    s.players[0].agent.targets = [("player", 1)]
+    before = s.players[0].spells_cast_this_turn
+    _activate_ability(s, 0, scepter.id, 0)
+    drain_stack(s)
+    assert s.players[1].life == 17
+    assert bolt in s.players[0].exile
+    assert s.players[0].spells_cast_this_turn == before + 1  # a cast
+    # The copy ceased to exist: only the imprinted card remains exiled.
+    assert [c.printing.name for c in s.players[0].exile] == ["Lightning Bolt"]
+    assert not any(c.is_spell_copy for c in s.players[0].graveyard)
+
+
+def test_isochron_scepter_declined_copy_ceases_to_exist():
+    from mtg_bot.actions import _activate_ability
+
+    s, scepter, bolt = _scepter_with_bolt()
+    s.players[0].agent.yes = False
+    _activate_ability(s, 0, scepter.id, 0)
+    drain_stack(s)
+    assert s.players[1].life == 20
+    assert [c.printing.name for c in s.players[0].exile] == ["Lightning Bolt"]
+
+
+def test_imprint_filter_rejects_big_or_noninstant_cards():
+    from mtg_bot.actions import put_into_battlefield
+
+    s = arena()
+    to_hand(s, printing("Fireblast"), 0)  # instant, mana value 6
+    to_hand(s, printing("Sol Ring"), 0)
+    scepter = s.new_object(printing("Isochron Scepter"), owner_id=0, zone=Zone.STACK)
+    put_into_battlefield(s, scepter, 0)
+    drain_stack(s)
+    assert s.players[0].exile == []
+    s.resolving_source = scepter
+    rm.CopyImprintedCardMayCastFree().resolve(s, 0, ())  # nothing imprinted
+    assert "copy" in rm.CopyImprintedCardMayCastFree().describe()
+    imprint = printing("Isochron Scepter").triggered_abilities[0].effect
+    assert "instant" in imprint.describe()

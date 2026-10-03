@@ -886,6 +886,57 @@ def enchanted_land_mana_grants(state: "GameState", player_id: int) -> list:
     return out
 
 
+@dataclass(frozen=True)
+class CopyImprintedCardMayCastFree(Effect):
+    """"You may copy the exiled card. If you do, you may cast the copy
+    without paying its mana cost." (Isochron Scepter). The copy of the
+    card imprinted on the source (CR 707.12) is created in exile and cast
+    during the resolution (``cast_now``, timing ignored); a copy of a
+    card that isn't cast -- declined, or no legal targets -- ceases to
+    exist, and a cast one ceases to exist when it leaves the stack
+    (``GameObject.is_spell_copy``). The two "may"s are one choice: a
+    copy that isn't cast does nothing."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.creature_casting_ub import can_cast_now, cast_now
+        from mtg_bot.effects.generic.artifact_mechanics import imprinted_cards
+        from mtg_bot.game import Zone
+
+        src = state.resolving_source
+        if src is None:
+            return
+        cards = imprinted_cards(state, src)
+        if not cards:
+            state.log.append("no card is exiled with it")
+            return
+        p = state.player_by_id(controller_id)
+        copy = state.new_object(cards[0].printing, controller_id, Zone.EXILE)
+        copy.is_spell_copy = True
+        p.exile.append(copy)
+        if can_cast_now(state, controller_id, copy, free=True) and (
+            p.agent is None or p.agent.choose_yes_no(
+                state, controller_id,
+                f"Cast a copy of {copy.printing.name} for free?",
+            )
+        ):
+            state.log.append(
+                f"P{controller_id} casts a copy of {copy.printing.name}"
+            )
+            cast_now(state, controller_id, copy, free=True)
+            return
+        p.exile.remove(copy)
+        state.log.append(f"the copy of {copy.printing.name} ceases to exist")
+
+    def describe(self) -> str:
+        return (
+            "you may copy the exiled card and cast the copy without paying "
+            "its mana cost"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -1952,6 +2003,7 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "CopyImprintedCardMayCastFree",
     "choose_color_as_enters",
     "enchantable_land",
     "enchanted_land_mana_grants",

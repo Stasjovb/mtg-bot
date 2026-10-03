@@ -99,11 +99,17 @@ _TYPE_GROUPS: dict[str, tuple[str, ...]] = {
     "enchantments": ("Enchantment",),
 }
 
-# "You may exile a non<type>[, non<type>] card from your hand." —
-# Chrome Mox's Imprint ETB. -> ``ImprintCardFromHand`` linking the
-# exiled card to the source.
+# "You may exile <card descriptor> from your hand." — the Imprint ETB
+# -> ``ImprintCardFromHand`` linking the exiled card to the source.
+# Chrome Mox's "a nonartifact, nonland card" keeps its type-exclusion
+# form; any other descriptor ("an instant card with mana value 2 or
+# less", Isochron Scepter) goes through the card-descriptor grammar.
 _MAY_EXILE_CARD_FROM_HAND_IMPRINT = re.compile(
-    r"^you may exile a ((?:non[a-z]+, )*non[a-z]+) card from your hand$"
+    r"^you may exile (?P<desc>an? .+? card(?: with mana value \d+ or less)?)"
+    r" from your hand$"
+)
+_NON_TYPES_ONLY_DESCRIPTOR = re.compile(
+    r"^a ((?:non[a-z]+, )*non[a-z]+) card$"
 )
 
 # "Add one mana of any of the exiled card's colors." — Chrome Mox.
@@ -157,10 +163,21 @@ def _parse_artifact_effect_phrase(phrase: str) -> Effect | None:
         )
     m = _MAY_EXILE_CARD_FROM_HAND_IMPRINT.match(phrase)
     if m is not None:
-        excluded = tuple(
-            w[len("non"):].capitalize() for w in m.group(1).split(", ")
+        desc = m.group("desc")
+        nm = _NON_TYPES_ONLY_DESCRIPTOR.match(desc)
+        if nm is not None:
+            excluded = tuple(
+                w[len("non"):].capitalize() for w in nm.group(1).split(", ")
+            )
+            return ImprintCardFromHand(excluded_types=excluded)
+        from mtg_bot.cards.parser.card_flow_grammar import (
+            parse_card_descriptor,
         )
-        return ImprintCardFromHand(excluded_types=excluded)
+
+        card_filter = parse_card_descriptor(desc)
+        if card_filter is None:
+            return None
+        return ImprintCardFromHand(card_filter=card_filter)
     if _ADD_ONE_MANA_OF_EXILED_CARDS_COLORS.match(phrase) is not None:
         return AddOneManaOfImprintedColors()
     untap = _parse_untap_phrase(phrase)
