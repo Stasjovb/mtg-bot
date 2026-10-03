@@ -393,6 +393,17 @@ _YOU_AND_PERMANENTS_HEXPROOF_FROM = re.compile(
 )
 
 
+_TARGET_OPPONENT_DRAWS = re.compile(
+    r"^target opponent draws (?P<n>a|two|three) cards?$"
+)
+# "exile up to one target <np>. If you do, this creature gains
+# "<triggered ability>"" (Thief of Existence; the name was rewritten).
+_EXILE_IF_YOU_DO_GAINS = re.compile(
+    r'^(?P<exile>exile (?:up to one )?target .+?)\. If you do, this '
+    r'(?:creature|permanent) gains "(?P<ability>.+\.)"$'
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -494,6 +505,20 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _TARGET_OPPONENT_DRAWS.match(phrase)
+    if m is not None:
+        return rb.TargetOpponentDraws(amount=_n(m.group("n")))
+    m = _EXILE_IF_YOU_DO_GAINS.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
+        from mtg_bot.effects.base import TriggeredAbility
+
+        inner = _parse_effect(m.group("exile"))
+        ability = _parse_triggered_ability_line(m.group("ability"))
+        if inner is None or not isinstance(ability, TriggeredAbility):
+            return None
+        return rb.ExileThenSourceGainsTrigger(inner=inner, ability=ability)
     m = _DRAW_IF_OPPONENT_CAST_COLOR.match(phrase)
     if m is not None:
         colors = {_COLOR_WORDS[m.group("c1")]}
@@ -1302,8 +1327,36 @@ def _state_trigger(line: str) -> BoardLine | None:
     ),)})
 
 
+# "When/Whenever <condition>, <effect ending in a quoted ability>." --
+# the line ends with the quote, which the trigger grammar's
+# "<body>." shape doesn't take (Thief of Existence).
+_TRIGGER_WITH_QUOTED_TAIL = re.compile(
+    r'^(?:When|Whenever) (?P<cond>.+?), (?P<body>.+\.")$'
+)
+
+
+def _trigger_with_quoted_tail(line: str) -> BoardLine | None:
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.base import TriggeredAbility
+
+    m = _TRIGGER_WITH_QUOTED_TAIL.match(line)
+    if m is None:
+        return None
+    cond = _parse_predicate_trigger_phrase(m.group("cond"))
+    body = m.group("body")
+    effect = _parse_effect(body[0].lower() + body[1:])
+    if cond is None or effect is None:
+        return None
+    event, predicate = cond
+    return BoardLine(triggers=(TriggeredAbility(
+        event=event, predicate=predicate, effect=effect,
+    ),))
+
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
+    _trigger_with_quoted_tail,
     _state_trigger,
     _escape_card_types,
     _graveyard_pt_static,

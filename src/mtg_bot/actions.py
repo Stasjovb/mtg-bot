@@ -6066,7 +6066,9 @@ def dispatch_event(
     # Tabernacle at Pendrell Vale; Vintage Roto P5).
     from mtg_bot.roto_board_statics import fire_granted_triggers
 
-    fire_granted_triggers(state, event, subjects, label, push_triggered_ability)
+    fire_granted_triggers(
+        state, event, subjects, label, push_triggered_ability, extra_observers,
+    )
     _dispatch_graveyard_triggers(state, event, label, subjects)
 
 

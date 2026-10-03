@@ -266,10 +266,57 @@ def granted_triggers(state: "GameState") -> list[tuple]:
     return out
 
 
-def fire_granted_triggers(state, event, subjects, label, push) -> None:
-    """``actions.dispatch_event``'s hook: push every board-rule-granted
-    triggered ability matching ``event`` (``push`` is
+# Marker in a layer-6 ``grant_triggered_ability`` registry entry's params
+# for a P5 grant that ``fire_granted_triggers`` fires ("<this> gains
+# <quoted triggered ability>" -- Thief of Existence). Other granted
+# triggers keep their own fire paths.
+GRANT_MARK = "roto_board"
+
+
+def _registry_granted(state, observers) -> list[tuple]:
+    """``(object, ability)`` for P5-marked registry grants on
+    ``observers`` still in effect (CR 613.7 order against
+    "loses all abilities": a later wipe removes the grant)."""
+    from mtg_bot.game import effective_triggered_abilities
+
+    out = []
+    for ce in state.continuous_effects:
+        if (
+            ce.kind != "grant_triggered_ability" or len(ce.params) < 2
+            or ce.params[1] != GRANT_MARK
+        ):
+            continue
+        obj = next((o for o in observers if o.id == ce.target_id), None)
+        if obj is None:
+            continue
+        ability = ce.params[0]
+        if ability not in effective_triggered_abilities(state, obj):
+            continue
+        if _wiped_after(state, obj, ce.timestamp):
+            continue
+        out.append((obj, ability))
+    return out
+
+
+def fire_granted_triggers(
+    state, event, subjects, label, push, extra_observers=None,
+) -> None:
+    """``actions.dispatch_event``'s hook: push every triggered ability
+    a board rule grants (Tabernacle) or a P5 effect granted an object
+    (Thief of Existence; the departing object of a leaves event is among
+    ``extra_observers``) that matches ``event`` (``push`` is
     ``push_triggered_ability``)."""
+    if state.continuous_effects:
+        observers = list(state.battlefield) + [
+            o for o in (extra_observers or ()) if o not in state.battlefield
+        ]
+        for obj, ability in _registry_granted(state, observers):
+            if not ability.matches_event(event, subjects, obj, state):
+                continue
+            push(
+                state, source=obj, ability=ability, ability_index=-1,
+                controller_id=obj.controller_id, label=label,
+            )
     if not any_rules(state):
         return
     for creature, ability in granted_triggers(state):
@@ -453,6 +500,7 @@ def apply_board_state_checks(state: "GameState") -> bool:
     704.5y), then put state triggers whose condition holds on the stack.
     Returns True when a Role was removed."""
     changed = _apply_role_uniqueness(state)
+    _drop_stale_grants(state)
     if not any_rules(state):
         return changed
     from mtg_bot.actions import push_triggered_ability
@@ -469,6 +517,29 @@ def apply_board_state_checks(state: "GameState") -> bool:
             controller_id=source.controller_id, label="state trigger",
         )
     return changed
+
+
+def _drop_stale_grants(state: "GameState") -> None:
+    """A P5 grant to a spell lasts for the permanent that spell becomes
+    (CR 400.7: a new object after any other zone change) -- drop it once
+    its object is neither on the battlefield nor a spell on the stack
+    (a countered Thief of Existence)."""
+    if not state.continuous_effects:
+        return
+    live = {o.id for o in state.battlefield} | {
+        item.source.id for item in state.stack
+        if item.ability is None and item.source is not None
+    }
+    kept = [
+        ce for ce in state.continuous_effects
+        if not (
+            ce.kind == "grant_triggered_ability" and len(ce.params) > 1
+            and ce.params[1] == GRANT_MARK and ce.target_id not in live
+        )
+    ]
+    if len(kept) != len(state.continuous_effects):
+        state.continuous_effects = kept
+        state._invalidate_layered_cache()
 
 
 def _apply_role_uniqueness(state: "GameState") -> bool:
@@ -650,6 +721,7 @@ def untap_step_held(
 
 
 __all__ = [
+    "GRANT_MARK",
     "note_spell_cast",
     "player_hexproof_from_source",
     "spell_colors_cast_this_turn",

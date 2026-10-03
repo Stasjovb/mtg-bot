@@ -1802,6 +1802,95 @@ class NextSpellThisTurnCantBeCountered(Effect):
         return "the next spell you cast this turn can't be countered"
 
 
+@dataclass(frozen=True)
+class TargetOpponentDraws(Effect):
+    """"Target opponent draws N cards." """
+
+    amount: int = 1
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self):
+        return (1, 1)
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("player", p.id) for p in state.players
+            if not p.has_lost and p.id != controller_id
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.turn import draw_n_cards
+
+        pid = _target_player_id(targets)
+        if pid is None or pid == controller_id:
+            return
+        if state.player_by_id(pid).has_lost:
+            return
+        draw_n_cards(state, pid, self.amount)
+
+    def describe(self) -> str:
+        return f"target opponent draws {self.amount} card(s)"
+
+
+@dataclass(frozen=True)
+class ExileThenSourceGainsTrigger(Effect):
+    """"exile up to one target <permanent>. If you do, <this> gains
+    "<triggered ability>"." (Thief of Existence's cast trigger). "If
+    you do" = a target was exiled. The source -- the spell, still on the
+    stack when its cast trigger resolves -- gains the ability through a
+    marked layer-6 registry entry that lasts for the permanent the spell
+    becomes (``roto_board_statics.GRANT_MARK``); a spell no longer on
+    the stack gains nothing (CR 400.7)."""
+
+    inner: Effect = None  # type: ignore[assignment]
+    ability: object = None
+
+    @property
+    def targets(self):  # type: ignore[override]
+        return self.inner.targets
+
+    def requires_target(self) -> bool:
+        return self.inner.requires_target()
+
+    def target_count_range(self):
+        return self.inner.target_count_range()
+
+    def legal_targets(self, state, controller_id):
+        return self.inner.legal_targets(state, controller_id)
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+        from mtg_bot.roto_board_statics import GRANT_MARK
+        from mtg_bot.turn import _find_object_by_id
+
+        self.inner.resolve(state, controller_id, targets)
+        exiled = any(
+            (obj := _find_object_by_id(state, tid)) is not None
+            and obj.zone == Zone.EXILE
+            for _kind, tid in targets
+        )
+        source = state.resolving_source
+        if not exiled or source is None:
+            return
+        on_stack = any(item.source is source for item in state.stack)
+        if not (on_stack or source in state.battlefield):
+            return
+        state.add_continuous_effect(
+            source_id=-1, layer=6, kind="grant_triggered_ability",
+            target_id=source.id, params=(self.ability, GRANT_MARK),
+            description=f"{source.printing.name} gains a triggered ability",
+        )
+        state.log.append(f"{source.printing.name} gains a triggered ability")
+
+    def describe(self) -> str:
+        return (
+            f"{self.inner.describe()}; if you do, this gains "
+            f"\"{self.ability.effect.describe()}\""
+        )
+
+
 # ---------------------------------------------------------------------------
 # X-scaled modes (Kozilek's Command)
 # ---------------------------------------------------------------------------
@@ -2023,6 +2112,8 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "ExileThenSourceGainsTrigger",
+    "TargetOpponentDraws",
     "NextSpellThisTurnCantBeCountered",
     "DrawIfOpponentCastColorThisTurn",
     "YouAndPermanentsGainHexproofFromUEOT",
