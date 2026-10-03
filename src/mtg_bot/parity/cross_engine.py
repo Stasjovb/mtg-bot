@@ -16031,8 +16031,25 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # gates all AA emissions through the outer ``is_sorcery_timing``
     # block (every emitted ActivateAbility is byte-equivalently
     # gated at the outer-block level in production); see
-    # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry.
+    # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry. (Since
+    # ``feature/roto-instant-activations`` Rust enforces the
+    # ``sorcery_speed`` slot at legal-emit time:
+    # ``GameState::push_battlefield_activations``.)
     if aa.activate_only_once:
+        return None
+    # **Instant-speed activations (2026-10-03).** Activated abilities
+    # are offered at every priority window on both engines, so a timing
+    # or condition rider Rust has no field for would be silently
+    # dropped across the bridge (Rust would offer the ability where
+    # Python refuses it). Decline instead -- no bridged EoE AA carries
+    # one of these today.
+    if (
+        aa.activate_only_during_your_turn
+        or aa.activate_only_if is not None
+        or aa.activate_only_as_instant
+        or aa.exhaust
+        or aa.boast
+    ):
         return None
     # **Spacecraft Phase 4 Cycle 2 (2026-05-26 — Eternity Elevator FLIP
     # per docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md §5).** The

@@ -95,58 +95,6 @@ def _loyalty_abilities_at_instant_speed(
     )
 
 
-def _instant_speed_loyalty_activations(
-    state: GameState, player_id: int,
-) -> list[Action]:
-    """``ActivateAbility`` actions for loyalty abilities that may be
-    activated outside sorcery timing (The Wandering Emperor the turn
-    she entered). A loyalty ability's only cost is its loyalty cost
-    (CR 606.4), so the gates are: the once-per-turn-per-walker rule
-    (CR 606.3), loyalty affordability for a -N cost, and at least one
-    legal target when the effect targets."""
-    from mtg_bot.game import effective_activated_abilities
-
-    out: list[Action] = []
-    for obj in state.battlefield:
-        if obj.controller_id != player_id:
-            continue
-        if not _loyalty_abilities_at_instant_speed(state, obj):
-            continue
-        if not loyalty_activation_available(state, player_id, obj):
-            continue
-        for idx, ability in enumerate(
-            effective_activated_abilities(state, obj)
-        ):
-            if (
-                ability.cost.loyalty > 0
-                and obj.loyalty_counters < ability.cost.loyalty
-            ):
-                continue
-            # A named-card activation tax (Anointed Peacekeeper) adds mana.
-            from mtg_bot.creature_statics_wg import ability_cost_increase
-
-            if ability_cost_increase(state, obj, ability):
-                from mtg_bot.actions import _effective_ability_mana_cost
-
-                if not can_pay_cost(
-                    state, player_id,
-                    _effective_ability_mana_cost(state, obj, ability),
-                ):
-                    continue
-            if ability.effect.requires_target():
-                state.resolving_source = obj
-                try:
-                    has_legal = bool(
-                        ability.effect.legal_targets(state, player_id)
-                    )
-                finally:
-                    state.resolving_source = None
-                if not has_legal:
-                    continue
-            out.append(ActivateAbility(source_id=obj.id, ability_index=idx))
-    return out
-
-
 def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
     """Build the set of spend-restriction context tags for casting
     ``card``. Mirrors the logic in ``actions._cast_spell``: a card may
@@ -462,6 +410,430 @@ def _exile_permission_plays(
             continue
         out.append(CastSpell(card.id, cast_for_free=perm.free))
     return out
+
+
+def activation_timing_permits(
+    state: GameState, obj: GameObject, ability, *, sorcery_timing: bool,
+) -> bool:
+    """Whether the timing rules let ``obj``'s controller activate
+    ``ability`` now, given they hold priority (CR 117.1b: an activated
+    ability may be activated any time its controller has priority unless
+    the ability or a rule restricts it -- CR 602.5).
+
+    In a sorcery window (``sorcery_timing``) every ability qualifies.
+    Outside one:
+
+    * a mana ability doesn't -- the engine-wide handling of explicit mana
+      abilities (offered as actions in a sorcery window only; automatic
+      payment otherwise), a documented simplification of CR 605.3a
+      (cube-lands shortcut #1 in ``docs/SEARCH_LIMITATIONS.md``);
+    * a planeswalker's abilities (loyalty abilities, CR 606.3 -- every
+      walker ability is one by construction, flagged or not) don't,
+      unless the walker's own static lets them be activated any time
+      their controller could cast an instant (The Wandering Emperor the
+      turn she entered);
+    * a ``sorcery_speed`` ability ("Activate only as a sorcery.", equip,
+      reconfigure, saddle, level up) doesn't.
+
+    The other restrictions ("Activate only during your turn / if / once
+    [each turn]", exhaust, boast, the loyalty once-per-turn gate) are
+    window-independent and checked by ``battlefield_ability_activations``
+    in every window."""
+    if sorcery_timing:
+        return True
+    if ability.is_mana_ability:
+        return False
+    if obj.printing.is_planeswalker:
+        return _loyalty_abilities_at_instant_speed(state, obj)
+    return not ability.sorcery_speed
+
+
+def battlefield_ability_activations(
+    state: GameState, player_id: int, *, sorcery_timing: bool,
+    first_only: bool = False,
+) -> list[Action]:
+    """``ActivateAbility`` for every activated ability of a permanent
+    ``player_id`` controls that they may activate now (they hold
+    priority; ``sorcery_timing`` says whether this is a sorcery window).
+
+    The one enumerator for battlefield activations: both exits of
+    ``_legal_actions_core`` call it, and so does the search capability
+    check (``first_only=True`` stops at the first activation found).
+    Timing is ``activation_timing_permits``; costs, targets and the
+    printed riders are checked below in every window."""
+    from mtg_bot.game import effective_subtypes
+
+    p = state.player_by_id(player_id)
+    actions: list[Action] = []
+    for obj in state.battlefield:
+        if obj.controller_id != player_id:
+            continue
+        from mtg_bot.game import effective_activated_abilities
+        # CR 606.3 — once-per-turn-per-walker loyalty gate. If this
+        # planeswalker has already had a loyalty ability activated this
+        # turn, ALL of its activated abilities are inert for the rest of
+        # the turn. Gate fires BEFORE the per-ability loop so none of the
+        # walker's abilities emit. Per-walker (not per-ability) keyed on
+        # (controller_id, source_id) — mirrors Rust's
+        # state_ops_legal.rs walker-skip. Today every walker's activated
+        # abilities are loyalty abilities by construction, so gating on
+        # the Planeswalker card type maps 1:1 to "has a loyalty ability".
+        if (
+            obj.printing.is_planeswalker
+            and not loyalty_activation_available(state, player_id, obj)
+        ):
+            continue
+        for idx, ability in enumerate(
+            effective_activated_abilities(state, obj)
+        ):
+            # CR 117.1b / 602.5 timing (the only window-dependent
+            # gate; every other check below runs in every window).
+            if not activation_timing_permits(
+                state, obj, ability, sorcery_timing=sorcery_timing,
+            ):
+                continue
+            # CR 606 — positive loyalty cost is a pay-loyalty cost: the
+            # walker must have at least ``cost.loyalty`` loyalty counters
+            # to afford the activation. Negative (add-loyalty) and zero
+            # costs are always affordable. Mirrors Rust's emission gate
+            # at state_ops_legal.rs. Fires early (before the other
+            # cost-payability gates) — a walker that can't afford its
+            # -N ability is outright unable regardless of other state.
+            if (
+                ability.cost.loyalty > 0
+                and obj.loyalty_counters < ability.cost.loyalty
+            ):
+                continue
+            # ``Activate only once.`` rider — DSK Haunted Screen's
+            # third activation. Once the source's
+            # ``has_activated_once_only_ability`` flag is latched at
+            # activation time, every later activation of an ability
+            # with this rider is filtered out — including a second
+            # attempt within the same priority window before the
+            # first activation has resolved.
+            if ability.activate_only_once and obj.has_activated_once_only_ability:
+                continue
+            # Exhaust (CR 702.177): each exhaust ability once per object.
+            if ability.exhaust and idx in obj.exhausted_abilities:
+                continue
+            # Boast (CR 702.142): only if it attacked this turn, once
+            # each turn.
+            if ability.boast and (
+                obj.boasted_turn == state.turn_number
+                or not any(
+                    a.id == obj.id for a in p.attacked_this_turn
+                )
+            ):
+                continue
+            if ability.cost.extra_costs and not _extra_costs_payable(
+                state, player_id, obj, ability.cost,
+            ):
+                continue
+            # "Activate only if <condition>." (Library of Alexandria).
+            if (
+                ability.activate_only_if is not None
+                and not ability.activate_only_if.matches(state, player_id)
+            ):
+                continue
+            # ``Activate only during your turn.`` (Wishclaw Talisman).
+            if (
+                ability.activate_only_during_your_turn
+                and state.active_player().id != player_id
+            ):
+                continue
+            # Cost payability checks. Apply ability-level mana
+            # reductions (Dominion Bracelet: {X} less where X is
+            # equipped creature's power) before checking.
+            from mtg_bot.creature_statics_wg import ability_cost_increase
+
+            if ability.cost.mana is not None or ability_cost_increase(
+                state, obj, ability,
+            ):
+                from mtg_bot.actions import _effective_ability_mana_cost
+                effective_mana = _effective_ability_mana_cost(state, obj, ability)
+                if ability.cost.waterbend:
+                    from mtg_bot.layouts import waterbend_helpers
+
+                    effective_mana = effective_mana.reduced(
+                        len(waterbend_helpers(state, player_id)),
+                    )
+                # Activation spend-restriction context: combine all the
+                # tags this source qualifies for so coins with any of
+                # those restrictions are usable. Mirrors
+                # actions._activate_ability.
+                ability_kinds: set[str] = {"spell", "activated_ability"}
+                if (
+                    "Eldrazi" in obj.printing.subtypes
+                    and not obj.printing.mana_cost.colored
+                ):
+                    ability_kinds.add("colorless_eldrazi_ability")
+                if obj.printing.is_artifact:
+                    ability_kinds.add("artifact_activation")
+                if obj.printing.is_legendary:
+                    ability_kinds.add("legendary_permanent_ability")
+                if obj.printing.is_land:
+                    ability_kinds.add("land_activation")
+                if not can_pay_cost(
+                    state, player_id, effective_mana,
+                    spell_kind=frozenset(ability_kinds),
+                ):
+                    continue
+            if ability.cost.tap_self:
+                if obj.tapped:
+                    continue
+                # Creatures tapping as part of a cost can't while summoning-sick.
+                from mtg_bot.game import is_creature_now
+                if is_creature_now(obj) and obj.summoning_sick:
+                    continue
+            if ability.cost.sacrifice_another_creature_or_artifact:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and (o2.printing.is_creature or o2.printing.is_artifact)
+                )
+                if not has_another:
+                    continue
+            if ability.cost.sacrifice_another_artifact_or_land:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and (o2.printing.is_artifact or o2.printing.is_land)
+                )
+                if not has_another:
+                    continue
+            if ability.cost.sacrifice_another_artifact:
+                has_another = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and o2.printing.is_artifact
+                )
+                if not has_another:
+                    continue
+            if ability.cost.remove_plus_one_counter_from_your_creature:
+                has_counter_creature = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_creature
+                    and o2.plus_one_counters > 0
+                )
+                if not has_counter_creature:
+                    continue
+            if ability.cost.sacrifice_food:
+                has_food = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Food" in effective_subtypes(state, o2)
+                )
+                if not has_food:
+                    continue
+            if ability.cost.pay_energy and p.energy < ability.cost.pay_energy:
+                continue
+            if ability.cost.pay_life:
+                if p.life <= ability.cost.pay_life:
+                    # MTG lets you pay to 0 life (it kills you) but
+                    # pragmatically our bot avoids that line — gate
+                    # strictly to require surviving the payment.
+                    continue
+            if ability.cost.sacrifice_a_land:
+                has_land = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_land
+                    and o2.id != obj.id
+                )
+                if not has_land:
+                    continue
+            if ability.cost.sacrifice_a_desert:
+                has_desert = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Desert" in effective_subtypes(state, o2)
+                )
+                if not has_desert:
+                    continue
+            if ability.cost.sacrifice_n_nonland_permanents:
+                n_nonland = sum(
+                    1 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and not o2.printing.is_land
+                )
+                if n_nonland < ability.cost.sacrifice_n_nonland_permanents:
+                    continue
+            if ability.cost.saddle:
+                from mtg_bot.game import crew_candidates, effective_power
+
+                if sum(
+                    max(0, effective_power(state, o2))
+                    for o2 in crew_candidates(state, player_id, obj)
+                ) < ability.cost.saddle:
+                    continue
+            if ability.cost.crew:
+                from mtg_bot.game import crew_candidates, crew_power
+                total = sum(
+                    crew_power(state, o2)
+                    for o2 in crew_candidates(state, player_id, obj)
+                )
+                if total < ability.cost.crew:
+                    continue
+            if ability.cost.sacrifice_subtype:
+                wanted_sub = ability.cost.sacrifice_subtype
+                if not any(
+                    o2.controller_id == player_id
+                    and wanted_sub in effective_subtypes(state, o2)
+                    for o2 in state.battlefield
+                ):
+                    continue
+            if ability.cost.sacrifice_nontoken_artifact:
+                if not any(
+                    o2.controller_id == player_id
+                    and o2.printing.is_artifact
+                    and not o2.printing.is_token
+                    for o2 in state.battlefield
+                ):
+                    continue
+            if ability.cost.sacrifice_a_permanent_type:
+                from mtg_bot.effects.generic.enchantment_mechanics import (
+                    sacrifice_type_candidates,
+                )
+                if not sacrifice_type_candidates(
+                    state, player_id, ability.cost.sacrifice_a_permanent_type,
+                ):
+                    continue
+            if ability.cost.remove_counters_from_self_kind:
+                from mtg_bot.game import counter_count
+                if (
+                    counter_count(obj, ability.cost.remove_counters_from_self_kind)
+                    < ability.cost.remove_counters_from_self_amount
+                ):
+                    continue
+            if ability.cost.requires_own_creature_power_at_least:
+                from mtg_bot.game import effective_power
+                threshold = ability.cost.requires_own_creature_power_at_least
+                has_big = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.printing.is_creature
+                    and effective_power(state, o2) >= threshold
+                )
+                if not has_big:
+                    continue
+            if ability.cost.requires_own_artifact_count_at_least:
+                # Inventors' Fair: "Activate only if you control three
+                # or more artifacts." Count artifacts the activator
+                # controls; skip the activation if below the threshold.
+                threshold = ability.cost.requires_own_artifact_count_at_least
+                artifact_count = sum(
+                    1 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and "Artifact" in o2.printing.card_types
+                )
+                if artifact_count < threshold:
+                    continue
+            if ability.cost.requires_control_of_subtype:
+                # Duskmourn Verge cycle: "Activate only if you control
+                # a <T1> or a <T2>." The activator must control at
+                # least one permanent whose effective subtypes include
+                # any of the listed names.
+                wanted = ability.cost.requires_control_of_subtype
+                has_subtype = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and any(
+                        st in effective_subtypes(state, o2) for st in wanted
+                    )
+                )
+                if not has_subtype:
+                    continue
+            if ability.cost.exile_granting_equipment:
+                # The granting equipment must still be attached to
+                # the source. Legal when there's any equipment with
+                # a matching grant-flag attached to obj.
+                has_granter = any(
+                    eq for eq in state.battlefield
+                    if eq.attached_to == obj.id
+                    and eq.printing.grants_control_opponent_ability_when_equipped
+                )
+                if not has_granter:
+                    continue
+            # exile_self — source must be on the battlefield to exile
+            # it. The battlefield presence check at the top of this
+            # loop already guarantees that, so there is no additional
+            # gate beyond what sacrifice_self requires. The field is
+            # checked here for explicitness and future-proofing (e.g.
+            # if a card ever has an exile_self restriction beyond the
+            # normal "must be on battlefield" one).
+            # (no extra gate beyond battlefield presence for exile_self)
+            if ability.cost.tap_permanent_you_control:
+                # "Tap an untapped permanent you control" — Gene
+                # Pollinator. Requires at least one OTHER untapped
+                # permanent under the activator's control. The source
+                # itself cannot be used (same ruling as crewing: the
+                # source is the thing benefiting from the cost).
+                has_untapped_other = any(
+                    o2 for o2 in state.battlefield
+                    if o2.controller_id == player_id
+                    and o2.id != obj.id
+                    and not o2.tapped
+                    and (
+                        not ability.cost.tap_permanent_type
+                        or ability.cost.tap_permanent_type
+                        in o2.printing.card_types
+                    )
+                )
+                if not has_untapped_other:
+                    continue
+            if ability.cost.remove_named_counter_from_self:
+                from mtg_bot.game import named_counter_count
+                if named_counter_count(
+                    obj, ability.cost.remove_named_counter_from_self,
+                ) < 1:
+                    continue
+            if ability.cost.discard_a_card and not p.hand:
+                continue
+            if (
+                ability.cost.exile_cards_from_graveyard
+                and len(p.graveyard) < ability.cost.exile_cards_from_graveyard
+            ):
+                continue
+            if ability.cost.exile_artifact_from_graveyard:
+                # "Exile an artifact card from your graveyard" — Rust
+                # Harvester. Requires at least one artifact card in the
+                # activating player's graveyard.
+                has_artifact_in_gy = any(
+                    card for card in p.graveyard
+                    if card.printing.is_artifact
+                )
+                if not has_artifact_in_gy:
+                    continue
+            # If the effect requires a target, at least one must be legal.
+            # Set resolving_source so effects with self-exclusion filters
+            # (e.g. "another target creature") compute the correct legal
+            # pool during legality-check. Cleared immediately afterward.
+            if ability.effect.requires_target():
+                state.resolving_source = obj
+                try:
+                    from mtg_bot.game import drop_protected_players
+                    from mtg_bot.keyword_rules import filter_targetable
+
+                    has_legal = bool(drop_protected_players(state, filter_targetable(
+                        state,
+                        ability.effect.legal_targets(state, player_id),
+                        obj, player_id,
+                    )
+                    ))
+                finally:
+                    state.resolving_source = None
+                if not has_legal:
+                    continue
+            actions.append(
+                ActivateAbility(source_id=obj.id, ability_index=idx)
+            )
+            if first_only:
+                return actions
+    return actions
 
 
 def legal_actions(state: GameState, player_id: int) -> list[Action]:
@@ -946,20 +1318,13 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
     ))
 
     if not sorcery_timing:
-        # Instant-speed loyalty activations (The Wandering Emperor the
-        # turn she entered). Every other activated ability in the pool
-        # is surfaced at sorcery timing only (see the activated-ability
-        # block below).
-        actions.extend(_instant_speed_loyalty_activations(state, player_id))
-        # Counter-a-spell activated abilities (roto P1: Glen Elendra
-        # Guardian) -- only ever useful with a spell on the stack.
-        from mtg_bot.roto_restrictions import (
-            instant_speed_spell_targeting_activations,
-        )
-
-        actions.extend(
-            instant_speed_spell_targeting_activations(state, player_id),
-        )
+        # CR 117.1b / 602.5: activated abilities of permanents are
+        # activatable whenever their controller has priority, unless
+        # the ability or a rule restricts its timing
+        # (``activation_timing_permits``).
+        actions.extend(battlefield_ability_activations(
+            state, player_id, sorcery_timing=False,
+        ))
         # Teferi, Time Raveler: an opponent's static confines this
         # player's spell casts to their own sorcery timing.
         if _restricted_to_sorcery_speed_casts(state, player_id):
@@ -1364,369 +1729,12 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
                     UnlockRoomHalf(card_id=obj.id, half_name=half.name)
                 )
 
-    # Activated abilities on permanents this player controls.
-    for obj in state.battlefield:
-        if obj.controller_id != player_id:
-            continue
-        from mtg_bot.game import effective_activated_abilities
-        # CR 606.3 — once-per-turn-per-walker loyalty gate. If this
-        # planeswalker has already had a loyalty ability activated this
-        # turn, ALL of its activated abilities are inert for the rest of
-        # the turn. Gate fires BEFORE the per-ability loop so none of the
-        # walker's abilities emit. Per-walker (not per-ability) keyed on
-        # (controller_id, source_id) — mirrors Rust's
-        # state_ops_legal.rs walker-skip. Today every walker's activated
-        # abilities are loyalty abilities by construction, so gating on
-        # the Planeswalker card type maps 1:1 to "has a loyalty ability".
-        if (
-            obj.printing.is_planeswalker
-            and not loyalty_activation_available(state, player_id, obj)
-        ):
-            continue
-        for idx, ability in enumerate(
-            effective_activated_abilities(state, obj)
-        ):
-            if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
-                continue
-            # CR 606 — positive loyalty cost is a pay-loyalty cost: the
-            # walker must have at least ``cost.loyalty`` loyalty counters
-            # to afford the activation. Negative (add-loyalty) and zero
-            # costs are always affordable. Mirrors Rust's emission gate
-            # at state_ops_legal.rs. Fires early (before the other
-            # cost-payability gates) — a walker that can't afford its
-            # -N ability is outright unable regardless of other state.
-            if (
-                ability.cost.loyalty > 0
-                and obj.loyalty_counters < ability.cost.loyalty
-            ):
-                continue
-            # ``Activate only once.`` rider — DSK Haunted Screen's
-            # third activation. Once the source's
-            # ``has_activated_once_only_ability`` flag is latched at
-            # activation time, every later activation of an ability
-            # with this rider is filtered out — including a second
-            # attempt within the same priority window before the
-            # first activation has resolved.
-            if ability.activate_only_once and obj.has_activated_once_only_ability:
-                continue
-            # Exhaust (CR 702.177): each exhaust ability once per object.
-            if ability.exhaust and idx in obj.exhausted_abilities:
-                continue
-            # Boast (CR 702.142): only if it attacked this turn, once
-            # each turn.
-            if ability.boast and (
-                obj.boasted_turn == state.turn_number
-                or not any(
-                    a.id == obj.id for a in p.attacked_this_turn
-                )
-            ):
-                continue
-            if ability.cost.extra_costs and not _extra_costs_payable(
-                state, player_id, obj, ability.cost,
-            ):
-                continue
-            # "Activate only if <condition>." (Library of Alexandria).
-            if (
-                ability.activate_only_if is not None
-                and not ability.activate_only_if.matches(state, player_id)
-            ):
-                continue
-            # ``Activate only during your turn.`` (Wishclaw Talisman).
-            if (
-                ability.activate_only_during_your_turn
-                and state.active_player().id != player_id
-            ):
-                continue
-            # Cost payability checks. Apply ability-level mana
-            # reductions (Dominion Bracelet: {X} less where X is
-            # equipped creature's power) before checking.
-            from mtg_bot.creature_statics_wg import ability_cost_increase
-
-            if ability.cost.mana is not None or ability_cost_increase(
-                state, obj, ability,
-            ):
-                from mtg_bot.actions import _effective_ability_mana_cost
-                effective_mana = _effective_ability_mana_cost(state, obj, ability)
-                if ability.cost.waterbend:
-                    from mtg_bot.layouts import waterbend_helpers
-
-                    effective_mana = effective_mana.reduced(
-                        len(waterbend_helpers(state, player_id)),
-                    )
-                # Activation spend-restriction context: combine all the
-                # tags this source qualifies for so coins with any of
-                # those restrictions are usable. Mirrors
-                # actions._activate_ability.
-                ability_kinds: set[str] = {"spell", "activated_ability"}
-                if (
-                    "Eldrazi" in obj.printing.subtypes
-                    and not obj.printing.mana_cost.colored
-                ):
-                    ability_kinds.add("colorless_eldrazi_ability")
-                if obj.printing.is_artifact:
-                    ability_kinds.add("artifact_activation")
-                if obj.printing.is_legendary:
-                    ability_kinds.add("legendary_permanent_ability")
-                if obj.printing.is_land:
-                    ability_kinds.add("land_activation")
-                if not can_pay_cost(
-                    state, player_id, effective_mana,
-                    spell_kind=frozenset(ability_kinds),
-                ):
-                    continue
-            if ability.cost.tap_self:
-                if obj.tapped:
-                    continue
-                # Creatures tapping as part of a cost can't while summoning-sick.
-                from mtg_bot.game import is_creature_now
-                if is_creature_now(obj) and obj.summoning_sick:
-                    continue
-            if ability.cost.sacrifice_another_creature_or_artifact:
-                has_another = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.id != obj.id
-                    and (o2.printing.is_creature or o2.printing.is_artifact)
-                )
-                if not has_another:
-                    continue
-            if ability.cost.sacrifice_another_artifact_or_land:
-                has_another = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.id != obj.id
-                    and (o2.printing.is_artifact or o2.printing.is_land)
-                )
-                if not has_another:
-                    continue
-            if ability.cost.sacrifice_another_artifact:
-                has_another = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.id != obj.id
-                    and o2.printing.is_artifact
-                )
-                if not has_another:
-                    continue
-            if ability.cost.remove_plus_one_counter_from_your_creature:
-                has_counter_creature = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.printing.is_creature
-                    and o2.plus_one_counters > 0
-                )
-                if not has_counter_creature:
-                    continue
-            if ability.cost.sacrifice_food:
-                has_food = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and "Food" in effective_subtypes(state, o2)
-                )
-                if not has_food:
-                    continue
-            if ability.cost.pay_energy and p.energy < ability.cost.pay_energy:
-                continue
-            if ability.cost.pay_life:
-                if p.life <= ability.cost.pay_life:
-                    # MTG lets you pay to 0 life (it kills you) but
-                    # pragmatically our bot avoids that line — gate
-                    # strictly to require surviving the payment.
-                    continue
-            if ability.cost.sacrifice_a_land:
-                has_land = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.printing.is_land
-                    and o2.id != obj.id
-                )
-                if not has_land:
-                    continue
-            if ability.cost.sacrifice_a_desert:
-                has_desert = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and "Desert" in effective_subtypes(state, o2)
-                )
-                if not has_desert:
-                    continue
-            if ability.cost.sacrifice_n_nonland_permanents:
-                n_nonland = sum(
-                    1 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and not o2.printing.is_land
-                )
-                if n_nonland < ability.cost.sacrifice_n_nonland_permanents:
-                    continue
-            if ability.cost.saddle:
-                from mtg_bot.game import crew_candidates, effective_power
-
-                if sum(
-                    max(0, effective_power(state, o2))
-                    for o2 in crew_candidates(state, player_id, obj)
-                ) < ability.cost.saddle:
-                    continue
-            if ability.cost.crew:
-                from mtg_bot.game import crew_candidates, crew_power
-                total = sum(
-                    crew_power(state, o2)
-                    for o2 in crew_candidates(state, player_id, obj)
-                )
-                if total < ability.cost.crew:
-                    continue
-            if ability.cost.sacrifice_subtype:
-                wanted_sub = ability.cost.sacrifice_subtype
-                if not any(
-                    o2.controller_id == player_id
-                    and wanted_sub in effective_subtypes(state, o2)
-                    for o2 in state.battlefield
-                ):
-                    continue
-            if ability.cost.sacrifice_nontoken_artifact:
-                if not any(
-                    o2.controller_id == player_id
-                    and o2.printing.is_artifact
-                    and not o2.printing.is_token
-                    for o2 in state.battlefield
-                ):
-                    continue
-            if ability.cost.sacrifice_a_permanent_type:
-                from mtg_bot.effects.generic.enchantment_mechanics import (
-                    sacrifice_type_candidates,
-                )
-                if not sacrifice_type_candidates(
-                    state, player_id, ability.cost.sacrifice_a_permanent_type,
-                ):
-                    continue
-            if ability.cost.remove_counters_from_self_kind:
-                from mtg_bot.game import counter_count
-                if (
-                    counter_count(obj, ability.cost.remove_counters_from_self_kind)
-                    < ability.cost.remove_counters_from_self_amount
-                ):
-                    continue
-            if ability.cost.requires_own_creature_power_at_least:
-                from mtg_bot.game import effective_power
-                threshold = ability.cost.requires_own_creature_power_at_least
-                has_big = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.printing.is_creature
-                    and effective_power(state, o2) >= threshold
-                )
-                if not has_big:
-                    continue
-            if ability.cost.requires_own_artifact_count_at_least:
-                # Inventors' Fair: "Activate only if you control three
-                # or more artifacts." Count artifacts the activator
-                # controls; skip the activation if below the threshold.
-                threshold = ability.cost.requires_own_artifact_count_at_least
-                artifact_count = sum(
-                    1 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and "Artifact" in o2.printing.card_types
-                )
-                if artifact_count < threshold:
-                    continue
-            if ability.cost.requires_control_of_subtype:
-                # Duskmourn Verge cycle: "Activate only if you control
-                # a <T1> or a <T2>." The activator must control at
-                # least one permanent whose effective subtypes include
-                # any of the listed names.
-                wanted = ability.cost.requires_control_of_subtype
-                has_subtype = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and any(
-                        st in effective_subtypes(state, o2) for st in wanted
-                    )
-                )
-                if not has_subtype:
-                    continue
-            if ability.cost.exile_granting_equipment:
-                # The granting equipment must still be attached to
-                # the source. Legal when there's any equipment with
-                # a matching grant-flag attached to obj.
-                has_granter = any(
-                    eq for eq in state.battlefield
-                    if eq.attached_to == obj.id
-                    and eq.printing.grants_control_opponent_ability_when_equipped
-                )
-                if not has_granter:
-                    continue
-            # exile_self — source must be on the battlefield to exile
-            # it. The battlefield presence check at the top of this
-            # loop already guarantees that, so there is no additional
-            # gate beyond what sacrifice_self requires. The field is
-            # checked here for explicitness and future-proofing (e.g.
-            # if a card ever has an exile_self restriction beyond the
-            # normal "must be on battlefield" one).
-            # (no extra gate beyond battlefield presence for exile_self)
-            if ability.cost.tap_permanent_you_control:
-                # "Tap an untapped permanent you control" — Gene
-                # Pollinator. Requires at least one OTHER untapped
-                # permanent under the activator's control. The source
-                # itself cannot be used (same ruling as crewing: the
-                # source is the thing benefiting from the cost).
-                has_untapped_other = any(
-                    o2 for o2 in state.battlefield
-                    if o2.controller_id == player_id
-                    and o2.id != obj.id
-                    and not o2.tapped
-                    and (
-                        not ability.cost.tap_permanent_type
-                        or ability.cost.tap_permanent_type
-                        in o2.printing.card_types
-                    )
-                )
-                if not has_untapped_other:
-                    continue
-            if ability.cost.remove_named_counter_from_self:
-                from mtg_bot.game import named_counter_count
-                if named_counter_count(
-                    obj, ability.cost.remove_named_counter_from_self,
-                ) < 1:
-                    continue
-            if ability.cost.discard_a_card and not p.hand:
-                continue
-            if (
-                ability.cost.exile_cards_from_graveyard
-                and len(p.graveyard) < ability.cost.exile_cards_from_graveyard
-            ):
-                continue
-            if ability.cost.exile_artifact_from_graveyard:
-                # "Exile an artifact card from your graveyard" — Rust
-                # Harvester. Requires at least one artifact card in the
-                # activating player's graveyard.
-                has_artifact_in_gy = any(
-                    card for card in p.graveyard
-                    if card.printing.is_artifact
-                )
-                if not has_artifact_in_gy:
-                    continue
-            # If the effect requires a target, at least one must be legal.
-            # Set resolving_source so effects with self-exclusion filters
-            # (e.g. "another target creature") compute the correct legal
-            # pool during legality-check. Cleared immediately afterward.
-            if ability.effect.requires_target():
-                state.resolving_source = obj
-                try:
-                    from mtg_bot.game import drop_protected_players
-                    from mtg_bot.keyword_rules import filter_targetable
-
-                    has_legal = bool(drop_protected_players(state, filter_targetable(
-                        state,
-                        ability.effect.legal_targets(state, player_id),
-                        obj, player_id,
-                    )
-                    ))
-                finally:
-                    state.resolving_source = None
-                if not has_legal:
-                    continue
-            actions.append(
-                ActivateAbility(source_id=obj.id, ability_index=idx)
-            )
+    # Activated abilities on permanents this player controls (sorcery
+    # window: everything the timing rules allow, in the order this
+    # block has always emitted them).
+    actions.extend(battlefield_ability_activations(
+        state, player_id, sorcery_timing=True,
+    ))
 
     # Station activations: for each Spacecraft this player controls, each
     # untapped non-sick creature they control (not the Spacecraft itself) is

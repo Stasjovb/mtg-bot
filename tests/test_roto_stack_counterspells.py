@@ -602,17 +602,27 @@ def _counter_creature(**cost_kw):
     )
 
 
-def test_instant_speed_spell_targeting_activations():
-    from mtg_bot.roto_restrictions import (
-        instant_speed_spell_targeting_activations as offered,
-    )
+def test_spell_targeting_activations_at_instant_speed():
+    """Glen Elendra Guardian's ability, once roto P1's special case, is
+    an ordinary instant-speed activation now (``legal.
+    battlefield_ability_activations``): offered while a spell is on the
+    stack, under every cost and restriction gate."""
+    from mtg_bot.legal import battlefield_ability_activations
     from mtg_bot.search._player_capabilities import (
         _has_instant_speed_activatable,
     )
 
+    def offered(state, pid):
+        return battlefield_ability_activations(
+            state, pid, sorcery_timing=False,
+        )
+
     state = arena(active=1)
     tapper = put(state, _counter_creature(tap_self=True), 0)
-    assert offered(state, 0) == []  # empty stack
+    assert offered(state, 0) == []  # empty stack: nothing to target
+    assert not _has_instant_speed_activatable(
+        state, 0, state.players[0], is_active_player=False,
+    )
     _bolt_on_stack(state)
     assert offered(state, 0) == [ActivateAbility(tapper.id, 0)]
     assert _has_instant_speed_activatable(
@@ -624,10 +634,11 @@ def test_instant_speed_spell_targeting_activations():
     tapper.tapped = True
     assert offered(state, 0) == []
     tapper.tapped = False
-    # Not offered: a sacrifice cost, sorcery speed, unpayable mana,
-    # an activation restriction.
+    # A sacrifice cost is fine (P1's special case excluded it).
     tapper.printing = _counter_creature(sacrifice_self=True)
-    assert offered(state, 0) == []
+    assert offered(state, 0) == [ActivateAbility(tapper.id, 0)]
+    # Not offered: sorcery speed, unpayable mana, an activation
+    # restriction.
     tapper.printing = replace(
         _counter_creature(),
         activated_abilities=(replace(

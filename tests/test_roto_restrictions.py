@@ -23,7 +23,6 @@ from mtg_bot.roto_restrictions import (
     activation_prohibited,
     cast_prohibited,
     filter_actions,
-    instant_speed_spell_targeting_activations,
     max_x_allowed,
     nameable_card_names,
     roto_spell_tax,
@@ -111,24 +110,32 @@ def test_named_lock_reaches_hand_graveyard_and_station_sources():
     assert filter_actions(state, 1, acts) == acts
 
 
-def test_instant_activations_skip_mixed_and_targetless_abilities():
+def test_instant_activations_need_a_target_for_the_counter_ability():
+    """Off sorcery timing a counter ability is offered only while a
+    counterable spell is on the stack; the draw ability next to it is
+    offered regardless (CR 117.1b)."""
+    from mtg_bot.legal import battlefield_ability_activations
+
     state = arena(active=1)
     counter = ActivatedAbility(cost=ActivationCost(), effect=CounterSpell())
     other = ActivatedAbility(cost=ActivationCost(), effect=DrawCards(amount=1))
     pr = replace(make_creature("Mixed", "{1}", 1, 1), activated_abilities=(other, counter))
     put(state, pr, 0)
+    oid = state.battlefield[0].id
     goodbye = to_hand(state, printing("Long Goodbye"), 1)
     from mtg_bot.game import StackItem
 
     goodbye.zone = Zone.STACK
     state.players[1].hand.remove(goodbye)
     state.stack.append(StackItem(source=goodbye, controller_id=1))
-    # Long Goodbye can't be countered: no target, nothing offered.
-    assert instant_speed_spell_targeting_activations(state, 0) == []
+    # Long Goodbye can't be countered: the counter ability has no target.
+    assert battlefield_ability_activations(state, 0, sorcery_timing=False) == [
+        ActivateAbility(oid, 0),
+    ]
     bolt = state.new_object(printing("Lightning Bolt"), owner_id=1, zone=Zone.STACK)
     state.stack.append(StackItem(source=bolt, controller_id=1))
-    assert instant_speed_spell_targeting_activations(state, 0) == [
-        ActivateAbility(state.battlefield[0].id, 1),
+    assert battlefield_ability_activations(state, 0, sorcery_timing=False) == [
+        ActivateAbility(oid, 0), ActivateAbility(oid, 1),
     ]
 
 

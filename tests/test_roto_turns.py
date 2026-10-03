@@ -306,12 +306,11 @@ def test_run_turn_after_sundial_skips_to_cleanup():
     s.players[0].agent = SundialAgent()
     steps: list = []
     run_turn(s, on_snapshot=lambda st: steps.append(st.step))
-    # Non-mana activations are offered at sorcery timing (engine-wide),
-    # so Sundial resolves in the first main phase; combat, the second
-    # main phase and the end step are skipped.
-    assert steps == [
-        Step.UNTAP, Step.UPKEEP, Step.DRAW, Step.PRECOMBAT_MAIN, Step.CLEANUP,
-    ]
+    # Activated abilities are offered whenever their controller has
+    # priority (CR 117.1b), so Sundial is activated -- and resolves --
+    # in the upkeep, its first window; the draw step, both main phases,
+    # combat and the end step are skipped.
+    assert steps == [Step.UNTAP, Step.UPKEEP, Step.CLEANUP]
     assert any("the turn is ended" in line for line in s.log)
     assert not s.turn_ending
 

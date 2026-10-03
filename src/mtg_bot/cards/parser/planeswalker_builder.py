@@ -22,7 +22,7 @@ with:
   * ``sorcery_speed=True`` — loyalty abilities are inherently
     sorcery-speed (CR 606.3 timing: only as a sorcery, your main phase,
     empty stack). The Wandering Emperor's static lifts this the turn
-    she entered (``legal._instant_speed_loyalty_activations``).
+    she entered (``legal.activation_timing_permits``).
   * ``effect`` — the loyalty body parsed through the unified effect
     grammar (``_parse_spell_effect_phrase``), after the Tezzeret,
     Cruel Captain literal table (``_LOYALTY_ABILITY_EFFECTS``).
