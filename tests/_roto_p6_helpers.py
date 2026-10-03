@@ -3,9 +3,10 @@ pregame).
 
 ``roto_source(*names)`` is a context manager that makes the active card
 source the default printings plus the named roto printings (built
-through the parser's claim path by ``tests._roto_helpers.printing``), so
-``simulate.setup_game`` can build decks naming roto-only cards without
-constructing the whole roto pool.
+through the parser's claim path by ``tests._roto_helpers.printing``).
+Written when roto was opt-in so ``simulate.setup_game`` could build decks
+naming roto-only cards; the default pool holds them since 2026-10-03, so
+it now only pins those names to the claim-path printing.
 """
 
 from __future__ import annotations

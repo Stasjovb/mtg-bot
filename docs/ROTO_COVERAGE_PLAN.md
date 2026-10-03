@@ -28,7 +28,7 @@ Card lists are separated by semicolons (card names contain commas). Ordered by d
 - Branch each package off `feature/cube-roto-coverage` as `feature/roto-<package>` in its own worktree; commit as you go; don't merge to `main`.
 - Put new grammar in the package's own parser module and new effects in its own `effects/generic/` module (names below), the way the cube buckets did (`creature_wg_lines.py`, `cube_glue_grammar.py`, ...). Shared dispatchers (`effects.py`, `triggers.py`, `statics.py`, builders) get one import-and-call hook per package; that keeps conflicts to trivially mergeable appends.
 - Known shared hot spots: `cards/base.py` (`CardPrinting` fields), `cube_enchantments.CUBE_ENCHANTMENT_NAMES` (keep it alphabetical; on conflict take the union), `legal.py` (P1 prohibitions, P3 permissions, P6 split second), `turn.py` (P4 draw/extra turns, P5 untap/upkeep), `game.py` (P2 zone/draw replacements, P4 sideboard, P5 layers), `land_lines.py` (P2, P3, P5), `docs/SEARCH_LIMITATIONS.md` (everyone).
-- Roto-only cards are not in the default `all` pool. Test them through `tests/_roto_helpers.py` (`roto_card`, `printing`) or `OracleParserCardSource(pool="roto")`, never the default source.
+- Roto-only cards were not in the default `all` pool while the packages ran (they are since 2026-10-03). Test them through `tests/_roto_helpers.py` (`roto_card`, `printing`) or `OracleParserCardSource(pool="roto")`.
 - Oracle-text fidelity: no no-op recognizers, no partial claims, no name-keyed literals unless the parser CLAUDE.md's single-card exception applies. If a clause isn't modeled, the card stays unclaimed. Every deliberate shortcut gets a `docs/SEARCH_LIMITATIONS.md` entry.
 - Before each commit: refresh `docs/ROTO_POOL_COVERAGE.md` (`scripts/measure_cube_coverage.py --pool roto`; `tests/test_pool_coverage.py::test_committed_roto_doc_is_fresh` enforces it). On a merge conflict in that doc, re-run the script instead of hand-merging. `docs/CUBE_POOL_COVERAGE.md` must stay byte-identical (cube claims must not move).
 
@@ -161,7 +161,7 @@ Drafted custom conspiracies (no Scryfall record, outside the pool): ANOTHER HEAD
 
 ## Open decisions for the user
 
-1. **Fold `roto` into the default pool?** It is opt-in today so the default source and the EoE/cube evidence base don't move. Self-play on the roto cube also needs a deck pool; `scripts/build_cube_deck_pool.py` is cube-only today and would need a pool parameter.
+1. **Fold `roto` into the default pool?** Decided 2026-10-03: yes -- `all` is the EoE-era dumps + cube + roto (`feature/roto-default-pool-leyline-wizard`); no printing already in `all` changed. Self-play on the roto cube still needs a deck pool; `scripts/build_cube_deck_pool.py` is cube-only and would need a pool parameter.
 2. **Wish / sideboard semantics** (Burning Wish, Karn's -2): in a roto draft the sideboard is the drafter's unused picks.
 3. **Custom conspiracies**: whether to hand-author records for them (only Meddling Wizard changes a game; Quanitity Over Quality changes deck size; ANOTHER HEAD?! lets a deck run two copies of a card).
 

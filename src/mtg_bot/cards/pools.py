@@ -8,17 +8,21 @@ are written against those cards.
 
 Pool names (``MTG_BOT_CARD_POOL`` env var):
 
-- ``all`` (default): EoE pools + cube, deduped by name (first wins).
-  Production and tests see the same source; nothing is dropped.
+- ``all`` (default): EoE pools + cube + Vintage Roto, deduped by name
+  (first file wins: an EoE-era record, then the cube's, then roto's).
+  Production and tests see the same source; nothing is dropped. Roto
+  joined the default on 2026-10-03 (user decision); every card it
+  shares with the EoE-era dumps or the cube keeps the record (and so
+  the printing) it had before.
 - ``cube``: the PowerLSV cube + basic lands only. Use this for
   coverage measurement, cube deck-pool generation, and cube self-play.
-- ``eoe``: the legacy four EoE-era files only.
+- ``eoe``: the legacy four EoE-era files only (the Rust parity
+  campaign's pool, ``parity.effect_coverage.PARITY_POOL``).
 - ``roto``: Retireddevil's Vintage Roto 1.1 (``data/cube_roto.json``,
   860 Scryfall cards from the draft sheet's list + basic lands;
   regenerate via ``scripts/fetch_cube.py --names
-  data/cube_roto.sheet.json``). Opt-in only: it is not part of ``all``,
-  so the default source and its claimed set are unchanged. Coverage
-  lives in ``docs/ROTO_POOL_COVERAGE.md``.
+  data/cube_roto.sheet.json``). Part of ``all``; selectable alone for
+  coverage measurement (``docs/ROTO_POOL_COVERAGE.md``).
 
 Unknown values raise so a typo never silently becomes a different pool.
 """
@@ -41,7 +45,7 @@ EOE_POOL_FILES: tuple[str, ...] = (
     "duskmourn.json",
 )
 POOLS: dict[str, tuple[str, ...]] = {
-    "all": EOE_POOL_FILES + CUBE_POOL_FILES,
+    "all": EOE_POOL_FILES + CUBE_POOL_FILES + ROTO_POOL_FILES,
     "cube": CUBE_POOL_FILES,
     "eoe": EOE_POOL_FILES,
     "roto": ROTO_POOL_FILES,

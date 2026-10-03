@@ -382,6 +382,39 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
     assert (len(declined) + len(admitted)) >= 14
 
 
+def test_predicate_declines_auras_the_rust_arms_dont_model():
+    """The default source holds the Vintage Roto list since 2026-10-03,
+    including two land Auras. Rust's Aura arms model only "Enchant
+    creature" (the cast-time picker's default arm) and "Enchant
+    artifact", and no bridge arm carries the land-Aura riders, so both
+    are declined rather than admitted as creature Auras."""
+    import dataclasses
+
+    sprawl = _live_printing("Utopia Sprawl")  # Enchant Forest + color
+    nest = _live_printing("Tarmogoyf Nest")  # Enchant land + granted AA
+    assert sprawl.aura_enchant_type == nest.aura_enchant_type == "land"
+    assert _printing_is_bridge_simple_aura(sprawl) is False
+    assert _printing_is_bridge_simple_aura(nest) is False
+    # Each guard on its own: an otherwise-admitted S1 Aura (Frantic
+    # Strength) declined by one unmodeled kind / rider at a time.
+    frantic = _live_printing("Frantic Strength")
+    assert _printing_is_bridge_simple_aura(frantic) is True
+    for change in (
+        {"aura_enchant_type": "land"},
+        {"aura_enchant_type": "creature_card_in_graveyard"},
+        {"aura_enchant_subtype": "Forest"},
+        {"attached_grants_activated_abilities": nest.attached_grants_activated_abilities},
+        {"enters_choosing_color": True},
+        {"enchanted_land_adds_chosen_color": True},
+    ):
+        assert _printing_is_bridge_simple_aura(
+            dataclasses.replace(frantic, **change)
+        ) is False, change
+    assert _printing_is_bridge_simple_aura(
+        dataclasses.replace(frantic, aura_enchant_type="artifact")
+    ) is True
+
+
 def test_predicate_admits_synthetic_phase1_s1_aura():
     """A SYNTHETIC printing carrying ONLY the Phase-1 S1 admit shape
     (is_aura + safe-keyword-only granted-keywords + no triggers / no

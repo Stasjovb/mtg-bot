@@ -6,9 +6,9 @@ parser source's own claim path (``build_card_record``) and asserts the
 card is claimed. Arena/agent helpers are re-exported from the cube
 artifact helpers so roto tests read like the cube bucket tests.
 
-Roto-only cards are not in the default ``all`` pool, so tests for them
-must build from these records (or from ``OracleParserCardSource(pool=
-"roto")``), never from the default card source.
+Roto cards are part of the default ``all`` pool since 2026-10-03, so
+the default card source holds them too; these helpers build one record
+through the claim path without depending on the active source.
 """
 
 from __future__ import annotations
