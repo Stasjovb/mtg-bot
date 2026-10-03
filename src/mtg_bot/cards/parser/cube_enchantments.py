@@ -82,6 +82,9 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "High Noon",
     "Jeskai Ascendancy",
     "Leyline Binding",
+    # Duskmourn printing on the roto list; claimable since roto joined
+    # the target lists (user decision 2026-10-03, EoE claimed 481 -> 482).
+    "Leyline of the Void",
     "Moat",
     "Momentum Breaker",
     "Mystic Remora",

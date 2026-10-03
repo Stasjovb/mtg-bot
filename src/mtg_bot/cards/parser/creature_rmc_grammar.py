@@ -53,12 +53,20 @@ def _n(token: str) -> int:
 # ---------------------------------------------------------------------------
 #
 # The Edge-of-Eternities-era pools carry cross-engine parity evidence
-# keyed on exactly which printings the parser claims. This grammar
-# targets the cube, so it is switched off while building a printing
-# that appears ONLY in the EoE-era dumps (cards shared with the cube --
-# Screaming Nemesis, Fear of Missing Out -- still use it). Without the
-# guard the generic cost atoms would newly claim e.g. Intruding
+# keyed on exactly which printings the parser claims. This grammar (and
+# every cube / roto grammar that shares ``_DISABLED``) targets the cube
+# and the Vintage Roto list, so it is switched off while building a
+# printing that appears ONLY in the EoE-era dumps -- on neither target
+# list. Cards shared with the cube (Screaming Nemesis, Fear of Missing
+# Out) or with the roto list (Leyline of the Void) still use it. Without
+# the guard the generic cost atoms would newly claim e.g. Intruding
 # Soulrager ("Sacrifice a Room"), changing the EoE claimed set.
+#
+# Roto joined the target lists on 2026-10-03 (user decision; EoE's
+# claimed set accepted to move 481 -> 482). That opens the guard for the
+# 11 EoE-era printings on the roto list, not for the rest of the
+# Duskmourn / EoE dumps; Leyline of the Void is the only one whose build
+# changes (``tests/test_roto_zones_graveyard_hate.py`` pins that).
 
 _DISABLED = [False]
 
@@ -79,12 +87,15 @@ def _eoe_only_names() -> frozenset[str]:
     from mtg_bot.cards.pools import load_pool_cards
 
     eoe = {c["name"] for c in load_pool_cards("eoe")}
-    cube = {c["name"] for c in load_pool_cards("cube")}
-    return frozenset(eoe - cube)
+    targets = {
+        c["name"] for pool in ("cube", "roto") for c in load_pool_cards(pool)
+    }
+    return frozenset(eoe - targets)
 
 
 def is_eoe_only_printing(name: str) -> bool:
-    """Whether ``name`` is an EoE-era printing outside the cube."""
+    """Whether ``name`` is an EoE-era printing on neither target list
+    (the PowerLSV cube, the Vintage Roto list)."""
     try:
         return name in _eoe_only_names()
     except FileNotFoundError:  # pragma: no cover - dumps are committed
