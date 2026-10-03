@@ -628,6 +628,113 @@ class OnceEachTurnCost:
         return "activate only once each turn"
 
 
+@dataclass(frozen=True)
+class PayXEnergyCost:
+    """"Pay X {E}" where X is the mana value of the ability's targeted
+    graveyard card (Chthonian Nightmare's "Return target creature card
+    with mana value X"): choosing that card IS choosing X, so the energy
+    is paid as the targets are locked in (``x_from_cost_atoms``) and this
+    atom's own ``pay`` has nothing left to do. Payability is enforced by
+    the effect's targets (cards with mana value up to your energy)."""
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return True
+
+    def pay(self, state, player_id: int, source) -> list:
+        return []
+
+    def describe(self) -> str:
+        return "Pay X {E}"
+
+
+@dataclass(frozen=True)
+class ReturnSourceToHandCost:
+    """"Return this <permanent> to its owner's hand" as a cost."""
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return source is not None and source in state.battlefield
+
+    def pay(self, state, player_id: int, source) -> list:
+        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
+
+        state.log.append(f"P{player_id} returns {source.printing.name} (cost)")
+        _bounce_to_hand(state, source)
+        return []
+
+    def describe(self) -> str:
+        return "Return this permanent to its owner's hand"
+
+
+def x_from_cost_atoms(
+    state: "GameState", player_id: int, ability, targets, x: int,
+) -> int:
+    """The activation's X once targets are chosen: with a
+    ``PayXEnergyCost`` atom it is the targeted graveyard card's mana
+    value, and that much energy is paid now."""
+    if not any(isinstance(a, PayXEnergyCost) for a in ability.cost.extra_costs):
+        return x
+    p = state.player_by_id(player_id)
+    card = next(
+        (c for c in p.graveyard if targets and c.id == targets[0][1]), None,
+    )
+    if card is None:
+        return x
+    x = card.printing.mana_cost.total
+    p.energy -= x
+    state.log.append(f"P{player_id} pays {x} energy (now {p.energy})")
+    return x
+
+
+@dataclass(frozen=True)
+class ReturnTargetGraveyardCreatureWithMVX(Effect):
+    """"Return target creature card with mana value X from your graveyard
+    to the battlefield." -- X is the ability's X (``resolving_x_value``,
+    the energy paid). While choosing, cards with mana value up to the
+    controller's energy are legal; on resolution the card must still be
+    there with mana value exactly X."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        p = state.player_by_id(controller_id)
+        return [
+            ("graveyard_card", c.id) for c in p.graveyard
+            if c.printing.is_creature
+            and c.printing.mana_cost.total <= p.energy
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import put_into_battlefield
+
+        if not targets or targets[0][0] != "graveyard_card":
+            return
+        p = state.player_by_id(controller_id)
+        card = next((c for c in p.graveyard if c.id == targets[0][1]), None)
+        if (
+            card is None or not card.printing.is_creature
+            or card.printing.mana_cost.total != state.resolving_x_value
+        ):
+            state.log.append("reanimation target is no longer legal")
+            return
+        p.graveyard.remove(card)
+        state.log.append(
+            f"P{controller_id} returns {card.printing.name} to the battlefield"
+        )
+        put_into_battlefield(state, card, controller_id)
+
+    def describe(self) -> str:
+        return (
+            "return target creature card with mana value X from your "
+            "graveyard to the battlefield"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
@@ -1694,6 +1801,10 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "PayXEnergyCost",
+    "ReturnSourceToHandCost",
+    "ReturnTargetGraveyardCreatureWithMVX",
+    "x_from_cost_atoms",
     "OnceEachTurnCost",
     "HasNotAddedManaWithThisAbilityThisTurn",
     "MayAddManaPerTargetOpponentsSubtype",

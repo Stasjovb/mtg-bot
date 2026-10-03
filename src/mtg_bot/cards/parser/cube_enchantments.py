@@ -66,6 +66,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Aluren",
     "Animate Dead",
     "Carpet of Flowers",
+    "Chthonian Nightmare",
     "Dream Halls",
     "Exploration",
     "Fastbond",

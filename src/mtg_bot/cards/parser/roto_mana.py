@@ -241,6 +241,14 @@ _CONVERGE_DRAW_DAMAGE_LIFE_RE = re.compile(
     r"damage to any target, and you gain X life, where X is the number of "
     r"colors of mana spent to cast this spell$"
 )
+# "return target creature card with mana value X from your graveyard to
+# the battlefield" (Chthonian Nightmare, X paid in energy). A literal: the
+# only card in the pools with this X-matched reanimation; broader grammar
+# deferred until a second example exists.
+_RETURN_GRAVEYARD_CREATURE_MV_X_LINE = (
+    "return target creature card with mana value X from your graveyard to "
+    "the battlefield"
+)
 # "<effect naming this creature> and it <verb phrase>" -- the pronoun is
 # the source (Vivi Ornitier: "put a +1/+1 counter on this creature and it
 # deals 1 damage to each opponent").
@@ -374,6 +382,8 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
             total_power=int(m.group("n")),
         )
+    if phrase == _RETURN_GRAVEYARD_CREATURE_MV_X_LINE:
+        return rm.ReturnTargetGraveyardCreatureWithMVX()
     m = _EFFECT_ON_SELF_AND_IT_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.base import Sequence
@@ -654,6 +664,26 @@ def _once_each_turn_ability(body: str, name: str):
     return replace(
         ability, cost=cost, activate_only_during_your_turn=True,
     )
+
+
+_RETURN_SELF_TO_HAND_PIECE = re.compile(
+    r"^Return this (?:enchantment|artifact|creature|permanent) to its "
+    r"owner's hand$"
+)
+
+
+def parse_roto_cost_piece(piece: str):
+    """A composable ``ActivationCost.extra_costs`` atom of this bucket
+    (the activated grammar's last cost-piece fallback), or ``None``."""
+    if _disabled():
+        return None
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    if piece == "Pay X {E}":
+        return rm.PayXEnergyCost()
+    if _RETURN_SELF_TO_HAND_PIECE.match(piece):
+        return rm.ReturnSourceToHandCost()
+    return None
 
 
 def _tapped_for_mana_trigger(line: str):

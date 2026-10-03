@@ -19741,3 +19741,7 @@ Roto-only cards of `docs/ROTO_COVERAGE_PLAN.md` section 4. Grammar: `src/mtg_bot
 ### Vivi Ornitier
 
 **Where:** `roto_mana._once_each_turn_ability` (the creature builder's last-fallback hook), `OnceEachTurnCost` (`GameObject.once_each_turn_used`), `AddFormulaManaInAnyCombination` (an `AddManaInAnyCombination`, so the `{0}` ability is a mana ability), the "<effect on this creature> and it deals ..." sequence. **What:** "Activate only during your turn and only once each turn" is the `activate_only_during_your_turn` gate plus a once-per-turn cost atom. As an explicit mana ability it shares the engine-wide sorcery-window shortcut (cube-lands #1), so its mana can't be made in response during your turn.
+
+### Chthonian Nightmare: X chosen through the target
+
+**Where:** `roto_mana.PayXEnergyCost` / `ReturnSourceToHandCost` (cost atoms via `roto_mana.parse_roto_cost_piece`, the activated grammar's last cost-piece fallback), `x_from_cost_atoms` (hooked just before `_activate_ability` pays `extra_costs`), `ReturnTargetGraveyardCreatureWithMVX`. **What:** CR 601.2b announces X before targets; here the target (a creature card in your graveyard with mana value up to your energy) is chosen and X is set to its mana value, then that much energy is paid. The outcome set is identical (an X matching no card leaves no legal target), only the decision order differs. On resolution the card must still have mana value exactly X. The ability is sorcery-speed and leaves the stack independent of the returned Nightmare.

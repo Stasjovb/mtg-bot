@@ -4403,6 +4403,13 @@ def _activate_ability(
     # filtered permanents. Paid after target selection, before
     # exile-self / sacrifice-self.
     if ability.cost.extra_costs:
+        # Vintage Roto P3: "Pay X {E}" whose X is the targeted card's
+        # mana value (Chthonian Nightmare) sets the ability's X.
+        from mtg_bot.effects.generic.roto_mana import x_from_cost_atoms
+
+        ability_x_value = x_from_cost_atoms(
+            state, player_id, ability, targets, ability_x_value,
+        )
         from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
 
         cost_paid_objects.extend(

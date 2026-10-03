@@ -109,3 +109,68 @@ def test_amped_raptor_reanimated_after_a_hand_cast_doesnt_count_as_cast():
     drain_stack(s)
     assert not raptor.entered_from_hand_cast
     assert bear in s.players[0].library
+
+
+# ---------------------------------------------------------------------------
+# Chthonian Nightmare
+# ---------------------------------------------------------------------------
+
+
+def test_chthonian_nightmare_reanimates_for_energy():
+    from mtg_bot.actions import ActivateAbility, put_into_battlefield
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import legal_actions
+    from tests._roto_helpers import to_graveyard
+
+    s = arena()
+    night = s.new_object(printing("Chthonian Nightmare"), owner_id=0, zone=Zone.STACK)
+    put_into_battlefield(s, night, 0)
+    drain_stack(s)
+    assert s.players[0].energy == 3
+    fodder = put(s, make_creature("Thrull", "{B}", 1, 1), 0)
+    ogre = to_graveyard(s, make_creature("Ogre", "{2}{R}", 3, 3), 0)
+    to_graveyard(s, make_creature("Giant", "{4}{R}", 5, 5), 0)  # too big
+    act = ActivateAbility(source_id=night.id, ability_index=0)
+    assert act in legal_actions(s, 0)
+    s.players[0].agent.targets = [("graveyard_card", ogre.id)]
+    apply_action(s, 0, act)
+    assert night in s.players[0].hand and fodder not in s.battlefield
+    assert s.players[0].energy == 0
+    drain_stack(s)
+    assert ogre in s.battlefield
+
+
+def test_chthonian_nightmare_needs_a_creature_to_sacrifice_and_a_target():
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.legal import legal_actions
+    from tests._roto_helpers import to_graveyard
+
+    s = arena()
+    night = put(s, printing("Chthonian Nightmare"), 0)
+    s.players[0].energy = 2
+    to_graveyard(s, make_creature("Ogre", "{2}{R}", 3, 3), 0)
+    act = ActivateAbility(source_id=night.id, ability_index=0)
+    assert act not in legal_actions(s, 0)  # nothing to sacrifice
+    put(s, make_creature("Thrull", "{B}", 1, 1), 0)
+    assert act not in legal_actions(s, 0)  # mana value 3 > 2 energy
+    s.players[0].energy = 3
+    assert act in legal_actions(s, 0)
+
+
+def test_reanimation_target_must_still_match_x():
+    from tests._roto_helpers import to_graveyard
+
+    s = arena()
+    ogre = to_graveyard(s, make_creature("Ogre", "{2}{R}", 3, 3), 0)
+    eff = rm.ReturnTargetGraveyardCreatureWithMVX()
+    s.resolving_x_value = 2
+    eff.resolve(s, 0, (("graveyard_card", ogre.id),))
+    assert ogre in s.players[0].graveyard
+    eff.resolve(s, 0, ())
+    assert "mana value X" in eff.describe()
+    assert rm.PayXEnergyCost().describe() == "Pay X {E}"
+    assert "owner's hand" in rm.ReturnSourceToHandCost().describe()
+    night = printing("Chthonian Nightmare").activated_abilities[0]
+    assert rm.x_from_cost_atoms(s, 0, night, (), 4) == 4  # no target card
+    spire = printing("Spire of Industry").activated_abilities[0]
+    assert rm.x_from_cost_atoms(s, 0, spire, (), 7) == 7  # no energy atom
