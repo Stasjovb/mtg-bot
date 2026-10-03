@@ -83,8 +83,8 @@ def _drain(state):
 
 
 def test_every_bucket_card_is_claimed(cube):
-    # The name gate also opts Vintage Roto enchantments in
-    # (docs/ROTO_COVERAGE_PLAN.md): each name is claimed in one of the pools.
+    # Vintage Roto enchantments share the builder's name gate
+    # (docs/ROTO_COVERAGE_PLAN.md); they are claimed in the roto pool.
     roto = OracleParserCardSource(pool="roto").get_printings()
     for name in CUBE_ENCHANTMENT_NAMES:
         assert name in cube or name in roto, name
