@@ -311,7 +311,7 @@ def _try_build_line_composed_land(
     opening_hand_action = None
     gated: tuple[str, str] | None = None  # (counter kind, base color)
     self_refs = ("this land", card["name"])
-    roto_fields: dict = {}  # Vintage Roto P3 lines (``roto_mana``)
+    roto_mana_fields: dict = {}  # Vintage Roto P3 lines (``roto_mana``)
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
         if m is not None:
@@ -403,7 +403,7 @@ def _try_build_line_composed_land(
         roto = parse_roto_land_line(line, card["name"])
         if roto is not None:
             # Vintage Roto P3 lines (Cavern of Souls, Dark Depths).
-            merge_roto_fields(roto_fields, roto.fields)
+            merge_roto_fields(roto_mana_fields, roto.fields)
             activated.extend(roto.activated)
             continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
@@ -489,11 +489,11 @@ def _try_build_line_composed_land(
         opening_hand_action=opening_hand_action,
     )
     if "Snow" in supertypes or tuple(card_types) != ("Land",):
-        roto_fields["supertypes"] = tuple(supertypes)
-        roto_fields["card_types"] = tuple(card_types)
-        roto_fields["type_line"] = card["type_line"]
-    if roto_fields:
+        roto_mana_fields["supertypes"] = tuple(supertypes)
+        roto_mana_fields["card_types"] = tuple(card_types)
+        roto_mana_fields["type_line"] = card["type_line"]
+    if roto_mana_fields:
         from dataclasses import replace
 
-        printing = replace(printing, **roto_fields)
+        printing = replace(printing, **roto_mana_fields)
     return printing
