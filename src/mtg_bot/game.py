@@ -2336,9 +2336,11 @@ def effective_activated_abilities(
     - The Dominion Bracelet: the equipped creature gains the
       control-opponent-next-turn activated ability.
 
-    Magus of the Moon: nonbasic lands lose their activated abilities
-    entirely (their {T}: Add {R} tap is handled via
-    ``effective_land_produces``, not as an activated ability).
+    Magus of the Moon: nonbasic lands lose their printed activated
+    abilities (their {T}: Add {R} tap is handled via
+    ``effective_land_produces``, not as an activated ability); abilities
+    granted by other effects still apply (CR 305.7 removes only
+    rules-text abilities).
 
     Lignify-style "lose all abilities" (layer 6) is processed in
     CR-613 timestamp order alongside ``grant_activated_ability``
@@ -2357,17 +2359,20 @@ def effective_activated_abilities(
     # loses its abilities derived from rules text and old land
     # types. Routes through the same registry/synthesis path as
     # ``effective_subtypes`` so the two stay consistent.
-    if (
+    # Abilities other effects grant it (an Aura's "Enchanted land has
+    # ..." -- Tarmogoyf Nest) are not rules text and still apply.
+    moon_land = (
         obj.printing.is_land
         and _has_basic_land_type_set_effect(state, obj)
-    ):
-        return ()
+    )
 
     # DSK Rooms: filter out activated abilities whose ``room_half``
     # is not in ``obj.unlocked_halves`` — those halves are locked,
     # so their abilities are inert. Non-Room abilities (room_half ==
     # None) are never filtered.
-    if obj.printing.is_room:
+    if moon_land:
+        base = []
+    elif obj.printing.is_room:
         base = [
             a for a in obj.printing.activated_abilities
             if getattr(a, "room_half", None) is None

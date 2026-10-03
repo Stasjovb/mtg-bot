@@ -1360,6 +1360,67 @@ _LINE_RECOGNIZERS = (
 )
 
 
+# 'Enchanted <permanent> has "<cost>: Create a <Name> token."' with the
+# token defined by the line's reminder text, "(It's a <mana cost>
+# <subtypes> creature with "<characteristic-defining P/T sentence>")"
+# (Tarmogoyf Nest -- roto integration). The only reminder-defined token
+# in the pools, so the definition grammar reads just that CDA-creature
+# shape; a second such token would widen ``_TOKEN_REMINDER``.
+_ENCHANTED_HAS_CREATE_TOKEN = re.compile(
+    r"^Enchanted (?:land|creature|artifact|permanent) has "
+    r"\"(?P<cost>[^\":]+): Create an? (?P<name>[A-Z][A-Za-z']*) token\.\"$"
+)
+_TOKEN_REMINDER = re.compile(
+    r"\(It's an? (?P<cost>(?:\{[^}]+\})+) "
+    r"(?P<subs>[A-Z][a-z]+(?: [A-Z][a-z]+)*) creature with "
+    r"\"(?P<cda>[^\"]+)\"\)"
+)
+
+
+def _reminder_defined_token(name: str, oracle_text: str):
+    """The token printing a card's reminder text defines for ``name``,
+    or ``None``."""
+    from dataclasses import replace
+
+    from mtg_bot.cards.base import make_token_creature, parse_mana_cost
+    from mtg_bot.cards.parser.printing_keywords import (
+        _parse_dynamic_pt_formula_line,
+    )
+
+    found = _TOKEN_REMINDER.findall(oracle_text)
+    if len(found) != 1:
+        return None
+    cost, subs, cda = found[0]
+    if not cda.startswith(f"{name}'s "):
+        return None
+    formula = _parse_dynamic_pt_formula_line(cda)
+    if formula is None:
+        return None
+    token = make_token_creature(name, 0, 0, subtypes=tuple(subs.split()))
+    # Its colors come from its mana cost (CR 202.2); the CDA sets P/T in
+    # every zone (``game._dynamic_pt``).
+    return replace(
+        token, mana_cost_str=cost, mana_cost=parse_mana_cost(cost),
+        dynamic_pt_formula=formula,
+    )
+
+
+def _enchanted_has_create_token(line: str, card: dict) -> BoardLine | None:
+    from mtg_bot.cards.base import ActivatedAbility
+    from mtg_bot.cards.parser.activated import _parse_activation_cost
+    from mtg_bot.effects.generic.tokens import CreateToken
+
+    m = _ENCHANTED_HAS_CREATE_TOKEN.match(line)
+    if m is None:
+        return None
+    token = _reminder_defined_token(m.group("name"), card.get("oracle_text", ""))
+    cost = _parse_activation_cost(m.group("cost"))
+    if token is None or cost is None:
+        return None
+    ability = ActivatedAbility(cost=cost, effect=CreateToken(token_printing=token))
+    return BoardLine(fields={"attached_grants_activated_abilities": (ability,)})
+
+
 def parse_roto_board_line(line: str, card: dict) -> BoardLine | None:
     """A whole oracle line of a P5 permanent the builder's grammar
     declined (reminder text stripped)."""
@@ -1368,6 +1429,9 @@ def parse_roto_board_line(line: str, card: dict) -> BoardLine | None:
     from mtg_bot.cards.parser.triggers import _substitute_self_name
 
     line = _substitute_self_name(line.strip(), card.get("name", ""))
+    granted = _enchanted_has_create_token(line, card)
+    if granted is not None:
+        return granted
     for recognizer in _LINE_RECOGNIZERS:
         parsed = recognizer(line)
         if parsed is not None:

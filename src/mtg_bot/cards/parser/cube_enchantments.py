@@ -100,6 +100,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Squandered Resources",
     "Stony Silence",
     "Survival of the Fittest",
+    "Tarmogoyf Nest",
     "Temporary Lockdown",
     "Touch the Spirit Realm",
     "Underworld Breach",
@@ -330,7 +331,9 @@ def build_cube_enchantment(card: dict) -> CardPrinting | None:
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )
-    if tuple(card_types) != ("Enchantment",):
+    # "Kindred Enchantment — Lhurgoyf Aura" (Tarmogoyf Nest): Kindred is a
+    # card type too (CR 308; graveyard card-type counts see it).
+    if tuple(card_types) not in (("Enchantment",), ("Kindred", "Enchantment")):
         return None
     acc = _Accumulator()
     for raw in card.get("oracle_text", "").split("\n"):
@@ -443,6 +446,13 @@ def _assemble(card, supertypes, subtypes, acc: _Accumulator) -> CardPrinting:
                 type_line=card.get("type_line", printing.type_line),
             )
     updates = dict(acc.printing_fields)
+    if "Kindred" in card.get("type_line", "").split("—")[0].split():
+        # Keep the printed Kindred type and its subtypes (Lhurgoyf Aura).
+        updates.update(
+            card_types=("Kindred",) + tuple(printing.card_types),
+            subtypes=tuple(subtypes),
+            type_line=card["type_line"],
+        )
     if acc.cost_reductions:
         updates["cost_reductions"] = tuple(acc.cost_reductions)
     if acc.named_counters:

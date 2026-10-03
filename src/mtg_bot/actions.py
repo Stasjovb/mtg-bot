@@ -5557,6 +5557,19 @@ def apply_aura_static_grants_on_attach(
             ),
         )
 
+    for ability in aura.printing.attached_grants_activated_abilities:
+        state.add_continuous_effect(
+            source_id=aura.id,
+            layer=6,
+            kind="grant_activated_ability",
+            target_id=target.id,
+            params=(ability,),
+            description=(
+                f"{aura.printing.name}: {target.printing.name} has "
+                f"an activated ability"
+            ),
+        )
+
     if aura.printing.attached_grants_subtype is not None:
         sub = aura.printing.attached_grants_subtype
         state.add_continuous_effect(

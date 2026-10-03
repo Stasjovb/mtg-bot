@@ -711,6 +711,10 @@ class CardPrinting:
     attached_sets_base_pt: "tuple[int, int] | None" = None
     attached_grants_lose_all_abilities: bool = False
     attached_grants_subtype: "str | None" = None
+    # "Enchanted <permanent> has "<activated ability>"" (Tarmogoyf Nest;
+    # roto integration): layer 6 ``"grant_activated_ability"`` entries on
+    # the enchanted permanent while the Aura is attached.
+    attached_grants_activated_abilities: tuple = ()
     # Clone-style ETB replacement: "You may have this creature enter
     # as a copy of any creature on the battlefield." When True, the
     # spell-resolution path prompts the controller for a target
