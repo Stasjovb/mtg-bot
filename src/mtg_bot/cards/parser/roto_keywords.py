@@ -19,7 +19,8 @@ Entry points, each called from one hook:
   exchange), hand keyword abilities (Transmute, "Cycling—Pay N life."),
   prevention / replacement statics ("Prevent all damage that would be
   dealt to <self>.", Vizier of Remedies' "-1/-1 counters minus one"),
-  Plot on a permanent card, Toxic N, Split second and Echo.
+  Plot on a permanent card, Toxic N, Split second, Echo and Start your
+  engines!.
 * :func:`parse_hand_keyword_line` -- also ``land_lines`` (Tolaria West).
 * :func:`parse_p6_effect` -- last in ``effects._parse_effect``.
 * :func:`parse_p6_trigger_phrase` -- last in
@@ -181,6 +182,31 @@ _DAMAGE_THAT_PLAYER_HAND_SIZE_RE = re.compile(
     r"number of cards in their hand$",
     re.IGNORECASE,
 )
+_SACRIFICE_OR_DISCARD_RE = re.compile(
+    r"^each opponent sacrifices an? (?P<np>[A-Za-z ]+?) of their choice\. "
+    r"each opponent who can't discards a card$",
+    re.IGNORECASE,
+)
+
+
+def _noun_or_subtype_filter(np: str):
+    """"creature or Vehicle": each arm a permanent noun phrase or a
+    capitalized subtype."""
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.object_predicates import HasSubtype
+
+    result = None
+    for item in np.split(" or "):
+        item = item.strip()
+        f = parse_permanent_phrase(item.lower()) if item[:1].islower() else None
+        if f is None and item[:1].isupper() and item.isalpha():
+            f = HasSubtype(item)
+        if f is None:
+            return None
+        result = f if result is None else result | f
+    return result
+
+
 _TARGET_OPPONENT_GETS_POISON_RE = re.compile(
     r"^target opponent gets (?P<n>a|an|\w+) poison counters?$", re.IGNORECASE,
 )
@@ -230,6 +256,20 @@ def _parse_keyword_action_phrase(phrase: str):
 
     if _REGENERATE_SELF_RE.match(phrase):
         return RegenerateSource()
+    m = _SACRIFICE_OR_DISCARD_RE.match(phrase.strip())
+    if m is not None:
+        from mtg_bot.effects.generic.roto_keywords import (
+            EachOpponentSacrificesOrDiscards,
+        )
+
+        f = _noun_or_subtype_filter(m.group("np"))
+        if f is None:
+            return None
+        return EachOpponentSacrificesOrDiscards(permanent_filter=f, label=m.group("np"))
+    if phrase.strip().lower() == "you gain life equal to your speed":
+        from mtg_bot.effects.generic.roto_keywords import GainLifeEqualToYourSpeed
+
+        return GainLifeEqualToYourSpeed()
     if phrase.strip().lower() == "exile all graveyards":
         from mtg_bot.effects.generic.exile import ExileAllGraveyards
 
@@ -700,6 +740,7 @@ def _self_trigger_counters_on_it(line: str):
     )
 _TOXIC_RE = re.compile(r"^Toxic (?P<n>\d+)$")
 _SPLIT_SECOND_LINE = "Split second"
+_START_YOUR_ENGINES_LINE = "Start your engines!"
 _ECHO_RE = re.compile(r"^Echo (?P<cost>(?:\{[^}]+\})+)$")
 
 
@@ -770,6 +811,9 @@ def _line_patch(line: str, card: dict):
     if m is not None and "Instant" not in type_line and "Sorcery" not in type_line:
         trigger = _echo_trigger(m.group("cost"))
         return lambda p: _attach_trigger(p, trigger)
+    if line.strip() == _START_YOUR_ENGINES_LINE:
+        # CR 702.179: ``roto_keywords.update_speed``.
+        return lambda p: _attach_keyword(p, "start your engines!")
     if line.strip() == _SPLIT_SECOND_LINE:
         # Split second (CR 702.61): ``roto_keywords.filter_split_second``.
         return lambda p: _attach_keyword(p, "split second")

@@ -52,6 +52,10 @@ def note_life_losses(state: GameState) -> None:
         if p.life < p.life_checkpoint:
             p.lost_life_this_turn = True
         p.life_checkpoint = p.life
+    # Speed (CR 702.179; roto P6) reads the life-loss latch.
+    from mtg_bot.effects.generic.roto_keywords import update_speed
+
+    update_speed(state)
 
 
 def next_step(state: GameState, current: Step) -> "Step | None":

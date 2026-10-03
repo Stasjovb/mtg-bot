@@ -3172,6 +3172,12 @@ class Player:
     # leave it (CR 313.2) and never change, so the immutable tuple is
     # safely shared by every clone.
     conspiracies: tuple = ()
+    # Speed (CR 702.179; "Start your engines!", roto P6): 0 = no speed,
+    # else 1-4 for the rest of the game; ``speed_increased_turn`` is the
+    # turn it last increased (once each turn). Updated by
+    # ``effects.generic.roto_keywords.update_speed``.
+    speed: int = 0
+    speed_increased_turn: int = 0
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

@@ -831,6 +831,111 @@ class TargetPlayerLosesTheGame(Effect):
         return "that player loses the game"
 
 
+# ------------------------------------------- Start your engines! / speed
+
+START_YOUR_ENGINES = "start your engines!"
+MAX_SPEED = 4
+
+
+def update_speed(state: "GameState") -> None:
+    """Speed (CR 702.179), applied at every state-based-action check
+    (``turn.note_life_losses``):
+
+    * "Start your engines!": a player who controls a permanent with it
+      and has no speed gets speed 1;
+    * once each turn, if one or more of the active player's opponents
+      lost life this turn and the active player's speed is 1-3, it
+      increases by 1 (``Player.lost_life_this_turn`` is the engine's
+      per-turn life-loss latch).
+    """
+    players = state.players
+    for p in players:
+        if p.speed == 0 and any(
+            o.controller_id == p.id and START_YOUR_ENGINES in o.printing.keywords
+            for o in state.battlefield
+        ):
+            p.speed = 1
+            state.log.append(f"P{p.id}'s speed becomes 1")
+    if not players:
+        return
+    ap = state.active_player()
+    if not (0 < ap.speed < MAX_SPEED) or ap.speed_increased_turn == state.turn_number:
+        return
+    if any(o.id != ap.id and o.lost_life_this_turn for o in players):
+        ap.speed += 1
+        ap.speed_increased_turn = state.turn_number
+        state.log.append(f"P{ap.id}'s speed increases to {ap.speed}")
+
+
+@dataclass(frozen=True)
+class GainLifeEqualToYourSpeed(Effect):
+    """"You gain life equal to your speed." (Momentum Breaker.)"""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import gain_life
+
+        speed = state.player_by_id(controller_id).speed
+        if speed > 0:
+            gain_life(state, controller_id, speed)
+            state.log.append(f"P{controller_id} gains {speed} life (speed)")
+
+    def describe(self) -> str:
+        return "you gain life equal to your speed"
+
+
+@dataclass(frozen=True)
+class EachOpponentSacrificesOrDiscards(Effect):
+    """"Each opponent sacrifices a <np> of their choice. Each opponent who
+    can't discards a card." (Momentum Breaker.)"""
+
+    permanent_filter: object = None
+    label: str = "permanent"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.card_flow import discard_card
+        from mtg_bot.player_protections import opponent_effect_blocked_for
+        from mtg_bot.turn import sacrifice
+
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            if opponent_effect_blocked_for(state, p.id):
+                continue  # "can't make you discard or sacrifice" (Tamiyo)
+            prior = state.resolving_controller_id
+            try:
+                state.resolving_controller_id = p.id
+                legal = [
+                    o for o in state.battlefield
+                    if o.controller_id == p.id
+                    and self.permanent_filter.test(o, state)
+                ]
+            finally:
+                state.resolving_controller_id = prior
+            if legal:
+                pick = p.agent.choose_sacrifice(state, p.id, [o.id for o in legal])
+                chosen = next((o for o in legal if o.id == pick), legal[0])
+                state.log.append(f"P{p.id} sacrifices {chosen.printing.name}")
+                sacrifice(state, chosen)
+                continue
+            if not p.hand:
+                continue
+            pick = p.agent.choose_discard(state, p.id, [c.id for c in p.hand])
+            card = next((c for c in p.hand if c.id == pick), p.hand[0])
+            discard_card(state, p, card)
+
+    def describe(self) -> str:
+        return (
+            f"each opponent sacrifices a {self.label} of their choice; each "
+            "opponent who can't discards a card"
+        )
+
+
 # ------------------------------------------- can't lose / can't win (Grace)
 
 CANT_LOSE_KIND = "cant_lose_the_game"           # params=(player_id,)
@@ -951,6 +1056,11 @@ def apply_toxic(state: "GameState", sources_hit_player) -> None:
 
 
 __all__ = [
+    "EachOpponentSacrificesOrDiscards",
+    "GainLifeEqualToYourSpeed",
+    "MAX_SPEED",
+    "START_YOUR_ENGINES",
+    "update_speed",
     "CANT_LOSE_KIND",
     "LIFE_FLOOR_KIND",
     "OPPONENTS_CANT_WIN_KIND",
