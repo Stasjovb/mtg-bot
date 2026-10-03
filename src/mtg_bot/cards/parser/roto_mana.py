@@ -747,6 +747,36 @@ _ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE = re.compile(
 )
 
 
+# "When this creature enters, if {C}{C} was spent to cast it, <effect>."
+# (Wistfulness).
+_ETB_IF_MANA_SPENT_RE = re.compile(
+    r"^When this creature enters, if (?P<mana>(?:\{[WUBRG]\})+) was spent "
+    r"to cast it, (?P<eff>.+)\.$"
+)
+
+
+def _etb_if_mana_spent(m):
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+    from mtg_bot.cards.parser.effects import _parse_effect
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import roto_mana as rm
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    colors = re.findall(r"\{([WUBRG])\}", m.group("mana"))
+    if len(set(colors)) != 1:
+        return None
+    eff = _parse_effect(m.group("eff"))
+    if eff is None:
+        return None
+    return WGLine(triggers=(TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf() & rm.ManaSpentToCastSource(
+            color=colors[0], count=len(colors),
+        ),
+        effect=eff,
+    ),))
+
+
 def _once_each_turn_ability(body: str, name: str):
     from dataclasses import replace
 
@@ -838,6 +868,9 @@ def parse_roto_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.creature_wg_lines import WGLine
 
+    m = _ETB_IF_MANA_SPENT_RE.match(line)
+    if m is not None:
+        return _etb_if_mana_spent(m)
     m = _ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE.match(line)
     if m is not None:
         ability = _once_each_turn_ability(m.group("body"), card["name"])

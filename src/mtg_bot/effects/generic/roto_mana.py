@@ -954,6 +954,100 @@ class HasNotAddedManaWithThisAbilityThisTurn(TriggerPredicate):
         return source.ability_mana_added_turn != state.turn_number
 
 
+# ---------------------------------------------------------------------------
+# "if {C}{C} was spent to cast it" (Wistfulness)
+# ---------------------------------------------------------------------------
+
+
+def _colors_assignable(sources: tuple, demands) -> bool:
+    """Can distinct spent units be assigned colors so each ``(color,
+    n)`` demand gets ``n`` units of that color? (bipartite matching of
+    demand slots to units)."""
+    slots = [c for c, n in demands for _ in range(n)]
+    match: dict[int, int] = {}
+
+    def _augment(slot: int, seen: set) -> bool:
+        for unit, colors in enumerate(sources):
+            if slots[slot] not in colors or unit in seen:
+                continue
+            seen.add(unit)
+            if unit not in match or _augment(match[unit], seen):
+                match[unit] = slot
+                return True
+        return False
+
+    return all(_augment(i, set()) for i in range(len(slots)))
+
+
+def _mana_spent_demands(printing) -> tuple:
+    """The ``(color, n)`` of every "if {C}{C} was spent" condition on
+    ``printing``'s triggered abilities."""
+    out: list = []
+
+    def _walk(pred) -> None:
+        if isinstance(pred, ManaSpentToCastSource):
+            out.append((pred.color, pred.count))
+        for attr in ("left", "right", "inner"):
+            child = getattr(pred, attr, None)
+            if child is not None:
+                _walk(child)
+
+    for trig in printing.triggered_abilities:
+        _walk(trig.predicate)
+    return tuple(dict.fromkeys(out))
+
+
+def spent_mana_choice(state: "GameState", obj) -> frozenset:
+    """The "{C}{C} was spent" conditions ``obj``'s controller settled the
+    spent mana's colors to satisfy: the most conditions that hold
+    together (each flexible unit -- a dual land, an "any" coin -- is one
+    color of its controller's choice); between several such sets the
+    controller picks with ``choose_mode``. Settled once per cast and
+    cached on the object."""
+    from itertools import combinations
+
+    if obj.spent_color_choice is not None:
+        return obj.spent_color_choice
+    demands = _mana_spent_demands(obj.printing)
+    sources = obj.mana_spent_color_sources
+    best: list = [frozenset()]
+    for size in range(len(demands), 0, -1):
+        feasible = [
+            frozenset(combo) for combo in combinations(demands, size)
+            if _colors_assignable(sources, combo)
+        ]
+        if feasible:
+            best = feasible
+            break
+    choice = best[0]
+    agent = state.player_by_id(obj.controller_id).agent
+    if len(best) > 1 and agent is not None:
+        labels = [
+            " and ".join("{" + c + "}" * n for c, n in sorted(s)) for s in best
+        ]
+        idx = agent.choose_mode(state, obj.controller_id, labels)
+        if isinstance(idx, int) and 0 <= idx < len(best):
+            choice = best[idx]
+    obj.spent_color_choice = choice
+    return choice
+
+
+@dataclass(frozen=True)
+class ManaSpentToCastSource(TriggerPredicate):
+    """Intervening-if "if {C}...{C} (``count`` of ``color``) was spent to
+    cast it" on the source's enters trigger: the source entered by
+    resolving as the spell that was cast, and the settled color
+    assignment (``spent_mana_choice``) covers this condition."""
+
+    color: str = "G"
+    count: int = 2
+
+    def matches(self, state, subjects, source) -> bool:
+        if getattr(source, "entered_from_zone", "") != "stack":
+            return False
+        return (self.color, self.count) in spent_mana_choice(state, source)
+
+
 @dataclass(frozen=True)
 class EnteredThisTurn(ObjectPredicate):
     """A permanent that entered the battlefield this turn ("creatures
@@ -2003,6 +2097,8 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "ManaSpentToCastSource",
+    "spent_mana_choice",
     "CopyImprintedCardMayCastFree",
     "choose_color_as_enters",
     "enchantable_land",

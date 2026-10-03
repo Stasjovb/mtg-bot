@@ -251,5 +251,11 @@ def test_roto_helpers_build_through_the_claim_path():
 
     assert roto_card("Smokestack")["name"] == "Smokestack"
     assert printing("Black Lotus").name == "Black Lotus"
+    from mtg_bot.cards.parser.source import build_card_record
+
+    unclaimed = next(
+        c["name"] for c in pools.load_pool_cards("roto")
+        if build_card_record(c) is None
+    )
     with pytest.raises(AssertionError, match="should be claimed"):
-        printing("Wistfulness")
+        printing(unclaimed)

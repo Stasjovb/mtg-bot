@@ -2905,6 +2905,11 @@ def _cast_spell(
     # Total mana spent ("if five or more mana was spent to cast that
     # spell", Exhibition Tidecaller; Vintage Roto P3).
     card.mana_spent_to_cast = len(color_sources)
+    # Which colors each spent unit could have been ("if {G}{G} was spent
+    # to cast it", Wistfulness); the color assignment is settled when a
+    # condition first reads it (``roto_mana.spent_mana_choice``).
+    card.mana_spent_color_sources = tuple(color_sources)
+    card.spent_color_choice = None
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.

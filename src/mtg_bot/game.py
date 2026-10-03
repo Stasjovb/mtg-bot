@@ -994,6 +994,11 @@ class GameObject:
     # The color chosen as this permanent entered
     # (``CardPrinting.enters_choosing_color``; Utopia Sprawl).
     chosen_color: Optional[str] = None
+    # Per-unit possible colors of the mana spent to cast this object
+    # (``actions._cast_spell``) and the "if {C}{C} was spent" conditions
+    # the controller settled them to satisfy (``roto_mana``).
+    mana_spent_color_sources: tuple = ()
+    spent_color_choice: Optional[frozenset] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
