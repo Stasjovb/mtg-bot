@@ -333,11 +333,17 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
 
     atom = parse_rmc_cost_piece(piece)
     if atom is None:
-        # Vintage Roto P3 cost atoms ("Pay X {E}", "Return this
-        # enchantment to its owner's hand").
-        from mtg_bot.cards.parser.roto_mana import parse_roto_cost_piece
+        # Vintage Roto P3 cost atoms ("Pay X {E}").
+        from mtg_bot.cards.parser.roto_mana import (
+            parse_roto_cost_piece as parse_roto_mana_cost_piece,
+        )
 
-        atom = parse_roto_cost_piece(piece)
+        atom = parse_roto_mana_cost_piece(piece)
+    if atom is None:
+        # Roto P2 cost atoms (return this permanent to its owner's hand).
+        from mtg_bot.cards.parser.roto_zones import parse_roto_zones_cost_piece
+
+        atom = parse_roto_zones_cost_piece(piece)
     if atom is not None:
         return _CostPiece(kind="extra", atom=atom)
     # Roto P1 cost pieces ("Remove a counter from this creature",

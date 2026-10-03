@@ -28,6 +28,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union
 
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
@@ -454,6 +458,7 @@ class SearchLibrary(Effect):
                 f"{SEARCH_DESTINATIONS}, got {self.destination!r}"
             )
 
+    @library_search
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import Zone, reveal_to, reveal_to_all, shuffle_library
@@ -478,6 +483,9 @@ class SearchLibrary(Effect):
             shuffle_library(state, controller_id)
             return
         p.library.remove(chosen)
+        if searched_card_taken(state, controller_id, chosen):
+            shuffle_library(state, controller_id)
+            return
         if self.reveal:
             reveal_to_all(state, chosen)
         dest = self.destination

@@ -647,24 +647,6 @@ class PayXEnergyCost:
         return "Pay X {E}"
 
 
-@dataclass(frozen=True)
-class ReturnSourceToHandCost:
-    """"Return this <permanent> to its owner's hand" as a cost."""
-
-    def payable(self, state, player_id: int, source) -> bool:
-        return source is not None and source in state.battlefield
-
-    def pay(self, state, player_id: int, source) -> list:
-        from mtg_bot.effects.generic.targets_helpers import _bounce_to_hand
-
-        state.log.append(f"P{player_id} returns {source.printing.name} (cost)")
-        _bounce_to_hand(state, source)
-        return []
-
-    def describe(self) -> str:
-        return "Return this permanent to its owner's hand"
-
-
 def x_from_cost_atoms(
     state: "GameState", player_id: int, ability, targets, x: int,
 ) -> int:
@@ -2530,7 +2512,6 @@ __all__ = [
     "CreatureDiedThisTurn",
     "roto_next_step",
     "PayXEnergyCost",
-    "ReturnSourceToHandCost",
     "ReturnTargetGraveyardCreatureWithMVX",
     "x_from_cost_atoms",
     "OnceEachTurnCost",

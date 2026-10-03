@@ -3058,6 +3058,12 @@ def _cast_spell(
             # "the sacrificed creature's mana value" (Burnt Offering)
             # reads it from ``state.resolving_cost_paid_objects``.
             spell_cost_paid_objects.append(sacrificed)
+    if card.printing.zone_abilities:
+        # Roto P2: the non-mana part of a flashback cost (Cabal Therapy),
+        # the optional bargain cost (Beseech the Mirror).
+        from mtg_bot.effects.generic.roto_zones import pay_zone_cast_costs
+
+        pay_zone_cast_costs(state, player_id, card, use_flashback=use_flashback)
     if use_escape and escape_exile_n:
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 
@@ -4927,6 +4933,15 @@ def _send_to_graveyard_or_library(state: GameState, card) -> None:
         owner.exile.append(card)
         state.log.append(f"{card.printing.name} is exiled instead")
         return
+    from mtg_bot.effects.generic.roto_zones import (
+        exile_instead_of_graveyard,
+        graveyard_exile_instead_applies,
+    )
+
+    if graveyard_exile_instead_applies(state, card):
+        # Roto P2 exile-instead replacements (Rest in Peace, ...).
+        exile_instead_of_graveyard(state, card)
+        return
     from mtg_bot.game import exile_with_void_counter, void_exile_replacement_active
 
     if not card.is_spell_copy and void_exile_replacement_active(
@@ -5712,6 +5727,12 @@ def put_into_battlefield(
         obj.cast_via_hand and obj.entered_from_zone == Zone.STACK.value
     )
     obj.cast_via_hand = False
+    if obj.printing.zone_abilities:
+        # Roto P2 entry hook: exile-instead sources apply only from now
+        # on; "enters with a counter for each ..." replacements.
+        from mtg_bot.effects.generic.roto_zones import on_enter_battlefield
+
+        on_enter_battlefield(state, obj)
     # A "void" graveyard replacement source (Dauthi Voidwalker) applies
     # only to cards put into its opponents' graveyards from now on.
     if obj.printing.void_exile_replacement:

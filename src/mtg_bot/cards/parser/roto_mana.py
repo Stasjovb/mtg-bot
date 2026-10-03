@@ -859,10 +859,10 @@ def _once_each_turn_ability(body: str, name: str):
     )
 
 
-_RETURN_SELF_TO_HAND_PIECE = re.compile(
-    r"^Return this (?:enchantment|artifact|creature|permanent) to its "
-    r"owner's hand$"
-)
+# "Return this <permanent> to its owner's hand" as a cost (Chthonian
+# Nightmare) is P2's ``roto_zones.parse_roto_zones_cost_piece`` (also
+# Recurring Nightmare), the next cost-piece fallback; P3's identical atom
+# was removed when the packages were integrated.
 
 
 # "[<Ability word> — ]This spell costs {N} less to cast if <condition>."
@@ -908,8 +908,6 @@ def parse_roto_cost_piece(piece: str):
 
     if piece == "Pay X {E}":
         return rm.PayXEnergyCost()
-    if _RETURN_SELF_TO_HAND_PIECE.match(piece):
-        return rm.ReturnSourceToHandCost()
     return None
 
 

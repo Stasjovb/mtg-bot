@@ -169,8 +169,12 @@ def test_reanimation_target_must_still_match_x():
     eff.resolve(s, 0, ())
     assert "mana value X" in eff.describe()
     assert rm.PayXEnergyCost().describe() == "Pay X {E}"
-    assert "owner's hand" in rm.ReturnSourceToHandCost().describe()
     night = printing("Chthonian Nightmare").activated_abilities[0]
+    # The return-to-hand cost atom is P2's (shared with Recurring
+    # Nightmare; P3's duplicate was dropped at integration).
+    from mtg_bot.effects.generic.roto_zones import ReturnSelfToOwnersHandCost
+
+    assert ReturnSelfToOwnersHandCost() in night.cost.extra_costs
     assert rm.x_from_cost_atoms(s, 0, night, (), 4) == 4  # no target card
     spire = printing("Spire of Industry").activated_abilities[0]
     assert rm.x_from_cost_atoms(s, 0, spire, (), 7) == 7  # no energy atom

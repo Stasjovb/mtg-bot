@@ -68,7 +68,9 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Animate Dead",
     "Back to Basics",
     "Blood Moon",
+    "Bridge from Below",
     "Carpet of Flowers",
+    "Chains of Mephistopheles",
     "Chthonian Nightmare",
     "Dream Halls",
     "Drop of Honey",
@@ -89,10 +91,13 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Opposition",
     "Parallax Wave",
     "Pernicious Deed",
+    "Recurring Nightmare",
+    "Rest in Peace",
     "Seal of Cleansing",
     "Sneak Attack",
     "Squandered Resources",
     "Stony Silence",
+    "Survival of the Fittest",
     "Temporary Lockdown",
     "Touch the Spirit Realm",
     "Underworld Breach",
@@ -289,6 +294,14 @@ def _roto_mana_lines(line: str, acc: _Accumulator) -> bool:
     return True
 
 
+def _roto_zones_line(line: str, acc: _Accumulator) -> bool:
+    """Roto P2 static lines (graveyard exile-instead replacements, the
+    Leylines' opening-hand line): ``cards.parser.roto_zones``."""
+    from mtg_bot.cards.parser.roto_zones import roto_zones_enchantment_line
+
+    return roto_zones_enchantment_line(line, acc)
+
+
 _LINE_RECOGNIZERS = (
     _fading,
     _cost_reduction,
@@ -299,6 +312,7 @@ _LINE_RECOGNIZERS = (
     _enchanted_creature_gets,
     _reanimation_aura_lines,
     _roto_mana_lines,
+    _roto_zones_line,
 )
 
 

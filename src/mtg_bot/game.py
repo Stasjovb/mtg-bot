@@ -893,6 +893,10 @@ class GameObject:
     # Number of times the spell this permanent resolved from was kicked
     # (multikicker; Batroc the Leaper).
     kick_count: int = 0
+    # Roto P2: this spell was cast with its bargain cost paid ("If this
+    # spell was bargained", Beseech the Mirror). Set on every cast of a
+    # card with a ``Bargain`` zone ability (``roto_zones.pay_zone_cast_costs``).
+    cast_bargained: bool = False
     # ── Cube W/G creature bucket ─────────────────────────────────────
     # Evoke (CR 702.74): set when this object was cast for its evoke
     # cost; read by the evoke sacrifice trigger's intervening-if at
@@ -3105,6 +3109,23 @@ class Player:
     # void source last started applying. The SBA catch-all exiles only
     # cards that arrived later (see ``turn.apply_void_exile_replacement``).
     void_graveyard_snapshot: frozenset = frozenset()
+    # Roto P2 exile-instead replacements (``CardPrinting.zone_abilities``,
+    # Rest in Peace / Leyline of the Void): ids of cards
+    # already in this player's graveyard when such a source last started
+    # applying to it; the SBA catch-all leaves them (see
+    # ``roto_zones.apply_graveyard_exile_instead``).
+    graveyard_exile_instead_snapshot: frozenset = frozenset()
+    # Roto P2: ``GameState.turn_number`` of this player's latest library
+    # search (``roto_search.run_library_search``; "if an opponent
+    # searched their library this turn", Archive Trap). 0 = never.
+    library_searched_turn: int = 0
+    # Roto P2 graveyard zone watch (``roto_zones.sweep_graveyard_zone_
+    # watch``): (library ids, graveyard ids) at the previous sweep; the
+    # turn a card last left this player's graveyard; ids that left the
+    # library by a draw or a search since the last sweep.
+    zone_watch: tuple = ()
+    card_left_graveyard_turn: int = 0
+    left_library_ids: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions
@@ -3392,6 +3413,9 @@ class GameState:
     active_player_idx: int = 0
     priority_player_idx: int = 0
     turn_number: int = 1
+    # Roto P2: does any card in this game watch graveyard zone changes
+    # (``roto_zones.zone_watch_active``)? None until the first sweep.
+    p2_zone_watch: object = None
     step: Optional["Step"] = None
     next_object_id: int = 0
     # Layered-effects registry (CR 613). Phase 1 introduces it as
@@ -4278,6 +4302,7 @@ class GameState:
             list(self.extra_turn_queue) if self.extra_turn_queue else []
         )
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
+        new_state.p2_zone_watch = self.p2_zone_watch
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

@@ -275,6 +275,12 @@ def draw_card(state: GameState, player_id: int) -> None:
             f"P{player_id} can't draw more than one card this turn"
         )
         return
+    # Roto P2 draw replacements (dredge, Chains of Mephistopheles): they
+    # apply to the draw even from an empty library.
+    from mtg_bot.effects.generic.roto_zones import replace_draw
+
+    if replace_draw(state, p):
+        return
     if not p.library:
         if _draw_from_empty_library_wins(state, player_id):
             win_the_game(
@@ -489,6 +495,15 @@ def move_off_battlefield(
         if named_counter_count(obj, "finality") > 0:
             # A permanent with a finality counter that would be put into
             # a graveyard from the battlefield is exiled instead.
+            destination = "exile"
+    if destination == "graveyard":
+        # Roto P2 exile-instead replacements (Rest in Peace, Leyline of
+        # the Void): exiled instead, so it never dies.
+        from mtg_bot.effects.generic.roto_zones import (
+            graveyard_exile_instead_applies,
+        )
+
+        if graveyard_exile_instead_applies(state, obj):
             destination = "exile"
     void_redirect = False
     if destination == "graveyard" and not obj.printing.is_token:
@@ -1790,6 +1805,12 @@ def state_based_actions(state: GameState) -> bool:
         sweep_library_graveyard_exile_watch,
     )
 
+    # Roto P2 exile-instead catch-all: before any graveyard watcher, so
+    # an exiled-instead card never looks like a graveyard arrival.
+    from mtg_bot.effects.generic.roto_zones import run_zone_sweeps
+
+    if run_zone_sweeps(state):
+        any_changed = True
     if sweep_graveyard_watch(state):
         any_changed = True
     if sweep_library_graveyard_exile_watch(state):

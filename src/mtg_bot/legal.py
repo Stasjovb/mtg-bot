@@ -771,6 +771,11 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
     # Flashback (CR 702.34) from the graveyard. Instants are castable
     # at any priority; everything else waits for sorcery timing (the
     # second flashback block below).
+    # Roto P2: flashback costs with a sacrifice (Cabal Therapy).
+    from mtg_bot.effects.generic.roto_zones import (
+        flashback_extra_costs_payable as _flashback_extra_costs_payable,
+    )
+
     def _emit_flashback_casts(instant_speed: bool) -> None:
         for gcard in p.graveyard:
             fb = _flashback_cost(gcard)
@@ -786,6 +791,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
                 _can_cast(state, player_id, gcard, _effective_cost(gcard, fb))
                 and _targets_are_satisfiable(state, player_id, gcard)
                 and _additional_costs_payable(state, player_id, gcard)
+                and _flashback_extra_costs_payable(state, player_id, gcard)
             ):
                 actions.append(CastSpell(gcard.id, use_flashback=True))
 

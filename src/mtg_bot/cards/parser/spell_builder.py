@@ -728,7 +728,12 @@ def _casting_keyword_fields(clause: str) -> dict | None:
         return {"free_cast_condition": cond}
     m = _SPELL_CASTING_KEYWORD_LINE_RE.match(clause.strip())
     if m is None:
-        return None
+        # Roto P2: flashback paid by sacrifice (Cabal Therapy).
+        from mtg_bot.cards.parser.roto_zones import (
+            roto_zones_casting_keyword_fields,
+        )
+
+        return roto_zones_casting_keyword_fields(clause.strip())
     if m.group("fb"):
         cost = m.group("fb_cost")
         return {
