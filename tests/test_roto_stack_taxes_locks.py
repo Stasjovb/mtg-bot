@@ -194,11 +194,15 @@ def test_stony_silence_locks_artifacts_but_not_creatures():
 
 
 def test_null_rod_locks_artifact_land_mana():
+    # Seat of the Synod is an artifact land (roto P3): its {T}: Add {U}
+    # rides automatic payment, which Null Rod's lock reaches through
+    # ``actions._untapped_lands``.
     state = arena()
     seat = put(state, printing("Seat of the Synod"), 0)
-    assert _activations(state, seat)
+    assert seat.printing.is_land and seat.printing.is_artifact
+    assert can_pay_cost(state, 0, parse_mana_cost("{U}"))
     put(state, printing("Null Rod"), 1)
-    assert not _activations(state, seat)
+    assert not can_pay_cost(state, 0, parse_mana_cost("{U}"))
 
 
 def test_activation_lock_stops_automatic_payment_from_a_locked_land():

@@ -19676,7 +19676,7 @@ Roto-only cards (not in the default `all` pool). Engine code: `src/mtg_bot/roto_
 
 ### Activation locks on lands' mana abilities
 
-**Where:** `actions._untapped_lands`. **What:** a land whose current card types an "Activated abilities of <types> can't be activated." static names (an artifact land under Null Rod / Stony Silence, an animated manland under Clarion Conqueror) is no longer offered to automatic payment. The roto pool's artifact lands (Seat of the Synod & co.) are currently claimed as pure artifacts whose mana ability is an ordinary `ActivateAbility`, so the lock reaches them through `filter_activation_locks` instead. **Impact:** one battlefield scan per `_untapped_lands` call.
+**Where:** `actions._untapped_lands`. **What:** a land whose current card types an "Activated abilities of <types> can't be activated." static names (an artifact land under Null Rod / Stony Silence, an animated manland under Clarion Conqueror) is no longer offered to automatic payment. The roto pool's artifact lands (Seat of the Synod & co.) are artifact lands since P3 (their mana rides automatic payment through `produces`), so this check is what locks them under Null Rod / Stony Silence. **Impact:** one battlefield scan per `_untapped_lands` call.
 
 ### Counter-a-spell activated abilities are offered at instant speed; nothing else is
 
