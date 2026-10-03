@@ -639,7 +639,11 @@ def _resolve_damage_step(
                     f"from infect (now {p.poison_counters})"
                 )
             else:
-                p.life -= amount
+                from mtg_bot.effects.generic.roto_keywords import (
+                    life_after_damage,
+                )
+
+                p.life = life_after_damage(state, p, amount)  # roto P6
                 player_life_damage[target_id] = (
                     player_life_damage.get(target_id, 0) + amount
                 )

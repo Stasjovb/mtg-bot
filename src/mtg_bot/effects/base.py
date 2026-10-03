@@ -303,7 +303,9 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
         if player_damage_prevented(state, target_id):
             return
         p = state.player_by_id(target_id)
-        p.life -= amount
+        from mtg_bot.effects.generic.roto_keywords import life_after_damage
+
+        p.life = life_after_damage(state, p, amount)  # Angel's Grace floor
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
         _fire_deals_damage(state, amount)
         from mtg_bot.effects.generic.roto_keywords import after_damage_to_player

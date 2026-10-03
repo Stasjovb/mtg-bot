@@ -191,6 +191,34 @@ _LOSES_THE_GAME_RE = re.compile(
 )
 
 
+_PLAYER_RULE_PHRASES = {
+    "you can't lose the game this turn": "cant_lose_the_game",
+    "your opponents can't win the game this turn": "opponents_cant_win",
+    (
+        "until end of turn, damage that would reduce your life total to "
+        "less than 1 reduces it to 1 instead"
+    ): "damage_life_floor_one",
+}
+
+
+def _parse_player_rule_phrase(phrase: str):
+    """Angel's Grace's player rules -- each clause, and "<clause> and
+    <clause>" joining two of them."""
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.roto_keywords import PlayerRuleUntilEndOfTurn
+
+    p = phrase.strip().lower()
+    if p in _PLAYER_RULE_PHRASES:
+        return PlayerRuleUntilEndOfTurn(kind=_PLAYER_RULE_PHRASES[p])
+    left, sep, right = p.partition(" and ")
+    if sep and left in _PLAYER_RULE_PHRASES and right in _PLAYER_RULE_PHRASES:
+        return Sequence(effects=(
+            PlayerRuleUntilEndOfTurn(kind=_PLAYER_RULE_PHRASES[left]),
+            PlayerRuleUntilEndOfTurn(kind=_PLAYER_RULE_PHRASES[right]),
+        ))
+    return None
+
+
 def _parse_keyword_action_phrase(phrase: str):
     from mtg_bot.effects.generic.roto_keywords import (
         PutPlusOneCountersOnEachCreatureTargetPlayerControls,
@@ -416,6 +444,7 @@ def parse_p6_effect(phrase: str):
         or _parse_keyword_action_phrase(phrase)
         or _parse_untap_then_grant(phrase)
         or _parse_flip_and_counter_phrase(phrase)
+        or _parse_player_rule_phrase(phrase)
     )
 
 

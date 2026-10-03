@@ -820,12 +820,96 @@ class TargetPlayerLosesTheGame(Effect):
         player = state.player_by_id(targets[0][1])
         if player.has_lost:
             return
+        if player_cant_lose(state, player.id):
+            state.log.append(f"P{player.id} can't lose the game this turn")
+            return
         player.has_lost = True
         player.lost_reason = "lost the game (effect)"
         state.log.append(f"P{player.id} loses the game")
 
     def describe(self) -> str:
         return "that player loses the game"
+
+
+# ------------------------------------------- can't lose / can't win (Grace)
+
+CANT_LOSE_KIND = "cant_lose_the_game"           # params=(player_id,)
+OPPONENTS_CANT_WIN_KIND = "opponents_cant_win"  # params=(player_id,)
+LIFE_FLOOR_KIND = "damage_life_floor_one"       # params=(player_id,)
+
+
+def _has_player_entry(state: "GameState", kind: str, player_id: int) -> bool:
+    return any(
+        ce.kind == kind and ce.params == (player_id,)
+        for ce in state.continuous_effects
+    )
+
+
+def player_cant_lose(state: "GameState", player_id: int) -> bool:
+    """"<player> can't lose the game this turn" is in force (CR 104.3:
+    neither state-based actions nor effects make them lose)."""
+    return _has_player_entry(state, CANT_LOSE_KIND, player_id)
+
+
+def player_cant_win(state: "GameState", player_id: int) -> bool:
+    """An opponent of ``player_id`` said "your opponents can't win the
+    game this turn"."""
+    return any(
+        ce.kind == OPPONENTS_CANT_WIN_KIND and ce.params[0] != player_id
+        for ce in state.continuous_effects
+    )
+
+
+def life_after_damage(state: "GameState", player, amount: int) -> int:
+    """The player's life total after ``amount`` damage reduces it --
+    "damage that would reduce your life total to less than 1 reduces it
+    to 1 instead" applies when in force. Called at the engine's
+    damage-to-life sites (``effects.base._apply_damage``, combat)."""
+    new_life = player.life - amount
+    if new_life < 1 and _has_player_entry(state, LIFE_FLOOR_KIND, player.id):
+        state.log.append(f"P{player.id}'s life total is reduced to 1 instead")
+        return 1
+    return new_life
+
+
+@dataclass(frozen=True)
+class PlayerRuleUntilEndOfTurn(Effect):
+    """A rules-modifying effect on the resolving ability's controller that
+    lasts until end of turn (a ``layer=0`` registry entry ending at
+    cleanup): ``kind`` is :data:`CANT_LOSE_KIND` ("You can't lose the game
+    this turn"), :data:`OPPONENTS_CANT_WIN_KIND` ("your opponents can't
+    win the game this turn") or :data:`LIFE_FLOOR_KIND` ("Until end of
+    turn, damage that would reduce your life total to less than 1 reduces
+    it to 1 instead")."""
+
+    kind: str = CANT_LOSE_KIND
+
+    _TEXT = {
+        CANT_LOSE_KIND: "you can't lose the game this turn",
+        OPPONENTS_CANT_WIN_KIND: "your opponents can't win the game this turn",
+        LIFE_FLOOR_KIND: (
+            "until end of turn, damage that would reduce your life total to "
+            "less than 1 reduces it to 1 instead"
+        ),
+    }
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.kind not in self._TEXT:
+            raise ValueError(f"unknown player rule {self.kind!r}")
+        source = state.resolving_spell or state.resolving_source
+        state.add_continuous_effect(
+            source_id=source.id if source is not None else -1,
+            layer=0, kind=self.kind, params=(controller_id,),
+            expires_at="cleanup",
+            description=f"P{controller_id}: {self._TEXT[self.kind]}",
+        )
+        state.log.append(f"P{controller_id}: {self._TEXT[self.kind]}")
+
+    def describe(self) -> str:
+        return self._TEXT.get(self.kind, self.kind)
 
 
 # ------------------------------------------------------------------ toxic
@@ -867,6 +951,13 @@ def apply_toxic(state: "GameState", sources_hit_player) -> None:
 
 
 __all__ = [
+    "CANT_LOSE_KIND",
+    "LIFE_FLOOR_KIND",
+    "OPPONENTS_CANT_WIN_KIND",
+    "PlayerRuleUntilEndOfTurn",
+    "life_after_damage",
+    "player_cant_lose",
+    "player_cant_win",
     "DAMAGE_TALLY_KIND",
     "DealtDamageToThatPlayerThisTurnAtLeast",
     "TargetPlayerLosesTheGame",
