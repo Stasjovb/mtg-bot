@@ -938,6 +938,101 @@ class CopyImprintedCardMayCastFree(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Channel: life for colorless mana
+# ---------------------------------------------------------------------------
+
+LIFE_FOR_COLORLESS_KIND = "roto_pay_life_add_colorless"
+
+
+@dataclass(frozen=True)
+class GrantLifeForColorlessUntilEndOfTurn(Effect):
+    """"Until end of turn, any time you could activate a mana ability,
+    you may pay 1 life. If you do, add {C}." (Channel): a
+    cleanup-expiring layer-0 registry entry for the controller, used by
+    automatic payment (``life_mana_units_needed`` / ``pay_life_for_mana``)."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        src = state.resolving_spell or state.resolving_source
+        state.add_continuous_effect(
+            source_id=src.id if src is not None else -1, layer=0,
+            kind=LIFE_FOR_COLORLESS_KIND, params=(controller_id,),
+            expires_at="cleanup",
+            description=f"P{controller_id} may pay 1 life for {{C}} this turn",
+        )
+        state.log.append(f"P{controller_id} may pay 1 life for {{C}} this turn")
+
+    def describe(self) -> str:
+        return (
+            "until end of turn, any time you could activate a mana ability, "
+            "you may pay 1 life to add {C}"
+        )
+
+
+def _life_mana_budget(state: "GameState", player_id: int) -> int:
+    """How many {C} the player may make by paying life: 0 without the
+    grant, else life above 1 (automatic payment never pays down to 0
+    -- the cube-lands life-cost convention)."""
+    if not any(
+        ce.kind == LIFE_FOR_COLORLESS_KIND and ce.params == (player_id,)
+        for ce in state.continuous_effects
+    ):
+        return 0
+    return max(0, state.player_by_id(player_id).life - 1)
+
+
+def life_mana_units_needed(
+    state: "GameState", player_id: int, cost, usable_pool, lands,
+) -> "int | None":
+    """The fewest life-paid {C} that make ``cost`` payable from
+    ``usable_pool`` and ``lands``; ``None`` when no amount the player can
+    pay does (or the grant isn't active)."""
+    from mtg_bot.actions import _can_pay_from
+    from mtg_bot.game import ManaCoin
+
+    budget = _life_mana_budget(state, player_id)
+    if budget <= 0:
+        return None
+    need = cost.generic + len(cost.hybrid)
+    for k in range(1, min(budget, need) + 1):
+        pool = list(usable_pool) + [ManaCoin(color="C")] * k
+        if _can_pay_from(state, cost, pool, lands):
+            return k
+    return None
+
+
+def pay_life_for_mana(
+    state: "GameState", player_id: int, cost, spell_kind,
+) -> None:
+    """During automatic payment: pay life for the fewest {C} that make
+    ``cost`` payable (nothing if the pool and lands already cover it)."""
+    from mtg_bot.actions import (
+        _can_pay_from,
+        _coin_satisfies_context,
+        _untapped_lands,
+    )
+    from mtg_bot.game import ManaCoin
+
+    if _life_mana_budget(state, player_id) <= 0:
+        return
+    p = state.player_by_id(player_id)
+    usable = [c for c in p.mana_pool if _coin_satisfies_context(c, spell_kind)]
+    lands = _untapped_lands(state, player_id)
+    if _can_pay_from(state, cost, usable, lands):
+        return
+    k = life_mana_units_needed(state, player_id, cost, usable, lands)
+    if k is None:
+        return
+    p.life -= k
+    p.mana_pool.extend(ManaCoin(color="C") for _ in range(k))
+    state.log.append(
+        f"P{player_id} pays {k} life for {{C}}x{k} (life: {p.life})"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -2097,6 +2192,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "GrantLifeForColorlessUntilEndOfTurn",
+    "life_mana_units_needed",
+    "pay_life_for_mana",
     "ManaSpentToCastSource",
     "spent_mana_choice",
     "CopyImprintedCardMayCastFree",

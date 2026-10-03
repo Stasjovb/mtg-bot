@@ -241,6 +241,14 @@ _CONVERGE_DRAW_DAMAGE_LIFE_RE = re.compile(
     r"damage to any target, and you gain X life, where X is the number of "
     r"colors of mana spent to cast this spell$"
 )
+# "until end of turn, any time you could activate a mana ability, you may
+# pay 1 life. If you do, add {C}" (Channel). A literal: the only card in
+# the pools with this player-level mana grant; broader grammar deferred
+# until a second example exists.
+_CHANNEL_LIFE_FOR_COLORLESS_LINE = (
+    "until end of turn, any time you could activate a mana ability, you may "
+    "pay 1 life. If you do, add {C}"
+)
 # "you may copy the exiled card. If you do, you may cast the copy without
 # paying its mana cost" (Isochron Scepter). A literal: the only card in
 # the pools with this copy-and-cast; broader grammar deferred until a
@@ -395,6 +403,8 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
             total_power=int(m.group("n")),
         )
+    if phrase == _CHANNEL_LIFE_FOR_COLORLESS_LINE:
+        return rm.GrantLifeForColorlessUntilEndOfTurn()
     if phrase == _COPY_EXILED_CAST_FREE_LINE:
         return rm.CopyImprintedCardMayCastFree()
     if phrase == _RETURN_GRAVEYARD_CREATURE_MV_X_LINE:

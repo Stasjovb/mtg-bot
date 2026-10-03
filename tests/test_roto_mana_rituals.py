@@ -315,3 +315,57 @@ def test_culling_ritual_grammar_needs_a_destroy_sweep():
         "exile each creature. Add {B} or {G} for each permanent destroyed "
         "this way"
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Channel
+# ---------------------------------------------------------------------------
+
+
+def _channeled():
+    s = arena()
+    for _ in range(2):
+        put(s, make_basic_land("Forest", "G"), 0)
+    channel = to_hand(s, printing("Channel"), 0)
+    apply_action(s, 0, CastSpell(channel.id))
+    resolve_top_of_stack(s)
+    return s
+
+
+def test_channel_pays_life_for_colorless_mana():
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+
+    s = _channeled()
+    giant = to_hand(s, make_creature("Colossus", "{8}", 8, 8), 0)
+    assert CastSpell(giant.id) in legal_actions(s, 0)
+    apply_action(s, 0, CastSpell(giant.id))
+    assert s.players[0].life == 12
+    resolve_top_of_stack(s)
+    assert giant in s.battlefield
+    # Colored mana can't come from Channel; nor can the opponent use it.
+    assert not can_pay_cost(s, 0, parse_mana_cost("{R}"))
+    assert not can_pay_cost(s, 1, parse_mana_cost("{1}"))
+
+
+def test_channel_never_pays_down_to_zero_and_ends_at_cleanup():
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.cards.base import parse_mana_cost
+    from mtg_bot.turn import run_cleanup_step
+
+    s = _channeled()
+    s.players[0].life = 3
+    assert can_pay_cost(s, 0, parse_mana_cost("{2}"))
+    assert not can_pay_cost(s, 0, parse_mana_cost("{3}"))
+    run_cleanup_step(s)
+    assert not can_pay_cost(s, 0, parse_mana_cost("{1}"))
+
+
+def test_channel_pays_only_the_shortfall():
+    s = _channeled()
+    for _ in range(3):
+        put(s, MOUNTAIN, 0)
+    giant = to_hand(s, make_creature("Colossus", "{5}", 5, 5), 0)
+    apply_action(s, 0, CastSpell(giant.id))
+    assert s.players[0].life == 18  # three Mountains + 2 life
+    assert "1 life" in rm.GrantLifeForColorlessUntilEndOfTurn().describe()

@@ -571,6 +571,15 @@ def can_pay_cost(
     lands = _untapped_lands(state, player_id)
     if _can_pay_from(state, cost, usable_pool, lands):
         return True
+    if state.continuous_effects:
+        # "any time you could activate a mana ability, you may pay 1
+        # life. If you do, add {C}." (Channel; Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import life_mana_units_needed
+
+        if life_mana_units_needed(
+            state, player_id, cost, usable_pool, lands,
+        ) is not None:
+            return True
     # "Whenever you tap a <Forest> for mana, add an additional {G}"
     # (Nissa, Who Shakes the World): tapping such lands first yields
     # extra coins -- try pre-tapping 1..all of them.
@@ -1348,6 +1357,12 @@ def auto_tap_for_cost(
     extra = extra_mana_grants_for_tapped_lands(state, player_id)
     if extra:
         _pretap_lands_for_extra_mana(state, player_id, cost, spell_kind, extra)
+    if state.continuous_effects:
+        # Channel's life-for-{C} (Vintage Roto P3): only for the part of
+        # the cost the pool and lands can't cover.
+        from mtg_bot.effects.generic.roto_mana import pay_life_for_mana
+
+        pay_life_for_mana(state, player_id, cost, spell_kind)
     lands = _untapped_lands(state, player_id)
     used_coin_ids: list[int] = []  # indices into p.mana_pool
     used_lands: set[int] = set()
