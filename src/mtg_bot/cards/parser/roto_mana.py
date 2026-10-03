@@ -622,8 +622,10 @@ _ETB_THEN_EXTRA_COMBAT_IF_MAIN_RE = re.compile(
 
 
 # "Enchant <land subtype>" (Utopia Sprawl: Forest).
+# "Enchant <land subtype>" (Utopia Sprawl) / "Enchant land" (Tarmogoyf
+# Nest): aura_enchant_type "land", with the subtype ("" for any land).
 _ENCHANT_LAND_SUBTYPE_RE = re.compile(
-    r"^Enchant (?P<sub>Plains|Island|Swamp|Mountain|Forest)$"
+    r"^Enchant (?P<sub>Plains|Island|Swamp|Mountain|Forest|land)$"
 )
 _AS_AURA_ENTERS_CHOOSE_COLOR = "As this Aura enters, choose a color."
 # "Whenever enchanted <land subtype> is tapped for mana, its controller
@@ -640,9 +642,10 @@ def _aura_line(line: str) -> RotoLine | None:
         return RotoLine(enchant_type="creature")
     m = _ENCHANT_LAND_SUBTYPE_RE.match(line)
     if m is not None:
+        sub = m.group("sub")
         return RotoLine(
             enchant_type="land",
-            fields={"aura_enchant_subtype": m.group("sub")},
+            fields={"aura_enchant_subtype": "" if sub == "land" else sub},
         )
     if line == _AS_AURA_ENTERS_CHOOSE_COLOR:
         return RotoLine(fields={"enters_choosing_color": True})

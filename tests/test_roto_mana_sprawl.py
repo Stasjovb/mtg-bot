@@ -66,3 +66,57 @@ def test_sprawl_extra_mana_goes_to_the_forests_controller():
     forest.controller_id = 1
     assert rm.enchanted_land_mana_grants(s, 1) == [(forest.id, "U")]
     assert rm.enchanted_land_mana_grants(s, 0) == []
+
+
+# ---------------------------------------------------------------------------
+# "Enchant land" (any land): the same land-Aura substrate, no subtype
+# ---------------------------------------------------------------------------
+
+
+def test_enchant_land_line_parses_without_a_subtype():
+    from mtg_bot.cards.parser.roto_mana import parse_roto_enchantment_line
+
+    parsed = parse_roto_enchantment_line("Enchant land")
+    assert parsed.enchant_type == "land"
+    assert parsed.fields == {"aura_enchant_subtype": ""}
+    forest = parse_roto_enchantment_line("Enchant Forest")
+    assert forest.fields == {"aura_enchant_subtype": "Forest"}
+
+
+def _land_aura():
+    """An "Enchant land" Aura with no other text."""
+    return replace(
+        printing("Utopia Sprawl"), name="Land Aura (test)",
+        aura_enchant_subtype="", enters_choosing_color=False,
+        enchanted_land_adds_chosen_color=False,
+    )
+
+
+def test_enchant_land_aura_targets_any_land_including_opponents():
+    s = arena()
+    put(s, FOREST, 0)
+    their_island = put(s, ISLAND, 1)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 1)
+    aura = to_hand(s, _land_aura(), 0)
+    assert rm.enchantable_land(s, aura.printing, their_island)
+    assert not rm.enchantable_land(s, aura.printing, bear)
+    s.players[0].agent.targets = [("creature", bear.id), ("land", their_island.id)]
+    apply_action(s, 0, CastSpell(aura.id))
+    drain_stack(s)
+    assert aura in s.battlefield and aura.attached_to == their_island.id
+
+
+def test_enchant_land_aura_falls_off_when_the_land_stops_being_a_land():
+    s = arena()
+    put(s, FOREST, 0)
+    island = put(s, ISLAND, 0)
+    aura = to_hand(s, _land_aura(), 0)
+    s.players[0].agent.targets = [("land", island.id)]
+    apply_action(s, 0, CastSpell(aura.id))
+    drain_stack(s)
+    assert aura.attached_to == island.id
+    state_based_actions(s)
+    assert aura in s.battlefield
+    island.printing = make_creature("Island Golem", "{2}", 2, 2)
+    state_based_actions(s)
+    assert aura not in s.battlefield and aura in s.players[0].graveyard
