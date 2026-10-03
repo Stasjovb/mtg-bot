@@ -36,7 +36,7 @@ from mtg_bot.game import (
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import move_off_battlefield
 
-from tests._roto_helpers import agent, arena, printing, put, to_hand
+from tests._roto_helpers import agent, arena, printing, put, roto_card, to_hand
 
 
 # ---------------------------------------------------------------------
@@ -205,3 +205,23 @@ def test_a_land_under_blood_moon_keeps_the_nest_s_granted_ability():
     _nest_on(s, bayou)
     put(s, printing("Blood Moon"), 1)
     assert len(_granted(s, bayou)) == 1
+
+
+def test_reminder_token_grammar_declines_what_it_cannot_define():
+    from mtg_bot.cards.parser.roto_board import (
+        _enchanted_has_create_token,
+        _reminder_defined_token,
+    )
+
+    raw = roto_card(NEST)["oracle_text"]
+    line = 'Enchanted land has "{1}{G}, {T}: Create a Tarmogoyf token."'
+    assert _enchanted_has_create_token(line, {"oracle_text": raw}) is not None
+    # No reminder text, a reminder for another name, a CDA the grammar
+    # doesn't know, an unparsable cost, or a non-matching line: no claim.
+    assert _reminder_defined_token("Tarmogoyf", "Enchant land") is None
+    assert _reminder_defined_token("Lhurgoyf", raw) is None
+    odd = raw.replace("number of card types", "number of wombats")
+    assert _reminder_defined_token("Tarmogoyf", odd) is None
+    bad_cost = line.replace("{1}{G}, {T}", "Frobnicate")
+    assert _enchanted_has_create_token(bad_cost, {"oracle_text": raw}) is None
+    assert _enchanted_has_create_token("Enchant land", {"oracle_text": raw}) is None
