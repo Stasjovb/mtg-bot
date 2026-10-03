@@ -198,3 +198,10 @@ def test_bite_trigger_may_choose_no_target():
     s.resolving_source = None
     eff.resolve(s, 0, (("creature", archer.id),))
     assert archer.damage == 0
+
+
+def test_split_second_ignores_placeholder_stack_entries():
+    s = arena()
+    s.stack.append(object())  # search tests push bare placeholders
+    assert not split_second_on_stack(s)
+    assert filter_split_second(s, [CastSpell(1)]) == [CastSpell(1)]

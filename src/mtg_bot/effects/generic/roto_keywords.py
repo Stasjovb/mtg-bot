@@ -525,11 +525,18 @@ SPLIT_SECOND = "split second"
 
 
 def split_second_on_stack(state: "GameState") -> bool:
-    """A spell with split second (copies included) is on the stack."""
-    return any(
-        item.ability is None and SPLIT_SECOND in item.source.printing.keywords
-        for item in state.stack
-    )
+    """A spell with split second (copies included) is on the stack.
+
+    Reads only ``StackItem``-shaped entries: search tests push bare
+    placeholder objects to make the stack non-empty, and those are no
+    spell at all."""
+    for item in state.stack:
+        if getattr(item, "ability", None) is not None:
+            continue
+        source = getattr(item, "source", None)
+        if source is not None and SPLIT_SECOND in source.printing.keywords:
+            return True
+    return False
 
 
 def _is_mana_ability_action(state: "GameState", action) -> bool:
