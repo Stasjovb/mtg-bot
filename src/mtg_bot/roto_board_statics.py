@@ -320,8 +320,6 @@ def fire_granted_triggers(
     if not any_rules(state):
         return
     for creature, ability in granted_triggers(state):
-        if creature not in state.battlefield:
-            continue
         if not ability.matches_event(event, subjects, creature, state):
             continue
         bind = getattr(ability.effect, "targets_from_event", None)
@@ -506,8 +504,6 @@ def apply_board_state_checks(state: "GameState") -> bool:
     from mtg_bot.actions import push_triggered_ability
 
     for source, rule in list(rules_in_play(state, StateTrigger)):
-        if source not in state.battlefield:
-            continue
         if _pending(state, source, rule.ability):
             continue
         if not rule.condition.holds(state, source):
@@ -611,7 +607,7 @@ def player_hexproof_from_source(
         return False
     try:
         turn, qualities = state.player_by_id(player_id).hexproof_from_this_turn
-    except (KeyError, AttributeError):
+    except KeyError:
         return False
     if turn != state.turn_number or not qualities:
         return False
