@@ -66,8 +66,10 @@ def build_face(face: dict) -> CardPrinting | None:
         else:
             kept.append(raw)
     rec["oracle_text"] = "\n".join(kept)
+    from mtg_bot.cards.parser.roto_keywords import build_with_p6_lines
+
     body, hand_abilities = _split_hand_abilities(rec)
-    built = _build_printing(body)
+    built = build_with_p6_lines(body, _build_printing)
     if built is None:
         return None
     if flags:

@@ -2626,10 +2626,14 @@ def add_minus_one_counters(
     not here.
 
     No doubling applied (no in-pool doublers target -1/-1
-    counters). Safe when amount <= 0.
+    counters). "That many minus one" replacements (Vizier of Remedies,
+    roto P6) apply here. Safe when amount <= 0.
     """
     if amount <= 0:
         return 0
+    from mtg_bot.effects.generic.roto_keywords import adjust_minus_one_counters
+
+    amount = adjust_minus_one_counters(state, obj, amount)
     obj.minus_one_counters += amount
     return amount
 
@@ -2667,6 +2671,10 @@ def player_damage_prevented(state: GameState, player_id: int) -> bool:
     everything — The One Ring). Logs the prevention."""
     p = state.player_by_id(player_id)
     if p.protected_from_everything:
+        from mtg_bot.effects.generic.roto_damage import damage_cant_be_prevented
+
+        if damage_cant_be_prevented(state):  # Impractical Joke (roto P6)
+            return False
         state.log.append(
             f"damage to P{player_id} is prevented (protection from everything)"
         )
@@ -2729,6 +2737,8 @@ def add_counters(
         return add_plus_one_counters(state, obj, amount)
     if kind == "charge":
         return add_charge_counters(state, obj, amount)
+    if kind == "-1/-1":
+        return add_minus_one_counters(state, obj, amount)
     if kind == "lore" and obj.printing.is_saga:
         # Lore counters on a Saga trigger its chapters (CR 714.2b).
         from mtg_bot.layouts import add_lore_counters
@@ -3275,6 +3285,17 @@ class Player:
     # (Emrakul, the Promised End) -- set with ``scheduled_agent_override``;
     # the cleanup that reverts the override queues the extra turn.
     extra_turn_after_controlled_turn: bool = False
+    # Conspiracy cards (CR 313) this player started the game with, face
+    # up in the command zone (``mtg_bot.conspiracies``). They never
+    # leave it (CR 313.2) and never change, so the immutable tuple is
+    # safely shared by every clone.
+    conspiracies: tuple = ()
+    # Speed (CR 702.179; "Start your engines!", roto P6): 0 = no speed,
+    # else 1-4 for the rest of the game; ``speed_increased_turn`` is the
+    # turn it last increased (once each turn). Updated by
+    # ``effects.generic.roto_keywords.update_speed``.
+    speed: int = 0
+    speed_increased_turn: int = 0
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

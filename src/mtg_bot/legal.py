@@ -1815,7 +1815,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
     # "Cast this spell only before ..." (Berserk; Vintage Roto P5).
     from mtg_bot.roto_board_statics import filter_cast_timing
 
-    return filter_cast_timing(state, player_id, actions)
+    actions = filter_cast_timing(state, player_id, actions)
+    # Split second (roto P6).
+    from mtg_bot.effects.generic.roto_keywords import filter_split_second
+
+    return filter_split_second(state, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

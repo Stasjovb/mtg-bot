@@ -116,6 +116,11 @@ def can_block(
 
     if blocked_by_protection(state, attacker, blocker):
         return False
+    # Landwalk (CR 702.14; roto P6).
+    from mtg_bot.effects.generic.roto_keywords import blocked_by_landwalk
+
+    if blocked_by_landwalk(state, attacker, blocker):
+        return False
     return True
 
 
@@ -609,6 +614,12 @@ def _resolve_damage_step(
         ev for ev in damage_events_typed
         if not _prevented_by_protection(state, ev[0], ev[1], ev[3])
     ]
+    # Roto P6: per-creature combat prevention (Maze of Ith), "prevent all
+    # damage dealt to <self>" (Black Panther), redirection shields
+    # (Nomads en-Kor).
+    from mtg_bot.effects.generic.roto_damage import route_combat_damage_events
+
+    damage_events_typed = route_combat_damage_events(state, damage_events_typed)
 
     # Combat damage in MTG is simultaneous, so aggregate damage to each
     # player into a single end-of-step log line ("P0 takes 5 (life:
@@ -647,7 +658,11 @@ def _resolve_damage_step(
                     f"from infect (now {p.poison_counters})"
                 )
             else:
-                p.life -= amount
+                from mtg_bot.effects.generic.roto_keywords import (
+                    life_after_damage,
+                )
+
+                p.life = life_after_damage(state, p, amount)  # roto P6
                 player_life_damage[target_id] = (
                     player_life_damage.get(target_id, 0) + amount
                 )
@@ -713,6 +728,13 @@ def _resolve_damage_step(
         state.log.append(
             f"P{target_id} takes {total} (life: {p.life})"
         )
+
+    # Roto P6: toxic (CR 702.164) and "deals damage to a player".
+    from mtg_bot.effects.generic.roto_keywords import (
+        after_combat_damage_to_players,
+    )
+
+    after_combat_damage_to_players(state, sources_hit_player)
 
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.

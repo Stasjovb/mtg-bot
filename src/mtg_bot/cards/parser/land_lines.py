@@ -383,6 +383,12 @@ def _try_build_line_composed_land(
                 return None
             is_chosen_type = True
             continue
+        from mtg_bot.cards.parser.roto_keywords import parse_hand_keyword_line
+
+        p6_hand_ability = parse_hand_keyword_line(line, card)  # roto P6
+        if p6_hand_ability is not None:
+            hand_abilities.append(p6_hand_ability)
+            continue
         m = _CYCLING_RE.match(line)
         if m is not None:
             cost_str = m.group("cost")

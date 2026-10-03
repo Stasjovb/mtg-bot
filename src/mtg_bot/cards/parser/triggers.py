@@ -1586,7 +1586,13 @@ def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
         parse_face_intervening_if,
     )
 
-    return parse_face_intervening_if(phrase.strip())
+    pred = parse_face_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Roto P6 gates ("if it has dealt N or more damage to that player").
+    from mtg_bot.cards.parser.roto_keywords import parse_p6_intervening_if
+
+    return parse_p6_intervening_if(phrase.strip())
 
 
 # Intervening-``while`` gate phrases. The DSK Delirium "while X"
@@ -1601,6 +1607,8 @@ _INTERVENING_WHILE_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
         StateBound(Delirium())
     ),
+    # Emberwilde Captain (roto P6).
+    "you're the monarch": StateBound(IsMonarch()),
 }
 
 
@@ -1783,7 +1791,13 @@ def _parse_predicate_trigger_phrase(
         # Roto P4 conditions ("this creature becomes the target of ...").
         from mtg_bot.cards.parser.roto_walkers import parse_roto_trigger_phrase
 
-        return parse_roto_trigger_phrase(phrase.strip())
+        walker = parse_roto_trigger_phrase(phrase.strip())
+        if walker is not None:
+            return walker
+        # Roto P6 conditions (becomes the target, ...).
+        from mtg_bot.cards.parser.roto_keywords import parse_p6_trigger_phrase
+
+        return parse_p6_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 

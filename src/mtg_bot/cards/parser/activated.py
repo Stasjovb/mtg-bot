@@ -144,6 +144,8 @@ _SACRIFICE_SELF_PIECES = frozenset({
     # land: Draw a card.", Wasteland, the fetch lands).
     # (Also Rain of Filth's granted "Sacrifice this land: Add {B}.")
     "Sacrifice this land",
+    # Enchantments' self-reference (Momentum Breaker; roto P6).
+    "Sacrifice this enchantment",
 })
 
 # "Exile this land" / "Exile this creature" / "Exile this artifact" —

@@ -29,6 +29,7 @@ def _pool(n_per_color=5):
     cards.append(_card("WU gold", "WU", mana_cost="{W}{U}"))
     cards.append(_card("Dual", "WU", type_line="Land"))
     cards.append(_card("MDFC", "W", mana_cost="{W}", type_line="Creature — Cleric // Land"))
+    cards.append(_card("Power Play", "", type_line="Conspiracy"))
     return cards
 
 
@@ -48,6 +49,11 @@ def test_eligible_spells_filters_claimed_color_and_lands():
     claimed = {c["name"] for c in cards} - {"W0"}
     names = {c["name"] for c in cd.eligible_spells(cards, "WU", claimed)}
     assert names == {"W1", "U0", "U1", "A0", "A1", "WU gold", "MDFC"}
+
+
+def test_conspiracies_are_never_deck_spells():
+    assert cd.is_conspiracy(_card("Power Play", "", type_line="Conspiracy"))
+    assert not cd.is_conspiracy(_card("A", "", type_line="Artifact"))
 
 
 def test_basic_land_split_proportional_and_exact():

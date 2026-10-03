@@ -52,6 +52,10 @@ def note_life_losses(state: GameState) -> None:
         if p.life < p.life_checkpoint:
             p.lost_life_this_turn = True
         p.life_checkpoint = p.life
+    # Speed (CR 702.179; roto P6) reads the life-loss latch.
+    from mtg_bot.effects.generic.roto_keywords import update_speed
+
+    update_speed(state)
 
 
 def next_step(state: GameState, current: Step) -> "Step | None":
@@ -256,6 +260,11 @@ def win_the_game(state: GameState, player_id: int, reason: str) -> None:
     """
     if state.is_over():
         return
+    from mtg_bot.effects.generic.roto_keywords import player_cant_win
+
+    if player_cant_win(state, player_id):  # Angel's Grace (roto P6)
+        state.log.append(f"P{player_id} can't win the game this turn")
+        return
     p = state.player_by_id(player_id)
     if p.has_lost:
         if p.lost_reason != DREW_FROM_EMPTY_LIBRARY:
@@ -295,8 +304,11 @@ def draw_card(state: GameState, player_id: int) -> None:
                 reason="would draw from an empty library",
             )
             return
-        p.has_lost = True
-        p.lost_reason = DREW_FROM_EMPTY_LIBRARY
+        from mtg_bot.effects.generic.roto_keywords import player_cant_lose
+
+        if not player_cant_lose(state, player_id):  # Angel's Grace (roto P6)
+            p.has_lost = True
+            p.lost_reason = DREW_FROM_EMPTY_LIBRARY
         return
     # The first card a player draws in their own draw step (CR 504.1's
     # turn-based draw) is exempt from "except the first one they draw
@@ -1078,6 +1090,12 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
         state, Event.BECOMES_TAPPED,
         label="becomes-tapped", obj=obj,
     )
+    # Granted "whenever this creature becomes tapped" (roto P6).
+    from mtg_bot.effects.generic.roto_keywords import (
+        fire_granted_becomes_tapped_triggers,
+    )
+
+    fire_granted_becomes_tapped_triggers(state, obj)
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
@@ -1963,12 +1981,17 @@ def _state_based_actions_pass(state: GameState) -> bool:
     """
     changed = False
 
+    from mtg_bot.effects.generic.roto_keywords import player_cant_lose
+
     for p in state.players:
-        if not p.has_lost and p.life <= 0:
+        if not p.has_lost and p.life <= 0 and not player_cant_lose(state, p.id):
             p.has_lost = True
             p.lost_reason = "life total <= 0"
             changed = True
-        if not p.has_lost and p.poison_counters >= 10:
+        if (
+            not p.has_lost and p.poison_counters >= 10
+            and not player_cant_lose(state, p.id)
+        ):
             p.has_lost = True
             p.lost_reason = "10+ poison counters"
             changed = True

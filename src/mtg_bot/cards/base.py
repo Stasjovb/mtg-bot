@@ -1663,6 +1663,20 @@ class CardPrinting:
     # N; 0 = the plain "Exile <count> other cards" form
     # (``escape_exile_count``). Read by ``alt_casting``'s escape helpers.
     escape_exile_card_types: int = 0
+    # --- Conspiracies (CR 313; roto P6) ----------------------------
+    # The static abilities of a conspiracy card (``card_types ==
+    # ("Conspiracy",)``), which function from the command zone, where
+    # the card starts the game face up (CR 313.2): tuple of
+    # ``mtg_bot.conspiracies`` rules (``YouAreTheStartingPlayer``,
+    # ``MinimumDeckSizeChange``) applied by ``simulate.setup_game``.
+    conspiracy_rules: tuple = ()
+    # Printed static prevention / replacement effects modeled by roto
+    # P6: ``effects.generic.roto_damage.PreventAllDamageToSelf`` ("Prevent
+    # all damage that would be dealt to <this creature>.", read by the
+    # damage routing hooks) and
+    # ``roto_keywords.FewerMinusOneCountersOnYourCreatures`` (Vizier of
+    # Remedies, read by ``game.add_minus_one_counters``).
+    replacement_statics: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
@@ -1738,6 +1752,12 @@ class CardPrinting:
     def is_room(self) -> bool:
         """A Duskmourn Room (Enchantment — Room) — has two halves."""
         return bool(self.room_halves)
+
+    @property
+    def is_conspiracy(self) -> bool:
+        """A conspiracy card (CR 313): never a permanent, never cast;
+        it starts the game in the command zone."""
+        return "Conspiracy" in self.card_types
 
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}

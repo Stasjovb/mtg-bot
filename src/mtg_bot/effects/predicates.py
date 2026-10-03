@@ -302,6 +302,9 @@ class Event(str, Enum):
     # Dispatched by ``actions._activate_ability`` once the ability is on
     # the stack.
     ACTIVATES_ABILITY = "activates_ability"
+    # "Whenever <source> deals damage to a player" (combat or not; roto
+    # P6, ``effects.generic.roto_keywords.after_damage_to_player``).
+    DEALS_DAMAGE_TO_PLAYER = "deals_damage_to_player"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -336,8 +339,9 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.BECOMES_MONSTROUS: ("obj",),
     # ``target_spell`` replaces ``target`` when a spell on the stack is
-    # targeted (``cube_creatures_rmc.fire_becomes_target``).
-    Event.BECOMES_TARGET: ("target", "controller", "target_spell"),
+    # targeted (``cube_creatures_rmc.fire_becomes_target``); ``targeting``
+    # is the targeting StackItem (spell or ability).
+    Event.BECOMES_TARGET: ("target", "controller", "target_spell", "targeting"),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
     Event.WOULD_DRAW_CARDS: ("player",),
@@ -353,6 +357,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.TRANSFORMS: ("obj",),
     Event.DEALS_DAMAGE: ("source",),
     Event.ACTIVATES_ABILITY: ("source", "controller"),
+    Event.DEALS_DAMAGE_TO_PLAYER: ("source", "player"),
 }
 
 

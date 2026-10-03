@@ -175,8 +175,13 @@ def combat_damage_unpreventable(state: "GameState", source: "GameObject") -> boo
     """Combat damage ``source`` deals can't be prevented: its own "Combat
     damage can't be prevented." or a "Combat damage that would be dealt
     by creatures you control can't be prevented." permanent its
-    controller controls."""
+    controller controls. Also while "Damage can't be prevented this turn."
+    is in force (Impractical Joke, roto P6)."""
     if source.printing.combat_damage_cant_be_prevented:
+        return True
+    from mtg_bot.effects.generic.roto_damage import damage_cant_be_prevented
+
+    if damage_cant_be_prevented(state):
         return True
     from mtg_bot.game import is_creature_now
 

@@ -16,7 +16,7 @@ pointed at the removed spell becomes ``("stack", -1)``, i.e. illegal).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
@@ -24,6 +24,7 @@ from mtg_bot.effects.generic.counterspells import CounterSpell
 from mtg_bot.effects.generic.cube_creatures_ub import CounterTargetStackObject
 from mtg_bot.effects.object_predicates import ObjectPredicate
 from mtg_bot.effects.predicates import TriggerPredicate
+from mtg_bot.opening_hand import AFTER_KEEP
 
 if TYPE_CHECKING:
     from mtg_bot.game import GameState, StackItem
@@ -853,6 +854,10 @@ class RevealForFirstSpellTax:
     it fires once per opponent."""
 
     unless_pays: str = "{1}"
+
+    # Offered after the final keep (the opening-hand action protocol P6
+    # added for Serum Powder's mulligan-window action).
+    timing: ClassVar[str] = AFTER_KEEP
 
     def available_to(self, player_id: int, starting_player_id: int) -> bool:
         return True

@@ -289,14 +289,29 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     damage amount in ``state.resolving_combat_damage_amount``.
     """
     kind, target_id = target
+    # Roto P6: prevention / redirection effects (Black Panther, Nomads
+    # en-Kor); redirected damage is dealt from inside the router.
+    from mtg_bot.effects.generic.roto_damage import (
+        damage_cant_be_prevented, route_damage,
+    )
+
+    amount = route_damage(state, target, amount)
+    if amount <= 0:
+        return
     if kind == "player":
         from mtg_bot.game import player_damage_prevented
         if player_damage_prevented(state, target_id):
             return
         p = state.player_by_id(target_id)
-        p.life -= amount
+        from mtg_bot.effects.generic.roto_keywords import life_after_damage
+
+        p.life = life_after_damage(state, p, amount)  # Angel's Grace floor
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
         _fire_deals_damage(state, amount)
+        from mtg_bot.effects.generic.roto_keywords import after_damage_to_player
+        from mtg_bot.keyword_rules import current_damage_source
+
+        after_damage_to_player(state, current_damage_source(state), target_id, amount)
     elif kind == "creature":
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:
@@ -305,7 +320,9 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             )
 
             source = current_damage_source(state)
-            if is_protected_from(state, obj, source):
+            if is_protected_from(state, obj, source) and not (
+                damage_cant_be_prevented(state)
+            ):
                 state.log.append(
                     f"{amount} damage to {obj.printing.name} from "
                     f"{source.printing.name} is prevented (protection)"

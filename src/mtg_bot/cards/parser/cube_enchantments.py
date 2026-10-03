@@ -83,6 +83,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Jeskai Ascendancy",
     "Leyline Binding",
     "Moat",
+    "Momentum Breaker",
     "Mystic Remora",
     "Necromancy",
     "Necropotence",

@@ -3617,7 +3617,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Roto P4 shapes (walkers, copies, control, turns).
     from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
 
-    return parse_roto_effect(phrase)
+    eff = parse_roto_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P6 (keyword mechanics, face-changing & pregame).
+    from mtg_bot.cards.parser.roto_keywords import parse_p6_effect
+
+    return parse_p6_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

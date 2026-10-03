@@ -40,6 +40,13 @@ _KEYWORD_LINES: dict[str, str] = {
     # Ascend (CR 702.131) on a permanent: ``creature_statics_wg.
     # apply_ascend`` grants the city's blessing (cube W/G bucket).
     "Ascend": "ascend",
+    # Landwalk (CR 702.14; roto P6): block legality in
+    # ``effects.generic.roto_keywords.blocked_by_landwalk``.
+    "Plainswalk": "plainswalk",
+    "Islandwalk": "islandwalk",
+    "Swampwalk": "swampwalk",
+    "Mountainwalk": "mountainwalk",
+    "Forestwalk": "forestwalk",
 }
 
 
