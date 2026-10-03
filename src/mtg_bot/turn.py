@@ -2075,7 +2075,9 @@ def _state_based_actions_pass(state: GameState) -> bool:
             if not target.printing.is_artifact:
                 auras_to_bury.append(obj)
         elif kind == "land":
-            if not target.printing.is_land:
+            from mtg_bot.effects.generic.roto_mana import enchantable_land
+
+            if not enchantable_land(state, obj.printing, target):
                 auras_to_bury.append(obj)
         # Other kinds (e.g., player-enchant) aren't in scope.
         # Protection (CR 702.16c): a permanent with protection from a

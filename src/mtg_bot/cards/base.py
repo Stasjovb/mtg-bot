@@ -1593,6 +1593,14 @@ class CardPrinting:
     # offered by ``roto_mana.roto_legal_actions`` and activated through
     # ``roto_mana.activate_exile_ability``.
     exile_activated_abilities: tuple = ()
+    # "Enchant Forest" (Utopia Sprawl): with ``aura_enchant_type="land"``,
+    # the land subtype the enchanted land must have.
+    aura_enchant_subtype: str = ""
+    # "As this <permanent> enters, choose a color." -> GameObject.chosen_color
+    enters_choosing_color: bool = False
+    # "Whenever enchanted <land> is tapped for mana, its controller adds an
+    # additional one mana of the chosen color." (Utopia Sprawl).
+    enchanted_land_adds_chosen_color: bool = False
     # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
     # entries checked with the state-based actions ("When Dark Depths has
     # no ice counters on it, ...").

@@ -585,9 +585,33 @@ _ETB_THEN_EXTRA_COMBAT_IF_MAIN_RE = re.compile(
 )
 
 
+# "Enchant <land subtype>" (Utopia Sprawl: Forest).
+_ENCHANT_LAND_SUBTYPE_RE = re.compile(
+    r"^Enchant (?P<sub>Plains|Island|Swamp|Mountain|Forest)$"
+)
+_AS_AURA_ENTERS_CHOOSE_COLOR = "As this Aura enters, choose a color."
+# "Whenever enchanted <land subtype> is tapped for mana, its controller
+# adds an additional one mana of the chosen color." (Utopia Sprawl).
+_ENCHANTED_LAND_TAPPED_ADDS_CHOSEN_RE = re.compile(
+    r"^Whenever enchanted (?:Plains|Island|Swamp|Mountain|Forest|land) is "
+    r"tapped for mana, its controller adds an additional one mana of the "
+    r"chosen color\.$"
+)
+
+
 def _aura_line(line: str) -> RotoLine | None:
     if line == "Enchant creature":
         return RotoLine(enchant_type="creature")
+    m = _ENCHANT_LAND_SUBTYPE_RE.match(line)
+    if m is not None:
+        return RotoLine(
+            enchant_type="land",
+            fields={"aura_enchant_subtype": m.group("sub")},
+        )
+    if line == _AS_AURA_ENTERS_CHOOSE_COLOR:
+        return RotoLine(fields={"enters_choosing_color": True})
+    if _ENCHANTED_LAND_TAPPED_ADDS_CHOSEN_RE.match(line):
+        return RotoLine(fields={"enchanted_land_adds_chosen_color": True})
     m = _ENCHANTED_GETS_AND_HAS_RE.match(line)
     if m is not None:
         kws = frozenset(

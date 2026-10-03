@@ -837,6 +837,56 @@ class CreatureDiedThisTurn(Condition):
 
 
 # ---------------------------------------------------------------------------
+# Auras on lands (Utopia Sprawl)
+# ---------------------------------------------------------------------------
+
+
+def enchantable_land(state: "GameState", aura_printing, obj) -> bool:
+    """Can an Aura with ``aura_enchant_type="land"`` enchant ``obj``: a
+    land, with the printed land subtype if any ("Enchant Forest")."""
+    from mtg_bot.game import effective_subtypes
+
+    if not obj.printing.is_land:
+        return False
+    sub = aura_printing.aura_enchant_subtype
+    return not sub or sub in effective_subtypes(state, obj)
+
+
+def choose_color_as_enters(state: "GameState", obj, controller_id: int) -> None:
+    """"As this <permanent> enters, choose a color." --
+    ``Agent.choose_mana_color`` over WUBRG into ``chosen_color``."""
+    colors = ["W", "U", "B", "R", "G"]
+    color = colors[0]
+    agent = state.player_by_id(controller_id).agent
+    if agent is not None:
+        picked = agent.choose_mana_color(state, controller_id, colors)
+        if picked in colors:
+            color = picked
+    obj.chosen_color = color
+    state.log.append(f"{obj.printing.name} enters; chose {color}")
+
+
+def enchanted_land_mana_grants(state: "GameState", player_id: int) -> list:
+    """``(land id, color)`` grants for ``player_id``'s lands enchanted by
+    an "its controller adds an additional one mana of the chosen color"
+    Aura (read by automatic payment through
+    ``actions.extra_mana_grants_for_tapped_lands``)."""
+    out: list = []
+    for aura in state.battlefield:
+        if (
+            not aura.printing.enchanted_land_adds_chosen_color
+            or aura.attached_to is None or aura.chosen_color is None
+        ):
+            continue
+        land = next(
+            (o for o in state.battlefield if o.id == aura.attached_to), None,
+        )
+        if land is not None and land.controller_id == player_id:
+            out.append((land.id, aura.chosen_color))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -1902,6 +1952,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "choose_color_as_enters",
+    "enchantable_land",
+    "enchanted_land_mana_grants",
     "AdditionalCombatAfterThisMainPhase",
     "CreatureDiedThisTurn",
     "roto_next_step",

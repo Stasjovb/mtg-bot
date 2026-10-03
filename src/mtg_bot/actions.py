@@ -607,6 +607,12 @@ def extra_mana_grants_for_tapped_lands(
         from mtg_bot.effects.generic.roto_mana import ueot_land_tap_mana_grants
 
         out.extend(ueot_land_tap_mana_grants(state))
+    # "Whenever enchanted Forest is tapped for mana, its controller adds an
+    # additional one mana of the chosen color." (Utopia Sprawl): keyed by
+    # the enchanted land's id.
+    from mtg_bot.effects.generic.roto_mana import enchanted_land_mana_grants
+
+    out.extend(enchanted_land_mana_grants(state, player_id))
     return out
 
 
@@ -615,10 +621,12 @@ def _extra_mana_lands(state, lands, extra) -> list:
     lands with the fewest other colors are tapped first."""
     from mtg_bot.game import effective_subtypes
 
-    subtypes = {s for s, _ in extra}
+    subtypes = {s for s, _ in extra if isinstance(s, str)}
+    # Per-land grants are keyed by the land's id (Utopia Sprawl).
+    land_ids = {s for s, _ in extra if isinstance(s, int)}
     hits = [
         l for l in lands
-        if subtypes & set(effective_subtypes(state, l))
+        if l.id in land_ids or subtypes & set(effective_subtypes(state, l))
     ]
     hits.sort(key=lambda l: len(effective_land_produces(state, l)))
     return hits
@@ -632,7 +640,7 @@ def _extra_coins_for_land(state, land, extra) -> list[str]:
 
     subs = set(effective_subtypes(state, land))
     produces = effective_land_produces(state, land)
-    bonus = [color for s, color in extra if s in subs]
+    bonus = [color for s, color in extra if s in subs or s == land.id]
     own = bonus[0] if bonus and bonus[0] in produces else (
         next(iter(sorted(produces)), "C")
     )
@@ -2058,6 +2066,15 @@ def _select_spell_targets(
                 (enchant_type, o.id)
                 for o in state.battlefield
                 if o.printing.is_artifact
+                and (not yours_only or o.controller_id == player_id)
+            ]
+        elif enchant_type == "land":
+            # "Enchant Forest" (Vintage Roto P3: Utopia Sprawl).
+            from mtg_bot.effects.generic.roto_mana import enchantable_land
+
+            legal = [
+                ("land", o.id) for o in state.battlefield
+                if enchantable_land(state, card.printing, o)
                 and (not yours_only or o.controller_id == player_id)
             ]
         else:
@@ -5136,6 +5153,19 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                                  and o.printing.is_artifact),
                                 None,
                             )
+                        elif enchant_type == "land":
+                            from mtg_bot.effects.generic.roto_mana import (
+                                enchantable_land,
+                            )
+
+                            target_obj = next(
+                                (o for o in state.battlefield
+                                 if o.id == target_id
+                                 and enchantable_land(
+                                     state, card.printing, o,
+                                 )),
+                                None,
+                            )
                         else:
                             target_obj = next(
                                 (o for o in state.battlefield
@@ -5652,6 +5682,11 @@ def put_into_battlefield(
             )
         obj.chosen_player_id = pick[1]
         state.log.append(f"{obj.printing.name} enters; chose P{pick[1]}")
+    if obj.printing.enters_choosing_color:
+        # "As this <permanent> enters, choose a color." (Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import choose_color_as_enters
+
+        choose_color_as_enters(state, obj, controller_id)
     # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's

@@ -991,6 +991,9 @@ class GameObject:
     # ``(turn_number, ability key)`` pairs of "Activate only once each
     # turn." abilities used (``roto_mana.OnceEachTurnCost``).
     once_each_turn_used: tuple = ()
+    # The color chosen as this permanent entered
+    # (``CardPrinting.enters_choosing_color``; Utopia Sprawl).
+    chosen_color: Optional[str] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
