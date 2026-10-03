@@ -256,3 +256,49 @@ def test_stinkweed_imp_destroys_creatures_it_damages():
     assert bear in state.players[1].graveyard
     DestroyEventCreature().resolve(state, 0, (("creature", 999),))
     assert DestroyEventCreature().describe() == "destroy that creature"
+
+
+# --- Golgari Grave-Troll ----------------------------------------------------------
+
+def test_grave_troll_enters_with_counters_and_regenerates():
+    from mtg_bot import apply
+    from mtg_bot.actions import ActivateAbility, put_into_battlefield
+    from mtg_bot.effects.generic.roto_zones import (
+        EntersWithCountersPerGraveyardCard,
+        RegenerateSource,
+    )
+    from mtg_bot.effects.generic.targeted_removal import destroy_permanent
+    from mtg_bot.game import Zone, counter_count
+
+    pr = printing("Golgari Grave-Troll")
+    assert Dredge(n=6) in pr.zone_abilities
+    spec = next(s for s in pr.zone_abilities
+                if isinstance(s, EntersWithCountersPerGraveyardCard))
+    assert "creature card" in spec.describe()
+    state = arena()
+    to_graveyard(state, BEAR)
+    to_graveyard(state, ELF)
+    to_graveyard(state, BASIC_LANDS["Forest"])
+    to_graveyard(state, BEAR, owner=1)          # not your graveyard
+    troll = state.new_object(pr, owner_id=0, zone=Zone.STACK)
+    put_into_battlefield(state, troll, 0)
+    assert counter_count(troll, "+1/+1") == 2
+    put(state, BASIC_LANDS["Forest"])
+    apply(state, ActivateAbility(source_id=troll.id, ability_index=0), 0)
+    drain_stack(state)
+    assert counter_count(troll, "+1/+1") == 1 and troll.regeneration_shield
+    destroy_permanent(state, troll)
+    assert troll in state.battlefield and troll.tapped
+    RegenerateSource().resolve(state, 0)        # no source: nothing
+    assert RegenerateSource().describe() == "regenerate this creature"
+
+
+def test_grave_troll_with_empty_graveyard_enters_without_counters():
+    from mtg_bot.actions import put_into_battlefield
+    from mtg_bot.game import Zone, counter_count
+
+    state = arena()
+    troll = state.new_object(printing("Golgari Grave-Troll"), owner_id=0,
+                             zone=Zone.STACK)
+    put_into_battlefield(state, troll, 0)
+    assert counter_count(troll, "+1/+1") == 0

@@ -2918,3 +2918,57 @@ class ReturnSourceToOwnersHand(Effect):
 
     def describe(self) -> str:
         return "return this creature to its owner's hand"
+
+
+# ---------------------------------------------------------------------
+# Entry replacements and self-regeneration (Golgari Grave-Troll)
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EntersWithCountersPerGraveyardCard:
+    """A ``CardPrinting.zone_abilities`` spec: "This creature enters with
+    a +1/+1 counter on it for each <creature> card in your graveyard."
+    (Golgari Grave-Troll.) Counted as it enters (CR 614.1c)."""
+
+    card_filter: CardFilter = CardFilter()
+
+    def describe(self) -> str:
+        return (
+            f"enters with a +1/+1 counter for each "
+            f"{self.card_filter.describe()} in your graveyard"
+        )
+
+
+def on_enter_battlefield(state, obj) -> None:
+    """``actions.put_into_battlefield`` hook for a permanent with P2 zone
+    abilities, as it enters (before its enters triggers)."""
+    from mtg_bot.game import add_plus_one_counters
+
+    note_exile_instead_source_entered(state, obj)
+    for spec in obj.printing.zone_abilities:
+        if isinstance(spec, EntersWithCountersPerGraveyardCard):
+            p = state.player_by_id(obj.controller_id)
+            n = sum(1 for c in p.graveyard if spec.card_filter.matches(c.printing))
+            if n:
+                add_plus_one_counters(state, obj, n)
+                state.log.append(
+                    f"{obj.printing.name} enters with {n} +1/+1 counter(s)"
+                )
+
+
+@dataclass(frozen=True)
+class RegenerateSource(Effect):
+    """"Regenerate this creature." -- the resolving ability's source gets
+    the base's regeneration shield (one shield; it is used up by the next
+    destruction this turn and cleared at cleanup)."""
+
+    def resolve(self, state, controller_id, targets=()):
+        src = state.resolving_source
+        if src is None or src not in state.battlefield:
+            return
+        src.regeneration_shield = True
+        state.log.append(f"{src.printing.name} gains a regeneration shield")
+
+    def describe(self) -> str:
+        return "regenerate this creature"

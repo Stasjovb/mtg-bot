@@ -5447,12 +5447,11 @@ def put_into_battlefield(
         )
     obj.cast_via_hand = False
     if obj.printing.zone_abilities:
-        # Roto P2 exile-instead sources apply only from now on.
-        from mtg_bot.effects.generic.roto_zones import (
-            note_exile_instead_source_entered,
-        )
+        # Roto P2 entry hook: exile-instead sources apply only from now
+        # on; "enters with a counter for each ..." replacements.
+        from mtg_bot.effects.generic.roto_zones import on_enter_battlefield
 
-        note_exile_instead_source_entered(state, obj)
+        on_enter_battlefield(state, obj)
     # A "void" graveyard replacement source (Dauthi Voidwalker) applies
     # only to cards put into its opponents' graveyards from now on.
     if obj.printing.void_exile_replacement:

@@ -278,6 +278,12 @@ _SEARCH_HOOK_LINES = {
     "exiled, and you may spend mana as though it were mana of any color "
     "to cast them.": "ExileFoundCardsForYou",
 }
+# "This creature enters with a +1/+1 counter on it for each <creature>
+# card in your graveyard." (Golgari Grave-Troll).
+_ENTERS_WITH_COUNTER_PER_GRAVEYARD_CARD_RE = re.compile(
+    r"^This creature enters with a \+1/\+1 counter on it for each "
+    r"(?P<desc>(?:[a-z]+ )+card) in your graveyard\.$"
+)
 # "Dredge N" (CR 702.52).
 _DREDGE_LINE_RE = re.compile(r"^Dredge (?P<n>\d+)$")
 # Chains of Mephistopheles' discard-instead draw replacement.
@@ -312,6 +318,16 @@ def parse_roto_zones_static_line(line: str, name: str) -> dict | None:
         from mtg_bot.effects.generic.roto_zones import Dredge
 
         return {"zone_abilities": (Dredge(n=int(m.group("n"))),)}
+    m = _ENTERS_WITH_COUNTER_PER_GRAVEYARD_CARD_RE.match(line)
+    if m is not None:
+        from mtg_bot.effects.generic.roto_zones import (
+            EntersWithCountersPerGraveyardCard,
+        )
+
+        f = parse_roto_descriptor(f"a {m.group('desc')}")
+        if f is None:
+            return None
+        return {"zone_abilities": (EntersWithCountersPerGraveyardCard(f),)}
     search_spec = _SEARCH_HOOK_LINES.get(line)
     if search_spec is not None:
         from mtg_bot.effects.generic import roto_search
@@ -1109,6 +1125,8 @@ def _parse_more_tutors(phrase: str) -> Effect | None:
         return rz.PutXCountersOnSelfThenDrawHalfX()
     if phrase == "return this creature to its owner's hand":
         return rz.ReturnSourceToOwnersHand()
+    if phrase == "regenerate this creature":
+        return rz.RegenerateSource()
     m = _EXILE_SELF_AND_TOP_N_PILE_RE.match(phrase)
     if m is not None:
         n = _count(m.group("n"))
