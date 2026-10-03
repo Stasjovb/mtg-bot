@@ -12,7 +12,7 @@ from mtg_bot.effects.generic.roto_keywords import ManaValueCardFilter
 from mtg_bot.game import Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.turn import Step
-from tests._roto_helpers import arena, printing, put, roto_card, to_hand, to_library
+from tests._roto_helpers import agent, arena, printing, put, roto_card, to_hand, to_library
 
 MUDDLE = "Muddle the Mixture"
 TOLARIA_WEST = "Tolaria West"
@@ -396,3 +396,65 @@ def test_echo_not_on_opponents_upkeep_and_rechecked_on_resolution():
     assert guide in s.battlefield
     s.resolving_source = None
     EchoUpkeep(cost_str="{1}").resolve(s, 0)
+
+
+# ---------------------------------------------- Cleave (Dread Fugue, P2's)
+
+FUGUE = "Dread Fugue"
+
+
+def test_dread_fugue_parse_is_cleave():
+    from mtg_bot.cards.spell_costs import AlternativeCost
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.generic.cast_conditionals import AlternativeCostWasPaid
+
+    p = printing(FUGUE)
+    assert p.alternative_costs == (AlternativeCost(mana="{2}{B}"),)
+    eff = p.spell_effect
+    assert isinstance(eff, IfConditionElse)
+    assert eff.condition == AlternativeCostWasPaid()
+    assert eff.else_effect.card_filter.max_mv == 2      # printed: [with MV 2 or less]
+    assert eff.then_effect.card_filter.max_mv is None   # cleaved: brackets removed
+
+
+def _fugue_game(*, cleave):
+    from mtg_bot.actions import CastSpell
+
+    s = arena()
+    for _ in range(3 if cleave else 1):
+        put(s, _default("Swamp"), 0)
+    fugue = to_hand(s, printing(FUGUE), 0)
+    big = to_hand(s, _default("Counterspell"), 1)      # MV 2
+    bigger = to_hand(s, _default("Wrath of God"), 1)   # MV 4
+    agent(s, 0).targets = [("player", 1)]
+    agent(s, 0).hand_pick = bigger.id
+    apply_action(s, 0, CastSpell(fugue.id, cast_for_free=cleave))
+    resolve_top_of_stack(s)
+    return s, big, bigger
+
+
+def test_dread_fugue_printed_cost_takes_only_cheap_cards():
+    s, big, bigger = _fugue_game(cleave=False)
+    assert bigger in s.players[1].hand  # MV 4 isn't a legal choice
+    assert big in s.players[1].graveyard
+
+
+def test_dread_fugue_cleaved_takes_any_nonland_card():
+    s, big, bigger = _fugue_game(cleave=True)
+    assert bigger in s.players[1].graveyard
+    assert all(o.tapped for o in s.battlefield)  # paid {2}{B}
+
+
+def test_cleave_split_edges():
+    from mtg_bot.cards.parser.roto_keywords import _split_cleave
+
+    card = dict(roto_card(FUGUE))
+    assert _split_cleave(dict(card, type_line="Creature — Horror")) is None
+    assert _split_cleave(dict(card, oracle_text="Cleave {1}\nDraw a card.")) is None
+    two = card["oracle_text"].replace("Cleave {2}{B}", "Cleave {2}{B}\nCleave {1}")
+    assert _split_cleave(dict(card, oracle_text=two)) is None
+    # A cleaved text that doesn't parse leaves the card unclaimed.
+    from mtg_bot.cards.parser.source import build_card_record
+
+    bad = card["oracle_text"].replace("[with mana value 2 or less]", "[frobnicate]")
+    assert build_card_record(dict(card, oracle_text=bad)) is None

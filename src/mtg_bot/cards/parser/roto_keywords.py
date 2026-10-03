@@ -852,12 +852,76 @@ def _split_p6_lines(card: dict) -> tuple[dict, list]:
     return stripped, patches
 
 
+_CLEAVE_RE = re.compile(r"^Cleave (?P<cost>(?:\{[^}]+\})+)$")
+_BRACKETED_RE = re.compile(r"\s*\[[^\]]*\]")
+
+
+def _split_cleave(card: dict):
+    """``(cost, printed_card, cleaved_card)`` for an instant / sorcery
+    printing "Cleave {cost}" (CR 702.148): the printed text keeps the
+    bracketed words (brackets dropped); the cleaved text removes them.
+    ``None`` for any other card."""
+    from mtg_bot.cards.parser.text import _strip_reminder_text
+
+    type_line = card.get("type_line", "")
+    text = card.get("oracle_text") or ""
+    if card.get("card_faces") or not (
+        "Instant" in type_line or "Sorcery" in type_line
+    ):
+        return None
+    lines = text.split("\n")
+    costs = [
+        m.group("cost") for m in (
+            _CLEAVE_RE.match(_strip_reminder_text(raw)) for raw in lines
+        ) if m is not None
+    ]
+    if len(costs) != 1:
+        return None
+    body = "\n".join(
+        raw for raw in lines if _CLEAVE_RE.match(_strip_reminder_text(raw)) is None
+    )
+    if "[" not in body:
+        return None
+    printed = body.replace("[", "").replace("]", "")
+    cleaved = _BRACKETED_RE.sub("", body)
+    return costs[0], dict(card, oracle_text=printed), dict(card, oracle_text=cleaved)
+
+
+def _build_cleave(card: dict, build: Callable[[dict], object]):
+    """Cleave: an alternative cost (CR 702.148a) whose payment changes
+    the spell's text -- the overload pattern:
+    ``IfConditionElse(AlternativeCostWasPaid(), <cleaved>, <printed>)``."""
+    from mtg_bot.cards.spell_costs import AlternativeCost
+    from mtg_bot.effects.combinators import IfConditionElse
+    from mtg_bot.effects.generic.cast_conditionals import AlternativeCostWasPaid
+
+    cost, printed_card, cleaved_card = _split_cleave(card)
+    printed = build_with_p6_lines(printed_card, build)
+    cleaved = build_with_p6_lines(cleaved_card, build)
+    if (
+        printed is None or cleaved is None
+        or printed.spell_effect is None or cleaved.spell_effect is None
+    ):
+        return None
+    return replace(
+        printed,
+        alternative_costs=tuple(printed.alternative_costs) + (AlternativeCost(mana=cost),),
+        spell_effect=IfConditionElse(
+            condition=AlternativeCostWasPaid(),
+            then_effect=cleaved.spell_effect,
+            else_effect=printed.spell_effect,
+        ),
+    )
+
+
 def build_with_p6_lines(card: dict, build: Callable[[dict], object]):
     """Build ``card`` with ``build`` after peeling off its P6 printing-
     level lines (pregame actions, hand keyword abilities, prevention /
     replacement statics), then apply
     each line's patch. Any patch refusing (``None``) leaves the card
     unclaimed."""
+    if _split_cleave(card) is not None:
+        return _build_cleave(card, build)
     body, patches = _split_p6_lines(card)
     built = build(body)
     for patch in patches:
