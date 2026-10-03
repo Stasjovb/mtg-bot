@@ -988,6 +988,9 @@ class GameObject:
     # added mana with this ability this turn" trigger (Carpet of
     # Flowers); -1 if never.
     ability_mana_added_turn: int = -1
+    # ``(turn_number, ability key)`` pairs of "Activate only once each
+    # turn." abilities used (``roto_mana.OnceEachTurnCost``).
+    once_each_turn_used: tuple = ()
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

@@ -241,6 +241,12 @@ _CONVERGE_DRAW_DAMAGE_LIFE_RE = re.compile(
     r"damage to any target, and you gain X life, where X is the number of "
     r"colors of mana spent to cast this spell$"
 )
+# "<effect naming this creature> and it <verb phrase>" -- the pronoun is
+# the source (Vivi Ornitier: "put a +1/+1 counter on this creature and it
+# deals 1 damage to each opponent").
+_EFFECT_ON_SELF_AND_IT_RE = re.compile(
+    r"^(?P<a>.+? this creature) and it (?P<b>deals .+)$"
+)
 # Restriction tags of ``ManaCoin.spend_restriction`` this bucket adds
 # (checked by ``effects.generic.roto_mana.roto_coin_satisfies``).
 _CANT_BE_SPENT_ON_KIND_TAGS = {"nonartifact": "not_nonartifact_spell"}
@@ -368,6 +374,15 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
             total_power=int(m.group("n")),
         )
+    m = _EFFECT_ON_SELF_AND_IT_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.base import Sequence
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        first, second = _parse_effect(m.group("a")), _parse_effect(m.group("b"))
+        if first is None or second is None:
+            return None
+        return Sequence(effects=(first, second))
     m = _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
@@ -426,7 +441,7 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
             and formula is not None
         ):
             return rm.AddFormulaManaInAnyCombination(
-                amount=formula, options=tuple(base.options),
+                formula=formula, options=tuple(base.options),
             )
     m = _REMOVE_COUNTERS_FROM_SELF_RE.match(phrase)
     if m is not None:
@@ -611,6 +626,36 @@ def _suspended_time_counter_ability(noun: str):
     return rm.ExileZoneAbility(ability=ability, activate_only_if_suspended=True)
 
 
+# "<cost>: <effect>. Activate only during your turn and only once each
+# turn." (Vivi Ornitier) -- the combined rider the base activated grammar
+# reads only as separate sentences.
+_ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE = re.compile(
+    r"^(?P<body>.+\.) Activate only during your turn and only once each "
+    r"turn\.$"
+)
+
+
+def _once_each_turn_ability(body: str, name: str):
+    from dataclasses import replace
+
+    from mtg_bot.cards.parser.activated import _parse_activated_ability_line
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    ability = _parse_activated_ability_line(
+        body.replace(f"where X is {name}'s", "where X is this creature's"),
+    )
+    if ability is None:
+        return None
+    cost = replace(
+        ability.cost,
+        extra_costs=tuple(ability.cost.extra_costs)
+        + (rm.OnceEachTurnCost(key=body),),
+    )
+    return replace(
+        ability, cost=cost, activate_only_during_your_turn=True,
+    )
+
+
 def _tapped_for_mana_trigger(line: str):
     m = _TAPPED_FOR_MANA_TRIGGER_RE.match(line)
     if m is None:
@@ -637,6 +682,12 @@ def parse_roto_creature_line(line: str, card: dict):
         return None
     from mtg_bot.cards.parser.creature_wg_lines import WGLine
 
+    m = _ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE.match(line)
+    if m is not None:
+        ability = _once_each_turn_ability(m.group("body"), card["name"])
+        if ability is None:
+            return None
+        return WGLine(activated=(ability,))
     m = _SUSPENDED_SAC_REMOVE_TIME_COUNTER_RE.match(line)
     if m is not None:
         ability = _suspended_time_counter_ability(m.group("noun"))

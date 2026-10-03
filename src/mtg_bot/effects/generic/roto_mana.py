@@ -50,14 +50,20 @@ class SourcePower(Formula):
         return max(0, _source_power(state))
 
 
-@dataclass(frozen=True)
-class AddFormulaManaInAnyCombination(Effect):
-    """"Add X mana in any combination of <colors>, where X is <formula>."
-    (Burnt Offering: the sacrificed creature's mana value). Each coin's
-    color is asked of ``Agent.choose_mana_color``."""
+from mtg_bot.effects.generic.artifact_mechanics import (  # noqa: E402
+    AddManaInAnyCombination,
+)
 
-    amount: Formula = None
-    options: tuple = ()
+
+@dataclass(frozen=True)
+class AddFormulaManaInAnyCombination(AddManaInAnyCombination):
+    """"Add X mana in any combination of <colors>, where X is <formula>."
+    (Burnt Offering: the sacrificed creature's mana value; Vivi Ornitier:
+    its power). Each coin's color is asked of ``Agent.choose_mana_color``.
+    An ``AddManaInAnyCombination``, so on an activated ability it is a
+    mana ability (CR 605)."""
+
+    formula: Formula = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -65,7 +71,7 @@ class AddFormulaManaInAnyCombination(Effect):
     ) -> None:
         from mtg_bot.game import ManaCoin
 
-        n = self.amount.value(state, controller_id)
+        n = self.formula.value(state, controller_id)
         p = state.player_by_id(controller_id)
         minted = []
         for _ in range(max(0, n)):
@@ -85,7 +91,7 @@ class AddFormulaManaInAnyCombination(Effect):
     def describe(self) -> str:
         return (
             f"add X mana in any combination of {'/'.join(self.options)} "
-            f"({self.amount!r})"
+            f"({self.formula!r})"
         )
 
 
@@ -597,6 +603,29 @@ class MayAddManaPerTargetOpponentsSubtype(Effect):
             f"you may add X mana of any one color (X = {self.subtype}s "
             "target opponent controls)"
         )
+
+
+@dataclass(frozen=True)
+class OnceEachTurnCost:
+    """An ``ActivationCost.extra_costs`` atom for "Activate only once
+    each turn." (Vivi Ornitier): payable while the source hasn't used the
+    ability (``key``) this turn; paying records the turn on the source
+    (``GameObject.once_each_turn_used``)."""
+
+    key: str = ""
+
+    def payable(self, state, player_id: int, source) -> bool:
+        return (state.turn_number, self.key) not in source.once_each_turn_used
+
+    def pay(self, state, player_id: int, source) -> list:
+        source.once_each_turn_used = tuple(
+            entry for entry in source.once_each_turn_used
+            if entry[0] == state.turn_number
+        ) + ((state.turn_number, self.key),)
+        return []
+
+    def describe(self) -> str:
+        return "activate only once each turn"
 
 
 # ---------------------------------------------------------------------------
@@ -1665,6 +1694,7 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "OnceEachTurnCost",
     "HasNotAddedManaWithThisAbilityThisTurn",
     "MayAddManaPerTargetOpponentsSubtype",
     "activate_exile_ability",

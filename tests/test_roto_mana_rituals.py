@@ -255,13 +255,13 @@ def test_x_formula_grammar_paths():
         "add X mana in any combination of {U} and/or {R}, where X is this "
         "creature's power"
     )
-    assert isinstance(eff.amount, rm.SourcePower)
+    assert isinstance(eff.formula, rm.SourcePower)
     assert "any combination" in eff.describe()
     eff = parse_roto_mana_effect(
         "add X mana in any combination of {B} and/or {R}, where X is the "
         "sacrificed creature's mana value"
     )
-    assert eff.amount == MVOfCostPaidObjectPlus(constant=0)
+    assert eff.formula == MVOfCostPaidObjectPlus(constant=0)
     assert parse_roto_mana_effect(
         "add X mana in any combination of {B} and/or {R}, where X is the "
         "number of frobs"
