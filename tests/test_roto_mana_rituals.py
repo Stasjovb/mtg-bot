@@ -369,3 +369,53 @@ def test_channel_pays_only_the_shortfall():
     apply_action(s, 0, CastSpell(giant.id))
     assert s.players[0].life == 18  # three Mountains + 2 life
     assert "1 life" in rm.GrantLifeForColorlessUntilEndOfTurn().describe()
+
+
+# ---------------------------------------------------------------------------
+# Firestorm
+# ---------------------------------------------------------------------------
+
+
+def test_firestorm_discards_x_and_deals_x_to_each_of_x_targets():
+    s = arena()
+    put(s, MOUNTAIN, 0)
+    bear = put(s, BEAR, 1)
+    giant = put(s, make_creature("Giant", "{4}", 5, 5), 1)
+    storm = to_hand(s, printing("Firestorm"), 0)
+    discards = [to_hand(s, BEAR, 0) for _ in range(2)]
+    agent0 = s.players[0].agent
+    agent0.x_value = 2
+    agent0.targets = [("creature", bear.id), ("player", 1)]
+    apply_action(s, 0, CastSpell(storm.id))
+    assert all(c in s.players[0].graveyard for c in discards)
+    assert s.stack[-1].targets == (("creature", bear.id), ("player", 1))
+    assert s.stack[-1].x_value == 2
+    resolve_top_of_stack(s)
+    from mtg_bot.turn import state_based_actions
+
+    state_based_actions(s)
+    assert bear not in s.battlefield and giant in s.battlefield
+    assert s.players[1].life == 18
+
+
+def test_firestorm_x_is_bounded_by_hand_and_targets():
+    s = arena()
+    put(s, MOUNTAIN, 0)
+    storm = to_hand(s, printing("Firestorm"), 0)
+    for _ in range(5):
+        to_hand(s, BEAR, 0)
+    s.players[0].agent.x_value = None  # take the largest X
+    # Two players are the only legal targets: X <= 2.
+    assert rm.choose_additional_cost_x(s, 0, storm) == 2
+    assert rm.choose_additional_cost_x(s, 0, to_hand(s, BEAR, 0)) is None
+
+
+def test_firestorm_with_x_zero_does_nothing():
+    s = arena()
+    put(s, MOUNTAIN, 0)
+    storm = to_hand(s, printing("Firestorm"), 0)
+    s.players[0].agent.x_value = 0
+    apply_action(s, 0, CastSpell(storm.id))
+    resolve_top_of_stack(s)
+    assert s.players[1].life == 20
+    assert "each of X targets" in rm.DealXDamageToEachOfXTargets().describe()

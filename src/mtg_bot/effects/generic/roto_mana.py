@@ -1033,6 +1033,110 @@ def pay_life_for_mana(
 
 
 # ---------------------------------------------------------------------------
+# "discard X cards" additional cost; "X damage to each of X targets"
+# ---------------------------------------------------------------------------
+
+
+def _any_target_filter():
+    from mtg_bot.effects.object_predicates import (
+        IsBattle, IsCreature, IsPlaneswalker, IsPlayer,
+    )
+    from mtg_bot.effects.target_filter import OneOf
+
+    return OneOf(IsCreature(), IsPlaneswalker(), IsBattle(), IsPlayer())
+
+
+@dataclass(frozen=True)
+class DealXDamageToEachOfXTargets(Effect):
+    """"<This> deals X damage to each of X targets." (Firestorm). The
+    target count is the X announced while casting (``cast_time_shape``);
+    each target still legal on resolution is dealt X damage."""
+
+    count: int = -1  # set by ``cast_time_shape``; -1 before X is known
+
+    def requires_target(self) -> bool:
+        return self.count > 0
+
+    def target_count_range(self) -> tuple[int, int]:
+        n = max(self.count, 0)
+        return (n, n)
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return self._enumerate_for_filter(
+            state, controller_id, _any_target_filter(),
+        )
+
+    def cast_time_shape(self, *, kicked=False, alt_cost_paid=False, x_value=None):
+        from dataclasses import replace
+
+        if x_value is None:
+            return self
+        return replace(self, count=max(0, x_value))
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.base import _apply_damage
+
+        x = max(0, state.resolving_x_value)
+        legal = set(self.legal_targets(state, controller_id))
+        for t in targets:
+            if t in legal and x > 0:
+                _apply_damage(state, t, x)
+
+    def describe(self) -> str:
+        return "deals X damage to each of X targets"
+
+
+def choose_additional_cost_x(
+    state: "GameState", player_id: int, card,
+) -> "int | None":
+    """X for "As an additional cost to cast this spell, discard X cards."
+    (``None`` for other spells), announced before targets (CR 601.2b):
+    at most the other cards in hand and, for "each of X targets", the
+    number of legal targets."""
+    if not card.printing.additional_cost_discard_x:
+        return None
+    p = state.player_by_id(player_id)
+    upper = len([c for c in p.hand if c is not card])
+    eff = card.printing.spell_effect
+    if isinstance(eff, DealXDamageToEachOfXTargets):
+        upper = min(upper, len(eff.legal_targets(state, player_id)))
+    x = upper
+    if p.agent is not None:
+        x = p.agent.choose_x(state, player_id, card.printing.name, upper)
+    x = max(0, min(upper, x))
+    state.log.append(f"P{player_id} chooses X={x} for {card.printing.name}")
+    return x
+
+
+def pay_discard_x(state: "GameState", player_id: int, card, x: int) -> None:
+    """Discard ``x`` cards (``choose_discard`` each) as the cost."""
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import fire_opponent_discards_triggers
+
+    p = state.player_by_id(player_id)
+    for _ in range(x):
+        options = [c for c in p.hand if c is not card]
+        if not options:  # pragma: no cover - X is bounded by the hand
+            return
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_discard(state, player_id, [c.id for c in options])
+            chosen = next((c for c in options if c.id == pick), options[0])
+        p.hand.remove(chosen)
+        chosen.zone = Zone.GRAVEYARD
+        p.graveyard.append(chosen)
+        state.log.append(
+            f"additional cost: P{player_id} discards {chosen.printing.name}"
+        )
+        fire_opponent_discards_triggers(state, player_id, card=chosen)
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -2192,6 +2296,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "choose_additional_cost_x",
+    "DealXDamageToEachOfXTargets",
+    "pay_discard_x",
     "GrantLifeForColorlessUntilEndOfTurn",
     "life_mana_units_needed",
     "pay_life_for_mana",

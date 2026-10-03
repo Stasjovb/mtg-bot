@@ -403,6 +403,8 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
             total_power=int(m.group("n")),
         )
+    if phrase == "deals X damage to each of X targets":
+        return rm.DealXDamageToEachOfXTargets()
     if phrase == _CHANNEL_LIFE_FOR_COLORLESS_LINE:
         return rm.GrantLifeForColorlessUntilEndOfTurn()
     if phrase == _COPY_EXILED_CAST_FREE_LINE:
@@ -836,6 +838,16 @@ def parse_roto_cost_reduction_line(line: str):
     return CostReduction(
         amount=int(m.group("n")), condition=rm.CreatureDiedThisTurn(),
     )
+
+
+def roto_additional_cost_fields(body: str) -> dict | None:
+    """``CardPrinting`` fields for an "As an additional cost to cast this
+    spell, <body>." the casting substrate doesn't know, or ``None``."""
+    if _disabled():
+        return None
+    if body == "discard X cards":
+        return {"additional_cost_discard_x": True}
+    return None
 
 
 def parse_roto_cost_piece(piece: str):

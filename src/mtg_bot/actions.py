@@ -2659,6 +2659,10 @@ def _cast_spell(
         from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
 
         life_x_paid = _choose_life_x(state, player_id, card)
+    # Vintage Roto P3: "discard X cards" (Firestorm) announces X here too.
+    from mtg_bot.effects.generic.roto_mana import choose_additional_cost_x
+
+    discard_x = choose_additional_cost_x(state, player_id, card)
     # "up to X target ...": X is announced before targets (CR 601.2b).
     early_x: "int | None" = None
     if (
@@ -2670,6 +2674,7 @@ def _cast_spell(
         state, player_id, card, mode_indices=chosen_modes,
         x_hint=(
             life_x_paid if life_x_paid is not None
+            else discard_x if discard_x is not None
             else early_x if early_x is not None
             else (0 if card.printing.mana_cost.x_pips == 0 else None)
         ),
@@ -3010,6 +3015,11 @@ def _cast_spell(
             f"additional cost: P{player_id} pays {life_x_paid} life "
             f"(life: {p.life})"
         )
+    if discard_x is not None:
+        from mtg_bot.effects.generic.roto_mana import pay_discard_x
+
+        pay_discard_x(state, player_id, card, discard_x)
+        x_value = discard_x
     # Printed alternative cost: pay its non-mana parts (life, exile a
     # card from hand, return / sacrifice a land).
     if alt_cost_index is not None:

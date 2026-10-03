@@ -762,7 +762,10 @@ def _substrate_additional_cost_fields(body: str) -> dict | None:
         f = parse_permanent_descriptor(m.group("desc"))
         if f is not None:
             return {"additional_cost_sacrifice_filter": f}
-    return None
+    # Vintage Roto P3 bodies ("discard X cards").
+    from mtg_bot.cards.parser.roto_mana import roto_additional_cost_fields
+
+    return roto_additional_cost_fields(body)
 
 
 # "<effect> instead if <condition>." replacement rider, optionally

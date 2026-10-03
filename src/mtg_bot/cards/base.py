@@ -1601,6 +1601,9 @@ class CardPrinting:
     # "Whenever enchanted <land> is tapped for mana, its controller adds an
     # additional one mana of the chosen color." (Utopia Sprawl).
     enchanted_land_adds_chosen_color: bool = False
+    # "As an additional cost to cast this spell, discard X cards."
+    # (Firestorm): X is announced before targets and becomes the spell's X.
+    additional_cost_discard_x: bool = False
     # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
     # entries checked with the state-based actions ("When Dark Depths has
     # no ice counters on it, ...").
