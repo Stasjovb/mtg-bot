@@ -279,6 +279,9 @@ class Event(str, Enum):
     # ``combat_damage_amount``. "Whenever <this creature> deals damage"
     # (Cecil, Dark Knight). Fired by ``layouts.fire_deals_damage``.
     DEALS_DAMAGE = "deals_damage"
+    # "Whenever <source> deals damage to a player" (combat or not; roto
+    # P6, ``effects.generic.roto_keywords.after_damage_to_player``).
+    DEALS_DAMAGE_TO_PLAYER = "deals_damage_to_player"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -327,6 +330,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.CARDS_PUT_INTO_LIBRARY: ("player",),
     Event.TRANSFORMS: ("obj",),
     Event.DEALS_DAMAGE: ("source",),
+    Event.DEALS_DAMAGE_TO_PLAYER: ("source", "player"),
 }
 
 

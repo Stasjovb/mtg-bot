@@ -706,10 +706,12 @@ def _resolve_damage_step(
             f"P{target_id} takes {total} (life: {p.life})"
         )
 
-    # Toxic (CR 702.164; roto P6): poison counters with the damage.
-    from mtg_bot.effects.generic.roto_keywords import apply_toxic
+    # Roto P6: toxic (CR 702.164) and "deals damage to a player".
+    from mtg_bot.effects.generic.roto_keywords import (
+        after_combat_damage_to_players,
+    )
 
-    apply_toxic(state, sources_hit_player)
+    after_combat_damage_to_players(state, sources_hit_player)
 
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.

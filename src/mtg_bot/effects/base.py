@@ -306,6 +306,10 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
         p.life -= amount
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
         _fire_deals_damage(state, amount)
+        from mtg_bot.effects.generic.roto_keywords import after_damage_to_player
+        from mtg_bot.keyword_rules import current_damage_source
+
+        after_damage_to_player(state, current_damage_source(state), target_id, amount)
     elif kind == "creature":
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:

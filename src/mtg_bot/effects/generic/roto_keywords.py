@@ -710,6 +710,124 @@ def fire_granted_becomes_tapped_triggers(state: "GameState", obj) -> None:
             )
 
 
+# ------------------------------------- damage dealt to a player this turn
+
+DAMAGE_TALLY_KIND = "damage_dealt_to_player_this_turn"
+
+
+def damage_dealt_to_player_this_turn(
+    state: "GameState", source_id: int, player_id: int,
+) -> int:
+    """Damage the object ``source_id`` has dealt to ``player_id`` this
+    turn -- tallied (a ``layer=0`` registry entry ending at cleanup) only
+    for objects with a "deals damage to a player" trigger."""
+    for ce in state.continuous_effects:
+        if (
+            ce.kind == DAMAGE_TALLY_KIND and ce.target_id == source_id
+            and ce.params[0] == player_id
+        ):
+            return ce.params[1]
+    return 0
+
+
+def _record_damage_to_player(state, source, player_id: int, amount: int) -> None:
+    for i, ce in enumerate(state.continuous_effects):
+        if (
+            ce.kind == DAMAGE_TALLY_KIND and ce.target_id == source.id
+            and ce.params[0] == player_id
+        ):
+            from dataclasses import replace
+
+            state.continuous_effects[i] = replace(
+                ce, params=(player_id, ce.params[1] + amount),
+            )
+            state._invalidate_layered_cache()
+            return
+    state.add_continuous_effect(
+        source_id=source.id, layer=0, kind=DAMAGE_TALLY_KIND,
+        target_id=source.id, params=(player_id, amount), expires_at="cleanup",
+        description=f"{source.printing.name}: damage dealt to P{player_id} this turn",
+    )
+
+
+def after_damage_to_player(
+    state: "GameState", source, player_id: int, amount: int,
+) -> None:
+    """``source`` just dealt ``amount`` damage to ``player_id`` (combat or
+    not): tally it for the source's own "this turn" checks and dispatch
+    ``Event.DEALS_DAMAGE_TO_PLAYER`` -- skipped unless some permanent
+    observes that event."""
+    from mtg_bot.effects.predicates import Event
+
+    if source is None or amount <= 0 or not hasattr(source, "printing"):
+        return
+    if not any(
+        ab.event is Event.DEALS_DAMAGE_TO_PLAYER
+        for o in (*state.battlefield, *state.emblems)
+        for ab in o.printing.triggered_abilities
+    ):
+        return
+    if any(
+        ab.event is Event.DEALS_DAMAGE_TO_PLAYER
+        for ab in source.printing.triggered_abilities
+    ):
+        _record_damage_to_player(state, source, player_id, amount)
+    from mtg_bot.actions import dispatch_event
+
+    dispatch_event(
+        state, Event.DEALS_DAMAGE_TO_PLAYER, label="deals damage to a player",
+        source=source, player=state.player_by_id(player_id),
+    )
+
+
+def after_combat_damage_to_players(state: "GameState", sources_hit_player) -> None:
+    """The combat damage step's hook (``combat._resolve_damage_step``):
+    ``(source_id, player_id, amount)`` for each combat damage event dealt
+    to a player -- toxic, then the deals-damage-to-a-player event."""
+    apply_toxic(state, sources_hit_player)
+    for source_id, player_id, amount in sources_hit_player:
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        after_damage_to_player(state, source, player_id, amount)
+
+
+@dataclass(frozen=True)
+class DealtDamageToThatPlayerThisTurnAtLeast(TriggerPredicate):
+    """``DEALS_DAMAGE_TO_PLAYER``: "if it has dealt N or more damage to
+    that player this turn"."""
+
+    n: int = 1
+
+    def matches(self, state, subjects, source):
+        player = subjects.get("player")
+        src = subjects.get("source") or source
+        if player is None or src is None:
+            return False
+        return damage_dealt_to_player_this_turn(state, src.id, player.id) >= self.n
+
+
+@dataclass(frozen=True)
+class TargetPlayerLosesTheGame(Effect):
+    """"<that player> loses the game" (CR 104.3a) -- the player arrives as
+    ``targets[0]``, bound from the triggering event by
+    ``BindEventPlayer``; state-based actions then end the game."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets or targets[0][0] != "player":
+            return
+        player = state.player_by_id(targets[0][1])
+        if player.has_lost:
+            return
+        player.has_lost = True
+        player.lost_reason = "lost the game (effect)"
+        state.log.append(f"P{player.id} loses the game")
+
+    def describe(self) -> str:
+        return "that player loses the game"
+
+
 # ------------------------------------------------------------------ toxic
 
 TOXIC_PREFIX = "toxic "
@@ -749,6 +867,12 @@ def apply_toxic(state: "GameState", sources_hit_player) -> None:
 
 
 __all__ = [
+    "DAMAGE_TALLY_KIND",
+    "DealtDamageToThatPlayerThisTurnAtLeast",
+    "TargetPlayerLosesTheGame",
+    "after_combat_damage_to_players",
+    "after_damage_to_player",
+    "damage_dealt_to_player_this_turn",
     "ECHO_PAID_KIND",
     "EchoDue",
     "EchoUpkeep",

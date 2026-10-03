@@ -1586,7 +1586,13 @@ def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
         parse_face_intervening_if,
     )
 
-    return parse_face_intervening_if(phrase.strip())
+    pred = parse_face_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Roto P6 gates ("if it has dealt N or more damage to that player").
+    from mtg_bot.cards.parser.roto_keywords import parse_p6_intervening_if
+
+    return parse_p6_intervening_if(phrase.strip())
 
 
 # Intervening-``while`` gate phrases. The DSK Delirium "while X"

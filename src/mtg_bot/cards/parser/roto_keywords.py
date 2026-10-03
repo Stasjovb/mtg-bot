@@ -186,6 +186,11 @@ _TARGET_OPPONENT_GETS_POISON_RE = re.compile(
 )
 
 
+_LOSES_THE_GAME_RE = re.compile(
+    r"^(?:they lose|that player loses) the game$", re.IGNORECASE,
+)
+
+
 def _parse_keyword_action_phrase(phrase: str):
     from mtg_bot.effects.generic.roto_keywords import (
         PutPlusOneCountersOnEachCreatureTargetPlayerControls,
@@ -197,6 +202,16 @@ def _parse_keyword_action_phrase(phrase: str):
 
     if _REGENERATE_SELF_RE.match(phrase):
         return RegenerateSource()
+    if phrase.strip().lower() == "exile all graveyards":
+        from mtg_bot.effects.generic.exile import ExileAllGraveyards
+
+        return ExileAllGraveyards()
+    if _LOSES_THE_GAME_RE.match(phrase):
+        # "they" / "that player": the triggering event's player.
+        from mtg_bot.effects.generic.cube_creatures_ub import BindEventPlayer
+        from mtg_bot.effects.generic.roto_keywords import TargetPlayerLosesTheGame
+
+        return BindEventPlayer(TargetPlayerLosesTheGame())
     if _DAMAGE_THAT_PLAYER_HAND_SIZE_RE.match(phrase):
         # "that player" is the triggering event's player.
         from mtg_bot.effects.generic.cube_creatures_ub import BindEventPlayer
@@ -467,6 +482,8 @@ def parse_p6_trigger_phrase(phrase: str):
         if m.group("who") == "an opponent":
             pred = Controlled(OPPONENT, subject="controller") & pred
         return (Event.IS_CAST, pred)
+    if phrase == "this creature deals damage to a player":
+        return (Event.DEALS_DAMAGE_TO_PLAYER, IsSelf(subject="source"))
     if phrase == "an opponent attacks you":
         # The engine's attackers always attack the defending player
         # (no planeswalker / battle attacks), so an opponent's attack is
@@ -494,6 +511,25 @@ def parse_p6_trigger_phrase(phrase: str):
     elif ctl == "an opponent controls":
         pred = pred & Controlled(OPPONENT, subject="controller")
     return (Event.BECOMES_TARGET, pred)
+
+
+_DEALT_DAMAGE_TO_THAT_PLAYER_RE = re.compile(
+    r"^it has dealt (?P<n>\d+) or more damage to that player this turn$"
+)
+
+
+def parse_p6_intervening_if(phrase: str):
+    """An intervening-"if" gate (CR 603.4) the P6 grammar models, else
+    ``None``: "it has dealt N or more damage to that player this turn"
+    (Vessel of the All-Consuming)."""
+    from mtg_bot.effects.generic.roto_keywords import (
+        DealtDamageToThatPlayerThisTurnAtLeast,
+    )
+
+    m = _DEALT_DAMAGE_TO_THAT_PLAYER_RE.match(phrase)
+    if m is not None:
+        return DealtDamageToThatPlayerThisTurnAtLeast(int(m.group("n")))
+    return None
 
 
 # ── Hand keyword lines (abilities that work from the hand) ─────────────
@@ -609,6 +645,30 @@ def _attach_hand_ability(printing, ability):
 
 
 _PLOT_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
+_SELF_TRIGGER_COUNTERS_ON_IT_RE = re.compile(
+    r"^Whenever (?P<cond>this creature [^,]+), put (?P<n>a|an|\w+) \+1/\+1 "
+    r"counters? on it\.$"
+)
+
+
+def _self_trigger_counters_on_it(line: str):
+    """"Whenever this creature <condition>, put N +1/+1 counter(s) on
+    it." -- "it" is the condition's subject, this creature (Vessel of the
+    All-Consuming). Recognized whole: "on it" alone has no referent."""
+    from mtg_bot.cards.parser.triggers import _parse_predicate_trigger_phrase
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+
+    m = _SELF_TRIGGER_COUNTERS_ON_IT_RE.match(line.strip())
+    if m is None:
+        return None
+    n = number_word(m.group("n"))
+    cond = _parse_predicate_trigger_phrase(m.group("cond"))
+    if n is None or cond is None:
+        return None
+    return TriggeredAbility(
+        event=cond[0], predicate=cond[1], effect=PutPlusOneCounterOnSelf(amount=n),
+    )
 _TOXIC_RE = re.compile(r"^Toxic (?P<n>\d+)$")
 _SPLIT_SECOND_LINE = "Split second"
 _ECHO_RE = re.compile(r"^Echo (?P<cost>(?:\{[^}]+\})+)$")
@@ -667,6 +727,9 @@ def _line_patch(line: str, card: dict):
     rule = parse_replacement_static_line(line, card["name"])
     if rule is not None:
         return lambda p: _attach_replacement_static(p, rule)
+    trigger = _self_trigger_counters_on_it(line)
+    if trigger is not None:
+        return lambda p: _attach_trigger(p, trigger)
     m = _PLOT_RE.match(line.strip())
     type_line = card.get("type_line", "")
     if m is not None and "Instant" not in type_line and "Sorcery" not in type_line:

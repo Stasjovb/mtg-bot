@@ -251,3 +251,125 @@ def test_flip_builder_edges():
     p = _build_flip_printing(dict(base, card_faces=[top, creature]))
     flipped = p.triggered_abilities[0].effect.flipped
     assert flipped.is_creature and flipped.mana_cost_str == "{1}{U}"
+
+
+# ------------------------------- Hidetsugu Consumes All // Vessel (saga DFC)
+
+HIDETSUGU = "Hidetsugu Consumes All // Vessel of the All-Consuming"
+
+
+def _vessel():
+    return printing(HIDETSUGU).transform_back_face
+
+
+def test_hidetsugu_parse():
+    from mtg_bot.effects.generic.exile import ExileAllGraveyards
+    from mtg_bot.effects.generic.roto_keywords import (
+        DealtDamageToThatPlayerThisTurnAtLeast,
+        TargetPlayerLosesTheGame,
+    )
+
+    p = printing(HIDETSUGU)
+    assert p.chapter_count == 3
+    assert isinstance(p.triggered_abilities[1].effect, ExileAllGraveyards)
+    vessel = _vessel()
+    assert vessel.name == "Vessel of the All-Consuming"
+    assert "trample" in vessel.keywords and (vessel.power, vessel.toughness) == (3, 3)
+    lose, grow = vessel.triggered_abilities
+    assert lose.event == Event.DEALS_DAMAGE_TO_PLAYER
+    assert DealtDamageToThatPlayerThisTurnAtLeast(10) == lose.predicate.right
+    assert lose.effect.inner == TargetPlayerLosesTheGame()
+    assert grow.event == Event.DEALS_DAMAGE
+    assert TargetPlayerLosesTheGame().describe() == "that player loses the game"
+
+
+def test_hidetsugu_chapter_two_exiles_all_graveyards():
+    from mtg_bot.effects.generic.exile import ExileAllGraveyards
+
+    s = arena()
+    from tests._roto_helpers import to_graveyard
+
+    a = to_graveyard(s, _default("Island"), 0)
+    b = to_graveyard(s, _default("Island"), 1)
+    ExileAllGraveyards().resolve(s, 0)
+    assert a in s.players[0].exile and b in s.players[1].exile
+
+
+def _vessel_attack(s, vessel):
+    from mtg_bot.actions import DeclareAttackers, apply_action
+    from mtg_bot.combat import resolve_combat_damage
+    from mtg_bot.turn import Step
+
+    s.step = Step.DECLARE_ATTACKERS
+    apply_action(s, 0, DeclareAttackers(attacker_ids=frozenset({vessel.id})))
+    s.step = Step.COMBAT_DAMAGE
+    resolve_combat_damage(s, defending_player_id=1)
+
+
+def _drain(s):
+    while s.stack:
+        resolve_top_of_stack(s)
+
+
+def test_vessel_grows_when_it_deals_damage():
+    s = arena()
+    vessel = put(s, _vessel(), 0)
+    _vessel_attack(s, vessel)
+    _drain(s)
+    assert s.players[1].life == 17
+    assert vessel.plus_one_counters == 1
+    assert not s.players[1].has_lost
+
+
+def test_vessel_wins_at_ten_damage_to_a_player_in_a_turn():
+    from mtg_bot.effects.base import _apply_damage
+    from mtg_bot.effects.generic.roto_keywords import damage_dealt_to_player_this_turn
+    from mtg_bot.turn import state_based_actions
+
+    s = arena()
+    vessel = put(s, _vessel(), 0)
+    # 7 noncombat damage from the Vessel first...
+    s.resolving_source = vessel
+    _apply_damage(s, ("player", 1), 7)
+    s.resolving_source = None
+    _drain(s)
+    assert damage_dealt_to_player_this_turn(s, vessel.id, 1) == 7
+    assert not s.players[1].has_lost
+    # ...then 4 combat damage (3 power + the counter it just got).
+    _vessel_attack(s, vessel)
+    assert damage_dealt_to_player_this_turn(s, vessel.id, 1) == 11
+    _drain(s)
+    assert s.players[1].has_lost
+    state_based_actions(s)
+    assert s.winner_id == 0
+
+
+def test_vessel_tally_is_per_turn():
+    from mtg_bot.effects.base import _apply_damage
+    from mtg_bot.effects.generic.roto_keywords import (
+        after_damage_to_player,
+        damage_dealt_to_player_this_turn,
+    )
+
+    s = arena()
+    vessel = put(s, _vessel(), 0)
+    s.resolving_source = vessel
+    _apply_damage(s, ("player", 1), 9)
+    s.resolving_source = None
+    s.expire_continuous_effects("cleanup")
+    assert damage_dealt_to_player_this_turn(s, vessel.id, 1) == 0
+    # Defensive no-ops.
+    after_damage_to_player(s, None, 1, 3)
+    after_damage_to_player(s, vessel, 1, 0)
+
+
+def test_lose_the_game_needs_a_player_and_is_idempotent():
+    from mtg_bot.effects.generic.roto_keywords import TargetPlayerLosesTheGame
+
+    s = arena()
+    TargetPlayerLosesTheGame().resolve(s, 0, ())
+    TargetPlayerLosesTheGame().resolve(s, 0, (("creature", 1),))
+    assert not s.players[1].has_lost
+    TargetPlayerLosesTheGame().resolve(s, 0, (("player", 1),))
+    TargetPlayerLosesTheGame().resolve(s, 0, (("player", 1),))
+    assert s.players[1].has_lost
