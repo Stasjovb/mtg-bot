@@ -151,22 +151,39 @@ _REDIRECT_NEXT_DAMAGE_RE = re.compile(
     r"turn is dealt to target (?P<np>[a-z ]+?) instead$",
     re.IGNORECASE,
 )
+# "<it|this creature> deals N damage to target <noun>" whose noun only
+# ``target_noun_filter`` reads (a combat qualifier -- Tinder Wall's
+# "target creature it's blocking"); the plain nouns are claimed earlier
+# in ``_parse_effect`` by the base damage recognizers, so this is the
+# fallback for the qualified ones.
+_DEAL_N_DAMAGE_TO_TARGET_NOUN_RE = re.compile(
+    r"^(?:it|this creature) deals (?P<n>\w+) damage to target "
+    r"(?P<np>[a-z' ]+?)$",
+    re.IGNORECASE,
+)
 
 
 def target_noun_filter(np: str):
-    """``parse_permanent_phrase`` plus a leading "attacking" modifier
-    ("target attacking creature"), else ``None``."""
+    """``parse_permanent_phrase`` plus the combat qualifiers: a leading
+    "attacking" ("target attacking creature") or a trailing "it's
+    blocking" ("target creature it's blocking" -- Tinder Wall; the
+    source's block, ``BlockedBySource``), else ``None``."""
     from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
-    from mtg_bot.effects.object_predicates import IsAttacking
+    from mtg_bot.effects.object_predicates import BlockedBySource, IsAttacking
 
     np = np.strip().lower()
     attacking = np.startswith("attacking ")
     if attacking:
         np = np[len("attacking "):]
+    blocked_by_source = np.endswith(" it's blocking")
+    if blocked_by_source:
+        np = np[: -len(" it's blocking")]
     base = parse_permanent_phrase(np)
     if base is None:
         return None
-    return base & IsAttacking() if attacking else base
+    if attacking:
+        base = base & IsAttacking()
+    return base & BlockedBySource() if blocked_by_source else base
 
 
 # "Regenerate this creature." (Blight Mamba) is P2's ``roto_zones``
@@ -372,6 +389,15 @@ def _parse_damage_phrase(phrase: str):
         if n is None or f is None:
             return None
         return RedirectNextDamageToSourceToTarget(amount=n, targets=(TargetSpec(f),))
+    m = _DEAL_N_DAMAGE_TO_TARGET_NOUN_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic.damage import DealDamage
+
+        n = number_word(m.group("n"))
+        f = target_noun_filter(m.group("np"))
+        if n is None or f is None:
+            return None
+        return DealDamage(amount=n, targets=(TargetSpec(f),))
     return None
 
 

@@ -98,7 +98,7 @@ def _describe_filter(target_filter) -> str:
     log lines / describe(). Coarse — exact wording is owned by the
     parser's phrasebook on the way in."""
     from mtg_bot.effects.object_predicates import (
-        ControlledByOpponent, ControlledByYou,
+        BlockedBySource, ControlledByOpponent, ControlledByYou,
         IsArtifact, IsAttacking, IsBasic, IsBlocking, IsCreature,
         IsEnchantment, IsLand, IsPlayer, IsTapped, ObjectAnd,
         ObjectNot, ObjectOr,
@@ -126,6 +126,8 @@ def _describe_filter(target_filter) -> str:
             return "target creature an opponent controls"
         if isinstance(l, IsCreature) and isinstance(r, ControlledByYou):
             return "target creature you control"
+        if isinstance(l, IsCreature) and isinstance(r, BlockedBySource):
+            return "target creature it's blocking"
         if isinstance(l, IsPlayer) and isinstance(r, ControlledByOpponent):
             return "target opponent"
         if isinstance(l, IsLand) and isinstance(r, ObjectNot) and isinstance(

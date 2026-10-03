@@ -242,14 +242,15 @@ def test_script_diagnose_card_gate_kind(script, monkeypatch):
 def test_script_diagnose_card_real_probe(script):
     from mtg_bot.cards.pools import load_pool_cards
 
-    wall = next(
-        c for c in load_pool_cards("roto") if c["name"] == "Tinder Wall"
+    coating = next(
+        c for c in load_pool_cards("roto")
+        if c["name"] == "Liquimetal Coating"
     )
-    d = script.diagnose_card(wall)
+    d = script.diagnose_card(coating)
     assert d.kind == "lines" and d.confirmed
     assert d.failing_text == [
-        "{R}, Sacrifice this creature: It deals 2 damage to target "
-        "creature it's blocking."
+        "{T}: Target permanent becomes an artifact in addition to its "
+        "other types until end of turn."
     ]
 
 

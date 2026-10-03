@@ -415,6 +415,29 @@ class IsBlocking(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class BlockedBySource(ObjectPredicate):
+    """The object is a creature the resolving source is blocking --
+    Tinder Wall's "target creature it's blocking".
+
+    Reads ``state.resolving_source`` (pinned during target enumeration
+    and resolution, like ``IsSource``). While the source is on the
+    battlefield its live block decides (``source.blocking``; a blocker
+    removed from combat blocks nothing). Once it has left -- Tinder Wall
+    is sacrificed as part of the cost -- the ability uses the source's
+    last known information (CR 608.2h): the attacker it was blocking
+    still lists it among its blockers (``blocked_by``; an attacker stays
+    blocked when its blocker leaves, CR 509.1h)."""
+
+    def test(self, obj, state):
+        source = getattr(state, "resolving_source", None)
+        if source is None or not hasattr(obj, "printing"):
+            return False
+        if any(o is source for o in state.battlefield):
+            return getattr(source, "blocking", None) == obj.id
+        return source.id in getattr(obj, "blocked_by", ())
+
+
+@dataclass(frozen=True)
 class HasKeyword(ObjectPredicate):
     """The object currently has the given keyword.
 
