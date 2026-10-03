@@ -433,3 +433,19 @@ def test_deal_damage_to_each_target_skips_illegal_targets():
     assert a.damage == 1
     eff.resolve(state, 0, ())
     assert DealDamageToEachTarget(amount=2).describe().endswith("the targets")
+
+
+def test_kiora_minus_one_untaps_any_target_permanent():
+    # "-1: Untap target permanent." -- the untap-target grammar is P5's;
+    # the planeswalker itself is plan family F30's (P4).
+    state = make_state()
+    kiora = place(state, 0, "Kiora, Behemoth Beckoner")
+    kiora.loyalty_counters = kiora.printing.loyalty
+    rock = place(state, 1, "Mox Pearl", tapped=True)
+    effect = kiora.printing.activated_abilities[0].effect
+    legal = effect.legal_targets(state, 0)
+    assert ("planeswalker", kiora.id) in legal and ("permanent", rock.id) in legal
+    script(state, 0, "target", ("permanent", rock.id))
+    activate(state, 0, kiora)
+    assert not rock.tapped
+    assert kiora.loyalty_counters == kiora.printing.loyalty - 1
