@@ -59,6 +59,9 @@ PROTECTION_QUALITIES: frozenset[str] = frozenset(
     }
 )
 
+# "hexproof from <quality>" keyword spelling (CR 702.11d).
+HEXPROOF_FROM_PREFIX = "hexproof from "
+
 # Target kinds whose integer id is NOT a battlefield object id (stack
 # indexes, player ids, card-in-other-zone ids).
 _NON_PERMANENT_TARGET_KINDS = frozenset({"player", "stack", "spell", "card"})
@@ -176,6 +179,13 @@ def can_be_targeted_by(
 
         if untargetable_by(state, obj, controller_id):
             return False
+    if obj.controller_id != controller_id and source is not None:
+        # "hexproof from <quality>" (CR 702.11d; Veil of Summer).
+        for kw in kws:
+            if kw.startswith(HEXPROOF_FROM_PREFIX) and source_has_quality(
+                state, source, kw[len(HEXPROOF_FROM_PREFIX):],
+            ):
+                return False
     return not is_protected_from(state, obj, source)
 
 
@@ -198,10 +208,16 @@ def filter_targetable(
     """Drop battlefield targets that hexproof / shroud / protection
     make illegal for this source + controller. Non-permanent targets
     (players, stack items, cards in other zones) pass through."""
+    from mtg_bot.roto_board_statics import player_hexproof_from_source
+
     out: list[tuple[str, int]] = []
     for t in targets:
         obj = _battlefield_object(state, t)
         if obj is not None and not can_be_targeted_by(state, obj, source, controller_id):
+            continue
+        if t[0] == "player" and player_hexproof_from_source(
+            state, t[1], source, controller_id,
+        ):
             continue
         out.append(t)
     return out

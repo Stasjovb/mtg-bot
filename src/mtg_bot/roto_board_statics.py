@@ -495,6 +495,55 @@ def _apply_role_uniqueness(state: "GameState") -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Per-turn player facts (Veil of Summer)
+# ---------------------------------------------------------------------------
+
+
+def note_spell_cast(state: "GameState", player, card) -> None:
+    """``actions._cast_spell``'s hook: record the cast spell's colors
+    for "<player> has cast a <color> spell this turn"."""
+    from mtg_bot.game import effective_colors
+
+    turn, colors = player.spell_colors_cast_this_turn
+    if turn != state.turn_number:
+        colors = frozenset()
+    player.spell_colors_cast_this_turn = (
+        state.turn_number, colors | effective_colors(state, card),
+    )
+
+
+def spell_colors_cast_this_turn(state: "GameState", player) -> frozenset:
+    turn, colors = player.spell_colors_cast_this_turn
+    return colors if turn == state.turn_number else frozenset()
+
+
+def spells_uncounterable_now(state: "GameState", player_id: int) -> bool:
+    """"Spells you control can't be countered this turn." in force for
+    ``player_id`` (``CounterTargetSpell._is_uncounterable``'s hook)."""
+    return state.player_by_id(player_id).spells_uncounterable_turn == state.turn_number
+
+
+def player_hexproof_from_source(
+    state: "GameState", player_id: int, source, controller_id: int,
+) -> bool:
+    """Whether player ``player_id`` can't be targeted by
+    ``controller_id``'s spell or ability from ``source`` because of
+    "you gain hexproof from <quality> until end of turn" (CR 702.11d;
+    only opponents' sources are refused)."""
+    if source is None or player_id == controller_id:
+        return False
+    try:
+        turn, qualities = state.player_by_id(player_id).hexproof_from_this_turn
+    except (KeyError, AttributeError):
+        return False
+    if turn != state.turn_number or not qualities:
+        return False
+    from mtg_bot.keyword_rules import source_has_quality
+
+    return any(source_has_quality(state, source, q) for q in qualities)
+
+
+# ---------------------------------------------------------------------------
 # Untap step
 # ---------------------------------------------------------------------------
 
@@ -595,6 +644,10 @@ def untap_step_held(
 
 
 __all__ = [
+    "note_spell_cast",
+    "player_hexproof_from_source",
+    "spell_colors_cast_this_turn",
+    "spells_uncounterable_now",
     "NoCreaturesOnBattlefield",
     "StateTrigger",
     "apply_board_state_checks",

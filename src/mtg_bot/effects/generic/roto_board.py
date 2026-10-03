@@ -1692,6 +1692,98 @@ class PumpThenCreateRoleAttached(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Veil of Summer
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DrawIfOpponentCastColorThisTurn(Effect):
+    """"Draw N cards if an opponent has cast a <color> or <color> spell
+    this turn." (Veil of Summer; the spells' colors as they were cast,
+    recorded by ``roto_board_statics.note_spell_cast``)."""
+
+    colors: frozenset = frozenset()
+    amount: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.roto_board_statics import spell_colors_cast_this_turn
+        from mtg_bot.turn import draw_n_cards
+
+        if any(
+            spell_colors_cast_this_turn(state, p) & self.colors
+            for p in state.players if p.id != controller_id
+        ):
+            draw_n_cards(state, controller_id, self.amount)
+        else:
+            state.log.append("no opponent cast a spell of those colors this turn")
+
+    def describe(self) -> str:
+        return (
+            f"draw {self.amount} if an opponent has cast a "
+            f"{'/'.join(sorted(self.colors))} spell this turn"
+        )
+
+
+@dataclass(frozen=True)
+class YourSpellsCantBeCounteredThisTurn(Effect):
+    """"Spells you control can't be countered this turn." -- spells
+    already on the stack and those cast later this turn."""
+
+    def resolve(self, state, controller_id, targets=()):
+        state.player_by_id(controller_id).spells_uncounterable_turn = (
+            state.turn_number
+        )
+        state.log.append(
+            f"P{controller_id}'s spells can't be countered this turn"
+        )
+
+    def describe(self) -> str:
+        return "spells you control can't be countered this turn"
+
+
+@dataclass(frozen=True)
+class YouAndPermanentsGainHexproofFromUEOT(Effect):
+    """"You and permanents you control gain hexproof from <quality> and
+    from <quality> until end of turn." (Veil of Summer): the player
+    (``Player.hexproof_from_this_turn``) and every permanent they
+    control as it resolves (layer-6 ``hexproof from <quality>`` keyword
+    grants expiring at cleanup)."""
+
+    qualities: frozenset = frozenset()
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.keyword_rules import HEXPROOF_FROM_PREFIX
+
+        p = state.player_by_id(controller_id)
+        turn, have = p.hexproof_from_this_turn
+        if turn != state.turn_number:
+            have = frozenset()
+        p.hexproof_from_this_turn = (state.turn_number, have | self.qualities)
+        src = state.resolving_source or state.resolving_spell
+        sid = src.id if src is not None else -1
+        for obj in list(state.battlefield):
+            if obj.controller_id != controller_id:
+                continue
+            for q in sorted(self.qualities):
+                state.add_continuous_effect(
+                    source_id=sid, layer=6, kind="grant_keyword",
+                    target_id=obj.id, params=(HEXPROOF_FROM_PREFIX + q,),
+                    expires_at="cleanup",
+                    description=f"{obj.printing.name} gains hexproof from {q}",
+                )
+        state.log.append(
+            f"P{controller_id} and their permanents gain hexproof from "
+            f"{', '.join(sorted(self.qualities))} until end of turn"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you and permanents you control gain hexproof from "
+            f"{' and from '.join(sorted(self.qualities))} until end of turn"
+        )
+
+
+# ---------------------------------------------------------------------------
 # X-scaled modes (Kozilek's Command)
 # ---------------------------------------------------------------------------
 
@@ -1912,6 +2004,9 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "DrawIfOpponentCastColorThisTurn",
+    "YouAndPermanentsGainHexproofFromUEOT",
+    "YourSpellsCantBeCounteredThisTurn",
     "ExileUpToXGraveyardCards",
     "ManaValueAtMostX",
     "RemoveTargetWithMVAtMostX",

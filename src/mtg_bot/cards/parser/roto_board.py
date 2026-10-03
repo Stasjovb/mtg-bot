@@ -374,6 +374,22 @@ _EXILE_UP_TO_X_GRAVEYARD_CARDS = (
 )
 
 
+# Veil of Summer.
+_DRAW_IF_OPPONENT_CAST_COLOR = re.compile(
+    r"^draw (?P<n>a|two|three) cards? if an opponent has cast an? "
+    r"(?P<c1>white|blue|black|red|green)(?: or (?P<c2>white|blue|black|red|"
+    r"green))? spell this turn$"
+)
+_YOUR_SPELLS_UNCOUNTERABLE_THIS_TURN = (
+    "spells you control can't be countered this turn"
+)
+_YOU_AND_PERMANENTS_HEXPROOF_FROM = re.compile(
+    r"^you and permanents you control gain hexproof from (?P<q1>white|blue|"
+    r"black|red|green)(?: and from (?P<q2>white|blue|black|red|green))? "
+    r"until end of turn$"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -475,6 +491,24 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _DRAW_IF_OPPONENT_CAST_COLOR.match(phrase)
+    if m is not None:
+        colors = {_COLOR_WORDS[m.group("c1")]}
+        if m.group("c2"):
+            colors.add(_COLOR_WORDS[m.group("c2")])
+        return rb.DrawIfOpponentCastColorThisTurn(
+            colors=frozenset(colors), amount=_n(m.group("n")),
+        )
+    if phrase == _YOUR_SPELLS_UNCOUNTERABLE_THIS_TURN:
+        return rb.YourSpellsCantBeCounteredThisTurn()
+    m = _YOU_AND_PERMANENTS_HEXPROOF_FROM.match(phrase)
+    if m is not None:
+        qualities = {m.group("q1")}
+        if m.group("q2"):
+            qualities.add(m.group("q2"))
+        return rb.YouAndPermanentsGainHexproofFromUEOT(
+            qualities=frozenset(qualities),
+        )
     m = _TARGET_PLAYER_CREATES_X.match(phrase)
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_effect

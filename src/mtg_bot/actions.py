@@ -3056,6 +3056,10 @@ def _cast_spell(
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
     p.spells_cast_this_game += 1
+    # The colors of the spells cast this turn (Veil of Summer).
+    from mtg_bot.roto_board_statics import note_spell_cast
+
+    note_spell_cast(state, p, card)
     # Track noncreature-spell casts for the Deafening Silence
     # restriction ("each player can't cast more than one noncreature
     # spell each turn").

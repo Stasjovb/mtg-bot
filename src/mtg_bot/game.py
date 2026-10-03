@@ -3190,6 +3190,15 @@ class Player:
     # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
     # first, second, or third turn of the game".
     turns_started: int = 0
+    # Vintage Roto P5 "this turn" facts, each stamped with the turn it
+    # belongs to (a stale stamp reads as empty -- no cleanup reset):
+    # ``(turn, colors)`` of the spells this player cast ("an opponent has
+    # cast a blue or black spell this turn" -- Veil of Summer); the turn
+    # in which "spells you control can't be countered this turn"
+    # applies; ``(turn, qualities)`` this player has hexproof from.
+    spell_colors_cast_this_turn: tuple = (-1, frozenset())
+    spells_uncounterable_turn: int = -1
+    hexproof_from_this_turn: tuple = (-1, frozenset())
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,
