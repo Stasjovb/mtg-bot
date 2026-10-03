@@ -247,6 +247,12 @@ def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
         o for o in state.battlefield
         if o.controller_id == player_id and o.printing.is_land and not o.tapped
     ]
+    # "Activated abilities of artifacts can't be activated." (Null Rod,
+    # Clarion Conqueror) locks an artifact land's mana ability too.
+    if any(o.printing.locks_activated_abilities_of for o in state.battlefield):
+        from mtg_bot.creature_statics_wg import activation_locked
+
+        lands = [o for o in lands if not activation_locked(state, o)]
     # Hot path (search rollouts): legacy printings skip both refinements.
     if not any(
         o.printing.mana_only_from_produces or o.printing.produces_life_cost
@@ -814,8 +820,15 @@ def _choose_and_apply_x(
     actually pay. Returns the chosen X (clamped into ``[0, upper_bound]``)
     and logs the choice.
     """
+    from mtg_bot.roto_restrictions import any_roto_statics, max_x_allowed
+
     p = state.player_by_id(player_id)
     upper_bound = _x_upper_bound(state, player_id, cost)
+    if card.zone != Zone.BATTLEFIELD and any_roto_statics(state):
+        # A mana-value cap on spells (roto P1: Lavinia, Azorius Renegade).
+        x_cap = max_x_allowed(state, player_id, card)
+        if x_cap is not None:
+            upper_bound = min(upper_bound, x_cap)
     if p.agent is None:  # pragma: no cover - games run with agents set
         chosen = 0
     else:
@@ -1100,6 +1113,15 @@ def _sac_for_mana_sources(
         if activation_locked(state, o):
             continue
         for idx, produces in _classify_sac_for_mana(state, o):
+            if any(b.printing.roto_statics for b in state.battlefield):
+                # A named lock (Phyrexian Revoker) forbids this mana
+                # ability (roto P1).
+                from mtg_bot.game import effective_activated_abilities
+                from mtg_bot.roto_restrictions import activation_prohibited
+
+                abilities = effective_activated_abilities(state, o)
+                if activation_prohibited(state, o, abilities[idx]):
+                    continue
             sources.append((o, idx, produces))
     return sources
 
@@ -2561,6 +2583,7 @@ def _cast_spell(
 
     with _casting_origin(
         cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
+        from_exile=card.zone == Zone.EXILE,
     ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
@@ -2605,14 +2628,17 @@ def _cast_spell(
         cost = offer_creature_additional_costs(state, player_id, card, cost)
     # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
     # one mana of its color before the rest of the payment.
+    phyrexian_life_units = 0
     if cost.phyrexian:
         _spell_kinds_for_phyrexian: set[str] = {"spell"}
         if cast_from_outside_hand:
             _spell_kinds_for_phyrexian.add("cast_from_outside_hand")
+        _total_before_settle = cost.total
         cost = _settle_phyrexian_pips(
             state, player_id, card.printing.name, cost,
             frozenset(_spell_kinds_for_phyrexian),
         )
+        phyrexian_life_units = _total_before_settle - cost.total
     # Buyback (CR 702.27): the optional additional cost joins the total
     # cost before X is resolved.
     if use_buyback and card.printing.buyback_cost is not None:
@@ -2689,11 +2715,24 @@ def _cast_spell(
         # mana cost (CR 601.2f -- Thalia on a pitched Force of Will).
         from mtg_bot.creature_statics_wg import spell_cost_increase
 
-        free_tax = spell_cost_increase(state, card.printing, player_id)
+        with _casting_origin(
+            cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
+            from_exile=card.zone == Zone.EXILE,
+        ):
+            free_tax = spell_cost_increase(state, card.printing, player_id)
         if free_tax:
             from mtg_bot.alt_casting import cost_plus as _cost_plus
 
             cost = _cost_plus(cost, ManaCost(generic=free_tax))
+    # Trinisphere (roto P1): a floor on the final total cost, applied
+    # after every other cost change; Phyrexian pips paid with life are
+    # part of that total.
+    from mtg_bot.roto_restrictions import apply_minimum_spell_cost
+
+    cost = apply_minimum_spell_cost(
+        state, cost, already_paid=0 if cast_for_free else phyrexian_life_units,
+        log=True,
+    )
     # Evoke's "Exile a <filter> card from your hand" cost (CR 702.74).
     if use_evoke:
         from mtg_bot.evoke import pay_evoke_exile as _pay_evoke_exile
@@ -2760,6 +2799,7 @@ def _cast_spell(
     # Colors of mana spent (Sunburst, Converge): every cast records
     # them — Prismatic Ending reads the count on the stack.
     color_sources: list = []
+    card.mana_spent_to_cast = cost.total
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
         color_sources=color_sources,
@@ -2950,7 +2990,16 @@ def _cast_spell(
     # so cost-reduction rules that key off the chosen target — e.g.
     # Dark Endurance's "costs {1} less if it targets a blocking
     # creature" — could see the choice.
-    countered = _apply_ward_check(state, player_id, targets)
+    # Ward counters "unless its controller pays": a spell that can't be
+    # countered (Long Goodbye: "This includes by the ward ability.") is
+    # unaffected, so nothing is paid (CR 702.21a / 101.2).
+    from types import SimpleNamespace as _Probe
+
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell as _CTS
+
+    countered = not _CTS._is_uncounterable(
+        state, _Probe(source=card, controller_id=player_id),
+    ) and _apply_ward_check(state, player_id, targets)
     card.cast_without_sorcery_timing = (
         card.printing.sacrifice_at_cleanup_if_cast_without_sorcery_timing
         and not sorcery_timing_at_cast
@@ -4388,6 +4437,14 @@ def _activate_ability(
         )
 
         fire_becomes_target(state, targets, source, player_id)
+    # "Whenever an opponent activates an ability of ..." (roto P1:
+    # Harsh Mentor). Mana abilities returned above.
+    from mtg_bot.effects.predicates import Event as _ActEvent
+
+    dispatch_event(
+        state, _ActEvent.ACTIVATES_ABILITY, label="activation",
+        source=source, controller=state.player_by_id(player_id),
+    )
 
 
 def _activate_station(
@@ -5491,6 +5548,14 @@ def put_into_battlefield(
         from mtg_bot.creature_statics_wg import choose_card_name_as_enters
 
         choose_card_name_as_enters(state, obj, controller_id)
+    if obj.printing.roto_statics:
+        # "As this enters, choose a card name." (roto P1: Pithing
+        # Needle, Phyrexian Revoker, Disruptor Flute, Meddling Mage).
+        from mtg_bot.roto_restrictions import (
+            choose_card_name_as_enters as _roto_choose_name,
+        )
+
+        _roto_choose_name(state, obj, controller_id)
     obj.chosen_parity = None
     obj.modes_chosen = ()
     if obj.printing.chooses_parity_as_enters:
@@ -5521,6 +5586,11 @@ def put_into_battlefield(
     if mode == "x":
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, state.resolving_x_value)
+    elif mode == "x_charge":
+        # "This artifact enters with X charge counters on it." (Chalice
+        # of the Void; X is 0 unless it was cast).
+        from mtg_bot.game import add_counters
+        add_counters(state, obj, "charge", obj.entered_x_value)
     elif mode == "mana_spent":
         from mtg_bot.game import add_plus_one_counters
         mc = obj.printing.mana_cost
@@ -5853,6 +5923,12 @@ def push_triggered_ability(
         )
 
         fire_becomes_target(state, targets, source, controller_id)
+    # "Whenever a permanent entering causes a triggered ability to
+    # trigger, ..." (roto P1: Strict Proctor).
+    if ability.event == "enters":
+        from mtg_bot.roto_restrictions import fire_entering_trigger_watchers
+
+        fire_entering_trigger_watchers(state, len(state.stack) - 1)
     return True
 
 

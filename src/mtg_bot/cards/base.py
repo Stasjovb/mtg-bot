@@ -1562,6 +1562,12 @@ class CardPrinting:
     # N or more." Optional; recorded on the spell object as
     # ``GameObject.optional_additional_cost_paid``.
     teamwork_power: int = 0
+    # Roto P1 (stack & restrictions): rules-modifying statics read by
+    # ``mtg_bot.roto_restrictions`` -- conditional spell taxes, the
+    # Trinisphere cost floor, can't-cast / can't-activate prohibitions
+    # (named, player-scoped, mana-value capped). A tuple of that
+    # module's static descriptors; empty on every other printing.
+    roto_statics: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

@@ -138,6 +138,13 @@ def _variant(eff_text: str, base: Effect) -> Effect | None:
     m = _COUNTER_TAX_VARIANT_RE.match(eff_text)
     if m is not None and isinstance(base, CounterSpell) and base.unless_pays:
         return dataclasses.replace(base, unless_pays=m.group("cost"))
+    # Roto P1: "counter that spell instead" drops the base's tax
+    # (Stubborn Denial's Ferocious line).
+    from mtg_bot.cards.parser.roto_stack import roto_counter_variant
+
+    variant = roto_counter_variant(eff_text, base)
+    if variant is not None:
+        return variant
     m = _REMOVAL_VARIANT_RE.match(eff_text)
     if (
         m is not None
@@ -175,6 +182,12 @@ def parse_instead_rider(rider: str, base: Effect, name: str = "") -> Effect | No
     if m is None:
         return None
     condition = _CONDITIONS.get(m.group("cond"))
+    if condition is None:
+        # Roto P1 conditions ("you control a creature with power 4 or
+        # greater").
+        from mtg_bot.cards.parser.roto_stack import roto_rider_condition
+
+        condition = roto_rider_condition(m.group("cond"))
     if condition is None:
         return None
     variant = _variant(m.group("eff"), base)

@@ -85,6 +85,10 @@ class AlternativeCost:
     # ``IfConditionElse(AlternativeCostWasPaid(), <each-version>,
     # <target-version>)``.
     overload: bool = False
+    # A game-state gate (a ``Condition`` evaluated for the caster): "If
+    # an opponent cast three or more spells this turn, ..." (Mindbreak
+    # Trap; roto P1).
+    condition: object = None
 
     def mana_cost(self) -> "ManaCost":
         from mtg_bot.cards.base import ManaCost, parse_mana_cost
@@ -112,6 +116,10 @@ class AlternativeCost:
             text += " (overload: \"target\" becomes \"each\")"
         if self.requires_control_subtype:
             text = f"if you control a {self.requires_control_subtype}, {text}"
+        if self.condition is not None:
+            describe = getattr(self.condition, "describe", None)
+            gate = describe() if describe is not None else "a condition holds"
+            text = f"if {gate}, {text}"
         if self.turn == "yours":
             text = f"if it's your turn, {text}"
         elif self.turn == "not_yours":
@@ -141,6 +149,8 @@ def alternative_cost_payable(
     if alt.turn == "yours" and not is_my_turn:
         return False
     if alt.turn == "not_yours" and is_my_turn:
+        return False
+    if alt.condition is not None and not alt.condition.matches(state, player_id):
         return False
     if alt.requires_control_subtype and not _controls_subtype(
         state, player_id, alt.requires_control_subtype,

@@ -66,12 +66,17 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Animate Dead",
     "Fastbond",
     "Goblin Bombardment",
+    "High Noon",
+    "Jeskai Ascendancy",
     "Leyline Binding",
+    "Mystic Remora",
     "Necromancy",
+    "Nether Void",
     "Oath of Druids",
     "Parallax Wave",
     "Sneak Attack",
     "Squandered Resources",
+    "Stony Silence",
     "Touch the Spirit Realm",
     "Underworld Breach",
 })
@@ -267,7 +272,20 @@ def build_cube_enchantment(card: dict) -> CardPrinting | None:
             continue
         clause = _parse_clause(line, name=name)
         if clause is None:
-            return None
+            # Roto P1 (stack & restrictions) lines.
+            from mtg_bot.cards.parser.roto_stack import (
+                merge_fields, parse_roto_stack_line,
+            )
+
+            roto = parse_roto_stack_line(line, card)
+            if roto is None:
+                return None
+            merge_fields(acc.printing_fields, roto.fields)
+            acc.keywords.update(roto.keywords)
+            acc.triggers.extend(roto.triggers)
+            acc.activated.extend(roto.activated)
+            acc.statics.extend(roto.statics)
+            continue
         if clause.keywords:
             acc.keywords.update(clause.keywords)
         elif clause.triggers:
@@ -343,6 +361,12 @@ def _assemble(card, supertypes, subtypes, acc: _Accumulator) -> CardPrinting:
         )
         if acc.keywords:
             printing = replace(printing, keywords=frozenset(acc.keywords))
+        if "World" in supertypes:
+            # World enchantments (Nether Void; the world rule reads it).
+            printing = replace(
+                printing, supertypes=tuple(supertypes),
+                type_line=card.get("type_line", printing.type_line),
+            )
     updates = dict(acc.printing_fields)
     if acc.cost_reductions:
         updates["cost_reductions"] = tuple(acc.cost_reductions)
