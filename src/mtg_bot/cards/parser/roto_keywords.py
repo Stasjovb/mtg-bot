@@ -10,7 +10,9 @@ Entry points, each called from one hook:
 
 * :func:`parse_conspiracy_rule_line` -- ``conspiracy_builder`` (CR 313):
   "You are the starting player. ..." (Power Play), "Your minimum deck
-  size is reduced|increased by <N>." (Advantageous Proclamation).
+  size is reduced|increased by <N>." (Advantageous Proclamation), "At
+  the beginning of each game, after mulligans, your opponent reveals
+  their hand to you." (Meddling Wizard, a custom roto conspiracy).
 * :func:`build_with_p6_lines` -- ``source.build_card_record`` and
   ``dfc_builder.build_face``: printing-level lines peeled off before the
   per-type builders run (like the cycling family) and attached to the
@@ -33,7 +35,11 @@ import re
 from dataclasses import replace
 from typing import Callable
 
-from mtg_bot.conspiracies import MinimumDeckSizeChange, YouAreTheStartingPlayer
+from mtg_bot.conspiracies import (
+    MinimumDeckSizeChange,
+    OpponentRevealsHandAfterMulligans,
+    YouAreTheStartingPlayer,
+)
 from mtg_bot.opening_hand import ExchangeHandWhileMulliganing, RevealFromOpeningHand
 
 _NUMBER_WORDS = {
@@ -59,6 +65,15 @@ _MINIMUM_DECK_SIZE_RE = re.compile(
     r"^Your minimum deck size is (?P<dir>reduced|increased) by "
     r"(?P<n>\w+)\.$"
 )
+# Literal: Meddling Wizard (the roto group's custom conspiracy, record in
+# data/cube_roto_custom.json) is the only card with an after-mulligans
+# hand reveal, and the sentence has no variable part; a broader grammar
+# (who reveals, what, when) is deferred until a second example exists
+# (parser CLAUDE.md single-card exception).
+_REVEAL_HAND_AFTER_MULLIGANS_LINE = (
+    "At the beginning of each game, after mulligans, your opponent "
+    "reveals their hand to you."
+)
 
 
 def parse_conspiracy_rule_line(line: str):
@@ -71,6 +86,8 @@ def parse_conspiracy_rule_line(line: str):
     line = line.strip()
     if line == _STARTING_PLAYER_LINE:
         return YouAreTheStartingPlayer()
+    if line == _REVEAL_HAND_AFTER_MULLIGANS_LINE:
+        return OpponentRevealsHandAfterMulligans()
     m = _MINIMUM_DECK_SIZE_RE.match(line)
     if m is not None:
         n = number_word(m.group("n"))

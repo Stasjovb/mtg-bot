@@ -125,6 +125,9 @@ def test_load_pool_cards_missing_file_is_loud(tmp_path):
         pools.load_pool_cards("cube", data_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="--names data/cube_roto.sheet.json"):
         pools.load_pool_cards("roto", data_dir=tmp_path)
+    (tmp_path / "cube_roto.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="hand-authored; restore it from git"):
+        pools.load_pool_cards("roto", data_dir=tmp_path)
     (tmp_path / pools.CUBE_POOL_FILES[0]).write_text("[]", encoding="utf-8")
     with pytest.raises(FileNotFoundError, match=r"fetch_\*\.py"):
         pools.load_pool_cards("all", data_dir=tmp_path)
@@ -161,16 +164,25 @@ def test_parser_source_rejects_unknown_pool():
 
 
 def test_real_roto_pool_contents():
-    """The committed roto dump: the sheet's 860 Scryfall-backed cards +
-    the five basics, unique by name; the four custom conspiracies are
-    not faked into it."""
+    """The committed roto pool: the dump's 860 Scryfall-backed cards +
+    the five basics, plus the one hand-authored custom card (Meddling
+    Wizard, ``data/cube_roto_custom.json``), unique by name. The custom
+    conspiracies are never faked into the Scryfall dump, and the three
+    left alone have no record at all."""
     names = pools.pool_card_names("roto")
-    assert len(names) == 865
+    assert len(names) == 866
     assert {"Plains", "Island", "Swamp", "Mountain", "Forest"} <= names
     assert {"Black Lotus", "Smokestack", "Spectacular Spider-Man",
             "Life // Death", "Regrowth"} <= names
-    assert "Meddling Wizard" not in names
+    assert "Meddling Wizard" in names
     assert "ANOTHER HEAD?!" not in names
+    dump = json.loads(
+        (pools.DATA_DIR / "cube_roto.json").read_text(encoding="utf-8")
+    )
+    assert len(dump) == 865
+    assert "Meddling Wizard" not in {c["name"] for c in dump}
+    assert pools.CUSTOM_CARD_FILES == ("cube_roto_custom.json",)
+    assert pools.ROTO_POOL_FILES == ("cube_roto.json", "cube_roto_custom.json")
 
 
 def test_default_source_is_the_union_of_the_three_pools(monkeypatch):
@@ -204,10 +216,22 @@ def test_default_claims_are_the_union_of_the_pools_claims(monkeypatch):
 
 
 def test_pool_custom_cards_reads_sidecars(tmp_path):
-    _write(tmp_path / pools.ROTO_POOL_FILES[0], [])
+    for fname in pools.ROTO_POOL_FILES:
+        _write(tmp_path / fname, [])
     (tmp_path / "cube_roto.meta.json").write_text(json.dumps({
-        "custom_cards_without_scryfall": [{"name": "X", "custom_text": "t"}],
+        "custom_cards_without_scryfall": [
+            {"name": "X", "custom_text": "t"},
+            {"name": "Authored", "custom_text": "u"},
+        ],
     }), encoding="utf-8")
+    assert pools.pool_custom_cards("roto", data_dir=tmp_path) == [
+        {"name": "X", "custom_text": "t"},
+        {"name": "Authored", "custom_text": "u"},
+    ]
+    # A hand-authored record takes a custom card off the list.
+    _write(tmp_path / pools.CUSTOM_CARD_FILES[0], [
+        {"name": "Authored", "custom_card": True},
+    ])
     assert pools.pool_custom_cards("roto", data_dir=tmp_path) == [
         {"name": "X", "custom_text": "t"},
     ]
@@ -219,9 +243,11 @@ def test_pool_custom_cards_reads_sidecars(tmp_path):
 
 
 def test_real_roto_custom_cards():
+    """Meddling Wizard has a hand-authored record (2026-10-03, user
+    decision); the other three custom conspiracies stay without one."""
     assert [c["name"] for c in pools.pool_custom_cards("roto")] == [
-        "Meddling Wizard", "Quanitity Over Quality",
-        "I've Made a Huge Mistake", "ANOTHER HEAD?!",
+        "Quanitity Over Quality", "I've Made a Huge Mistake",
+        "ANOTHER HEAD?!",
     ]
     assert pools.pool_custom_cards("cube") == []
 

@@ -630,10 +630,11 @@ class PutCardsFromHandOnTopOfLibrary(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
+        from mtg_bot.game import Zone, hide_hand_moved_into_library
 
         p = state.player_by_id(controller_id)
         n = min(self.amount, len(p.hand))
+        moved = []
         for _ in range(n):
             ids = [c.id for c in p.hand]
             pick = None
@@ -643,6 +644,9 @@ class PutCardsFromHandOnTopOfLibrary(Effect):
             p.hand.remove(card)
             card.zone = Zone.LIBRARY
             p.library.insert(0, card)
+            moved.append(card)
+        # Face down: the other players can't tell which cards went back.
+        hide_hand_moved_into_library(state, controller_id, moved)
         state.log.append(
             f"P{controller_id} puts {n} card(s) from hand on top of "
             f"their library"
@@ -677,7 +681,7 @@ class ExileTargetPlayersLibraryThenShuffleHandIn(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
+        from mtg_bot.game import Zone, shuffle_library
 
         target = _target_player(state, targets)
         if target is None:
@@ -692,7 +696,9 @@ class ExileTargetPlayersLibraryThenShuffleHandIn(Effect):
         for c in hand:
             c.zone = Zone.LIBRARY
             target.library.append(c)
-        state.rng.shuffle(target.library)
+        # The shared shuffle helper also forgets what anyone knew about
+        # the shuffled cards (the same RNG draw as a bare shuffle).
+        shuffle_library(state, target.id)
         state.log.append(
             f"P{target.id} exiles {len(exiled)} library card(s) and "
             f"shuffles {len(hand)} hand card(s) into their library"

@@ -2606,6 +2606,10 @@ class ScrollRackSwap(Effect):
             p.exile.remove(c)
             c.zone = Zone.LIBRARY
             p.library.insert(0, c)
+        # Face down: the other players can't tell which cards went back.
+        from mtg_bot.game import hide_hand_moved_into_library
+
+        hide_hand_moved_into_library(state, controller_id, order)
         state.log.append(f"P{controller_id} swaps {len(exiled)} card(s)")
 
     def describe(self) -> str:
