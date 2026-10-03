@@ -901,7 +901,9 @@ def _parse_artifact_ability_reduction_line(line: str) -> UBLine | None:
 # [When you do, exile that card.]"
 _ENTER_AS_COPY = re.compile(
     r"^(?:[A-Z][A-Za-z']*(?: [A-Za-z']+)* — )?You may have this creature "
-    r"enter as a copy of any (?P<what>[a-z ]+?) (?:on the battlefield|"
+    r"enter as a copy of any (?P<what>[a-z ]+?) (?:on the battlefield"
+    r"(?P<mv> with mana value less than or equal to the amount of mana "
+    r"spent to cast this creature)?|"
     r"(?P<gy>card in a graveyard))(?:, except (?P<except>.+?))?\."
     r"(?P<exile> When you do, exile that card\.)?$"
 )
@@ -925,6 +927,10 @@ def _parse_enter_as_copy_line(line: str) -> UBLine | None:
     }
     if m.group("gy"):
         fields["enters_as_copy_zone"] = "graveyard"
+    if m.group("mv"):
+        # Mockingbird: the copiable creature's mana value is capped by
+        # the mana spent to cast this one.
+        fields["enters_as_copy_max_mv_mana_spent"] = True
     exc = m.group("except")
     if exc is not None:
         a = re.match(r"^it's an? (artifact|enchantment) in addition to its "

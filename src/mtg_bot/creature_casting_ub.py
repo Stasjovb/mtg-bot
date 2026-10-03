@@ -225,6 +225,19 @@ def apply_copy_on_entry(
                 or ("Creature" in types and is_creature_now(o))
             )
         ]
+        if pr.enters_as_copy_max_mv_mana_spent:
+            # "with mana value less than or equal to the amount of mana
+            # spent to cast this creature" (Mockingbird): the clone is
+            # resolving as the spell that was cast, so
+            # ``mana_spent_to_cast`` is that cast's payment (0 for a free
+            # cast or a copy, which isn't cast).
+            from mtg_bot.effects.value_predicates import mana_value_of
+
+            cap = 0 if clone.is_spell_copy else clone.mana_spent_to_cast
+            by_obj = {o.id: o for o in state.battlefield}
+            candidates = [
+                c for c in candidates if mana_value_of(by_obj[c[1]]) <= cap
+            ]
         by_id = {o.id: o for o in state.battlefield}
     if not candidates:
         return

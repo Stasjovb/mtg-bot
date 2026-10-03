@@ -1546,6 +1546,11 @@ class CardPrinting:
     # riders (Phantasmal Image's granted becomes-the-target trigger).
     enters_as_copy_add_triggers: tuple = ()
     enters_as_copy_add_keywords: frozenset = frozenset()
+    # "... any creature on the battlefield with mana value less than or
+    # equal to the amount of mana spent to cast this creature" (Mockingbird;
+    # roto integration): candidates are capped by
+    # ``GameObject.mana_spent_to_cast`` (0 unless it was cast).
+    enters_as_copy_max_mv_mana_spent: bool = False
     # Roto P4: Rebound (CR 702.88) -- cast from hand, the spell is exiled
     # as it resolves and may be cast free at its owner's next upkeep
     # (``roto_walkers.exile_with_rebound``).
