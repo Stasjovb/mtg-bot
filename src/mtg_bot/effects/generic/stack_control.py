@@ -174,6 +174,12 @@ class CounterTargetSpell(Effect):
         # Halfling).
         if getattr(item.source, "cast_uncounterable", False):
             return True
+        # "Spells you control can't be countered this turn." (Veil of
+        # Summer; Vintage Roto P5).
+        from mtg_bot.roto_board_statics import spells_uncounterable_now
+
+        if spells_uncounterable_now(state, spell_controller):
+            return True
         # Battlefield static grant: "Creature spells you control can't be
         # countered." Only applies to creature spells.
         if "Creature" in src.card_types:

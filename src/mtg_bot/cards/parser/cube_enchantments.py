@@ -63,11 +63,16 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # Cards claimed through this builder. Explicit opt-in per name, like
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
+    "Aang's Iceberg",
     "Aluren",
     "Animate Dead",
+    "Back to Basics",
+    "Blood Moon",
     "Carpet of Flowers",
     "Chthonian Nightmare",
     "Dream Halls",
+    "Drop of Honey",
+    "Earthcraft",
     "Exploration",
     "Fastbond",
     "Goblin Bombardment",
@@ -75,15 +80,20 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "High Noon",
     "Jeskai Ascendancy",
     "Leyline Binding",
+    "Moat",
     "Mystic Remora",
     "Necromancy",
     "Nether Void",
     "Oath of Druids",
     "Omniscience",
+    "Opposition",
     "Parallax Wave",
+    "Pernicious Deed",
+    "Seal of Cleansing",
     "Sneak Attack",
     "Squandered Resources",
     "Stony Silence",
+    "Temporary Lockdown",
     "Touch the Spirit Realm",
     "Underworld Breach",
     "Utopia Sprawl",
@@ -320,14 +330,19 @@ def build_cube_enchantment(card: dict) -> CardPrinting | None:
             )
 
             roto = parse_roto_stack_line(line, card)
-            if roto is None:
-                return None
-            merge_fields(acc.printing_fields, roto.fields)
-            acc.keywords.update(roto.keywords)
-            acc.triggers.extend(roto.triggers)
-            acc.activated.extend(roto.activated)
-            acc.statics.extend(roto.statics)
-            continue
+            if roto is not None:
+                merge_fields(acc.printing_fields, roto.fields)
+                acc.keywords.update(roto.keywords)
+                acc.triggers.extend(roto.triggers)
+                acc.activated.extend(roto.activated)
+                acc.statics.extend(roto.statics)
+                continue
+            # Vintage Roto P5 lines (board rules, ...).
+            from mtg_bot.cards.parser.roto_board import absorb_enchantment_line
+
+            if absorb_enchantment_line(line, card, acc):
+                continue
+            return None
         if clause.keywords:
             acc.keywords.update(clause.keywords)
         elif clause.triggers:

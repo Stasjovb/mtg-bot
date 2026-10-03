@@ -1802,7 +1802,11 @@ def _filter_cast_restrictions_wg(state, player_id, actions):
     # Roto P1 prohibitions (named locks, "can't cast ... this turn").
     from mtg_bot.roto_restrictions import filter_actions as _roto_filter
 
-    return _roto_filter(state, player_id, actions)
+    actions = _roto_filter(state, player_id, actions)
+    # "Cast this spell only before ..." (Berserk; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import filter_cast_timing
+
+    return filter_cast_timing(state, player_id, actions)
 
 
 def _find_card_by_id(state: GameState, player_id: int, card_id: int):

@@ -117,7 +117,8 @@ _CONTROL_N_OR_FEWER_OTHER_LANDS_RE = re.compile(
     r"^you control (?P<n>[a-z]+) or fewer other lands$"
 )
 _CONTROL_A_BASIC_TYPE_RE = re.compile(
-    r"^you control an? (?P<t>Plains|Island|Swamp|Mountain|Forest)$"
+    r"^you control an? (?P<t>Plains|Island|Swamp|Mountain|Forest)"
+    r"(?: or an? (?P<t2>Plains|Island|Swamp|Mountain|Forest))?$"
 )
 # "As this land enters, choose a basic land type. Then you may pay N
 # life. If you don't, it enters tapped." + "This land is the chosen
@@ -179,7 +180,11 @@ def _parse_enters_tapped_condition(phrase: str) -> Condition | None:
         return early
     m = _CONTROL_A_BASIC_TYPE_RE.match(phrase)
     if m is not None:
-        return ControlPermanent(HasSubtype(m.group("t")))
+        # "a Mountain or a Forest" (Mistrise Village): either type.
+        pred = HasSubtype(m.group("t"))
+        if m.group("t2"):
+            pred = pred | HasSubtype(m.group("t2"))
+        return ControlPermanent(pred)
     return None
 
 
@@ -310,6 +315,7 @@ def _try_build_line_composed_land(
     named_counters: list[tuple[str, int]] = []
     opening_hand_action = None
     gated: tuple[str, str] | None = None  # (counter kind, base color)
+    roto_fields: dict = {}
     self_refs = ("this land", card["name"])
     roto_mana_fields: dict = {}  # Vintage Roto P3 lines (``roto_mana``)
     for raw in raw_lines:
@@ -421,6 +427,11 @@ def _try_build_line_composed_land(
             continue
         ability = _parse_activated_ability_line(line)
         if ability is None:
+            # Vintage Roto P5 lines (board rules, land-type grants, ...).
+            from mtg_bot.cards.parser.roto_board import absorb_land_line
+
+            if absorb_land_line(line, card, roto_fields, triggered, activated):
+                continue
             return None
         if ability.is_mana_ability:
             colors = _simple_mana_colors(ability.effect)
@@ -496,4 +507,8 @@ def _try_build_line_composed_land(
         from dataclasses import replace
 
         printing = replace(printing, **roto_mana_fields)
+    if roto_fields:
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
     return printing

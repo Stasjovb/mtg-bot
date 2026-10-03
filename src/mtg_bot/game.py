@@ -1002,6 +1002,15 @@ class GameObject:
     # the controller settled them to satisfy (``roto_mana``).
     mana_spent_color_sources: tuple = ()
     spent_color_choice: Optional[frozenset] = None
+    # "if this is the first / second / third time this ability has
+    # resolved this turn" (Omnath, Locus of Creation): ``(turn_number,
+    # etb_timestamp, count)`` of the last counted resolution -- a new
+    # object (fresh timestamp) or a new turn starts over (Vintage Roto P5).
+    ability_resolutions: tuple = (-1, -1, 0)
+    # How many targets each chosen mode of a multi-mode spell took when
+    # it was cast (a mode may take "up to X" targets -- Kozilek's
+    # Command); set by ``ChooseModes.select_targets`` (Vintage Roto P5).
+    mode_target_counts: tuple = ()
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -1580,6 +1589,10 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
             kws.clear()
         elif ce.kind == "grant_keyword" and ce.params:
             kws.add(ce.params[0])
+        elif ce.kind == "lose_keyword" and ce.params:
+            # "Target creature loses flying until end of turn." (Emerald
+            # Charm; Vintage Roto P5).
+            kws.discard(ce.params[0])
     # ContinuousModifier contributions from StaticAbility declarations.
     # Walked after the registry-based layer-6 pass so the existing
     # grant_keyword / lose_all_abilities ordering is preserved. Only
@@ -2244,14 +2257,29 @@ def effective_land_produces(
         for s in eff_subtypes
         if s in _BASIC_LAND_TYPE_TO_COLOR
     }
-    if produced:
-        return frozenset(produced) | _granted_tap_mana(state, land_obj)
     base = land_obj.printing.produces
     gated = land_obj.printing.produces_with_counter
     if gated is not None and counter_count(land_obj, gated[0]) > 0:
         # "If <this> has a <kind> counter on it, instead add ..."
         # (Gemstone Caverns' luck counter).
         base = gated[1]
+    if produced:
+        # Rules-text mana (anything a NONBASIC land's printed basic land
+        # types don't explain) survives a type ADDED "in addition to its
+        # other types" (Urborg / Yavimaya / Dryad: Wasteland keeps {C}
+        # and gains {B}); a type SET by Blood Moon / Magus removes it
+        # (CR 305.7). A basic land has no rules text: all its mana comes
+        # from its types (CR 305.6), so it never contributes here.
+        rules_text = frozenset() if land_obj.printing.is_basic_land else (
+            base - {
+                _BASIC_LAND_TYPE_TO_COLOR[s]
+                for s in land_obj.printing.subtypes
+                if s in _BASIC_LAND_TYPE_TO_COLOR
+            }
+        )
+        if rules_text and not _has_basic_land_type_set_effect(state, land_obj):
+            produced |= rules_text
+        return frozenset(produced) | _granted_tap_mana(state, land_obj)
     return base | _granted_tap_mana(state, land_obj)
 
 
@@ -2411,6 +2439,11 @@ def effective_triggered_abilities(
     re-adds the granted trigger; a newer lose-all-abilities wipes
     everything that came before within layer 6.
     """
+    # CR 305.7: a land whose basic land type is SET (Blood Moon / Magus)
+    # loses its rules-text triggered abilities too (the activated ones
+    # are dropped in ``effective_activated_abilities``).
+    if obj.printing.is_land and _has_basic_land_type_set_effect(state, obj):
+        return ()
     # DSK Rooms: filter out triggered abilities whose ``room_half``
     # is not in ``obj.unlocked_halves`` — those halves are locked,
     # so their abilities are inert. Non-Room abilities (room_half ==
@@ -3185,6 +3218,18 @@ class Player:
     # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
     # first, second, or third turn of the game".
     turns_started: int = 0
+    # Vintage Roto P5 "this turn" facts, each stamped with the turn it
+    # belongs to (a stale stamp reads as empty -- no cleanup reset):
+    # ``(turn, colors)`` of the spells this player cast ("an opponent has
+    # cast a blue or black spell this turn" -- Veil of Summer); the turn
+    # in which "spells you control can't be countered this turn"
+    # applies; ``(turn, qualities)`` this player has hexproof from.
+    spell_colors_cast_this_turn: tuple = (-1, frozenset())
+    spells_uncounterable_turn: int = -1
+    # "The next spell you cast this turn can't be countered." (Mistrise
+    # Village): the turn it was granted in; consumed by the next cast.
+    next_spell_uncounterable_turn: int = -1
+    hexproof_from_this_turn: tuple = (-1, frozenset())
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,

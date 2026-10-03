@@ -1679,6 +1679,11 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     text = card.get("oracle_text", "").strip()
     if not text:
         return None
+    # Vintage Roto P5: spell lines that are rules of the card itself
+    # ("Cast this spell only before the combat damage step.").
+    from mtg_bot.cards.parser.roto_board import claim_spell_lines
+
+    text, roto_fields = claim_spell_lines(text)
     effect = _parse_spell_oracle_text(text, card["name"])
     if effect is not None:
         effect = apply_overload(
@@ -1716,10 +1721,18 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
             supertypes=tuple(supertypes),
             subtypes=tuple(subtypes),
         )
+    if "Kindred" in card_types:
+        # "Kindred Instant — Eldrazi" (CR 308): Kindred is a card type
+        # too (graveyard card-type counts); Vintage Roto P5.
+        substrate["card_types"] = tuple(card_types)
     if substrate:
         import dataclasses
 
         printing = dataclasses.replace(printing, **substrate)
+    if roto_fields:
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
     return printing
 
 

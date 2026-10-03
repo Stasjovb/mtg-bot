@@ -24,7 +24,14 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
     # "Creatures can't attack this turn." (roto P1: Orim's Chant).
     from mtg_bot.roto_restrictions import filter_attackers
 
-    return filter_attackers(state, attackers)
+    attackers = filter_attackers(state, attackers)
+    # "... can't attack." board rules (Vintage Roto P5: Moat, Ensnaring
+    # Bridge).
+    from mtg_bot.roto_board_statics import (
+        filter_attackers as filter_board_rule_attackers,
+    )
+
+    return filter_board_rule_attackers(state, attackers)
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
@@ -42,7 +49,10 @@ def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
         )
 
         blockers = [o for o in blockers if not creature_cant_block(state, o)]
-    return blockers
+    # "This creature can't block." board rules (Carrion Feeder).
+    from mtg_bot.roto_board_statics import filter_blockers
+
+    return filter_blockers(state, blockers)
 
 
 def can_block(
@@ -320,6 +330,11 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
             state, Event.BLOCKS, label="blocks",
             blocker=blocker, attacker=attacker,
         )
+    # "Whenever this creature becomes blocked" (Vintage Roto P5): once
+    # per blocked attacker.
+    from mtg_bot.roto_board_statics import fire_becomes_blocked
+
+    fire_becomes_blocked(state, assignments)
     # "Whenever one or more creatures … attack you and aren't blocked"
     # (Coveted Jewel): once per declaration, if any attacker is
     # unblocked. The attacking player rides along as the fixed target.
@@ -711,6 +726,11 @@ def _resolve_damage_step(
     from mtg_bot.layouts import fire_combat_deals_damage
 
     fire_combat_deals_damage(state, sources_hit_player + sources_hit_creature)
+    # "Whenever equipped creature deals combat damage" (any recipient;
+    # Vintage Roto P5).
+    from mtg_bot.roto_board_statics import fire_combat_damage_dealt
+
+    fire_combat_damage_dealt(state, sources_hit_player + sources_hit_creature)
 
 
 def _fire_combat_damage_to_creature_triggers(

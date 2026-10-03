@@ -442,6 +442,20 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
                 activated.extend(roto.activated)
                 statics.extend(roto.statics)
                 continue
+            # Vintage Roto P5 lines (printing-level statics, ...).
+            from mtg_bot.cards.parser.roto_board import (
+                merge_board_fields,
+                parse_roto_board_line,
+            )
+
+            board = parse_roto_board_line(line, card)
+            if board is not None:
+                keywords.update(board.keywords)
+                triggers.extend(board.triggers)
+                activated.extend(board.activated)
+                statics.extend(board.statics)
+                merge_board_fields(roto_fields, board.fields)
+                continue
             # Anything the unified parser doesn't recognize - composite
             # triggers, zone-change triggers, custom effects - falls
             # through and we skip the whole card rather than half-claim
@@ -502,7 +516,11 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     if play_from_top_paying_life:
         printing = replace(printing, grants_play_from_top_paying_life=True)
     if roto_fields:
-        printing = replace(printing, **roto_fields)
+        # P5's accumulated fields (board rules, named counters) extend
+        # what the printing already carries; the rest are set.
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
     if "Vehicle" in subtypes:
         # Vehicles carry printed P/T that applies while they're
         # creatures (crewed / animated).

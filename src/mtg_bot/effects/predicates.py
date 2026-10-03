@@ -168,6 +168,18 @@ class Event(str, Enum):
     # triggers``; the damaged creature is the fixed target). Separate
     # from DEALS_COMBAT_DAMAGE, whose observers assume a player target.
     DEALS_COMBAT_DAMAGE_TO_CREATURE = "deals_combat_damage_to_creature"
+    # A creature has dealt combat damage in one combat damage step, to
+    # any players and / or permanents -- one event per source per step
+    # (CR 510.2; "Whenever equipped creature deals combat damage",
+    # Umezawa's Jitte). Subject is the source (``"source"``); the total
+    # rides ``combat_damage_amount``. Fired by
+    # ``roto_board_statics.fire_combat_damage_dealt``.
+    DEALS_COMBAT_DAMAGE_ANY = "deals_combat_damage_any"
+    # An attacking creature has become blocked (CR 509.1h; once per
+    # declaration however many creatures block it -- "Whenever this
+    # creature becomes blocked", Ichorclaw Myr). Subject is the attacker
+    # (``"attacker"``). Fired by ``roto_board_statics.fire_becomes_blocked``.
+    BECOMES_BLOCKED = "becomes_blocked"
     # A Room has just had its second / final door unlocked, transitioning
     # ``unlocked_halves`` from a single-half set to the full set
     # (``len(unlocked_halves) == len(printing.room_halves)``). Subject is
@@ -314,6 +326,8 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.CREATURE_TOKENS_CREATED: ("player",),
     Event.CARD_DISCARDED: ("player", "card"),
     Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
+    Event.DEALS_COMBAT_DAMAGE_ANY: ("source",),
+    Event.BECOMES_BLOCKED: ("attacker",),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
     Event.BECOMES_MONSTROUS: ("obj",),
     # ``target_spell`` replaces ``target`` when a spell on the stack is

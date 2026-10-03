@@ -3599,7 +3599,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Vintage Roto P3 (mana, costs, cast permissions).
     from mtg_bot.cards.parser.roto_mana import parse_roto_mana_effect
 
-    return parse_roto_mana_effect(phrase)
+    eff = parse_roto_mana_effect(phrase)
+    if eff is not None:
+        return eff
+    # Vintage Roto P5 (board-state prison & layers).
+    from mtg_bot.cards.parser.roto_board import parse_roto_board_effect
+
+    return parse_roto_board_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

@@ -1743,6 +1743,17 @@ def apply_land_etb_replacements(
     tapped" grants (Lightstall Inquisitor's exile-play rider).
     """
     p = state.player_by_id(player_id)
+    from mtg_bot.creature_statics_wg import forced_to_enter_tapped
+    from mtg_bot.roto_board_statics import land_enters_without_rules_text
+
+    if land_enters_without_rules_text(state, card):
+        # A nonbasic land entering under Blood Moon / Magus has already
+        # lost its own "as/enters" replacements (Vintage Roto P5): only
+        # external ones apply.
+        card.tapped = force_tapped or forced_to_enter_tapped(
+            state, card, player_id,
+        )
+        return
     # "Enters tapped" covers Planets + most non-basic utility lands.
     card.tapped = bool(card.printing.enters_tapped)
     # Lightstall Inquisitor: lands played from exile via this grant
@@ -1815,8 +1826,6 @@ def apply_land_etb_replacements(
         _offer_echoing_deeps_copy(state, player_id, card)
     # "Nonbasic lands your opponents control enter tapped." (Archon of
     # Emeria; ``mtg_bot.creature_statics_wg``).
-    from mtg_bot.creature_statics_wg import forced_to_enter_tapped
-
     if forced_to_enter_tapped(state, card, player_id):
         card.tapped = True
     # Vintage Roto P3 "As this land enters, ..." choices (Cavern of Souls).
@@ -2021,7 +2030,9 @@ def _select_spell_targets(
     from mtg_bot.effects.generic.multi_modal import ChooseModes
     if isinstance(spell_effect, ChooseModes):
         # Per-mode-instance targets (CR 601.2c); modes were picked above.
-        return spell_effect.select_targets(state, player_id, mode_indices)
+        return spell_effect.select_targets(
+            state, player_id, mode_indices, x_value=x_hint, card=card,
+        )
     if spell_effect is not None:
         spell_effect = cast_time_effect(
             spell_effect, kicked=kicked, alt_cost_paid=alt_cost_paid,
@@ -3251,6 +3262,10 @@ def _cast_spell(
     # Track cast-count for "whenever you cast your Nth spell" triggers.
     p.spells_cast_this_turn += 1
     p.spells_cast_this_game += 1
+    # The colors of the spells cast this turn (Veil of Summer).
+    from mtg_bot.roto_board_statics import note_spell_cast
+
+    note_spell_cast(state, p, card)
     # Track noncreature-spell casts for the Deafening Silence
     # restriction ("each player can't cast more than one noncreature
     # spell each turn").
@@ -6227,7 +6242,11 @@ def dispatch_event(
                 permanents.append(extra)
                 seen_ids.add(extra.id)
     from mtg_bot.game import _source_layer6_wiped
+    # Lands under Blood Moon / Magus have no rules-text abilities (CR
+    # 305.7; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import lands_without_rules_text
 
+    moon_lands = lands_without_rules_text(state)
     for source in permanents:
         # "Loses all abilities" (layer 6 -- Oko's +1, Lignify-style
         # Auras): the permanent's PRINTED triggered abilities no longer
@@ -6238,7 +6257,7 @@ def dispatch_event(
         ) or (
             source.left_without_abilities
             and source.zone != Zone.BATTLEFIELD
-        ):
+        ) or source.id in moon_lands:
             continue
         for ability_index, ability in enumerate(
             source.printing.triggered_abilities
@@ -6333,6 +6352,13 @@ def dispatch_event(
                 counter_amount=counter_amount,
                 fixed_targets=fixed_targets,
             )
+    # Triggered abilities a board rule grants every creature (The
+    # Tabernacle at Pendrell Vale; Vintage Roto P5).
+    from mtg_bot.roto_board_statics import fire_granted_triggers
+
+    fire_granted_triggers(
+        state, event, subjects, label, push_triggered_ability, extra_observers,
+    )
     _dispatch_graveyard_triggers(state, event, label, subjects)
 
 

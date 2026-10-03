@@ -348,7 +348,12 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     if roto is not None:
         kind, atom = roto
         return _CostPiece(kind=kind, atom=atom)
-    return None
+    # Vintage Roto P5 cost atoms.
+    from mtg_bot.cards.parser.roto_board import (
+        parse_roto_cost_piece as parse_roto_board_cost_piece,
+    )
+
+    return parse_roto_board_cost_piece(piece)
 
 
 def _classify_builtin_cost_piece(piece: str) -> _CostPiece | None:

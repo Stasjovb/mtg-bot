@@ -151,8 +151,19 @@ def run_untap_step(state: GameState) -> None:
         if att.attached_to is not None
         and att.printing.attached_prevents_untap
     }
+    # Board-rule untap limits (Back to Basics, Winter Orb; Vintage Roto
+    # P5): permanents the rules hold tapped this untap step.
+    from mtg_bot.roto_board_statics import untap_step_held
+
+    held_ids = untap_step_held(state, ap.id, no_untap_ids)
     for obj in state.battlefield:
         if obj.controller_id == ap.id:
+            if obj.id in held_ids:
+                obj.summoning_sick = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (untap-step limit)"
+                )
+                continue
             # Stun counters: instead of untapping, remove one counter.
             if obj.stun_counters > 0:
                 obj.stun_counters -= 1
@@ -1793,6 +1804,12 @@ def state_based_actions(state: GameState) -> bool:
     from mtg_bot.effects.generic.roto_mana import check_state_triggers
 
     check_state_triggers(state)
+    # Role uniqueness (CR 704.5y) and state triggers (CR 603.8) --
+    # Vintage Roto P5 (``mtg_bot.roto_board_statics``).
+    from mtg_bot.roto_board_statics import apply_board_state_checks
+
+    if apply_board_state_checks(state):
+        any_changed = True
     return any_changed
 
 

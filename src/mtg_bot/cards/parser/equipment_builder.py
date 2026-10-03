@@ -413,6 +413,19 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         return None
 
     text = card.get("oracle_text", "")
+    # Vintage Roto P5: modal activated-ability blocks and ward riders the
+    # line grammar below can't see whole.
+    from mtg_bot.cards.parser.roto_board import (
+        apply_board_fields,
+        claim_equipment_lines,
+        parse_roto_board_line_into,
+    )
+
+    claimed = claim_equipment_lines(card)
+    if claimed is None:
+        return None
+    text, roto = claimed
+    roto_fields: dict = dict(roto.fields)
     power_bonus = 0
     toughness_bonus = 0
     granted_keywords: set[str] = set()
@@ -663,7 +676,12 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         from mtg_bot.cards.parser.clause import _parse_clause
         clause = _parse_clause(line, name=card["name"])
         if clause is None:
-            return None
+            board = parse_roto_board_line_into(line, card, roto_fields)
+            if board is None or board.keywords or board.statics:
+                return None
+            triggers.extend(board.triggers)
+            activated.extend(board.activated)
+            continue
         if clause.triggers:
             from mtg_bot.cards.parser.artifact_effects import (
                 _functions_from_graveyard,
@@ -694,8 +712,8 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         toughness_bonus=toughness_bonus,
         granted_keywords=frozenset(granted_keywords),
         keywords=frozenset(self_keywords),
-        triggered_abilities=tuple(triggers),
-        activated_abilities=tuple(activated),
+        triggered_abilities=tuple(triggers) + tuple(roto.triggers),
+        activated_abilities=tuple(activated) + tuple(roto.activated),
         equip_cost=equip_cost,
         grants_control_opponent_ability_when_equipped=(
             grants_control_opponent_ability
@@ -711,4 +729,4 @@ def _build_equipment_printing(card: dict) -> CardPrinting | None:
         printing = replace(
             printing, equipment_granted_triggers=tuple(granted_triggers),
         )
-    return printing
+    return apply_board_fields(printing, roto_fields)

@@ -382,9 +382,12 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         from mtg_bot.cards.parser.effects import _parse_effect
         from mtg_bot.effects.generic.targeted_removal import RemoveAllMatching
 
-        base = _parse_effect(f"destroy each {m.group('np')}")
+        # The singular card-type list first: P5's general "destroy each
+        # <np>" grammar also reads it, but describes the list with "or"
+        # rather than the printed "and".
+        base = _destroy_each_of_types(m.group("np"))
         if base is None:
-            base = _destroy_each_of_types(m.group("np"))
+            base = _parse_effect(f"destroy each {m.group('np')}")
         if not isinstance(base, RemoveAllMatching) or base.action != "destroy":
             return None
         return rm.GetXEnergyPayAnyDestroyMVAtMostPaid(destroy=base)
