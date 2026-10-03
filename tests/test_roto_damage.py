@@ -391,3 +391,98 @@ def test_vizier_with_persist_returns_the_creature_counterless():
     move_off_battlefield(s, finks, destination="graveyard")
     drain_stack(s)
     assert finks in s.battlefield
+
+
+# ------------------------------------------------------- Impractical Joke
+
+JOKE = "Impractical Joke"
+
+
+def test_impractical_joke_parse():
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import DealDamage
+    from mtg_bot.effects.generic.roto_damage import DamageCantBePreventedThisTurn
+    from mtg_bot.effects.object_predicates import IsPlaneswalker
+
+    eff = printing(JOKE).spell_effect
+    assert eff == Sequence(effects=(
+        DamageCantBePreventedThisTurn(),
+        DealDamage(amount=3, targets=(TargetSpec(IsCreature() | IsPlaneswalker(), 0, 1),)),
+    ))
+    assert DamageCantBePreventedThisTurn().describe() == "damage can't be prevented this turn"
+    assert parse_p6_effect(
+        "damage can't be prevented this turn. X deals 3 damage to target goblin wizard"
+    ) is None
+    assert parse_p6_effect(
+        "damage can't be prevented this turn. X deals 2 damage to target creature"
+    ).effects[1].targets[0].count_min == 1
+
+
+def _joke(s, target):
+    from mtg_bot.actions import CastSpell
+
+    from tests._roto_helpers import to_hand
+
+    s.step = Step.PRECOMBAT_MAIN
+    put(s, _mountain(), 0)
+    joke = to_hand(s, printing(JOKE), 0)
+    agent(s, 0).targets = [target]
+    apply_action(s, 0, CastSpell(joke.id))
+    resolve_top_of_stack(s)
+
+
+def _mountain():
+    from mtg_bot.cards.source import get_active_source
+
+    return get_active_source().get_printings()["Mountain"]
+
+
+def test_impractical_joke_hits_a_planeswalker():
+    from mtg_bot.cards.base import make_planeswalker
+
+    s = arena()
+    walker = put(s, make_planeswalker("Test Walker", "{3}", 5, "Testy"), 1)
+    walker.loyalty_counters = 5
+    _joke(s, ("planeswalker", walker.id))
+    assert walker.loyalty_counters == 2
+
+
+def test_impractical_joke_damage_ignores_prevention():
+    s = arena()
+    panther = put(s, printing(TCHALLA).transform_back_face, 1)
+    _joke(s, ("creature", panther.id))
+    assert panther.damage == 3
+    # The rest of the turn: protection from red doesn't prevent noncombat
+    # damage either, and nor does protection from everything.
+    pro_red = put(s, make_creature("Test Monk", "{W}", 2, 4, keywords={"protection from red"}), 1)
+    from mtg_bot.effects.base import _apply_damage
+    from mtg_bot.game import player_damage_prevented
+
+    s.resolving_source = put(s, OGRE, 0)  # a red source
+    _apply_damage(s, ("creature", pro_red.id), 2)
+    s.resolving_source = None
+    assert pro_red.damage == 2
+    s.players[1].protected_from_everything = True
+    assert not player_damage_prevented(s, 1)
+    _apply_damage(s, ("player", 1), 2)
+    assert s.players[1].life == 18
+
+
+def test_cant_be_prevented_overrides_combat_prevention():
+    from mtg_bot.effects.generic.roto_damage import DamageCantBePreventedThisTurn
+
+    s, maze, attacker = _maze_arena()
+    _attack(s, attacker)
+    agent(s, 0).targets = [("creature", attacker.id)]
+    apply_action(s, 0, ActivateAbility(source_id=maze.id, ability_index=0))
+    resolve_top_of_stack(s)
+    s.prevent_combat_damage_this_turn = True  # Darkness too
+    DamageCantBePreventedThisTurn().resolve(s, 1)
+    s.step = Step.COMBAT_DAMAGE
+    resolve_combat_damage(s, defending_player_id=0)
+    assert s.players[0].life == 17
+    # It ends at cleanup.
+    s.expire_continuous_effects("cleanup")
+    from mtg_bot.effects.generic.roto_damage import damage_cant_be_prevented
+
+    assert not damage_cant_be_prevented(s)

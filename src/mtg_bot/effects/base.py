@@ -291,7 +291,9 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     kind, target_id = target
     # Roto P6: prevention / redirection effects (Black Panther, Nomads
     # en-Kor); redirected damage is dealt from inside the router.
-    from mtg_bot.effects.generic.roto_damage import route_damage
+    from mtg_bot.effects.generic.roto_damage import (
+        damage_cant_be_prevented, route_damage,
+    )
 
     amount = route_damage(state, target, amount)
     if amount <= 0:
@@ -312,7 +314,9 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
             )
 
             source = current_damage_source(state)
-            if is_protected_from(state, obj, source):
+            if is_protected_from(state, obj, source) and not (
+                damage_cant_be_prevented(state)
+            ):
                 state.log.append(
                     f"{amount} damage to {obj.printing.name} from "
                     f"{source.printing.name} is prevented (protection)"

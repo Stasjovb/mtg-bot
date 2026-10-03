@@ -1,7 +1,7 @@
 """Roto package P6: damage prevention and redirection (CR 615
 prevention effects; redirection, CR 614.1 / 615).
 
-Two rules-modifying effects ride the continuous-effects registry as
+Three rules-modifying effects ride the continuous-effects registry as
 ``layer=0`` entries (the ``cast_sorceries_as_flash`` precedent) that end
 at cleanup (``expires_at="cleanup"``), so they survive their source
 leaving the battlefield and are cloned / hashed with the rest of the
@@ -10,6 +10,8 @@ registry:
 * ``PREVENT_COMBAT_TO_AND_BY`` (``target_id`` = a creature) -- "Prevent
   all combat damage that would be dealt to and dealt by <that creature>
   this turn." (Maze of Ith, Cephalid Illusionist).
+* ``DAMAGE_CANT_BE_PREVENTED`` (global) -- "Damage can't be prevented
+  this turn." (Impractical Joke); see :func:`damage_cant_be_prevented`.
 * ``REDIRECT_NEXT_DAMAGE`` (``target_id`` = the protected creature,
   ``params=(n, redirect_to_id)``) -- "The next N damage that would be
   dealt to this creature this turn is dealt to target creature you
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
 
 PREVENT_COMBAT_TO_AND_BY = "prevent_combat_damage_to_and_by"
 REDIRECT_NEXT_DAMAGE = "redirect_next_damage"
+DAMAGE_CANT_BE_PREVENTED = "damage_cant_be_prevented"
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,18 @@ class PreventAllDamageToSelf:
 
 
 # ---------------------------------------------------------------- queries
+
+
+def damage_cant_be_prevented(state: "GameState") -> bool:
+    """"Damage can't be prevented this turn" (Impractical Joke) is in
+    force: every damage-prevention check in the engine consults this
+    (``game.player_damage_prevented``,
+    ``creature_statics_wg.combat_damage_unpreventable``, the protection
+    check in ``effects.base._apply_damage`` and this module's
+    routers)."""
+    return any(
+        ce.kind == DAMAGE_CANT_BE_PREVENTED for ce in state.continuous_effects
+    )
 
 
 def _combat_damage_prevented_for(state: "GameState", obj_id: int) -> bool:
@@ -104,7 +119,7 @@ def route_damage(state: "GameState", target: Target, amount: int) -> int:
     obj = _find(state, target_id)
     if obj is None:
         return amount
-    if prevents_all_damage_to(obj):
+    if prevents_all_damage_to(obj) and not damage_cant_be_prevented(state):
         state.log.append(
             f"{amount} damage to {obj.printing.name} is prevented"
         )
@@ -203,6 +218,27 @@ def _still_legal_target(state, effect: Effect, controller_id, targets):
 
 
 @dataclass(frozen=True)
+class DamageCantBePreventedThisTurn(Effect):
+    """"Damage can't be prevented this turn." (Impractical Joke.)"""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        state.add_continuous_effect(
+            source_id=_source_id(state),
+            layer=0,
+            kind=DAMAGE_CANT_BE_PREVENTED,
+            expires_at="cleanup",
+            description="damage can't be prevented this turn",
+        )
+        state.log.append("Damage can't be prevented this turn")
+
+    def describe(self) -> str:
+        return "damage can't be prevented this turn"
+
+
+@dataclass(frozen=True)
 class PreventCombatDamageToAndByTarget(Effect):
     """"[Untap target <creature>.] Prevent all combat damage that would be
     dealt to and dealt by <that | target> creature this turn."
@@ -294,6 +330,9 @@ class RedirectNextDamageToSourceToTarget(Effect):
 
 
 __all__ = [
+    "DAMAGE_CANT_BE_PREVENTED",
+    "DamageCantBePreventedThisTurn",
+    "damage_cant_be_prevented",
     "PREVENT_COMBAT_TO_AND_BY",
     "PreventAllDamageToSelf",
     "PreventCombatDamageToAndByTarget",

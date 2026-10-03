@@ -2593,6 +2593,10 @@ def player_damage_prevented(state: GameState, player_id: int) -> bool:
     everything — The One Ring). Logs the prevention."""
     p = state.player_by_id(player_id)
     if p.protected_from_everything:
+        from mtg_bot.effects.generic.roto_damage import damage_cant_be_prevented
+
+        if damage_cant_be_prevented(state):  # Impractical Joke (roto P6)
+            return False
         state.log.append(
             f"damage to P{player_id} is prevented (protection from everything)"
         )

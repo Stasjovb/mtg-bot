@@ -224,6 +224,45 @@ def _parse_keyword_action_phrase(phrase: str):
     return None
 
 
+_CANT_BE_PREVENTED_THEN_DAMAGE_RE = re.compile(
+    r"^damage can't be prevented this turn\. (?P<src>[^.]+?) deals "
+    r"(?P<n>\d+) damage to (?P<count>up to one target|target) "
+    r"(?P<np>[a-z ]+?)$",
+    re.IGNORECASE,
+)
+
+
+def _parse_cant_be_prevented_phrase(phrase: str):
+    """"Damage can't be prevented this turn[. <source> deals N damage to
+    [up to one] target <np>]" (Impractical Joke). The two-sentence form
+    is recognized whole because the damage sentence alone is claimed
+    first by the base grammar, which reads "creature or planeswalker"
+    as creature-only (``cards/parser/effects.py``, a documented
+    EoE-parity reading); here the target noun phrase is composed
+    faithfully by ``target_noun_filter``."""
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import DealDamage
+    from mtg_bot.effects.generic.roto_damage import DamageCantBePreventedThisTurn
+    from mtg_bot.effects.targets import TargetSpec
+
+    if phrase.strip().lower() == "damage can't be prevented this turn":
+        return DamageCantBePreventedThisTurn()
+    m = _CANT_BE_PREVENTED_THEN_DAMAGE_RE.match(phrase.strip())
+    if m is None:
+        return None
+    f = target_noun_filter(m.group("np"))
+    if f is None:
+        return None
+    count_min = 0 if m.group("count").lower().startswith("up to") else 1
+    return Sequence(effects=(
+        DamageCantBePreventedThisTurn(),
+        DealDamage(
+            amount=int(m.group("n")),
+            targets=(TargetSpec(f, count_min, 1),),
+        ),
+    ))
+
+
 def _parse_damage_phrase(phrase: str):
     from mtg_bot.effects.generic.roto_damage import (
         PreventCombatDamageToAndByTarget,
@@ -358,6 +397,7 @@ def parse_p6_effect(phrase: str):
         )
     return (
         _parse_damage_phrase(phrase)
+        or _parse_cant_be_prevented_phrase(phrase)
         or _parse_keyword_action_phrase(phrase)
         or _parse_untap_then_grant(phrase)
         or _parse_flip_and_counter_phrase(phrase)
