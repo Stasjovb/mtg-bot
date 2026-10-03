@@ -134,3 +134,65 @@ def test_trigger_grammar_and_descriptions():
     assert rm.roto_coin_satisfies(
         ManaCoin(color="R", spend_restriction="colored_only"), "spell",
     )
+
+
+# ---------------------------------------------------------------------------
+# Carpet of Flowers
+# ---------------------------------------------------------------------------
+
+
+def _carpet_arena(islands=3):
+    s = arena()
+    put(s, printing("Carpet of Flowers"), 0)
+    for _ in range(islands):
+        put(s, ISLAND, 1)
+    put(s, ISLAND, 0)  # mine don't count
+    return s
+
+
+def test_carpet_adds_mana_per_opponent_island_once_per_turn():
+    from mtg_bot.turn import (
+        Step,
+        run_beginning_of_postcombat_main_triggers,
+        run_beginning_of_precombat_main_triggers,
+    )
+
+    s = _carpet_arena()
+    s.players[0].agent.colors = ["G"]
+    run_beginning_of_precombat_main_triggers(s)
+    drain_stack(s)
+    assert [c.color for c in s.players[0].mana_pool] == ["G", "G", "G"]
+    s.players[0].mana_pool.clear()
+    s.step = Step.POSTCOMBAT_MAIN
+    run_beginning_of_postcombat_main_triggers(s)
+    drain_stack(s)
+    assert s.players[0].mana_pool == []  # already added this turn
+    s.turn_number += 1
+    run_beginning_of_postcombat_main_triggers(s)
+    drain_stack(s)
+    assert len(s.players[0].mana_pool) == 3
+
+
+def test_carpet_declined_or_no_islands_doesnt_spend_the_turn():
+    from mtg_bot.turn import run_beginning_of_precombat_main_triggers
+
+    s = _carpet_arena(islands=0)
+    run_beginning_of_precombat_main_triggers(s)
+    drain_stack(s)
+    assert s.players[0].mana_pool == []
+    carpet = next(o for o in s.battlefield if o.printing.name == "Carpet of Flowers")
+    assert carpet.ability_mana_added_turn == -1
+    s2 = _carpet_arena()
+    s2.players[0].agent.yes = False
+    run_beginning_of_precombat_main_triggers(s2)
+    drain_stack(s2)
+    assert s2.players[0].mana_pool == []
+
+
+def test_carpet_effect_guards():
+    eff = rm.MayAddManaPerTargetOpponentsSubtype(subtype="Island")
+    assert "Islands" in eff.describe()
+    s = arena()
+    eff.resolve(s, 0, ())
+    eff.resolve(s, 0, (("creature", 3),))
+    assert s.players[0].mana_pool == []

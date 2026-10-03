@@ -499,10 +499,46 @@ _DISCARD_SHARING_COLOR_ALT_COST_LINE = (
 )
 
 
+# "At the beginning of each of your main phases, if you haven't added mana
+# with this ability this turn, you may add X mana of any one color, where
+# X is the number of <Subtype>s target opponent controls." (Carpet of
+# Flowers).
+_EACH_MAIN_PHASE_MANA_PER_OPPONENT_SUBTYPE_RE = re.compile(
+    r"^At the beginning of each of your main phases, if you haven't added "
+    r"mana with this ability this turn, you may add X mana of any one "
+    r"color, where X is the number of (?P<sub>[A-Z][a-z]+)s target opponent "
+    r"controls\.$"
+)
+
+
+def _each_main_phase_triggers(effect):
+    """One trigger per main phase ("each of your main phases"), gated
+    by the "haven't added mana with this ability" intervening-if."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic import roto_mana as rm
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
+
+    gate = Controlled(YOU) & rm.HasNotAddedManaWithThisAbilityThisTurn()
+    return tuple(
+        TriggeredAbility(event=event, predicate=gate, effect=effect)
+        for event in (
+            Event.BEGINNING_OF_PRECOMBAT_MAIN,
+            Event.BEGINNING_OF_POSTCOMBAT_MAIN,
+        )
+    )
+
+
 def parse_roto_enchantment_line(line: str) -> RotoLine | None:
     """An enchantment line of this bucket, or ``None``."""
     if _disabled():
         return None
+    m = _EACH_MAIN_PHASE_MANA_PER_OPPONENT_SUBTYPE_RE.match(line)
+    if m is not None:
+        from mtg_bot.effects.generic import roto_mana as rm
+
+        return RotoLine(triggered=_each_main_phase_triggers(
+            rm.MayAddManaPerTargetOpponentsSubtype(subtype=m.group("sub")),
+        ))
     if line == _FREE_CASTS_FROM_HAND_LINE:
         return RotoLine(fields={"grants_free_casts_from_hand": True})
     m = _ANY_PLAYER_FREE_FLASH_CREATURES_RE.match(line)

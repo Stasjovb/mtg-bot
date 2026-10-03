@@ -537,9 +537,83 @@ class ConvergeDrawDamageGainLife(Effect):
         )
 
 
+@dataclass(frozen=True)
+class MayAddManaPerTargetOpponentsSubtype(Effect):
+    """"[If you haven't added mana with this ability this turn, ]you may
+    add X mana of any one color, where X is the number of <Subtype>s
+    target opponent controls." (Carpet of Flowers). The "haven't added"
+    intervening-if is ``HasNotAddedManaWithThisAbilityThisTurn`` on the
+    trigger and is re-checked here; adding mana (X > 0) records the turn
+    on the source."""
+
+    subtype: str = "Island"
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int,
+    ) -> list[Target]:
+        return [
+            ("player", p.id) for p in state.players
+            if p.id != controller_id and not p.has_lost
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin, effective_subtypes
+
+        src = state.resolving_source
+        if src is not None and src.ability_mana_added_turn == state.turn_number:
+            return
+        if not targets or targets[0][0] != "player":
+            return
+        opp_id = targets[0][1]
+        x = sum(
+            1 for o in state.battlefield
+            if o.controller_id == opp_id
+            and self.subtype in effective_subtypes(state, o)
+        )
+        p = state.player_by_id(controller_id)
+        if x <= 0 or (p.agent is not None and not p.agent.choose_yes_no(
+            state, controller_id, f"Add {x} mana of one color?",
+        )):
+            return
+        colors = ["W", "U", "B", "R", "G"]
+        color = colors[0]
+        if p.agent is not None:
+            picked = p.agent.choose_mana_color(state, controller_id, colors)
+            if picked in colors:
+                color = picked
+        p.mana_pool.extend(ManaCoin(color=color) for _ in range(x))
+        if src is not None:
+            src.ability_mana_added_turn = state.turn_number
+        state.log.append(f"P{controller_id} adds {{{color}}}x{x}")
+
+    def describe(self) -> str:
+        return (
+            f"you may add X mana of any one color (X = {self.subtype}s "
+            "target opponent controls)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
+
+
+from mtg_bot.effects.predicates import TriggerPredicate  # noqa: E402
+
+
+@dataclass(frozen=True)
+class HasNotAddedManaWithThisAbilityThisTurn(TriggerPredicate):
+    """Trigger gate: "if you haven't added mana with this ability this
+    turn" (Carpet of Flowers; ``GameObject.ability_mana_added_turn``)."""
+
+    def matches(self, state, subjects, source) -> bool:
+        return source.ability_mana_added_turn != state.turn_number
 
 
 @dataclass(frozen=True)
@@ -1591,6 +1665,8 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "HasNotAddedManaWithThisAbilityThisTurn",
+    "MayAddManaPerTargetOpponentsSubtype",
     "activate_exile_ability",
     "ExileZoneAbility",
     "roto_legal_actions",

@@ -65,6 +65,7 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Aluren",
     "Animate Dead",
+    "Carpet of Flowers",
     "Dream Halls",
     "Exploration",
     "Fastbond",

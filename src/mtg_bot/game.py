@@ -984,6 +984,10 @@ class GameObject:
     # How much mana was spent to cast this object as a spell (set by
     # ``actions._cast_spell``; 0 for a free cast).
     mana_spent_to_cast: int = 0
+    # The turn this permanent last added mana with its "if you haven't
+    # added mana with this ability this turn" trigger (Carpet of
+    # Flowers); -1 if never.
+    ability_mana_added_turn: int = -1
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
