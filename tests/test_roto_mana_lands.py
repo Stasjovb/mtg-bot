@@ -62,3 +62,65 @@ def test_shrieking_drake_rides_the_same_untargeted_bounce():
     put_into_battlefield(s, drake, 0)
     drain_stack(s)
     assert bear in s.players[0].hand and drake in s.battlefield
+
+
+# ---------------------------------------------------------------------------
+# Artifact lands
+# ---------------------------------------------------------------------------
+
+
+def test_artifact_land_is_played_as_the_land_drop_and_taps_for_its_color():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.legal import legal_actions
+
+    s = arena()
+    seat = to_hand(s, printing("Seat of the Synod"), 0)
+    other = to_hand(s, printing("Great Furnace"), 0)
+    acts = legal_actions(s, 0)
+    assert PlayLand(seat.id) in acts
+    assert not any(
+        isinstance(a, CastSpell) and a.card_id == seat.id for a in acts
+    )
+    apply_action(s, 0, PlayLand(seat.id))
+    assert seat in s.battlefield
+    assert seat.printing.is_land and seat.printing.is_artifact
+    assert PlayLand(other.id) not in legal_actions(s, 0)  # one land drop
+    recall = to_hand(s, printing("Ancestral Recall"), 0)
+    s.players[0].agent.targets = [("player", 0)]
+    assert CastSpell(recall.id) in legal_actions(s, 0)
+    apply_action(s, 0, CastSpell(recall.id))
+    assert seat.tapped  # it paid the {U}
+
+
+def test_artifact_lands_count_as_artifacts():
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.legal import legal_actions
+
+    s = arena()
+    spire = put(s, printing("Spire of Industry"), 0)
+    idx = next(
+        i for i, a in enumerate(spire.printing.activated_abilities)
+        if a.activate_only_if is not None
+    )
+    act = ActivateAbility(source_id=spire.id, ability_index=idx)
+    assert act not in legal_actions(s, 0)
+    put(s, printing("Vault of Whispers"), 0)
+    assert act in legal_actions(s, 0)
+
+
+def test_darksteel_citadel_is_indestructible():
+    from mtg_bot.turn import destroy
+
+    s = arena()
+    citadel = put(s, printing("Darksteel Citadel"), 0)
+    assert citadel.printing.produces == frozenset({"C"})
+    destroy(s, citadel)
+    assert citadel in s.battlefield
+
+
+def test_unparsed_artifact_land_stays_unclaimed():
+    from mtg_bot.cards.parser.source import build_card_record
+    from tests._roto_helpers import roto_card
+
+    record = dict(roto_card("Seat of the Synod"), oracle_text="Frobnicate.")
+    assert build_card_record(record) is None

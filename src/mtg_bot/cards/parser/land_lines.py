@@ -278,14 +278,19 @@ def _try_build_line_composed_land(
     """Compose a land printing from per-line recognizers; ``None`` if
     the card isn't a plain (optionally Legendary) Land or any line is
     unrecognized."""
-    if tuple(card_types) != ("Land",):
-        return None
     from mtg_bot.cards.parser.roto_mana import (
+        extra_land_card_types,
         extra_land_supertypes,
+        merge_roto_fields,
         parse_roto_land_line,
     )
 
-    # Snow (Vintage Roto P3, Dark Depths) rides the printing's supertypes.
+    # Artifact lands and Snow (Vintage Roto P3: Seat of the Synod, Dark
+    # Depths) ride the printing's card types / supertypes.
+    if tuple(card_types) != ("Land",) and (
+        tuple(card_types) not in extra_land_card_types()
+    ):
+        return None
     if set(supertypes) - {"Legendary"} - extra_land_supertypes():
         return None
     raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
@@ -398,7 +403,7 @@ def _try_build_line_composed_land(
         roto = parse_roto_land_line(line, card["name"])
         if roto is not None:
             # Vintage Roto P3 lines (Cavern of Souls, Dark Depths).
-            roto_fields.update(roto.fields)
+            merge_roto_fields(roto_fields, roto.fields)
             activated.extend(roto.activated)
             continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
@@ -483,8 +488,9 @@ def _try_build_line_composed_land(
         produces_with_counter=produces_with_counter,
         opening_hand_action=opening_hand_action,
     )
-    if "Snow" in supertypes:
+    if "Snow" in supertypes or tuple(card_types) != ("Land",):
         roto_fields["supertypes"] = tuple(supertypes)
+        roto_fields["card_types"] = tuple(card_types)
         roto_fields["type_line"] = card["type_line"]
     if roto_fields:
         from dataclasses import replace

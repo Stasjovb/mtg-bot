@@ -651,6 +651,22 @@ def parse_roto_creature_line(line: str, card: dict):
     return None
 
 
+def extra_land_card_types() -> frozenset:
+    """Card-type tuples beyond a plain Land the line-composed land builder
+    accepts (artifact lands: Seat of the Synod, Darksteel Citadel)."""
+    return frozenset() if _disabled() else frozenset({("Artifact", "Land")})
+
+
+def merge_roto_fields(acc: dict, fields: dict) -> None:
+    """Fold one line's printing fields into ``acc`` (keyword sets are
+    unioned, everything else set)."""
+    for key, value in fields.items():
+        if key == "keywords":
+            acc[key] = frozenset(acc.get(key, frozenset())) | frozenset(value)
+        else:
+            acc[key] = value
+
+
 def extra_land_supertypes() -> frozenset[str]:
     """Supertypes beyond Legendary the line-composed land builder accepts
     (Snow: Dark Depths)."""
@@ -672,6 +688,19 @@ _STATE_TRIGGER_NO_COUNTERS_RE = re.compile(
 )
 
 
+def _keyword_only_line(line: str, name: str) -> frozenset:
+    """The keywords of a keyword-only line ("Indestructible"), else an
+    empty set."""
+    from mtg_bot.cards.parser.clause import _parse_clause
+
+    clause = _parse_clause(line, name=name or None)
+    if clause is None or not clause.keywords:
+        return frozenset()
+    if clause.triggers or clause.activated is not None or clause.statics:
+        return frozenset()
+    return frozenset(clause.keywords)
+
+
 def _self_ref(text: str, name: str) -> bool:
     return text in (name, "this land", "this permanent")
 
@@ -683,6 +712,10 @@ def parse_roto_land_line(line: str, name: str = "") -> RotoLine | None:
         return None
     if _CHOOSE_CREATURE_TYPE_AS_ENTERS_RE.match(line):
         return RotoLine(fields={"enters_choosing_creature_type": True})
+    keywords = _keyword_only_line(line, name)
+    if keywords:
+        # "Indestructible" (Darksteel Citadel).
+        return RotoLine(fields={"keywords": keywords})
     trig = _tapped_for_mana_trigger(line)
     if trig is not None:
         return RotoLine(fields={"tapped_for_mana_triggers": (trig,)})

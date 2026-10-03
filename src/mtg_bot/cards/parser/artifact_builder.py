@@ -296,6 +296,10 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     # rejecting any printing they would also accept.
     if "Creature" in card_types:
         return None
+    # An artifact land is a land (playable as a land drop); the land
+    # builders own it -- never claim it as a plain artifact.
+    if "Land" in card_types:
+        return None
     if "Equipment" in subtypes:
         return None
     if "Spacecraft" in subtypes:
