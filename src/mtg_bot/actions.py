@@ -1922,7 +1922,9 @@ def _select_spell_targets(
     from mtg_bot.effects.generic.multi_modal import ChooseModes
     if isinstance(spell_effect, ChooseModes):
         # Per-mode-instance targets (CR 601.2c); modes were picked above.
-        return spell_effect.select_targets(state, player_id, mode_indices)
+        return spell_effect.select_targets(
+            state, player_id, mode_indices, x_value=x_hint, card=card,
+        )
     if spell_effect is not None:
         spell_effect = cast_time_effect(
             spell_effect, kicked=kicked, alt_cost_paid=alt_cost_paid,

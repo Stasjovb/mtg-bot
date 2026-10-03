@@ -979,6 +979,10 @@ class GameObject:
     # etb_timestamp, count)`` of the last counted resolution -- a new
     # object (fresh timestamp) or a new turn starts over (Vintage Roto P5).
     ability_resolutions: tuple = (-1, -1, 0)
+    # How many targets each chosen mode of a multi-mode spell took when
+    # it was cast (a mode may take "up to X" targets -- Kozilek's
+    # Command); set by ``ChooseModes.select_targets`` (Vintage Roto P5).
+    mode_target_counts: tuple = ()
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:

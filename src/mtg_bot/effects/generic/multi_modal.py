@@ -40,6 +40,22 @@ def _mode_target_count(mode: Effect) -> int:
     return mode.target_count_range()[1]
 
 
+def _x_dependent(mode: Effect) -> bool:
+    """A mode whose targets depend on the spell's X: "up to X target ..."
+    (``count_from_x``) or a target filter that reads X (``targets_use_x``,
+    "target creature with mana value X or less")."""
+    return bool(
+        getattr(mode, "count_from_x", False)
+        or getattr(mode, "targets_use_x", False)
+    )
+
+
+# An X no spell can pay: an X-dependent mode is available to choose (CR
+# 700.2a) when some X would give it a legal target; X itself is
+# announced after the modes (CR 601.2b).
+_ANY_X = 10 ** 6
+
+
 @dataclass(frozen=True)
 class ChooseModes(Effect):
     modes: tuple[Effect, ...]
@@ -55,12 +71,22 @@ class ChooseModes(Effect):
     def __post_init__(self) -> None:
         for mode in self.modes:
             lo, hi = mode.target_count_range()
-            if (lo, hi) not in ((0, 0), (1, 1)):
-                raise ValueError(
-                    "ChooseModes modes must take zero or exactly one target"
-                )
+            if (lo, hi) in ((0, 0), (1, 1)):
+                continue
+            if lo == 0 and getattr(mode, "count_from_x", False):
+                continue  # "up to X target ..." (Kozilek's Command)
+            raise ValueError(
+                "ChooseModes modes must take zero or exactly one target"
+                " (or up to X)"
+            )
         if self.mode_mana_costs and len(self.mode_mana_costs) != len(self.modes):
             raise ValueError("mode_mana_costs must parallel modes")
+
+    @property
+    def count_from_x(self) -> bool:
+        """X is announced before targets when a mode's targets depend on
+        it (``actions._targets_depend_on_x``)."""
+        return any(_x_dependent(m) for m in self.modes)
 
     # ---- targeting surface (the cast pipeline selects per mode) ----
 
@@ -86,6 +112,15 @@ class ChooseModes(Effect):
         mode = self.modes[idx]
         if _mode_target_count(mode) == 0:
             return True
+        if mode.target_count_range()[0] == 0:
+            return True  # "up to" targets: always choosable
+        if _x_dependent(mode):
+            prior = state.resolving_x_value
+            state.resolving_x_value = _ANY_X
+            try:
+                return bool(mode.legal_targets(state, controller_id))
+            finally:
+                state.resolving_x_value = prior
         return bool(mode.legal_targets(state, controller_id))
 
     def _mode_cost(self, picks) -> "ManaCost":
@@ -175,20 +210,48 @@ class ChooseModes(Effect):
 
     def select_targets(
         self, state: "GameState", player_id: int, picks: tuple[int, ...],
+        *, x_value: "int | None" = None, card: "GameObject | None" = None,
     ) -> tuple[Target, ...]:
+        """Targets per chosen mode instance, in mode order. With the
+        spell's X known (``x_value``), X-dependent modes are shaped by it
+        ("up to X target ...") and their filters read it ("mana value X
+        or less"). How many targets each instance took is recorded on
+        the spell (``card.mode_target_counts``) so resolution can split
+        them back when a mode took fewer than its maximum."""
+        from mtg_bot.actions import cast_time_effect
+
         p = state.player_by_id(player_id)
         chosen: list[Target] = []
-        for idx in picks:
-            mode = self.modes[idx]
-            if _mode_target_count(mode) == 0:
-                continue
-            pool = mode.legal_targets(state, player_id)
-            if not pool:  # pragma: no cover - availability filtered it
-                continue
-            pick = p.agent.choose_target(state, player_id, pool) if p.agent else None
-            if pick is None or pick not in pool:
-                pick = pool[0]
-            chosen.append(pick)
+        counts: list[int] = []
+        prior_x = state.resolving_x_value
+        if x_value is not None:
+            state.resolving_x_value = x_value
+        try:
+            for idx in picks:
+                mode = cast_time_effect(self.modes[idx], x_value=x_value)
+                lo, hi = mode.target_count_range()
+                if hi == 0:
+                    counts.append(0)
+                    continue
+                pool = list(mode.legal_targets(state, player_id))
+                taken: list[Target] = []
+                while pool and len(taken) < hi:
+                    pick = (
+                        p.agent.choose_target(state, player_id, pool)
+                        if p.agent else None
+                    )
+                    if pick is None or pick not in pool:
+                        if len(taken) >= lo:
+                            break
+                        pick = pool[0]
+                    taken.append(pick)
+                    pool.remove(pick)
+                chosen.extend(taken)
+                counts.append(len(taken))
+        finally:
+            state.resolving_x_value = prior_x
+        if card is not None:
+            card.mode_target_counts = tuple(counts)
         return tuple(chosen)
 
     def pay_escalate(
@@ -210,13 +273,17 @@ class ChooseModes(Effect):
         targets: tuple[Target, ...] = (),
     ) -> None:
         picks = state.resolving_modes or (0,)
+        spell = state.resolving_spell
+        counts = getattr(spell, "mode_target_counts", ()) if spell else ()
+        if len(counts) != len(picks):
+            counts = tuple(_mode_target_count(self.modes[i]) for i in picks)
         pos = 0
-        for idx in picks:
+        for idx, n in zip(picks, counts):
             mode = self.modes[idx]
-            n = _mode_target_count(mode)
             mode_targets = tuple(targets[pos:pos + n])
             pos += n
-            if n and len(mode_targets) < n:
+            lo = mode.target_count_range()[0]
+            if lo and len(mode_targets) < lo:
                 state.log.append(f"mode {idx} has no target — skipped")
                 continue
             state.log.append(f"mode {idx}: {mode.describe()}")

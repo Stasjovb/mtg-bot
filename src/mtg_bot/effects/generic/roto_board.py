@@ -13,10 +13,11 @@ section).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
+from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
 from mtg_bot.effects.object_predicates import ObjectPredicate
 
 if TYPE_CHECKING:
@@ -1691,6 +1692,142 @@ class PumpThenCreateRoleAttached(Effect):
 
 
 # ---------------------------------------------------------------------------
+# X-scaled modes (Kozilek's Command)
+# ---------------------------------------------------------------------------
+
+
+def _target_player_id(targets) -> "int | None":
+    return next((tid for kind, tid in targets if kind == "player"), None)
+
+
+class _TargetsPlayer:
+    """Mixin: one target player."""
+
+    def requires_target(self) -> bool:
+        return True
+
+    def target_count_range(self):
+        return (1, 1)
+
+    def legal_targets(self, state, controller_id):
+        return [("player", p.id) for p in state.players if not p.has_lost]
+
+
+@dataclass(frozen=True)
+class TargetPlayerCreatesXTokens(_TargetsPlayer, Effect):
+    """"Target player creates X <tokens>." -- X is the spell's X."""
+
+    token_printing: object = None
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        pid = _target_player_id(targets)
+        x = state.resolving_x_value
+        if pid is None or x <= 0 or state.player_by_id(pid).has_lost:
+            return
+        CreateToken(token_printing=self.token_printing, count=x).resolve(state, pid)
+
+    def describe(self) -> str:
+        return f"target player creates X {self.token_printing.name} tokens"
+
+
+@dataclass(frozen=True)
+class TargetPlayerScriesXThenDraws(_TargetsPlayer, Effect):
+    """"Target player scries X, then draws a card." -- that player makes
+    the scry decisions (``Scry(bottom_choice=True)`` as them)."""
+
+    draws: int = 1
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.effects.generic.library_lookat import Scry
+        from mtg_bot.turn import draw_n_cards
+
+        pid = _target_player_id(targets)
+        if pid is None or state.player_by_id(pid).has_lost:
+            return
+        x = state.resolving_x_value
+        if x > 0:
+            Scry(amount=x, bottom_choice=True).resolve(state, pid)
+        draw_n_cards(state, pid, self.draws)
+
+    def describe(self) -> str:
+        return "target player scries X, then draws a card"
+
+
+@dataclass(frozen=True)
+class ManaValueAtMostX(ObjectPredicate):
+    """"with mana value X or less" where X is the resolving spell's X
+    (``state.resolving_x_value``; ``ChooseModes`` sets it while targets
+    are chosen)."""
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.effects.value_predicates import mana_value_of
+
+        return mana_value_of(obj) <= state.resolving_x_value
+
+
+@dataclass(frozen=True)
+class RemoveTargetWithMVAtMostX(RemoveTargetPermanents):
+    """"exile target <np> with mana value X or less": a
+    ``RemoveTargetPermanents`` whose filter reads the spell's X
+    (``ManaValueAtMostX``); ``targets_use_x`` makes the cast pipeline
+    announce X before targets."""
+
+    targets_use_x: ClassVar[bool] = True
+
+
+@dataclass(frozen=True)
+class ExileUpToXGraveyardCards(Effect):
+    """"Exile up to X target cards from graveyards." -- ``count_max`` is
+    the spell's X, substituted at cast time (``cast_time_shape``)."""
+
+    count_max: int = 0
+    count_from_x: bool = True
+
+    def cast_time_shape(self, *, kicked=False, alt_cost_paid=False, x_value=None):
+        if not self.count_from_x or x_value is None:
+            return self
+        import dataclasses as _dc
+
+        return _dc.replace(self, count_max=x_value, count_from_x=False)
+
+    def requires_target(self) -> bool:
+        return False
+
+    def target_count_range(self):
+        return (0, self.count_max)
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("card_in_graveyard", c.id)
+            for p in state.players for c in p.graveyard
+        ]
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone
+
+        for kind, cid in targets:
+            if kind != "card_in_graveyard":
+                continue
+            for p in state.players:
+                card = next((c for c in p.graveyard if c.id == cid), None)
+                if card is None:
+                    continue
+                p.graveyard.remove(card)
+                card.zone = Zone.EXILE
+                p.exile.append(card)
+                state.log.append(
+                    f"{card.printing.name} exiled from P{p.id}'s graveyard"
+                )
+
+    def describe(self) -> str:
+        return "exile up to X target cards from graveyards"
+
+
+# ---------------------------------------------------------------------------
 # Cost atoms (``ActivationCost.extra_costs``)
 # ---------------------------------------------------------------------------
 
@@ -1775,6 +1912,11 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "ExileUpToXGraveyardCards",
+    "ManaValueAtMostX",
+    "RemoveTargetWithMVAtMostX",
+    "TargetPlayerCreatesXTokens",
+    "TargetPlayerScriesXThenDraws",
     "PumpThenCreateRoleAttached",
     "ROLE_TOKENS",
     "ByResolutionCountThisTurn",

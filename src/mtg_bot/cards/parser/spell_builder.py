@@ -1714,6 +1714,10 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
             supertypes=tuple(supertypes),
             subtypes=tuple(subtypes),
         )
+    if "Kindred" in card_types:
+        # "Kindred Instant — Eldrazi" (CR 308): Kindred is a card type
+        # too (graveyard card-type counts); Vintage Roto P5.
+        substrate["card_types"] = tuple(card_types)
     if substrate:
         import dataclasses
 

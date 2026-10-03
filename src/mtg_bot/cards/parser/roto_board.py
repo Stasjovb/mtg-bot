@@ -359,6 +359,21 @@ _PUMP_THEN_ROLE = re.compile(
 )
 
 
+# Kozilek's Command's X modes.
+_TARGET_PLAYER_CREATES_X = re.compile(
+    r"^target player creates X (?P<tok>.+? tokens?(?: with .+)?)$"
+)
+_TARGET_PLAYER_SCRIES_X_DRAWS = (
+    "target player scries X, then draws a card"
+)
+_EXILE_TARGET_MV_AT_MOST_X = re.compile(
+    r"^exile target (?P<np>.+?) with mana value X or less$"
+)
+_EXILE_UP_TO_X_GRAVEYARD_CARDS = (
+    "exile up to X target cards from graveyards"
+)
+
+
 def _keyword_list(text: str):
     from mtg_bot.cards.parser.keywords import _parse_keyword_line
 
@@ -460,6 +475,27 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
             return None
         cls = Tap if m.group("verb") == "tap" else Untap
         return cls(targets=(slot,))
+    m = _TARGET_PLAYER_CREATES_X.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.generic.tokens import CreateToken
+
+        token = _parse_effect(f"create two {m.group('tok')}")
+        if not isinstance(token, CreateToken) or token.count != 2:
+            return None
+        return rb.TargetPlayerCreatesXTokens(token_printing=token.token_printing)
+    if phrase == _TARGET_PLAYER_SCRIES_X_DRAWS:
+        return rb.TargetPlayerScriesXThenDraws()
+    m = _EXILE_TARGET_MV_AT_MOST_X.match(phrase)
+    if m is not None:
+        f = permanent_phrase(m.group("np"))
+        if f is None:
+            return None
+        return rb.RemoveTargetWithMVAtMostX(
+            action="exile", target_filter=f & rb.ManaValueAtMostX(),
+        )
+    if phrase == _EXILE_UP_TO_X_GRAVEYARD_CARDS:
+        return rb.ExileUpToXGraveyardCards()
     m = _PUMP_THEN_ROLE.match(phrase)
     if m is not None:
         from mtg_bot.effects.targets import TargetSpec
