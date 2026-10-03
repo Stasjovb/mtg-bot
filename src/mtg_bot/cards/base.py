@@ -297,7 +297,7 @@ class ManaCost:
             c for pair in self.hybrid for c in pair
         )
         return (
-            frozenset(c for c, _ in self.colored) | hybrid_colors
+            frozenset(c for c, _ in self.colored if c != "S") | hybrid_colors
             | frozenset(self.phyrexian)
         )
 
@@ -387,6 +387,12 @@ def parse_mana_cost(s: str) -> ManaCost:
             colored[sym] = colored.get(sym, 0) + 1
         elif sym == "C":
             generic += 1
+        elif sym == "S":
+            # Snow mana {S} (CR 107.4h): one mana from a snow source.
+            # Carried as the pseudo-color "S" in ``colored`` (payment:
+            # ``actions._coin_matches_color`` / the snow-land branch);
+            # it is not a color (``ManaCost.colors`` skips it).
+            colored["S"] = colored.get("S", 0) + 1
         elif sym == "X":
             x_pips += 1
         elif "/" in sym:
@@ -1568,6 +1574,68 @@ class CardPrinting:
     # (named, player-scoped, mana-value capped). A tuple of that
     # module's static descriptors; empty on every other printing.
     roto_statics: tuple = ()
+    # --- Vintage Roto P3: mana, costs, cast permissions -------------
+    # "As this land enters, choose a creature type." (Cavern of Souls):
+    # the choice lands on ``GameObject.chosen_creature_type``
+    # (``effects.generic.roto_mana.choose_creature_type_as_enters``).
+    enters_choosing_creature_type: bool = False
+    # "You may cast artifact spells and colorless spells from the top of
+    # your library." (Mystic Forge): the spell kinds ("artifact",
+    # "colorless") castable from the top of the controller's library. The
+    # artifact-only grant keeps ``grants_cast_artifact_from_top_of_library``.
+    cast_from_top_of_library_kinds: tuple = ()
+    # Suspend N--<cost> (CR 702.62): ``suspend_count`` time counters,
+    # ``suspend_cost`` paid by the special action
+    # (``CastSpell(id, use_suspend=True)``, ``roto_mana.suspend_card``).
+    suspend_count: int = 0
+    suspend_cost: "ManaCost | None" = None
+    suspend_cost_str: str = ""
+    # A nonland card printed with no mana cost (Lotus Bloom): it can't be
+    # cast by paying its mana cost (CR 202.1b / 601.2f), only through an
+    # alternative cost such as "without paying its mana cost".
+    has_no_mana_cost: bool = False
+    # Activated abilities that function while the card is in exile
+    # (Greater Gargadon's "Activate only if this card is suspended."),
+    # offered by ``roto_mana.roto_legal_actions`` and activated through
+    # ``roto_mana.activate_exile_ability``.
+    exile_activated_abilities: tuple = ()
+    # "Enchant Forest" (Utopia Sprawl): with ``aura_enchant_type="land"``,
+    # the land subtype the enchanted land must have.
+    aura_enchant_subtype: str = ""
+    # "As this <permanent> enters, choose a color." -> GameObject.chosen_color
+    enters_choosing_color: bool = False
+    # "Whenever enchanted <land> is tapped for mana, its controller adds an
+    # additional one mana of the chosen color." (Utopia Sprawl).
+    enchanted_land_adds_chosen_color: bool = False
+    # "As an additional cost to cast this spell, discard X cards."
+    # (Firestorm): X is announced before targets and becomes the spell's X.
+    additional_cost_discard_x: bool = False
+    # "As an additional cost to cast this spell, you may sacrifice any
+    # number of <permanents>." (Rottenmouth Viper): the ObjectPredicate
+    # over sacrificeable permanents; the matching "costs {1} less for each
+    # permanent sacrificed this way" is a ``cost_reductions`` entry.
+    optional_sacrifice_any_number: "object | None" = None
+    # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
+    # entries checked with the state-based actions ("When Dark Depths has
+    # no ice counters on it, ...").
+    state_triggers: tuple = ()
+    # Cast permissions (``effects.generic.roto_mana``): "You may cast
+    # spells from your hand without paying their mana costs."
+    # (Omniscience); "Any player may cast creature spells with mana value
+    # N or less without paying their mana costs and as though they had
+    # flash." (Aluren: N); "Rather than pay the mana cost for a spell, its
+    # controller may discard a card that shares a color with that
+    # spell." (Dream Halls, ``spell_costs.alternative_costs_for``).
+    grants_free_casts_from_hand: bool = False
+    free_flash_creature_casts_max_mv: "int | None" = None
+    grants_discard_alternative_cost: bool = False
+    # Mana triggers: "Whenever you tap this land for mana, <effect>."
+    # (Forbidden Orchard; ``TriggeredAbility`` entries stacked by
+    # ``roto_mana.after_mana_ability`` / automatic payment) and "Whenever
+    # you tap a nonland permanent for mana, add one mana of any type that
+    # permanent produced." (Kinnan, Bonder Prodigy).
+    tapped_for_mana_triggers: tuple = ()
+    extra_mana_when_you_tap_nonland_for_mana: bool = False
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

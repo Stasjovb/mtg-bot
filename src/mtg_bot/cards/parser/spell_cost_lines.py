@@ -46,15 +46,41 @@ _ALT_COST_CONDITION_RE = re.compile(
     r"^If (?P<cond>[^,]+), you may (?P<cost>.+) rather than pay this "
     r"spell's mana cost\.$"
 )
+# The gate-first word order: "If you control a Forest, rather than pay
+# this spell's mana cost, you may have an opponent gain 3 life."
+# (Invigorate).
+_ALT_COST_GATE_FIRST_RE = re.compile(
+    r"^If (?P<gate>it's your turn|it's not your turn"
+    r"|you control an? (?P<ctrl>[A-Z][a-z]+)), rather than pay this "
+    r"spell's mana cost, you may (?P<cost>.+)\.$"
+)
 _PAY_LIFE_RE = re.compile(r"^pay (\d+) life$")
 _PAY_MANA_RE = re.compile(r"^pay ((?:\{[^}]+\})+)$")
 _EXILE_COLOR_RE = re.compile(
     r"^exile an? (white|blue|black|red|green) card from your hand$"
 )
+# "return a[n] <Subtype> you control to its owner's hand" (Daze) /
+# "return two <Subtype>s you control to their owner's hand" (Gush).
 _RETURN_SUBTYPE_RE = re.compile(
-    r"^return an? ([A-Z][a-z]+) you control to its owner's hand$"
+    r"^return (?:an? (?P<one>[A-Z][a-z]+) you control to its owner's hand"
+    r"|(?P<n>two|three) (?P<many>[A-Z][a-z]+)s you control to their "
+    r"owner's hand)$"
 )
-_SACRIFICE_SUBTYPE_RE = re.compile(r"^sacrifice an? ([A-Z][a-z]+)$")
+# "sacrifice a[n] <Subtype>" (Mine Collapse) / "sacrifice two
+# <Subtype>s" (Fireblast).
+_SACRIFICE_SUBTYPE_RE = re.compile(
+    r"^sacrifice (?:an? (?P<one>[A-Z][a-z]+)|(?P<n>two|three) "
+    r"(?P<many>[A-Z][a-z]+)s)$"
+)
+# "have an opponent gain N life" (Invigorate).
+_OPPONENT_GAINS_LIFE_RE = re.compile(r"^have an opponent gain (\d+) life$")
+_ALT_COUNT_WORDS = {"two": 2, "three": 3}
+
+
+def _subtype_and_count(m: re.Match) -> tuple[str, int]:
+    if m.group("one") is not None:
+        return m.group("one"), 1
+    return m.group("many"), _ALT_COUNT_WORDS[m.group("n")]
 
 
 _OVERLOAD_RE = re.compile(r"^Overload (?P<cost>(?:\{[^}]+\})+)$")
@@ -65,7 +91,7 @@ def parse_alternative_cost_line(line: str) -> AlternativeCost | None:
     m = _OVERLOAD_RE.match(line)
     if m is not None:
         return AlternativeCost(mana=m.group("cost"), overload=True)
-    m = _ALT_COST_RE.match(line)
+    m = _ALT_COST_RE.match(line) or _ALT_COST_GATE_FIRST_RE.match(line)
     fields: dict = {}
     if m is None:
         # Roto P1: a game-state gate ("If an opponent cast three or more
@@ -94,11 +120,19 @@ def parse_alternative_cost_line(line: str) -> AlternativeCost | None:
         elif (pm := _EXILE_COLOR_RE.match(piece)) and "exile_card_color" not in fields:
             fields["exile_card_color"] = _COLOR_LETTERS[pm.group(1)]
         elif (pm := _RETURN_SUBTYPE_RE.match(piece)) and "return_subtype" not in fields:
-            fields["return_subtype"] = pm.group(1)
+            fields["return_subtype"], n = _subtype_and_count(pm)
+            if n > 1:
+                fields["return_count"] = n
         elif (pm := _SACRIFICE_SUBTYPE_RE.match(piece)) and (
             "sacrifice_subtype" not in fields
         ):
-            fields["sacrifice_subtype"] = pm.group(1)
+            fields["sacrifice_subtype"], n = _subtype_and_count(pm)
+            if n > 1:
+                fields["sacrifice_count"] = n
+        elif (pm := _OPPONENT_GAINS_LIFE_RE.match(piece)) and (
+            "opponent_gains_life" not in fields
+        ):
+            fields["opponent_gains_life"] = int(pm.group(1))
         else:
             return None
     return AlternativeCost(**fields)

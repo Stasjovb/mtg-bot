@@ -63,9 +63,15 @@ from mtg_bot.effects.predicates import YOU, Controlled, Event
 # Cards claimed through this builder. Explicit opt-in per name, like
 # ``enchantment_builder._UNIFIED_ENCHANTMENT_NAMES``.
 CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
+    "Aluren",
     "Animate Dead",
+    "Carpet of Flowers",
+    "Chthonian Nightmare",
+    "Dream Halls",
+    "Exploration",
     "Fastbond",
     "Goblin Bombardment",
+    "Grim Reaper's Sprint",
     "High Noon",
     "Jeskai Ascendancy",
     "Leyline Binding",
@@ -73,12 +79,14 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Necromancy",
     "Nether Void",
     "Oath of Druids",
+    "Omniscience",
     "Parallax Wave",
     "Sneak Attack",
     "Squandered Resources",
     "Stony Silence",
     "Touch the Spirit Realm",
     "Underworld Breach",
+    "Utopia Sprawl",
 })
 
 
@@ -103,6 +111,7 @@ class _Accumulator:
     enchant_type: str | None = None
     power_bonus: int = 0
     toughness_bonus: int = 0
+    granted_keywords: set[str] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +157,19 @@ _ANY_NUMBER_OF_LANDS_LINE = (
 
 def _any_number_of_lands(line: str, acc: _Accumulator) -> bool:
     """Fastbond. Literal: the only "any number of lands" surface in the
-    pool (the "an additional land" family is parsed by the creature
-    builder's printing keywords)."""
+    pool. The "<N> additional land(s)" family (Exploration) is the
+    printing keywords' parameterized ``parse_additional_lands_per_turn``."""
+    from mtg_bot.cards.parser.printing_keywords import (
+        parse_additional_lands_per_turn,
+    )
+
+    extra = parse_additional_lands_per_turn(line)
+    if extra is not None:
+        acc.printing_fields["grants_additional_land_per_turn"] = (
+            acc.printing_fields.get("grants_additional_land_per_turn", 0)
+            + extra
+        )
+        return True
     if line != _ANY_NUMBER_OF_LANDS_LINE:
         return False
     acc.printing_fields["grants_additional_land_per_turn"] = (
@@ -238,6 +258,27 @@ def _reanimation_aura_lines(line: str, acc: _Accumulator) -> bool:
     return True
 
 
+def _roto_mana_lines(line: str, acc: _Accumulator) -> bool:
+    """Vintage Roto P3 enchantment statics (cast permissions, ...):
+    ``roto_mana.parse_roto_enchantment_line``."""
+    from mtg_bot.cards.parser.roto_mana import parse_roto_enchantment_line
+
+    parsed = parse_roto_enchantment_line(line)
+    if parsed is None:
+        return False
+    acc.printing_fields.update(parsed.fields)
+    acc.triggers.extend(parsed.triggered)
+    acc.activated.extend(parsed.activated)
+    if parsed.aura_bonus is not None:
+        power, toughness, keywords = parsed.aura_bonus
+        acc.power_bonus += power
+        acc.toughness_bonus += toughness
+        acc.granted_keywords.update(keywords)
+    if parsed.enchant_type is not None:
+        acc.enchant_type = parsed.enchant_type
+    return True
+
+
 _LINE_RECOGNIZERS = (
     _fading,
     _cost_reduction,
@@ -247,6 +288,7 @@ _LINE_RECOGNIZERS = (
     _enchant_graveyard_card,
     _enchanted_creature_gets,
     _reanimation_aura_lines,
+    _roto_mana_lines,
 )
 
 
@@ -340,6 +382,7 @@ def _assemble(card, supertypes, subtypes, acc: _Accumulator) -> CardPrinting:
             cost=cost,
             power_bonus=acc.power_bonus,
             toughness_bonus=acc.toughness_bonus,
+            granted_keywords=frozenset(acc.granted_keywords),
             keywords=frozenset(acc.keywords),
             triggered_abilities=tuple(acc.triggers),
             aura_enchant_type=acc.enchant_type or "creature",

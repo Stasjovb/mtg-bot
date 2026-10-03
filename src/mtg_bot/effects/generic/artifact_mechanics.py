@@ -243,6 +243,9 @@ class ImprintCardFromHand(Effect):
     """
 
     excluded_types: tuple[str, ...] = ()
+    # Any other descriptor ("an instant card with mana value 2 or less",
+    # Isochron Scepter): a ``CardFilter`` the exiled card must match.
+    card_filter: "object | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -257,6 +260,7 @@ class ImprintCardFromHand(Effect):
         options = [
             c.id for c in p.hand
             if not any(t in c.printing.card_types for t in self.excluded_types)
+            and (self.card_filter is None or self.card_filter.matches(c.printing))
         ]
         if not options or p.agent is None:
             return
@@ -275,6 +279,10 @@ class ImprintCardFromHand(Effect):
         )
 
     def describe(self) -> str:
+        if self.card_filter is not None:
+            return (
+                f"you may exile a {self.card_filter.describe()} from your hand"
+            )
         kinds = ", ".join(f"non{t.lower()}" for t in self.excluded_types)
         return f"you may exile a {kinds} card from your hand"
 

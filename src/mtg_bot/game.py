@@ -911,9 +911,11 @@ class GameObject:
     # paid for with mana that makes it uncounterable (Delighted
     # Halfling); honored by ``CounterTargetSpell._is_uncounterable``.
     cast_uncounterable: bool = False
-    # Total mana spent to cast this spell (the paid total cost after
-    # convoke / improvise / delve; 0 for a spell cast without spending
-    # mana) -- "if no mana was spent to cast it" (Vexing Bauble, roto P1).
+    # Total mana spent to cast this object as a spell (one per unit paid
+    # by ``actions._cast_spell``'s automatic payment, so convoke /
+    # improvise / delve and Phyrexian life don't count; 0 for a free
+    # cast) -- "if no mana was spent to cast it" (Vexing Bauble, roto P1),
+    # "if five or more mana was spent" (Exhibition Tidecaller, roto P3).
     mana_spent_to_cast: int = 0
     # Turn number in which this creature "attacks that player this
     # combat if able" (Ursine Monstrosity); -1 otherwise. Read by
@@ -978,6 +980,28 @@ class GameObject:
     # Indices of the modes already chosen for a "choose one that hasn't
     # been chosen" modal ability (Gollum, Riddle Master).
     modes_chosen: tuple = ()
+    # Vintage Roto P3: the creature type chosen as this permanent
+    # entered (Cavern of Souls); ``None`` when none was chosen.
+    chosen_creature_type: Optional[str] = None
+    # This permanent entered by resolving as a spell cast from its owner's
+    # hand ("if you cast it from your hand" on an enters trigger: Amped
+    # Raptor); set by ``put_into_battlefield`` from ``cast_via_hand``.
+    entered_from_hand_cast: bool = False
+    # The turn this permanent last added mana with its "if you haven't
+    # added mana with this ability this turn" trigger (Carpet of
+    # Flowers); -1 if never.
+    ability_mana_added_turn: int = -1
+    # ``(turn_number, ability key)`` pairs of "Activate only once each
+    # turn." abilities used (``roto_mana.OnceEachTurnCost``).
+    once_each_turn_used: tuple = ()
+    # The color chosen as this permanent entered
+    # (``CardPrinting.enters_choosing_color``; Utopia Sprawl).
+    chosen_color: Optional[str] = None
+    # Per-unit possible colors of the mana spent to cast this object
+    # (``actions._cast_spell``) and the "if {C}{C} was spent" conditions
+    # the controller settled them to satisfy (``roto_mana``).
+    mana_spent_color_sources: tuple = ()
+    spent_color_choice: Optional[frozenset] = None
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -3216,6 +3240,9 @@ class ManaCoin:
     # can't be countered." (Delighted Halfling) -- the spell it pays for
     # becomes uncounterable.
     makes_spell_uncounterable: bool = False
+    # Snow mana (CR 107.4h): produced by a snow source; only such coins
+    # pay an {S} pip (Vintage Roto P3: Arcum's Astrolabe).
+    snow: bool = False
 
 
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)

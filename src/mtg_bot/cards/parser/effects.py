@@ -3593,7 +3593,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Roto P1 (stack & restrictions) shapes -- after every cube bucket.
     from mtg_bot.cards.parser.roto_stack import parse_roto_stack_effect
 
-    return parse_roto_stack_effect(phrase)
+    eff = parse_roto_stack_effect(phrase)
+    if eff is not None:
+        return eff
+    # Vintage Roto P3 (mana, costs, cast permissions).
+    from mtg_bot.cards.parser.roto_mana import parse_roto_mana_effect
+
+    return parse_roto_mana_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

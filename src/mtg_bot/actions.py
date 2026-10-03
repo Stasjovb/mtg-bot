@@ -137,6 +137,11 @@ class CastSpell(Action):
     # half of a split card (CR 709.3) or a modal DFC's castable back face
     # (CR 712.11). ``None`` casts the card's own (front) printing.
     cast_face: "str | None" = None
+    # Suspend (CR 702.62a): NOT a cast -- the special action (pay the
+    # suspend cost, exile the card from hand with N time counters;
+    # ``roto_mana.suspend_card``), encoded as a CastSpell variant like
+    # Plot.
+    use_suspend: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,7 +306,10 @@ def _land_tap_life_cost(state: GameState, land: GameObject) -> int:
 
 
 def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
-    """True if ``coin`` can pay for a ``{color}`` requirement."""
+    """True if ``coin`` can pay for a ``{color}`` requirement (``"S"``:
+    an {S} pip, paid only by snow mana)."""
+    if color == "S":
+        return coin.snow
     if coin.color == "any":
         return True
     return coin.color == color
@@ -398,7 +406,10 @@ def _coin_satisfies_context(
         and "cast_from_outside_hand" in kinds
     ):
         return True
-    return False
+    # Vintage Roto P3 restriction tags (The Mightstone and Weakstone, ...).
+    from mtg_bot.effects.generic.roto_mana import roto_coin_satisfies
+
+    return roto_coin_satisfies(coin, kinds)
 
 
 def effective_warp_cost(
@@ -566,6 +577,15 @@ def can_pay_cost(
     lands = _untapped_lands(state, player_id)
     if _can_pay_from(state, cost, usable_pool, lands):
         return True
+    if state.continuous_effects:
+        # "any time you could activate a mana ability, you may pay 1
+        # life. If you do, add {C}." (Channel; Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import life_mana_units_needed
+
+        if life_mana_units_needed(
+            state, player_id, cost, usable_pool, lands,
+        ) is not None:
+            return True
     # "Whenever you tap a <Forest> for mana, add an additional {G}"
     # (Nissa, Who Shakes the World): tapping such lands first yields
     # extra coins -- try pre-tapping 1..all of them.
@@ -596,6 +616,18 @@ def extra_mana_grants_for_tapped_lands(
         if state.continuous_effects and _source_layer6_wiped(state, o):
             continue
         out.extend(grants)
+    if state.continuous_effects:
+        # "Until end of turn, whenever a player taps an Island for mana,
+        # that player adds an additional {U}." (High Tide; Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import ueot_land_tap_mana_grants
+
+        out.extend(ueot_land_tap_mana_grants(state))
+    # "Whenever enchanted Forest is tapped for mana, its controller adds an
+    # additional one mana of the chosen color." (Utopia Sprawl): keyed by
+    # the enchanted land's id.
+    from mtg_bot.effects.generic.roto_mana import enchanted_land_mana_grants
+
+    out.extend(enchanted_land_mana_grants(state, player_id))
     return out
 
 
@@ -604,10 +636,12 @@ def _extra_mana_lands(state, lands, extra) -> list:
     lands with the fewest other colors are tapped first."""
     from mtg_bot.game import effective_subtypes
 
-    subtypes = {s for s, _ in extra}
+    subtypes = {s for s, _ in extra if isinstance(s, str)}
+    # Per-land grants are keyed by the land's id (Utopia Sprawl).
+    land_ids = {s for s, _ in extra if isinstance(s, int)}
     hits = [
         l for l in lands
-        if subtypes & set(effective_subtypes(state, l))
+        if l.id in land_ids or subtypes & set(effective_subtypes(state, l))
     ]
     hits.sort(key=lambda l: len(effective_land_produces(state, l)))
     return hits
@@ -621,7 +655,7 @@ def _extra_coins_for_land(state, land, extra) -> list[str]:
 
     subs = set(effective_subtypes(state, land))
     produces = effective_land_produces(state, land)
-    bonus = [color for s, color in extra if s in subs]
+    bonus = [color for s, color in extra if s in subs or s == land.id]
     own = bonus[0] if bonus and bonus[0] in produces else (
         next(iter(sorted(produces)), "C")
     )
@@ -637,6 +671,17 @@ def _virtual_pretap(state, usable_pool, lands, extra, n_tapped):
     for l in chosen:
         pool.extend(ManaCoin(color=c) for c in _extra_coins_for_land(state, l, extra))
     return pool, [l for l in lands if l.id not in ids]
+
+
+def _snow_mana_lands(state, lands, used_lands) -> list:
+    """Untapped snow lands that make mana -- the lands that can pay an
+    {S} pip (CR 107.4h; Vintage Roto P3)."""
+    return [
+        l for l in lands
+        if "Snow" in l.printing.supertypes
+        and effective_land_produces(state, l)
+        and l.id not in used_lands
+    ]
 
 
 def _can_pay_from(
@@ -658,11 +703,14 @@ def _can_pay_from(
                     break
         if need == 0:
             continue
-        matching = [
-            l for l in lands
-            if color in effective_land_produces(state, l)
-            and l.id not in used_lands
-        ]
+        if color == "S":
+            matching = _snow_mana_lands(state, lands, used_lands)
+        else:
+            matching = [
+                l for l in lands
+                if color in effective_land_produces(state, l)
+                and l.id not in used_lands
+            ]
         if len(matching) < need:
             return False
         for l in matching[:need]:
@@ -674,7 +722,10 @@ def _can_pay_from(
     # them, the strict color restriction isn't enforced). The pip
     # count must still be included in the bound — without this, a
     # {U/R} cost would be silently free.
-    remaining_pool = len(usable_pool) - len(used_coins)
+    remaining_pool = sum(
+        1 for idx, coin in enumerate(usable_pool)
+        if idx not in used_coins and coin.spend_restriction != "colored_only"
+    )
     remaining_lands = sum(1 for l in lands if l.id not in used_lands)
     needed = cost.generic + len(cost.hybrid)
     return remaining_pool + remaining_lands >= needed
@@ -1147,6 +1198,8 @@ def _produces_satisfies(
     a colored requirement is satisfied only by exact match or "any";
     a generic requirement (color="" / None) is satisfied by any output.
     """
+    if color == "S":
+        return False  # sacrifice-for-mana sources aren't snow
     for c, n in produces:
         if n <= 0:
             continue
@@ -1326,6 +1379,12 @@ def auto_tap_for_cost(
     extra = extra_mana_grants_for_tapped_lands(state, player_id)
     if extra:
         _pretap_lands_for_extra_mana(state, player_id, cost, spell_kind, extra)
+    if state.continuous_effects:
+        # Channel's life-for-{C} (Vintage Roto P3): only for the part of
+        # the cost the pool and lands can't cover.
+        from mtg_bot.effects.generic.roto_mana import pay_life_for_mana
+
+        pay_life_for_mana(state, player_id, cost, spell_kind)
     lands = _untapped_lands(state, player_id)
     used_coin_ids: list[int] = []  # indices into p.mana_pool
     used_lands: set[int] = set()
@@ -1347,16 +1406,22 @@ def auto_tap_for_cost(
                     break
         if need == 0:
             continue
-        matching = [
-            l for l in lands
-            if color in effective_land_produces(state, l)
-            and l.id not in used_lands
-        ]
+        if color == "S":
+            matching = _snow_mana_lands(state, lands, used_lands)
+        else:
+            matching = [
+                l for l in lands
+                if color in effective_land_produces(state, l)
+                and l.id not in used_lands
+            ]
         for l in matching[:need]:
             used_lands.add(l.id)
             tapped.append(l)
             if track:
-                color_sources.append(frozenset({color}))
+                color_sources.append(
+                    frozenset(effective_land_produces(state, l)) & _WUBRG_SET
+                    if color == "S" else frozenset({color})
+                )
     # Generic cost (including hybrid pips, treated as generic-1 per
     # the engine simplification): pool first, then lands. The hybrid
     # contribution to the bound was missing here, mirroring the same
@@ -1368,6 +1433,10 @@ def auto_tap_for_cost(
         if idx in used_coin_ids:
             continue
         if not _coin_satisfies_context(coin, spell_kind):
+            continue
+        if coin.spend_restriction == "colored_only":
+            # "This mana can't be spent to pay generic mana costs."
+            # (Jegantha, the Wellspring; Vintage Roto P3).
             continue
         used_coin_ids.append(idx)
         if track:
@@ -1395,6 +1464,13 @@ def auto_tap_for_cost(
         # life is part of the mana ability's cost, paid as it's tapped.
         life_cost = _land_tap_life_cost(state, l)
         tap_permanent(state, l)
+        if l.printing.tapped_for_mana_triggers:
+            # "Whenever you tap this land for mana" (Vintage Roto P3).
+            from mtg_bot.effects.generic.roto_mana import (
+                push_tapped_for_mana_triggers,
+            )
+
+            push_tapped_for_mana_triggers(state, player_id, l)
         if life_cost:
             p.life -= life_cost
             state.log.append(
@@ -1469,6 +1545,11 @@ def apply_action(state: GameState, player_id: int, action: Action) -> None:
         return
     if isinstance(action, CastSpell) and action.use_plot:
         _plot_card(state, player_id, action.card_id)
+        return
+    if isinstance(action, CastSpell) and action.use_suspend:
+        from mtg_bot.effects.generic.roto_mana import suspend_card
+
+        suspend_card(state, player_id, action.card_id)
         return
     if isinstance(action, CastSpell):
         _cast_spell(
@@ -1610,6 +1691,7 @@ def _play_land(state: GameState, player_id: int, card_id: int) -> None:
     apply_land_etb_replacements(
         state, player_id, card, force_tapped=lightstall_land,
     )
+    card.entered_battlefield_turn = state.turn_number
     state.battlefield.append(card)
     p.lands_played_this_turn += 1
     p.lands_entered_this_turn += 1
@@ -1737,6 +1819,10 @@ def apply_land_etb_replacements(
 
     if forced_to_enter_tapped(state, card, player_id):
         card.tapped = True
+    # Vintage Roto P3 "As this land enters, ..." choices (Cavern of Souls).
+    from mtg_bot.effects.generic.roto_mana import apply_roto_land_as_enters
+
+    apply_roto_land_as_enters(state, player_id, card)
 
 
 def _offer_echoing_deeps_copy(
@@ -2019,6 +2105,15 @@ def _select_spell_targets(
                 if o.printing.is_artifact
                 and (not yours_only or o.controller_id == player_id)
             ]
+        elif enchant_type == "land":
+            # "Enchant Forest" (Vintage Roto P3: Utopia Sprawl).
+            from mtg_bot.effects.generic.roto_mana import enchantable_land
+
+            legal = [
+                ("land", o.id) for o in state.battlefield
+                if enchantable_land(state, card.printing, o)
+                and (not yours_only or o.controller_id == player_id)
+            ]
         else:
             legal = [
                 ("creature", o.id)
@@ -2125,6 +2220,12 @@ def _choose_replicate_times(
             f"P{player_id} replicates {card.printing.name} x{times}"
         )
     return times, cost
+
+
+def _roto_top_of_library_cast_allowed(state, player_id, card) -> bool:
+    from mtg_bot.effects.generic.roto_mana import top_of_library_cast_allowed
+
+    return top_of_library_cast_allowed(state, player_id, card)
 
 
 def _cast_spell(
@@ -2349,6 +2450,11 @@ def _cast_spell(
         card = yw_card
         cost = card.printing.mana_cost
         cast_from_outside_hand = True
+        # ``legal_actions`` never offers a free graveyard cast: a
+        # ``cast_for_free`` one comes from an effect's "cast it without
+        # paying its mana cost" (``cast_now``; Dreadhorde Arcanist), so no
+        # alternative or pitch cost is demanded.
+        free_by_permission = cast_for_free
         p.graveyard.remove(card)
         card.cast_via_warp = False
         card.cast_via_hand = False
@@ -2481,10 +2587,16 @@ def _cast_spell(
             elif (
                 p.library
                 and p.library[0].id == card_id
-                and any(
-                    o.printing.grants_cast_artifact_from_top_of_library
-                    for o in state.battlefield
-                    if o.controller_id == player_id
+                and (
+                    any(
+                        o.printing.grants_cast_artifact_from_top_of_library
+                        for o in state.battlefield
+                        if o.controller_id == player_id
+                    )
+                    # Vintage Roto P3 grants (Mystic Forge).
+                    or _roto_top_of_library_cast_allowed(
+                        state, player_id, p.library[0],
+                    )
                 )
             ):
                 card = p.library.pop(0)
@@ -2536,12 +2648,22 @@ def _cast_spell(
     # free-cast permission) is cast for one of them. Announced before
     # modes and targets (CR 601.2b) since Overload changes the targets.
     alt_cost_index: int | None = None
-    if cast_for_free and card.printing.alternative_costs:
+    from mtg_bot.cards.spell_costs import alternative_costs_for
+
+    # Printed alternative costs plus granted ones (Dream Halls).
+    alternative_costs = alternative_costs_for(state, player_id, card)
+    if cast_for_free and alternative_costs and not free_by_permission:
         from mtg_bot.alt_casting import free_cast_permission as _free_perm
         from mtg_bot.cards.spell_costs import select_alternative_cost
 
         if not _free_perm(state, player_id, card):
             alt_cost_index = select_alternative_cost(state, player_id, card)
+    # "If this spell's alternative cost was paid" (Baleful Mastery,
+    # Overload) means the card's own printed one, not a granted one.
+    printed_alt_cost_paid = (
+        alt_cost_index is not None
+        and alt_cost_index < len(card.printing.alternative_costs)
+    )
     chosen_modes: tuple[int, ...] = _choose_modes_at_cast(
         state, player_id, card, base_cost=cost,
     )
@@ -2559,6 +2681,10 @@ def _cast_spell(
         from mtg_bot.alt_casting import choose_pay_x_life as _choose_life_x
 
         life_x_paid = _choose_life_x(state, player_id, card)
+    # Vintage Roto P3: "discard X cards" (Firestorm) announces X here too.
+    from mtg_bot.effects.generic.roto_mana import choose_additional_cost_x
+
+    discard_x = choose_additional_cost_x(state, player_id, card)
     # "up to X target ...": X is announced before targets (CR 601.2b).
     early_x: "int | None" = None
     if (
@@ -2570,10 +2696,11 @@ def _cast_spell(
         state, player_id, card, mode_indices=chosen_modes,
         x_hint=(
             life_x_paid if life_x_paid is not None
+            else discard_x if discard_x is not None
             else early_x if early_x is not None
             else (0 if card.printing.mana_cost.x_pips == 0 else None)
         ),
-        kicked=kicked, alt_cost_paid=alt_cost_index is not None,
+        kicked=kicked, alt_cost_paid=printed_alt_cost_paid,
     )
 
     # Apply cost reductions (e.g., "costs {3} less if you've cast another
@@ -2581,10 +2708,15 @@ def _cast_spell(
     # special-case this.
     from mtg_bot.creature_casting_ub import casting_origin as _casting_origin
 
+    # Vintage Roto P3: "you may sacrifice any number of <permanents>. This
+    # spell costs {1} less for each" (Rottenmouth Viper) -- the sacrifices
+    # happen as the total cost is determined.
+    from mtg_bot.effects.generic.roto_mana import optional_sacrifice_for_cost
+
     with _casting_origin(
         cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
         from_exile=card.zone == Zone.EXILE,
-    ):
+    ), optional_sacrifice_for_cost(state, player_id, card, cost, targets):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
         )
@@ -2703,6 +2835,7 @@ def _cast_spell(
         if (
             card.printing.alt_cost_exile_from_hand is not None
             and not free_by_permission
+            and alt_cost_index is None
             and not _free_permission(state, player_id, card)
         ):
             _pay_pitch(state, player_id, card)
@@ -2710,7 +2843,7 @@ def _cast_spell(
             # A printed alternative cost may itself cost mana (Baleful
             # Mastery's {1}{B}, Overload); its other parts are paid with
             # the additional costs below.
-            cost = card.printing.alternative_costs[alt_cost_index].mana_cost()
+            cost = alternative_costs[alt_cost_index].mana_cost()
         # Cost increases still apply to a spell cast without paying its
         # mana cost (CR 601.2f -- Thalia on a pitched Force of Will).
         from mtg_bot.creature_statics_wg import spell_cost_increase
@@ -2763,6 +2896,10 @@ def _cast_spell(
     # of library — set above when we resolved the spell's source zone).
     if cast_from_outside_hand:
         spell_kinds.add("cast_from_outside_hand")
+    # Vintage Roto P3 tags (Cavern of Souls' creature-type mana).
+    from mtg_bot.effects.generic.roto_mana import roto_spell_kinds
+
+    spell_kinds |= roto_spell_kinds(card)
     # CR 601.2g (mana abilities) precedes 601.2h (pay total cost). Sac
     # Treasures and other "sacrifice: Add ..." mana abilities fire
     # FIRST, filling the pool. Convoke is part of paying the cost
@@ -2799,7 +2936,6 @@ def _cast_spell(
     # Colors of mana spent (Sunburst, Converge): every cast records
     # them — Prismatic Ending reads the count on the stack.
     color_sources: list = []
-    card.mana_spent_to_cast = cost.total
     auto_tap_for_cost(
         state, player_id, cost, spell_kind=frozenset(spell_kinds),
         color_sources=color_sources,
@@ -2830,6 +2966,17 @@ def _cast_spell(
     # many counters on a Sunburst permanent, and converge spells read
     # it while on the stack.
     card.sunburst_colors_spent = max_distinct_colors(color_sources)
+    # Total mana spent: one unit per mana actually paid (after convoke /
+    # improvise / delve, which pay without mana, and after Phyrexian pips
+    # paid with life were taken out) -- "if no mana was spent to cast it"
+    # (Vexing Bauble, roto P1), "if five or more mana was spent to cast
+    # that spell" (Exhibition Tidecaller, roto P3).
+    card.mana_spent_to_cast = len(color_sources)
+    # Which colors each spent unit could have been ("if {G}{G} was spent
+    # to cast it", Wistfulness); the color assignment is settled when a
+    # condition first reads it (``roto_mana.spent_mana_choice``).
+    card.mana_spent_color_sources = tuple(color_sources)
+    card.spent_color_choice = None
     # Additional cost: sacrifice a creature or artifact. Legal_actions
     # already gated casting on a valid sac target existing; here we
     # just pay by calling sacrifice() on the agent's pick.
@@ -2886,6 +3033,7 @@ def _cast_spell(
                 f"{chosen.printing.name}"
             )
             _sacrifice(state, chosen)
+    spell_cost_paid_objects: list = []
     # Additional cost: sacrifice a permanent matching the printing's
     # ``additional_cost_sacrifice_filter`` (Tinker / Natural Order /
     # Crop Rotation).
@@ -2894,7 +3042,11 @@ def _cast_spell(
             pay_additional_sacrifice as _pay_additional_sacrifice,
         )
 
-        _pay_additional_sacrifice(state, player_id, card)
+        sacrificed = _pay_additional_sacrifice(state, player_id, card)
+        if sacrificed is not None:
+            # "the sacrificed creature's mana value" (Burnt Offering)
+            # reads it from ``state.resolving_cost_paid_objects``.
+            spell_cost_paid_objects.append(sacrificed)
     if use_escape and escape_exile_n:
         from mtg_bot.alt_casting import pay_escape_exile as _pay_escape_exile
 
@@ -2910,14 +3062,18 @@ def _cast_spell(
             f"additional cost: P{player_id} pays {life_x_paid} life "
             f"(life: {p.life})"
         )
+    if discard_x is not None:
+        from mtg_bot.effects.generic.roto_mana import pay_discard_x
+
+        pay_discard_x(state, player_id, card, discard_x)
+        x_value = discard_x
     # Printed alternative cost: pay its non-mana parts (life, exile a
     # card from hand, return / sacrifice a land).
     if alt_cost_index is not None:
         from mtg_bot.cards.spell_costs import pay_alternative_cost_components
 
         pay_alternative_cost_components(
-            state, player_id, card,
-            card.printing.alternative_costs[alt_cost_index],
+            state, player_id, card, alternative_costs[alt_cost_index],
         )
     # Teamwork: optionally tap creatures with enough total power.
     card.optional_additional_cost_paid = False
@@ -3008,7 +3164,8 @@ def _cast_spell(
         StackItem(
             source=card, controller_id=player_id, targets=targets,
             countered=countered, x_value=x_value, kicked=kicked,
-            alt_cost_paid=alt_cost_index is not None,
+            alt_cost_paid=printed_alt_cost_paid,
+            cost_paid_objects=tuple(spell_cost_paid_objects),
             additional_cost_choice_id=additional_cost_choice_id,
             chosen_modes=chosen_modes,
             cast_room_half=cast_room_half,
@@ -3611,6 +3768,12 @@ def _activate_ability(
             _activate_graveyard_ability(
                 state, player_id, grave_card, ability_index,
             )
+            return
+        # Exile-resident source (Greater Gargadon while suspended;
+        # Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import activate_exile_ability
+
+        activate_exile_ability(state, player_id, source_id, ability_index)
         return
     if source.controller_id != player_id:
         return
@@ -3664,7 +3827,9 @@ def _activate_ability(
         # Heroes's third mana ability ("among legendary permanents you
         # control") is read as "spend only to activate abilities of
         # legendary permanents you control".
-        ability_spell_kinds: set[str] = {"spell"}
+        # "activated_ability" marks the payment as an activation, not a
+        # cast (The Mightstone and Weakstone's mana pays for it).
+        ability_spell_kinds: set[str] = {"spell", "activated_ability"}
         if (
             "Eldrazi" in source.printing.subtypes
             and not source.printing.mana_cost.colored
@@ -4341,6 +4506,13 @@ def _activate_ability(
     # filtered permanents. Paid after target selection, before
     # exile-self / sacrifice-self.
     if ability.cost.extra_costs:
+        # Vintage Roto P3: "Pay X {E}" whose X is the targeted card's
+        # mana value (Chthonian Nightmare) sets the ability's X.
+        from mtg_bot.effects.generic.roto_mana import x_from_cost_atoms
+
+        ability_x_value = x_from_cost_atoms(
+            state, player_id, ability, targets, ability_x_value,
+        )
         from mtg_bot.effects.generic.cube_creatures_rmc import pay_extra_costs
 
         cost_paid_objects.extend(
@@ -4391,6 +4563,7 @@ def _activate_ability(
     # so the cost-paid objects need to be visible to the resolving
     # body via state.resolving_cost_paid_objects.
     if ability.is_mana_ability:
+        pool_before = len(state.player_by_id(player_id).mana_pool)
         state.resolving_source = source
         state.resolving_cost_paid_objects = tuple(cost_paid_objects)
         # Mana abilities with an {X} cost (Wizard's Rockets' "Add X
@@ -4407,6 +4580,14 @@ def _activate_ability(
             state.resolving_x_value = prior_x
         state.log.append(
             f"P{player_id} activates {source.printing.name}'s mana ability"
+        )
+        # Vintage Roto P3: what the mana ability just produced (snow
+        # mana from a snow source, ...).
+        from mtg_bot.effects.generic.roto_mana import after_mana_ability
+
+        after_mana_ability(
+            state, player_id, source, pool_before,
+            tapped=ability.cost.tap_self,
         )
         if ability.cost.tap_self:
             # "Whenever you tap a creature for mana, add an additional
@@ -4812,6 +4993,14 @@ def move_spell_off_stack(
     if card.is_spell_copy:
         state.log.append(f"copy of {card.printing.name} ceases to exist")
         return
+    if any(ce.target_id == card.id for ce in state.continuous_effects):
+        # CR 400.7: the card becomes a new object in its next zone, so
+        # effects on the spell end (a suspended creature spell's haste
+        # when it's countered, Arena of Glory's haste).
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects if ce.target_id != card.id
+        ]
+        state._invalidate_layered_cache()
     from mtg_bot.game import restore_mdfc_front
 
     # A split half / DFC face turns back to the card's front printing
@@ -5012,6 +5201,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
     state.resolving_alt_cost_paid = item.alt_cost_paid
     state.resolving_additional_cost_choice_id = item.additional_cost_choice_id
     state.resolving_modes = item.chosen_modes
+    state.resolving_cost_paid_objects = item.cost_paid_objects
     state.resolving_spell = card
     try:
         if card.printing.is_permanent and not (
@@ -5055,6 +5245,19 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                                 (o for o in state.battlefield
                                  if o.id == target_id
                                  and o.printing.is_artifact),
+                                None,
+                            )
+                        elif enchant_type == "land":
+                            from mtg_bot.effects.generic.roto_mana import (
+                                enchantable_land,
+                            )
+
+                            target_obj = next(
+                                (o for o in state.battlefield
+                                 if o.id == target_id
+                                 and enchantable_land(
+                                     state, card.printing, o,
+                                 )),
                                 None,
                             )
                         else:
@@ -5194,6 +5397,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
         state.resolving_alt_cost_paid = False
         state.resolving_additional_cost_choice_id = None
         state.resolving_modes = ()
+        state.resolving_cost_paid_objects = ()
 
 
 def apply_aura_static_grants_on_attach(
@@ -5487,6 +5691,11 @@ def put_into_battlefield(
             state, obj,
             obj.printing.enters_with_minus_one_counters_from_hand_cast,
         )
+    # Persistent provenance for "if you cast it from your hand" on its
+    # enters trigger (Amped Raptor; Vintage Roto P3).
+    obj.entered_from_hand_cast = (
+        obj.cast_via_hand and obj.entered_from_zone == Zone.STACK.value
+    )
     obj.cast_via_hand = False
     # A "void" graveyard replacement source (Dauthi Voidwalker) applies
     # only to cards put into its opponents' graveyards from now on.
@@ -5575,6 +5784,11 @@ def put_into_battlefield(
             )
         obj.chosen_player_id = pick[1]
         state.log.append(f"{obj.printing.name} enters; chose P{pick[1]}")
+    if obj.printing.enters_choosing_color:
+        # "As this <permanent> enters, choose a color." (Vintage Roto P3).
+        from mtg_bot.effects.generic.roto_mana import choose_color_as_enters
+
+        choose_color_as_enters(state, obj, controller_id)
     # (Kavu observer trigger fires below, after own ETB.)
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's

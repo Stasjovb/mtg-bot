@@ -125,6 +125,7 @@ class FamishedWorldsireETBEffect(Effect):
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
             land.controller_id = controller_id
+            land.entered_battlefield_turn = state.turn_number
             state.battlefield.append(land)
             state.log.append(
                 f"P{controller_id} puts {land.printing.name} onto the "
@@ -841,6 +842,7 @@ class KavaronHarrierAttackEffect(Effect):
         token.tapped = True
         token.attacking = True
         token.summoning_sick = False
+        token.entered_battlefield_turn = state.turn_number
         state.battlefield.append(token)
         state.pending_end_of_combat_sacrifices.append(token.id)
         state.log.append(
@@ -965,6 +967,7 @@ class TerrapactIntimidatorETBEffect(Effect):
                 token = state.new_object(
                     lander_printing, controller_id, Zone.BATTLEFIELD,
                 )
+                token.entered_battlefield_turn = state.turn_number
                 state.battlefield.append(token)
             state.log.append(
                 f"P{opponent.id} elected — P{controller_id} creates "

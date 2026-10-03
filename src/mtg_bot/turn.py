@@ -64,6 +64,13 @@ def next_step(state: GameState, current: Step) -> "Step | None":
     search adapter so both turn loops take the same path."""
     if current == Step.CLEANUP:
         return None
+    # Vintage Roto P3: an additional combat phase after the postcombat
+    # main phase (Grim Reaper's Sprint).
+    from mtg_bot.effects.generic.roto_mana import roto_next_step
+
+    override = roto_next_step(state, current)
+    if override is not None:
+        return override
     if current == Step.END_OF_COMBAT and state.extra_combat_phases > 0:
         state.extra_combat_phases -= 1
         state.log.append("an additional combat phase begins")
@@ -1203,6 +1210,10 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
     from mtg_bot.designations import on_beginning_of_upkeep
 
     on_beginning_of_upkeep(state)
+    # Vintage Roto P3: suspend's "remove a time counter" upkeep trigger.
+    from mtg_bot.effects.generic.roto_mana import push_suspend_upkeep_triggers
+
+    push_suspend_upkeep_triggers(state)
     run_delayed_upkeep_triggers(state)
 
 
@@ -1778,6 +1789,10 @@ def state_based_actions(state: GameState) -> bool:
     from mtg_bot.creature_statics_wg import apply_ascend
 
     apply_ascend(state)
+    # Vintage Roto P3: state triggers (CR 603.8; Dark Depths).
+    from mtg_bot.effects.generic.roto_mana import check_state_triggers
+
+    check_state_triggers(state)
     return any_changed
 
 
@@ -2066,7 +2081,9 @@ def _state_based_actions_pass(state: GameState) -> bool:
             if not target.printing.is_artifact:
                 auras_to_bury.append(obj)
         elif kind == "land":
-            if not target.printing.is_land:
+            from mtg_bot.effects.generic.roto_mana import enchantable_land
+
+            if not enchantable_land(state, obj.printing, target):
                 auras_to_bury.append(obj)
         # Other kinds (e.g., player-enchant) aren't in scope.
         # Protection (CR 702.16c): a permanent with protection from a

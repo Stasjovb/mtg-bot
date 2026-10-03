@@ -278,6 +278,13 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     convention used elsewhere in the parser.
     """
     stripped = line.strip()
+    # Vintage Roto P3 conditions ("Morbid — ... if a creature died this
+    # turn.").
+    from mtg_bot.cards.parser.roto_mana import parse_roto_cost_reduction_line
+
+    roto = parse_roto_cost_reduction_line(stripped)
+    if roto is not None:
+        return roto
     # ``[<Ability word> — ]This spell costs {N} less to cast for each
     # <counted thing>.`` (Leyline Binding's ``Domain —`` reduction). The
     # ability word has no rules meaning (CR 207.2c); the counted thing

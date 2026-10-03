@@ -754,26 +754,31 @@ def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
     return m.group("subtype"), m.group("cost")
 
 
-# ``You may play an additional land on each of your turns.`` — Icetill
-# Explorer's printed static land-drop grant. The engine field
+# ``You may play <N> additional land(s) on each of your turns.`` — the
+# printed static land-drop grant, parameterized over the count: Icetill
+# Explorer / Exploration ("an additional land"), Azusa, Lost but Seeking
+# ("two additional lands"). The engine field
 # ``grants_additional_land_per_turn: int`` is consumed by the turn
 # engine when counting legal land plays; the printing increments the
-# controller's per-turn quota by this value. Matched as a literal
-# string — Icetill Explorer is the only card in the pool with this
-# exact surface today; broader grammar deferred until a second example
-# with a different count (``two additional lands``) exists.
-_ADDITIONAL_LAND_PER_TURN_LINE = (
-    "You may play an additional land on each of your turns."
+# controller's per-turn quota by this value.
+_ADDITIONAL_LANDS_PER_TURN_RE = re.compile(
+    r"^You may play (?P<n>an|two|three|four) additional lands? on each of "
+    r"your turns\.$"
 )
+_ADDITIONAL_LAND_COUNTS = {"an": 1, "two": 2, "three": 3, "four": 4}
+
+
+def parse_additional_lands_per_turn(line: str) -> "int | None":
+    """The extra land plays a ``You may play <N> additional land(s) on
+    each of your turns.`` static grants, or ``None``."""
+    m = _ADDITIONAL_LANDS_PER_TURN_RE.match(line.strip())
+    return None if m is None else _ADDITIONAL_LAND_COUNTS[m.group("n")]
 
 
 def _parse_additional_land_per_turn_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the ``You may play an additional
-    land on each of your turns.`` static, else ``False``. Increments
-    the ``grants_additional_land_per_turn`` kwarg on ``make_creature``
-    by 1.
-    """
-    return line.strip() == _ADDITIONAL_LAND_PER_TURN_LINE
+    """Return ``True`` if ``line`` is an additional-land-plays static
+    (``parse_additional_lands_per_turn`` gives the count)."""
+    return parse_additional_lands_per_turn(line) is not None
 
 
 # ``You may play lands from your graveyard.`` — Icetill Explorer's
@@ -979,31 +984,40 @@ def _parse_look_at_top_card_any_time_line(line: str) -> bool:
     return line.strip() == _LOOK_AT_TOP_CARD_ANY_TIME_LINE
 
 
-# ── Mm'menon "you may cast artifact spells from the top of your library" ─────
+# ── "You may cast <kind> spells [and <kind> spells] from the top of your
+# library." ────────────────────────────────────────────────────────────────
 #
-# ``You may cast artifact spells from the top of your library.`` —
-# Mm'menon, the Right Hand's printed library-top artifact-cast grant.
-# The engine field ``grants_cast_artifact_from_top_of_library: bool`` is
-# consumed by ``legal_actions``: when any permanent the controller controls
-# has this flag, a CastSpell action is offered for the top-of-library card
-# if it is an artifact. Matched as a literal string — Mm'menon is the
-# only card in the pool with this exact surface today; deferred until a
-# second example exists (a future printing might generalize to non-artifact
-# card types, which would need a parameterized form).
-_CAST_ARTIFACT_FROM_TOP_LINE = (
-    "You may cast artifact spells from the top of your library."
+# The library-top cast grant, parameterized over the spell kinds:
+# Mm'menon, the Right Hand ("artifact spells") and Mystic Forge
+# ("artifact spells and colorless spells"). ``parse_cast_from_top_kinds``
+# returns the kinds in printed order. The artifact-only grant keeps its
+# ``grants_cast_artifact_from_top_of_library: bool`` field (consumed by
+# ``legal_actions`` / ``actions._cast_spell``); other kind lists are the
+# Vintage Roto P3 bucket's ``CardPrinting.cast_from_top_of_library_kinds``.
+_CAST_FROM_TOP_RE = re.compile(
+    r"^You may cast (?P<kinds>(?:artifact|colorless) spells(?: and "
+    r"(?:artifact|colorless) spells)?) from the top of your library\.$"
 )
 
 
+def parse_cast_from_top_kinds(line: str) -> "tuple[str, ...] | None":
+    """The spell kinds of a library-top cast grant line, or ``None``."""
+    m = _CAST_FROM_TOP_RE.match(line.strip())
+    if m is None:
+        return None
+    return tuple(re.findall(r"(artifact|colorless) spells", m.group("kinds")))
+
+
 def _parse_cast_artifact_from_top_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the ``You may cast artifact spells
-    from the top of your library.`` clause, else ``False``. Flips the
+    """Return ``True`` if ``line`` is the artifact-only library-top cast
+    grant (``You may cast artifact spells from the top of your
+    library.``), else ``False``. Flips the
     ``grants_cast_artifact_from_top_of_library`` kwarg on
     ``make_creature``; ``legal_actions`` reads the flag to offer
     top-of-library artifact casts when this permanent is on the
     battlefield.
     """
-    return line.strip() == _CAST_ARTIFACT_FROM_TOP_LINE
+    return parse_cast_from_top_kinds(line) == ("artifact",)
 
 
 # ── Mm'menon "artifacts you control have {T}: Add {U}" ───────────────────────

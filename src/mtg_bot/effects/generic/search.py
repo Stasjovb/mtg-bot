@@ -216,6 +216,7 @@ class SearchLibraryForBasicLandTapped(Effect):
             # SEARCH_LIMITATIONS #15 shuffle restoration).
             land.summoning_sick = False
             land.controller_id = controller_id
+            land.entered_battlefield_turn = state.turn_number
             state.battlefield.append(land)
             state.log.append(
                 f"P{controller_id} puts {land.printing.name} onto the "
@@ -306,6 +307,7 @@ class SearchLibraryForLandCardToBattlefield(Effect):
         apply_land_etb_replacements(
             state, controller_id, card, force_tapped=self.tapped,
         )
+        card.entered_battlefield_turn = state.turn_number
         state.battlefield.append(card)
         p.lands_entered_this_turn += 1
         state.log.append(

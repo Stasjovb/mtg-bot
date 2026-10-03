@@ -352,6 +352,7 @@ class OptionalPutLandFromHandOntoBattlefield(Effect):
         card.zone = Zone.BATTLEFIELD
         card.controller_id = controller_id
         card.tapped = bool(card.printing.enters_tapped)
+        card.entered_battlefield_turn = state.turn_number
         state.battlefield.append(card)
         state.log.append(
             f"P{controller_id} puts {card.printing.name} from hand "

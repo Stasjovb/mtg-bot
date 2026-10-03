@@ -332,6 +332,12 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
     from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_cost_piece
 
     atom = parse_rmc_cost_piece(piece)
+    if atom is None:
+        # Vintage Roto P3 cost atoms ("Pay X {E}", "Return this
+        # enchantment to its owner's hand").
+        from mtg_bot.cards.parser.roto_mana import parse_roto_cost_piece
+
+        atom = parse_roto_cost_piece(piece)
     if atom is not None:
         return _CostPiece(kind="extra", atom=atom)
     # Roto P1 cost pieces ("Remove a counter from this creature",
@@ -833,7 +839,10 @@ def _parse_activate_only_if_condition(phrase: str) -> "Condition | None":
     ):
         # Delirium (Shifting Woodland's copy ability).
         return DeliriumActive()
-    return None
+    # Vintage Roto P3 riders ("you control an artifact").
+    from mtg_bot.cards.parser.roto_mana import parse_activate_only_if_condition
+
+    return parse_activate_only_if_condition(phrase)
 
 
 # Inline cost-reduction rider for activated abilities:

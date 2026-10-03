@@ -722,11 +722,16 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_counters_from_x = "x"
             continue
         if _parse_additional_land_per_turn_line(line):
-            # ``You may play an additional land on each of your turns.``
-            # Increments the grant counter; a card with the line twice
-            # (no current EoE printing) would grant two additional land
-            # plays, matching the engine field's int semantics.
-            grants_additional_land_per_turn += 1
+            # ``You may play <N> additional land(s) on each of your
+            # turns.`` Adds N to the grant counter (Azusa: two), matching
+            # the engine field's int semantics.
+            from mtg_bot.cards.parser.printing_keywords import (
+                parse_additional_lands_per_turn,
+            )
+
+            grants_additional_land_per_turn += parse_additional_lands_per_turn(
+                line,
+            )
             continue
         if _parse_play_lands_from_graveyard_line(line):
             # ``You may play lands from your graveyard.`` — Icetill
@@ -917,15 +922,22 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                     merge_fields, parse_roto_stack_line,
                 )
 
-                wg = parse_roto_stack_line(line, card)
-                if wg is None:
-                    return None
-                merge_fields(wg_fields, wg.fields)
-                keywords.update(wg.keywords)
-                triggers.extend(wg.triggers)
-                activated.extend(wg.activated)
-                statics.extend(wg.statics)
-                continue
+                roto = parse_roto_stack_line(line, card)
+                if roto is not None:
+                    merge_fields(wg_fields, roto.fields)
+                    keywords.update(roto.keywords)
+                    triggers.extend(roto.triggers)
+                    activated.extend(roto.activated)
+                    statics.extend(roto.statics)
+                    continue
+                # Vintage Roto P3 (mana triggers, ...).
+                from mtg_bot.cards.parser.roto_mana import (
+                    parse_roto_creature_line,
+                )
+
+                wg = parse_roto_creature_line(line, card)
+            if wg is None:
+                return None
             wg_fields.update(wg.fields)
             keywords.update(wg.keywords)
             triggers.extend(wg.triggers)

@@ -218,9 +218,10 @@ def test_build_card_record_is_the_source_claim_path():
 
 
 def test_unrepresentable_mana_cost_declines_instead_of_crashing():
-    """Snow mana ``{S}`` isn't modeled: the card is unclaimed (and shows
-    up in the coverage report) rather than crashing pool construction or
-    claiming with a bogus cost."""
+    """A mana symbol the engine doesn't model leaves the card unclaimed
+    (and in the coverage report) rather than crashing pool construction
+    or claiming with a bogus cost. (Snow ``{S}``, the original example,
+    is modeled since the Vintage Roto P3 snow support.)"""
     from mtg_bot.cards.parser.source import (
         _printed_mana_costs_supported,
         build_card_record,
@@ -228,11 +229,12 @@ def test_unrepresentable_mana_cost_declines_instead_of_crashing():
 
     astrolabe = next(c for c in pools.load_pool_cards("roto")
                      if c["name"] == "Arcum's Astrolabe")
-    assert "{S}" in astrolabe["mana_cost"]
-    assert not _printed_mana_costs_supported(astrolabe)
-    assert build_card_record(astrolabe) is None
+    unmodeled = dict(astrolabe, mana_cost="{Q}")
+    assert not _printed_mana_costs_supported(unmodeled)
+    assert build_card_record(unmodeled) is None
+    assert _printed_mana_costs_supported(astrolabe)
     assert not _printed_mana_costs_supported({
-        "mana_cost": "", "card_faces": [{"mana_cost": "{1}"}, {"mana_cost": "{S}"}],
+        "mana_cost": "", "card_faces": [{"mana_cost": "{1}"}, {"mana_cost": "{Q}"}],
     })
     assert _printed_mana_costs_supported({
         "mana_cost": "{1}{G} // {2}{U}",
@@ -240,7 +242,7 @@ def test_unrepresentable_mana_cost_declines_instead_of_crashing():
     })
     roto = OracleParserCardSource(pool="roto")
     assert roto.pool_name == "roto"
-    assert "Arcum's Astrolabe" not in roto.claimed_names
+    assert "Arcum's Astrolabe" in roto.claimed_names
     assert "Black Lotus" in roto.claimed_names
 
 
@@ -249,5 +251,11 @@ def test_roto_helpers_build_through_the_claim_path():
 
     assert roto_card("Smokestack")["name"] == "Smokestack"
     assert printing("Black Lotus").name == "Black Lotus"
+    from mtg_bot.cards.parser.source import build_card_record
+
+    unclaimed = next(
+        c["name"] for c in pools.load_pool_cards("roto")
+        if build_card_record(c) is None
+    )
     with pytest.raises(AssertionError, match="should be claimed"):
-        printing("Arcum's Astrolabe")
+        printing(unclaimed)

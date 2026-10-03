@@ -169,6 +169,10 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
         kinds.add("legendary_spell")
     if card.zone != Zone.HAND:
         kinds.add("cast_from_outside_hand")
+    # Vintage Roto P3 tags (Cavern of Souls' creature-type mana).
+    from mtg_bot.effects.generic.roto_mana import roto_spell_kinds
+
+    kinds |= roto_spell_kinds(card)
     return frozenset(kinds)
 
 
@@ -228,7 +232,12 @@ def _can_cast(
     Treasure-style sacrifice during cost payment. ``spell_cost`` (default)
     marks ``cost`` as a spell's total cost, so a Trinisphere floor
     (``roto_restrictions``) applies; the plot special action passes False.
+
+    A card printed with no mana cost (Lotus Bloom) can't be cast by
+    paying a cost (CR 202.1b / 601.2f); its free casts don't come here.
     """
+    if card.printing.has_no_mana_cost:
+        return False
     if spell_cost:
         from mtg_bot.roto_restrictions import apply_minimum_spell_cost
 
@@ -569,8 +578,11 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         if cond is not None and cond.matches(state, player_id):
             return True
         # Printed alternative costs (Force of Will, Daze, Snuff Out,
-        # Baleful Mastery, Overload, ...) share this action variant.
-        if card.printing.alternative_costs:
+        # Baleful Mastery, Overload, ...) and granted ones (Dream Halls)
+        # share this action variant.
+        from mtg_bot.cards.spell_costs import alternative_costs_for
+
+        if alternative_costs_for(state, player_id, card):
             from mtg_bot.cards.spell_costs import payable_alternative_costs
 
             if payable_alternative_costs(state, player_id, card):
@@ -914,6 +926,15 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         ) and _additional_costs_payable(state, player_id, card):
             seen_bestow.add(pr.name)
             actions.append(CastSpell(card.id, use_bestow=True))
+
+    # Vintage Roto P3 cast permissions (Mystic Forge, Omniscience, ...),
+    # suspend and exile-zone activations: offered here, before the
+    # instant-speed return, so every restriction filter below sees them.
+    from mtg_bot.effects.generic.roto_mana import roto_legal_actions
+
+    actions.extend(roto_legal_actions(
+        state, player_id, actions, sorcery_timing=sorcery_timing,
+    ))
 
     if not sorcery_timing:
         # Instant-speed loyalty activations (The Wandering Emperor the
@@ -1427,7 +1448,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
                 # tags this source qualifies for so coins with any of
                 # those restrictions are usable. Mirrors
                 # actions._activate_ability.
-                ability_kinds: set[str] = {"spell"}
+                ability_kinds: set[str] = {"spell", "activated_ability"}
                 if (
                     "Eldrazi" in obj.printing.subtypes
                     and not obj.printing.mana_cost.colored

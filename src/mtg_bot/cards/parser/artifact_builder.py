@@ -296,6 +296,10 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     # rejecting any printing they would also accept.
     if "Creature" in card_types:
         return None
+    # An artifact land is a land (playable as a land drop); the land
+    # builders own it -- never claim it as a plain artifact.
+    if "Land" in card_types:
+        return None
     if "Equipment" in subtypes:
         return None
     if "Spacecraft" in subtypes:
@@ -323,7 +327,15 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     sunburst: bool = False
     look_at_top: bool = False
     play_from_top_paying_life: bool = False
-    roto_fields: dict = {}
+    # Vintage Roto P3 lines (modal "When ~ enters, choose one —" blocks,
+    # library-top cast grants, ...) are lifted out first.
+    from mtg_bot.cards.parser.roto_mana import extract_roto_artifact_lines
+
+    extracted = extract_roto_artifact_lines(text, card["name"])
+    if extracted is None:
+        return None
+    text, roto_triggers, roto_fields = extracted
+    triggers.extend(roto_triggers)
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)

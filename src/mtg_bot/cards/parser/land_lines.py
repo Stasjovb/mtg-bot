@@ -228,6 +228,20 @@ def _multi_mana_kind(effect) -> str | None:
     return color
 
 
+def _mixed_mana_colors(effect) -> frozenset[str]:
+    """The colors of an unrestricted ``Add {X}{Y}...`` minting two or more
+    distinct colors (``{T}: Add {G}{U}.``), else an empty set."""
+    if not isinstance(effect, AddManaToPool) or (
+        effect.spend_restriction is not None
+        or effect.grants_haste_to_creature_spell
+    ):
+        return frozenset()
+    colors = frozenset(c for c, n in effect.produces if n > 0)
+    if len(colors) < 2 or "any" in colors:
+        return frozenset()
+    return colors
+
+
 _TAP_ONLY = ActivationCost(tap_self=True)
 _WUBRG = frozenset("WUBRG")
 # "{T}: Add {C}. If <this land> has a <kind> counter on it, instead add
@@ -264,9 +278,20 @@ def _try_build_line_composed_land(
     """Compose a land printing from per-line recognizers; ``None`` if
     the card isn't a plain (optionally Legendary) Land or any line is
     unrecognized."""
-    if tuple(card_types) != ("Land",):
+    from mtg_bot.cards.parser.roto_mana import (
+        extra_land_card_types,
+        extra_land_supertypes,
+        merge_roto_fields,
+        parse_roto_land_line,
+    )
+
+    # Artifact lands and Snow (Vintage Roto P3: Seat of the Synod, Dark
+    # Depths) ride the printing's card types / supertypes.
+    if tuple(card_types) != ("Land",) and (
+        tuple(card_types) not in extra_land_card_types()
+    ):
         return None
-    if set(supertypes) - {"Legendary"}:
+    if set(supertypes) - {"Legendary"} - extra_land_supertypes():
         return None
     raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     if not raw_lines:
@@ -286,6 +311,7 @@ def _try_build_line_composed_land(
     opening_hand_action = None
     gated: tuple[str, str] | None = None  # (counter kind, base color)
     self_refs = ("this land", card["name"])
+    roto_mana_fields: dict = {}  # Vintage Roto P3 lines (``roto_mana``)
     for raw in raw_lines:
         m = _INTRINSIC_MANA_REMINDER_RE.match(raw)
         if m is not None:
@@ -374,6 +400,12 @@ def _try_build_line_composed_land(
             # Hideaway N (Shelldock Isle; cube glue bucket).
             triggered.append(keyword_trigger)
             continue
+        roto = parse_roto_land_line(line, card["name"])
+        if roto is not None:
+            # Vintage Roto P3 lines (Cavern of Souls, Dark Depths).
+            merge_roto_fields(roto_mana_fields, roto.fields)
+            activated.extend(roto.activated)
+            continue
         m = _ABILITY_WORD_PREFIX_RE.match(line)
         if m is not None:
             line = m.group("rest")
@@ -407,6 +439,11 @@ def _try_build_line_composed_land(
             kind = _multi_mana_kind(ability.effect)
             if kind is not None and ability.cost == _TAP_ONLY:
                 free_colors.add(kind)
+            elif ability.cost == _TAP_ONLY:
+                # ``{T}: Add {G}{U}.`` (the karoos; Vintage Roto P3):
+                # like ``{C}{C}``, automatic payment may tap it for one of
+                # its colors; the explicit ability yields both.
+                free_colors |= _mixed_mana_colors(ability.effect)
         activated.append(ability)
     if chooses_type != is_chosen_type:
         return None
@@ -432,7 +469,7 @@ def _try_build_line_composed_land(
             # life-costed ability stays explicit so automatic payment
             # never charges life for the free mana.
             activated.extend(ability for _, _, ability in life_mana)
-    return make_utility_land(
+    printing = make_utility_land(
         card["name"],
         produces=frozenset(produces),
         subtypes_str=" ".join(subtypes),
@@ -451,3 +488,12 @@ def _try_build_line_composed_land(
         produces_with_counter=produces_with_counter,
         opening_hand_action=opening_hand_action,
     )
+    if "Snow" in supertypes or tuple(card_types) != ("Land",):
+        roto_mana_fields["supertypes"] = tuple(supertypes)
+        roto_mana_fields["card_types"] = tuple(card_types)
+        roto_mana_fields["type_line"] = card["type_line"]
+    if roto_mana_fields:
+        from dataclasses import replace
+
+        printing = replace(printing, **roto_mana_fields)
+    return printing
