@@ -249,6 +249,11 @@ _RETURN_GRAVEYARD_CREATURE_MV_X_LINE = (
     "return target creature card with mana value X from your graveyard to "
     "the battlefield"
 )
+# "untap each <permanent> you control" -- the base grammar reads the plural
+# "untap all <permanents> you control" (Grim Reaper's Sprint).
+_UNTAP_EACH_YOU_CONTROL_RE = re.compile(
+    r"^untap each (?P<np>creature|artifact|land|permanent) you control$"
+)
 # "<effect naming this creature> and it <verb phrase>" -- the pronoun is
 # the source (Vivi Ornitier: "put a +1/+1 counter on this creature and it
 # deals 1 damage to each opponent").
@@ -384,6 +389,11 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
         )
     if phrase == _RETURN_GRAVEYARD_CREATURE_MV_X_LINE:
         return rm.ReturnTargetGraveyardCreatureWithMVX()
+    m = _UNTAP_EACH_YOU_CONTROL_RE.match(phrase)
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _parse_effect
+
+        return _parse_effect(f"untap all {m.group('np')}s you control")
     m = _EFFECT_ON_SELF_AND_IT_RE.match(phrase)
     if m is not None:
         from mtg_bot.cards.base import Sequence
@@ -498,6 +508,10 @@ class RotoLine:
     fields: dict = field(default_factory=dict)
     activated: tuple = ()
     triggered: tuple = ()
+    # Aura lines: "Enchanted creature gets +P/+T and has <keywords>."
+    # -> (P, T, keywords); "Enchant creature" -> "creature".
+    aura_bonus: "tuple | None" = None
+    enchant_type: "str | None" = None
 
 
 
@@ -553,10 +567,64 @@ def _each_main_phase_triggers(effect):
     )
 
 
+# "Enchanted creature gets +P/+T and has <keyword>[, <keyword>...]."
+_ENCHANTED_GETS_AND_HAS_RE = re.compile(
+    r"^Enchanted creature gets (?P<p>[+-]\d+)/(?P<t>[+-]\d+) and has "
+    r"(?P<kws>[a-z ]+(?:, [a-z ]+)*(?:,? and [a-z ]+)?)\.$"
+)
+_GRANTABLE_KEYWORDS = frozenset({
+    "flying", "first strike", "double strike", "deathtouch", "haste",
+    "hexproof", "indestructible", "lifelink", "menace", "reach", "trample",
+    "vigilance",
+})
+# "When this Aura enters, <effect>. If it's your main phase, there is an
+# additional combat phase after this phase." (Grim Reaper's Sprint).
+_ETB_THEN_EXTRA_COMBAT_IF_MAIN_RE = re.compile(
+    r"^When this Aura enters, (?P<first>.+?)\. If it's your main phase, "
+    r"there is an additional combat phase after this phase\.$"
+)
+
+
+def _aura_line(line: str) -> RotoLine | None:
+    if line == "Enchant creature":
+        return RotoLine(enchant_type="creature")
+    m = _ENCHANTED_GETS_AND_HAS_RE.match(line)
+    if m is not None:
+        kws = frozenset(
+            k.strip() for k in re.split(r",? and |, ", m.group("kws"))
+        )
+        if not kws <= _GRANTABLE_KEYWORDS:
+            return None
+        return RotoLine(
+            aura_bonus=(int(m.group("p")), int(m.group("t")), kws),
+        )
+    m = _ETB_THEN_EXTRA_COMBAT_IF_MAIN_RE.match(line)
+    if m is not None:
+        from mtg_bot.cards.base import Sequence
+        from mtg_bot.cards.parser.effects import _parse_effect
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic import roto_mana as rm
+        from mtg_bot.effects.predicates import Event, IsSelf
+
+        first = _parse_effect(m.group("first"))
+        if first is None:
+            return None
+        return RotoLine(triggered=(TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=Sequence(effects=(
+                first, rm.AdditionalCombatAfterThisMainPhase(),
+            )),
+        ),))
+    return None
+
+
 def parse_roto_enchantment_line(line: str) -> RotoLine | None:
     """An enchantment line of this bucket, or ``None``."""
     if _disabled():
         return None
+    aura = _aura_line(line)
+    if aura is not None:
+        return aura
     m = _EACH_MAIN_PHASE_MANA_PER_OPPONENT_SUBTYPE_RE.match(line)
     if m is not None:
         from mtg_bot.effects.generic import roto_mana as rm
@@ -670,6 +738,30 @@ _RETURN_SELF_TO_HAND_PIECE = re.compile(
     r"^Return this (?:enchantment|artifact|creature|permanent) to its "
     r"owner's hand$"
 )
+
+
+# "[<Ability word> — ]This spell costs {N} less to cast if <condition>."
+# for this bucket's conditions (Morbid: "a creature died this turn").
+_ROTO_COST_REDUCTION_RE = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?This spell costs \{(?P<n>\d+)\} less to cast if "
+    r"(?P<cond>.+)\.$"
+)
+
+
+def parse_roto_cost_reduction_line(line: str):
+    """A ``CostReduction`` for this bucket's conditions (the first check
+    of ``cost_reduction._parse_cost_reduction_line``), or ``None``."""
+    if _disabled():
+        return None
+    m = _ROTO_COST_REDUCTION_RE.match(line)
+    if m is None or m.group("cond") != "a creature died this turn":
+        return None
+    from mtg_bot.cards.base import CostReduction
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    return CostReduction(
+        amount=int(m.group("n")), condition=rm.CreatureDiedThisTurn(),
+    )
 
 
 def parse_roto_cost_piece(piece: str):

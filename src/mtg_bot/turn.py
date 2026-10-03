@@ -64,6 +64,13 @@ def next_step(state: GameState, current: Step) -> "Step | None":
     search adapter so both turn loops take the same path."""
     if current == Step.CLEANUP:
         return None
+    # Vintage Roto P3: an additional combat phase after the postcombat
+    # main phase (Grim Reaper's Sprint).
+    from mtg_bot.effects.generic.roto_mana import roto_next_step
+
+    override = roto_next_step(state, current)
+    if override is not None:
+        return override
     if current == Step.END_OF_COMBAT and state.extra_combat_phases > 0:
         state.extra_combat_phases -= 1
         state.log.append("an additional combat phase begins")

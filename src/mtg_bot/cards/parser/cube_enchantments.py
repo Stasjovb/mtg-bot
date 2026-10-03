@@ -70,6 +70,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Dream Halls",
     "Exploration",
     "Fastbond",
+    "Grim Reaper's Sprint",
     "Goblin Bombardment",
     "Leyline Binding",
     "Necromancy",
@@ -104,6 +105,7 @@ class _Accumulator:
     enchant_type: str | None = None
     power_bonus: int = 0
     toughness_bonus: int = 0
+    granted_keywords: set[str] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +263,13 @@ def _roto_mana_lines(line: str, acc: _Accumulator) -> bool:
     acc.printing_fields.update(parsed.fields)
     acc.triggers.extend(parsed.triggered)
     acc.activated.extend(parsed.activated)
+    if parsed.aura_bonus is not None:
+        power, toughness, keywords = parsed.aura_bonus
+        acc.power_bonus += power
+        acc.toughness_bonus += toughness
+        acc.granted_keywords.update(keywords)
+    if parsed.enchant_type is not None:
+        acc.enchant_type = parsed.enchant_type
     return True
 
 
@@ -354,6 +363,7 @@ def _assemble(card, supertypes, subtypes, acc: _Accumulator) -> CardPrinting:
             cost=cost,
             power_bonus=acc.power_bonus,
             toughness_bonus=acc.toughness_bonus,
+            granted_keywords=frozenset(acc.granted_keywords),
             keywords=frozenset(acc.keywords),
             triggered_abilities=tuple(acc.triggers),
             aura_enchant_type=acc.enchant_type or "creature",

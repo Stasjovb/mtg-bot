@@ -736,6 +736,107 @@ class ReturnTargetGraveyardCreatureWithMVX(Effect):
 
 
 # ---------------------------------------------------------------------------
+# Turn structure: an additional combat after a main phase
+# ---------------------------------------------------------------------------
+
+# Registry kinds (layer 0, cleanup-expiring -- cloned and hashed with the
+# rest of ``state.continuous_effects``): a pending combat after the
+# postcombat main phase, and "no main phase follows this combat".
+EXTRA_COMBAT_AFTER_MAIN2_KIND = "roto_extra_combat_after_postcombat_main"
+NO_MAIN_AFTER_COMBAT_KIND = "roto_no_main_after_this_combat"
+
+
+@dataclass(frozen=True)
+class AdditionalCombatAfterThisMainPhase(Effect):
+    """"If it's your main phase, there is an additional combat phase after
+    this phase." (Grim Reaper's Sprint). In the precombat main phase the
+    engine's pending extra combat (``extra_combat_phases``) follows the
+    turn's regular combat, so the turn still has two combats before the
+    postcombat main phase. In the postcombat main phase a combat phase is
+    scheduled right after it, followed by the end step (no extra main
+    phase is printed). Outside your main phases nothing happens."""
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import Step
+
+        if state.active_player().id != controller_id:
+            return
+        if state.step == Step.PRECOMBAT_MAIN:
+            state.extra_combat_phases += 1
+        elif state.step == Step.POSTCOMBAT_MAIN:
+            src = state.resolving_spell or state.resolving_source
+            state.add_continuous_effect(
+                source_id=src.id if src is not None else -1, layer=0,
+                kind=EXTRA_COMBAT_AFTER_MAIN2_KIND, expires_at="cleanup",
+                description="an additional combat after this main phase",
+            )
+        else:
+            return
+        state.log.append("an additional combat phase will follow this phase")
+
+    def describe(self) -> str:
+        return (
+            "if it's your main phase, there is an additional combat phase "
+            "after this phase"
+        )
+
+
+def roto_next_step(state: "GameState", current) -> object:
+    """``turn.next_step``'s override for this bucket's turn structure,
+    or ``None``: the postcombat main phase goes to an additional combat
+    phase, and that combat ends in the end step."""
+    from mtg_bot.turn import Step
+
+    if not state.continuous_effects:
+        return None
+    if current == Step.POSTCOMBAT_MAIN:
+        pending = next(
+            (ce for ce in state.continuous_effects
+             if ce.kind == EXTRA_COMBAT_AFTER_MAIN2_KIND), None,
+        )
+        if pending is None:
+            return None
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects if ce is not pending
+        ]
+        state.add_continuous_effect(
+            source_id=pending.source_id, layer=0,
+            kind=NO_MAIN_AFTER_COMBAT_KIND, expires_at="cleanup",
+            description="this combat is followed by the end step",
+        )
+        state.log.append("an additional combat phase begins")
+        return Step.BEGINNING_OF_COMBAT
+    if current == Step.END_OF_COMBAT and state.extra_combat_phases == 0:
+        marker = next(
+            (ce for ce in state.continuous_effects
+             if ce.kind == NO_MAIN_AFTER_COMBAT_KIND), None,
+        )
+        if marker is None:
+            return None
+        state.continuous_effects = [
+            ce for ce in state.continuous_effects if ce is not marker
+        ]
+        state._invalidate_layered_cache()
+        return Step.END
+    return None
+
+
+from mtg_bot.effects.conditions import Condition  # noqa: E402
+
+
+@dataclass(frozen=True)
+class CreatureDiedThisTurn(Condition):
+    """Cost-reduction condition: a creature died this turn (Morbid;
+    ``GameState.creatures_died_this_turn``)."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        return state.creatures_died_this_turn > 0
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -1801,6 +1902,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "AdditionalCombatAfterThisMainPhase",
+    "CreatureDiedThisTurn",
+    "roto_next_step",
     "PayXEnergyCost",
     "ReturnSourceToHandCost",
     "ReturnTargetGraveyardCreatureWithMVX",
