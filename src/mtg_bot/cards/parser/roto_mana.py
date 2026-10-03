@@ -201,6 +201,15 @@ _LOOK_TOP_MAY_PUT_ONTO_BATTLEFIELD_RE = re.compile(
     r"them onto the battlefield\. Put the rest on the bottom of your "
     r"library in a random order$"
 )
+# "put a <kind> counter on it. Then for each <kind> counter on it, each
+# opponent loses N life unless that player sacrifices a nonland permanent
+# of their choice or discards a card" (Rottenmouth Viper).
+_COUNTER_THEN_PUNISH_PER_COUNTER_RE = re.compile(
+    r"^put an? (?P<kind>[a-z]+) counter on (?:it|this creature)\. Then for "
+    r"each (?P=kind) counter on it, each opponent loses (?P<life>\d+) life "
+    r"unless that player sacrifices a nonland permanent of their choice or "
+    r"discards a card$"
+)
 # "sacrifice it unless you sacrifice any number of creatures with total
 # power N or greater" (Phyrexian Dreadnought).
 _SAC_UNLESS_TOTAL_POWER_RE = re.compile(
@@ -398,6 +407,11 @@ def parse_roto_mana_effect(phrase: str) -> Effect | None:
 
         damage = _parse_effect("deals 1 damage to any target")
         return rm.ConvergeDrawDamageGainLife(damage=damage)
+    m = _COUNTER_THEN_PUNISH_PER_COUNTER_RE.match(phrase)
+    if m is not None:
+        return rm.CounterOnSourceThenPunishPerCounter(
+            kind=m.group("kind"), life=int(m.group("life")),
+        )
     m = _SAC_UNLESS_TOTAL_POWER_RE.match(phrase)
     if m is not None:
         return rm.SacrificeSourceUnlessSacrificeTotalPower(
@@ -759,6 +773,35 @@ _ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE = re.compile(
 )
 
 
+# "As an additional cost to cast this spell, you may sacrifice any number
+# of <permanents>. This spell costs {N} less to cast for each permanent
+# sacrificed this way." (Rottenmouth Viper).
+_OPTIONAL_SACRIFICE_ANY_NUMBER_RE = re.compile(
+    r"^As an additional cost to cast this spell, you may sacrifice any "
+    r"number of (?P<np>.+?)\. This spell costs \{(?P<n>\d+)\} less to cast "
+    r"for each permanent sacrificed this way\.$"
+)
+
+
+def _optional_sacrifice_any_number(m):
+    from mtg_bot.cards.base import CostReduction
+    from mtg_bot.cards.parser.creature_wg_lines import WGLine
+    from mtg_bot.cards.parser.target_phrases import parse_permanent_phrase
+    from mtg_bot.effects.generic import roto_mana as rm
+
+    pred = parse_permanent_phrase(m.group("np"), plural=True)
+    if pred is None:
+        return None
+    reduction = CostReduction(
+        amount=int(m.group("n")),
+        condition=rm.PerPermanentSacrificedForCost(permanent_filter=pred),
+    )
+    return WGLine(fields={
+        "optional_sacrifice_any_number": pred,
+        "cost_reductions": (reduction,),
+    })
+
+
 # "When this creature enters, if {C}{C} was spent to cast it, <effect>."
 # (Wistfulness).
 _ETB_IF_MANA_SPENT_RE = re.compile(
@@ -893,6 +936,9 @@ def parse_roto_creature_line(line: str, card: dict):
     m = _ETB_IF_MANA_SPENT_RE.match(line)
     if m is not None:
         return _etb_if_mana_spent(m)
+    m = _OPTIONAL_SACRIFICE_ANY_NUMBER_RE.match(line)
+    if m is not None:
+        return _optional_sacrifice_any_number(m)
     m = _ACTIVATE_DURING_YOUR_TURN_ONCE_EACH_TURN_RE.match(line)
     if m is not None:
         ability = _once_each_turn_ability(m.group("body"), card["name"])

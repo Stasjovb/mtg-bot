@@ -1604,6 +1604,11 @@ class CardPrinting:
     # "As an additional cost to cast this spell, discard X cards."
     # (Firestorm): X is announced before targets and becomes the spell's X.
     additional_cost_discard_x: bool = False
+    # "As an additional cost to cast this spell, you may sacrifice any
+    # number of <permanents>." (Rottenmouth Viper): the ObjectPredicate
+    # over sacrificeable permanents; the matching "costs {1} less for each
+    # permanent sacrificed this way" is a ``cost_reductions`` entry.
+    optional_sacrifice_any_number: "object | None" = None
     # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
     # entries checked with the state-based actions ("When Dark Depths has
     # no ice counters on it, ...").

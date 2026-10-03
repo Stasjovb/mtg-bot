@@ -2686,9 +2686,14 @@ def _cast_spell(
     # special-case this.
     from mtg_bot.creature_casting_ub import casting_origin as _casting_origin
 
+    # Vintage Roto P3: "you may sacrifice any number of <permanents>. This
+    # spell costs {1} less for each" (Rottenmouth Viper) -- the sacrifices
+    # happen as the total cost is determined.
+    from mtg_bot.effects.generic.roto_mana import optional_sacrifice_for_cost
+
     with _casting_origin(
         cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
-    ):
+    ), optional_sacrifice_for_cost(state, player_id, card, cost, targets):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
         )

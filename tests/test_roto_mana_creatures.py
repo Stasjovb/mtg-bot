@@ -111,3 +111,189 @@ def test_once_each_turn_cost_atom():
     atom.pay(s, 0, vivi)
     assert vivi.once_each_turn_used == ((s.turn_number, "k"),)
     assert "once each turn" in atom.describe()
+
+
+# ---------------------------------------------------------------------------
+# Rottenmouth Viper
+# ---------------------------------------------------------------------------
+
+
+def _swamps(s, n):
+    from mtg_bot.cards.base import make_basic_land
+
+    land = make_basic_land("Swamp", "B")
+    return [put(s, land, 0) for _ in range(n)]
+
+
+def _modes(agent_, picks):
+    """Script ``choose_mode`` to answer by mode-label prefix."""
+    queue = list(picks)
+
+    def choose_mode(state, player_id, modes):
+        want = queue.pop(0)
+        return next(i for i, m in enumerate(modes) if m.startswith(want))
+
+    agent_.choose_mode = choose_mode
+
+
+def _cast_viper(s):
+    from mtg_bot.actions import CastSpell, apply_action
+    from tests._roto_helpers import to_hand
+
+    viper = to_hand(s, printing("Rottenmouth Viper"), 0)
+    apply_action(s, 0, CastSpell(viper.id))
+    drain_stack(s)
+    return viper
+
+
+def test_viper_full_price_without_sacrifices_and_enters_trigger():
+    from mtg_bot.game import counter_count
+    from tests._roto_helpers import agent
+
+    s = arena()
+    _swamps(s, 6)
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 0)
+    agent(s, 0).x_value = 0
+    _modes(agent(s, 1), ["lose"])
+    viper = _cast_viper(s)
+    assert viper in s.battlefield and bear in s.battlefield
+    assert all(o.tapped for o in s.battlefield if o.printing.is_land)
+    assert counter_count(viper, "blight") == 1
+    assert s.players[1].life == 16
+
+
+def test_viper_sacrifices_reduce_cost_one_each():
+    from mtg_bot.legal import legal_actions
+    from mtg_bot.actions import CastSpell
+    from tests._roto_helpers import agent, to_hand
+
+    s = arena()
+    lands = _swamps(s, 4)
+    bears = [put(s, make_creature("Bear", "{1}{G}", 2, 2), 0) for _ in range(2)]
+    probe = to_hand(s, printing("Rottenmouth Viper"), 0)
+    # {5}{B} with four lands is castable only by sacrificing both Bears
+    # (lands are not "nonland permanents").
+    assert CastSpell(probe.id) in legal_actions(s, 0)
+    s.players[0].hand.remove(probe)
+    agent(s, 0).x_value = 0  # wants none; the cost forces the minimum
+    _modes(agent(s, 1), ["lose"])
+    viper = _cast_viper(s)
+    assert viper in s.battlefield
+    assert all(b not in s.battlefield for b in bears)
+    assert all(l in s.battlefield and l.tapped for l in lands)
+    assert any("sacrifices Bear" in line for line in s.log)
+
+
+def test_viper_unaffordable_without_enough_nonland_permanents():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.legal import legal_actions
+    from tests._roto_helpers import to_hand
+
+    s = arena()
+    _swamps(s, 4)
+    put(s, make_creature("Bear", "{1}{G}", 2, 2), 0)
+    viper = to_hand(s, printing("Rottenmouth Viper"), 0)
+    assert CastSpell(viper.id) not in legal_actions(s, 0)
+
+
+def test_viper_may_sacrifice_more_than_needed():
+    from tests._roto_helpers import agent
+
+    s = arena()
+    _swamps(s, 6)
+    bears = [put(s, make_creature("Bear", "{1}{G}", 2, 2), 0) for _ in range(2)]
+    agent(s, 0).x_value = 2
+    _modes(agent(s, 1), ["lose"])
+    viper = _cast_viper(s)
+    assert viper in s.battlefield
+    assert all(b not in s.battlefield for b in bears)
+    # {5}{B} - 2 = four lands tapped, two left untapped.
+    assert sum(o.tapped for o in s.battlefield if o.printing.is_land) == 4
+
+
+def test_viper_attack_punishes_per_counter_opponent_choice():
+    from mtg_bot.actions import DeclareAttackers, apply_action
+    from mtg_bot.game import add_counters, counter_count
+    from mtg_bot.turn import Step
+    from tests._roto_helpers import agent, to_hand
+
+    s = arena()
+    viper = put(s, printing("Rottenmouth Viper"), 0)
+    add_counters(s, viper, "blight", 1)
+    rock = put(s, make_creature("Rock", "{1}", 1, 1), 1)
+    other = put(s, make_creature("Elk", "{2}", 2, 2), 1)
+    card = to_hand(s, make_creature("Elf", "{G}", 1, 1), 1)
+    agent(s, 1).sacrifices = [rock.id]
+    _modes(agent(s, 1), ["sacrifice", "discard"])
+    s.step = Step.DECLARE_ATTACKERS
+    apply_action(s, 0, DeclareAttackers(attacker_ids=frozenset({viper.id})))
+    drain_stack(s)
+    assert counter_count(viper, "blight") == 2
+    assert rock not in s.battlefield and other in s.battlefield
+    assert card in s.players[1].graveyard
+    assert s.players[1].life == 20
+
+
+def test_viper_punishment_offers_only_possible_options():
+    s = arena()
+    viper = put(s, printing("Rottenmouth Viper"), 0)
+    seen = []
+
+    def choose_mode(state, player_id, modes):
+        seen.append(tuple(modes))
+        return 0
+
+    s.players[1].agent.choose_mode = choose_mode
+    s.resolving_source = viper
+    rm.CounterOnSourceThenPunishPerCounter(kind="blight", life=4).resolve(s, 0)
+    # Opponent has no nonland permanent and no hand: only the life loss.
+    assert seen == [("lose 4 life",)]
+    assert s.players[1].life == 16
+    assert "blight" in rm.CounterOnSourceThenPunishPerCounter().describe()
+
+
+def _treasure():
+    from mtg_bot.cards.base import (
+        ActivatedAbility, ActivationCost, CardPrinting, ManaCost,
+    )
+    from mtg_bot.effects.generic import AddManaToPool
+
+    return CardPrinting(
+        name="Treasure (test)", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Token Artifact — Treasure", supertypes=("Token",),
+        card_types=("Artifact",), subtypes=("Treasure",),
+        activated_abilities=(ActivatedAbility(
+            cost=ActivationCost(sacrifice_self=True),
+            effect=AddManaToPool(produces=(("any", 1),)),
+            is_mana_ability=True,
+        ),),
+    )
+
+
+def test_viper_treasure_pays_mana_or_cost_never_both():
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.legal import legal_actions
+    from tests._roto_helpers import agent, to_hand
+
+    # Two Swamps + two Treasures: four mana, or two less for sacrificing
+    # them -- never both, so {5}{B} is out of reach.
+    s = arena()
+    _swamps(s, 2)
+    for _ in range(2):
+        put(s, _treasure(), 0)
+    viper = to_hand(s, printing("Rottenmouth Viper"), 0)
+    assert CastSpell(viper.id) not in legal_actions(s, 0)
+
+    # Three Swamps + two Treasures + a Bear: sacrifice the Bear for
+    # {4}{B}, the Treasures pay their mana.
+    s = arena()
+    _swamps(s, 3)
+    treasures = [put(s, _treasure(), 0) for _ in range(2)]
+    bear = put(s, make_creature("Bear", "{1}{G}", 2, 2), 0)
+    agent(s, 0).x_value = 0
+    agent(s, 0).sacrifices = [treasures[0].id]  # refused: payment needs it
+    _modes(agent(s, 1), ["lose"])
+    viper = _cast_viper(s)
+    assert viper in s.battlefield and bear not in s.battlefield
+    assert all(t not in s.battlefield for t in treasures)
+    assert s.players[0].mana_pool == []

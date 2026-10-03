@@ -1137,6 +1137,221 @@ def pay_discard_x(state: "GameState", player_id: int, card, x: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Rottenmouth Viper: sacrifice any number for a cost reduction; blight
+# ---------------------------------------------------------------------------
+
+import contextlib  # noqa: E402
+from contextvars import ContextVar  # noqa: E402
+
+from mtg_bot.effects.conditions import Condition as _Condition  # noqa: E402
+
+# How many permanents the spell being cast had sacrificed for its "costs
+# {1} less for each permanent sacrificed this way" (None outside a cast:
+# affordability checks then count every permanent that could be).
+_SACRIFICED_FOR_COST: ContextVar = ContextVar(
+    "roto_sacrificed_for_cost", default=None,
+)
+
+
+@dataclass(frozen=True)
+class PerPermanentSacrificedForCost(_Condition):
+    """Cost-reduction condition "for each permanent sacrificed this way":
+    the number the cast sacrificed, or -- in ``legal_actions``'
+    affordability probe -- every permanent the caster could sacrifice
+    except its sac-for-mana sources (a Treasure the affordability check
+    already counts as a mana: sacrificing it here instead saves at most
+    the one generic it would have paid, so leaving it out is exact)."""
+
+    permanent_filter: object = None
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        return True
+
+    def multiplier(self, state, viewer_id, chosen_targets=None) -> int:
+        from mtg_bot.actions import _sac_for_mana_sources
+
+        n = _SACRIFICED_FOR_COST.get()
+        if n is not None:
+            return n
+        mana = {src.id for src, _, _ in _sac_for_mana_sources(state, viewer_id)}
+        return sum(
+            1 for o in _sacrifice_candidates(state, viewer_id, self.permanent_filter)
+            if o.id not in mana
+        )
+
+
+def _sacrifice_candidates(state: "GameState", player_id: int, pred) -> list:
+    prior = state.resolving_controller_id
+    try:
+        state.resolving_controller_id = player_id
+        return [
+            o for o in state.battlefield
+            if o.controller_id == player_id and pred.test(o, state)
+        ]
+    finally:
+        state.resolving_controller_id = prior
+
+
+@contextlib.contextmanager
+def optional_sacrifice_for_cost(
+    state: "GameState", player_id: int, card, base_cost, targets=None,
+):
+    """Wrap the cast's cost determination (``actions._cast_spell``):
+    choose how many permanents to sacrifice (``choose_x``, at least as
+    many as the cost needs to stay payable), sacrifice them one at a time
+    (``choose_sacrifice``, never one whose loss would make the reduced
+    cost unpayable -- a Treasure the payment needs), and expose the count
+    to ``PerPermanentSacrificedForCost`` for the block."""
+    pred = card.printing.optional_sacrifice_any_number
+    if pred is None:
+        yield
+        return
+    from mtg_bot.actions import apply_cost_reductions, can_pay_cost
+    from mtg_bot.turn import sacrifice
+
+    def _payable(n: int) -> bool:
+        # A probe: the reduction's log line belongs to the real cast.
+        token = _SACRIFICED_FOR_COST.set(n)
+        logging, state.log.enabled = state.log.enabled, False
+        try:
+            cost = apply_cost_reductions(
+                card.printing, state, player_id, base_cost,
+                chosen_targets=targets,
+            )
+        finally:
+            state.log.enabled = logging
+            _SACRIFICED_FOR_COST.reset(token)
+        return can_pay_cost(state, player_id, cost, sac_for_mana=True)
+
+    candidates = _sacrifice_candidates(state, player_id, pred)
+    min_n = next(
+        (n for n in range(len(candidates) + 1) if _payable(n)), 0,
+    )
+    p = state.player_by_id(player_id)
+    n = min_n
+    if p.agent is not None and candidates:
+        n = p.agent.choose_x(
+            state, player_id, f"{card.printing.name}: permanents to sacrifice",
+            len(candidates),
+        )
+    n = max(min_n, min(n, len(candidates)))
+    paid = 0
+    for _ in range(n):
+        options = []
+        for o in _sacrifice_candidates(state, player_id, pred):
+            idx = state.battlefield.index(o)
+            state.battlefield.remove(o)
+            try:
+                if _payable(n):
+                    options.append(o)
+            finally:
+                state.battlefield.insert(idx, o)
+        if not options:
+            break
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_sacrifice(
+                state, player_id, [o.id for o in options],
+            )
+            chosen = next((o for o in options if o.id == pick), options[0])
+        state.log.append(
+            f"additional cost: P{player_id} sacrifices {chosen.printing.name}"
+        )
+        sacrifice(state, chosen)
+        paid += 1
+    token = _SACRIFICED_FOR_COST.set(paid)
+    try:
+        yield
+    finally:
+        _SACRIFICED_FOR_COST.reset(token)
+
+
+@dataclass(frozen=True)
+class CounterOnSourceThenPunishPerCounter(Effect):
+    """"Put a <kind> counter on it. Then for each <kind> counter on it,
+    each opponent loses N life unless that player sacrifices a nonland
+    permanent of their choice or discards a card." (Rottenmouth Viper).
+    Per counter, each opponent chooses (``choose_mode``) among the options
+    they can perform; the sacrificed permanent / discarded card is their
+    choice (``choose_sacrifice`` / ``choose_discard``)."""
+
+    kind: str = "blight"
+    life: int = 4
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import Zone, add_counters, counter_count
+        from mtg_bot.player_protections import opponent_effect_blocked_for
+        from mtg_bot.turn import fire_opponent_discards_triggers, sacrifice
+
+        src = state.resolving_source
+        if src is None:
+            return
+        if src in state.battlefield:
+            add_counters(state, src, self.kind, 1)
+        n = counter_count(src, self.kind)
+        for _ in range(n):
+            for opp in state.players:
+                if opp.id == controller_id or opp.has_lost:
+                    continue
+                sacs = [
+                    o for o in state.battlefield
+                    if o.controller_id == opp.id and not o.printing.is_land
+                ]
+                modes, tags = [], []
+                if sacs:
+                    modes.append("sacrifice a nonland permanent")
+                    tags.append("sac")
+                if opp.hand:
+                    modes.append("discard a card")
+                    tags.append("discard")
+                modes.append(f"lose {self.life} life")
+                tags.append("life")
+                pick = 0 if opp.agent is None else opp.agent.choose_mode(
+                    state, opp.id, modes,
+                )
+                tag = tags[max(0, min(pick, len(tags) - 1))]
+                if tag == "sac":
+                    if opponent_effect_blocked_for(state, opp.id):
+                        continue
+                    chosen = sacs[0]
+                    if opp.agent is not None:
+                        sid = opp.agent.choose_sacrifice(
+                            state, opp.id, [o.id for o in sacs],
+                        )
+                        chosen = next((o for o in sacs if o.id == sid), sacs[0])
+                    state.log.append(f"P{opp.id} sacrifices {chosen.printing.name}")
+                    sacrifice(state, chosen)
+                elif tag == "discard":
+                    if opponent_effect_blocked_for(state, opp.id):
+                        continue
+                    ids = [c.id for c in opp.hand]
+                    did = ids[0] if opp.agent is None else opp.agent.choose_discard(
+                        state, opp.id, ids,
+                    )
+                    card = next((c for c in opp.hand if c.id == did), opp.hand[0])
+                    opp.hand.remove(card)
+                    card.zone = Zone.GRAVEYARD
+                    opp.graveyard.append(card)
+                    state.log.append(f"P{opp.id} discards {card.printing.name}")
+                    fire_opponent_discards_triggers(state, opp.id, card=card)
+                else:
+                    opp.life -= self.life
+                    state.log.append(
+                        f"P{opp.id} loses {self.life} life (life: {opp.life})"
+                    )
+
+    def describe(self) -> str:
+        return (
+            f"put a {self.kind} counter on it; for each, each opponent loses "
+            f"{self.life} life unless they sacrifice a nonland permanent or "
+            "discard a card"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Predicates
 # ---------------------------------------------------------------------------
 
@@ -2296,6 +2511,9 @@ class GrantExtraManaOnLandTapUntilEndOfTurn(Effect):
 
 __all__ = [
     "after_mana_ability",
+    "CounterOnSourceThenPunishPerCounter",
+    "optional_sacrifice_for_cost",
+    "PerPermanentSacrificedForCost",
     "choose_additional_cost_x",
     "DealXDamageToEachOfXTargets",
     "pay_discard_x",
