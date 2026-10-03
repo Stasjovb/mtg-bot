@@ -2056,8 +2056,23 @@ def _select_spell_targets(
             chosen_list: list[tuple[str, int]] = []
             remaining = list(legal)
             slot_kinds = spell_effect.target_slot_kinds()
+            # A later target that depends on an earlier one ("two target
+            # permanents that share a card type" -- roto P4's Bilbo).
+            per_slot = getattr(spell_effect, "legal_targets_for_slot", None)
+            if not getattr(
+                spell_effect, "slot_targets_depend_on_chosen", False,
+            ):
+                per_slot = None
             for slot_idx in range(max_t):
-                if slot_kinds and slot_idx < len(slot_kinds):
+                if per_slot is not None:
+                    pool = [
+                        t for t in per_slot(
+                            state, player_id, slot_idx,
+                            chosen=tuple(chosen_list),
+                        )
+                        if t in remaining
+                    ]
+                elif slot_kinds and slot_idx < len(slot_kinds):
                     needed = slot_kinds[slot_idx]
                     pool = [t for t in remaining if t[0] == needed]
                 else:
@@ -2772,6 +2787,7 @@ def _cast_spell(
     # Phyrexian mana (CR 107.4f): settle each {C/P} pip as 2 life or
     # one mana of its color before the rest of the payment.
     phyrexian_life_units = 0
+    card.phyrexian_life_pips = 0
     if cost.phyrexian:
         _spell_kinds_for_phyrexian: set[str] = {"spell"}
         if cast_from_outside_hand:
@@ -2781,7 +2797,11 @@ def _cast_spell(
             state, player_id, card.printing.name, cost,
             frozenset(_spell_kinds_for_phyrexian),
         )
+        # Pips paid with life leave the total (Trinisphere still counts
+        # them, roto P1); Compleated (CR 702.150a, roto P4) reads how many
+        # pips were paid with life.
         phyrexian_life_units = _total_before_settle - cost.total
+        card.phyrexian_life_pips = phyrexian_life_units
     # Buyback (CR 702.27): the optional additional cost joins the total
     # cost before X is resolved.
     if use_buyback and card.printing.buyback_cost is not None:
@@ -3931,6 +3951,14 @@ def _activate_ability(
             f"P{player_id} taps {chosen_n} untapped artifact(s) "
             f"(cost for {source.printing.name}'s ability)"
         )
+
+    # Roto P4: a "-X" loyalty cost -- choose X and remove X loyalty.
+    if ability.cost.loyalty_x:
+        from mtg_bot.effects.generic.roto_walkers import (
+            choose_and_pay_loyalty_x,
+        )
+
+        ability_x_value = choose_and_pay_loyalty_x(state, player_id, source)
 
     # Target selection for the effect (if it targets). Source is exposed
     # via state.resolving_source during selection so effects with
@@ -5170,9 +5198,12 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             else "triggered"
         )
         # CR 608.2b: every target became illegal (hexproof / shroud /
-        # protection gained in response) -> the ability doesn't resolve.
+        # protection gained in response) -> the ability doesn't resolve
+        # -- unless it says it still does (Gilded Drake; roto P4).
         if targets_all_illegal_on_resolution(
             state, item.targets, item.source, item.controller_id,
+        ) and not getattr(
+            item.ability.effect, "still_resolves_if_targets_illegal", False,
         ):
             state.log.append(
                 f"{item.source.printing.name}'s {kind} ability fizzles "
@@ -5409,6 +5440,17 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
             if is_adventure_cast(card) and not card.is_spell_copy:
                 # CR 715.4: an Adventure is exiled as it resolves.
                 exile_on_adventure(state, card, item.controller_id)
+                return
+            if (
+                card.printing.rebound and card.cast_via_hand
+                and not card.is_spell_copy
+            ):
+                # Roto P4: Rebound (CR 702.88a) exiles it as it resolves.
+                from mtg_bot.effects.generic.roto_walkers import (
+                    exile_with_rebound,
+                )
+
+                exile_with_rebound(state, card, item.controller_id)
                 return
             # Non-permanent spells go to their owner's graveyard —
             # unless a zone-change replacement routes them elsewhere
@@ -5877,6 +5919,11 @@ def put_into_battlefield(
     # battlefield (loyalty_counters starts at 0).
     if obj.printing.is_planeswalker and obj.printing.loyalty is not None:
         obj.loyalty_counters = obj.printing.loyalty
+        if obj.phyrexian_life_pips:
+            # Roto P4: Compleated enters with fewer loyalty counters.
+            from mtg_bot.effects.generic.roto_walkers import apply_compleated
+
+            apply_compleated(state, obj)
     # "As long as ~ entered this turn" stamp (The Wandering Emperor).
     obj.entered_battlefield_turn = state.turn_number
     if obj.printing.creature_during_your_turn:

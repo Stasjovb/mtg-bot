@@ -84,6 +84,7 @@ def setup_game(
     enable_mulligans: bool = True,
     max_mulligans: int = 7,
     starting_player_idx: int = 0,
+    sideboards: Optional[list[list[str]]] = None,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -136,10 +137,24 @@ def setup_game(
     Callers that alternate the starting seat must pass it here rather
     than patch ``active_player_idx`` afterwards, or those actions would
     be offered to the wrong player.
+
+    Sideboards
+    ----------
+    ``sideboards`` (optional, one list of card names per agent) are the
+    cards each player owns outside the game (CR 400.11), the pool that
+    "a card you own from outside the game" effects fetch from (Burning
+    Wish, Karn, the Great Creator). In a roto draft that is the
+    drafter's unused picks. ``None`` (the default) gives every player an
+    empty sideboard, so games built without one are unchanged.
     """
     if len(decks) != len(agents):
         raise ValueError(
             f"decks length {len(decks)} != agents length {len(agents)}"
+        )
+    if sideboards is not None and len(sideboards) != len(agents):
+        raise ValueError(
+            f"sideboards length {len(sideboards)} != agents length "
+            f"{len(agents)}"
         )
     if not 0 <= starting_player_idx < len(agents):
         raise ValueError(
@@ -159,6 +174,11 @@ def setup_game(
     for i, (agent, deck) in enumerate(zip(agents, decks)):
         p = _build_player_from_names(state, i, list(deck), agent)
         state.players.append(p)
+    if sideboards is not None:
+        from mtg_bot.roto_turns import sideboard_printings
+
+        for p, names in zip(state.players, sideboards):
+            p.sideboard = sideboard_printings(p.id, list(names))
 
     for p in state.players:
         rng.shuffle(p.library)

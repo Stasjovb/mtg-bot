@@ -1015,6 +1015,10 @@ class GameObject:
     # it was cast (a mode may take "up to X" targets -- Kozilek's
     # Command); set by ``ChooseModes.select_targets`` (Vintage Roto P5).
     mode_target_counts: tuple = ()
+    # Roto P4: Phyrexian mana symbols paid with life when this card was
+    # last cast (set by the cast pipeline, consumed as it enters --
+    # Compleated, CR 702.150a).
+    phyrexian_life_pips: int = 0
 
 
 def restore_mdfc_front(obj: "GameObject") -> None:
@@ -1802,6 +1806,15 @@ def gain_life(state: "GameState", player_id: int, amount: int) -> int:
         return 0
     p.life += amount
     p.life_gained_this_turn += amount
+    # Roto P4: "Whenever you gain life" observers (the amount is the
+    # trigger's ``counter_amount`` -- "that much").
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(
+        state, Event.GAINS_LIFE, label="gains-life", counter_amount=amount,
+        player=p,
+    )
     return amount
 
 
@@ -3251,6 +3264,17 @@ class Player:
     # Village): the turn it was granted in; consumed by the next cast.
     next_spell_uncounterable_turn: int = -1
     hexproof_from_this_turn: tuple = (-1, frozenset())
+    # Roto P4: the cards this player owns outside the game (CR 400.11 --
+    # a sideboard; in a roto draft, the drafter's unused picks), as
+    # printings: they aren't game objects until an effect brings one in
+    # ("a card you own from outside the game" -- Burning Wish, Karn, the
+    # Great Creator; ``mtg_bot.roto_turns.take_from_outside_the_game``).
+    # Set once by ``simulate.setup_game(sideboards=...)``; empty by default.
+    sideboard: tuple = ()
+    # Roto P4: "After that turn, that player takes an extra turn."
+    # (Emrakul, the Promised End) -- set with ``scheduled_agent_override``;
+    # the cleanup that reverts the override queues the extra turn.
+    extra_turn_after_controlled_turn: bool = False
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,
@@ -3639,6 +3663,11 @@ class GameState:
     # COUNTS deaths from any player — the printed clause doesn't
     # specify "you control", so a dies on either side suffices.
     creatures_died_this_turn: int = 0
+    # Roto P4 turn structure (``mtg_bot.roto_turns``). ``turn_ending``
+    # is raised by "End the turn." (CR 723.1: the stack was exiled and
+    # no player gets priority); while set only passing is legal, and
+    # ``turn.next_step`` skips straight to the cleanup step, lowering it.
+    turn_ending: bool = False
     # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
     # whenever ``continuous_effects`` mutates. Cache entries store
     # ``(version_at_compute, result)``; on lookup, an entry whose
@@ -4303,6 +4332,7 @@ class GameState:
         )
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
         new_state.p2_zone_watch = self.p2_zone_watch
+        new_state.turn_ending = self.turn_ending
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

@@ -1773,7 +1773,15 @@ def _parse_predicate_trigger_phrase(
         if layout is not None:
             return layout
         # Vintage Roto P5 conditions ("becomes blocked", ...).
-        from mtg_bot.cards.parser.roto_board import parse_roto_trigger_phrase
+        from mtg_bot.cards.parser.roto_board import (
+            parse_roto_trigger_phrase as parse_roto_board_trigger_phrase,
+        )
+
+        board = parse_roto_board_trigger_phrase(phrase.strip())
+        if board is not None:
+            return board
+        # Roto P4 conditions ("this creature becomes the target of ...").
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_trigger_phrase
 
         return parse_roto_trigger_phrase(phrase.strip())
     return raw[0], raw[1]

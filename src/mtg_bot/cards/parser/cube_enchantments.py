@@ -85,6 +85,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Moat",
     "Mystic Remora",
     "Necromancy",
+    "Necropotence",
     "Nether Void",
     "Oath of Druids",
     "Omniscience",
@@ -102,6 +103,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Touch the Spirit Realm",
     "Underworld Breach",
     "Utopia Sprawl",
+    "Yawgmoth's Bargain",
 })
 
 

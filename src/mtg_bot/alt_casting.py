@@ -279,7 +279,11 @@ def pitch_options(state: "GameState", player_id: int, card: "GameObject") -> lis
     if f is None:
         return []
     p = state.player_by_id(player_id)
-    return [c for c in p.hand if c.id != card.id and f.matches(c.printing)]
+    options = [c for c in p.hand if c.id != card.id and f.matches(c.printing)]
+    # "Exile two <filter> cards" (Commandeer): payable only with enough.
+    if len(options) < card.printing.alt_cost_exile_from_hand_count:
+        return []
+    return options
 
 
 def free_cast_permission(state: "GameState", player_id: int, card: "GameObject") -> bool:
@@ -311,18 +315,20 @@ def pay_pitch_cost(state: "GameState", player_id: int, card: "GameObject") -> No
     if not options:  # pragma: no cover - legal_actions gates
         raise ValueError(f"no card to exile for {card.printing.name}")
     p = state.player_by_id(player_id)
-    chosen = options[0]
-    if p.agent is not None:
-        pick = p.agent.choose_discard(state, player_id, [c.id for c in options])
-        chosen = next((c for c in options if c.id == pick), options[0])
-    p.hand.remove(chosen)
-    chosen.zone = Zone.EXILE
-    p.exile.append(chosen)
-    reveal_to_all(state, chosen)
-    state.log.append(
-        f"P{player_id} exiles {chosen.printing.name} to cast "
-        f"{card.printing.name} without paying its mana cost"
-    )
+    for _ in range(card.printing.alt_cost_exile_from_hand_count):
+        chosen = options[0]
+        if p.agent is not None:
+            pick = p.agent.choose_discard(state, player_id, [c.id for c in options])
+            chosen = next((c for c in options if c.id == pick), options[0])
+        options.remove(chosen)
+        p.hand.remove(chosen)
+        chosen.zone = Zone.EXILE
+        p.exile.append(chosen)
+        reveal_to_all(state, chosen)
+        state.log.append(
+            f"P{player_id} exiles {chosen.printing.name} to cast "
+            f"{card.printing.name} without paying its mana cost"
+        )
 
 
 # ---------------------------------------------------------------------

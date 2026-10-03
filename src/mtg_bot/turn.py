@@ -64,6 +64,13 @@ def next_step(state: GameState, current: Step) -> "Step | None":
     search adapter so both turn loops take the same path."""
     if current == Step.CLEANUP:
         return None
+    # Roto P4 turn structure: "Skip your draw step." and "End the turn."
+    # First, so an ended turn goes straight to cleanup (CR 723.1).
+    from mtg_bot.roto_turns import turn_structure_next_step
+
+    replaced = turn_structure_next_step(state, current)
+    if replaced is not None:
+        return replaced
     # Vintage Roto P3: an additional combat phase after the postcombat
     # main phase (Grim Reaper's Sprint).
     from mtg_bot.effects.generic.roto_mana import roto_next_step
@@ -1335,8 +1342,18 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
         # ``any_player_end_step`` entries ("at the beginning of the
         # next end step") fire on whichever player's end step comes
         # first; the rest fire on their controller's end step.
+        # ``own_next_end_step`` entries ("at the beginning of your next
+        # end step", ``roto_turns.schedule_at_your_next_end_step``) fire
+        # at their controller's first end step from ``fire_at_turn`` on,
+        # however many extra turns intervene.
         fires_now = (
-            entry["fire_at_turn"] == state.turn_number
+            (
+                entry["fire_at_turn"] == state.turn_number
+                or (
+                    entry.get("own_next_end_step", False)
+                    and entry["fire_at_turn"] <= state.turn_number
+                )
+            )
             and (
                 entry.get("any_player_end_step", False)
                 or entry["controller_id"] == ap_id
@@ -1361,10 +1378,17 @@ def run_delayed_upkeep_triggers(state: GameState) -> None:
 
     remaining: list[dict] = []
     to_push: list[dict] = []
+    ap_id = state.active_player().id
     for entry in state.delayed_triggers:
         if (
             entry.get("step") == "upkeep"
             and entry["fire_at_turn"] <= state.turn_number
+            # ``own_upkeep`` ("your next upkeep" -- Rebound) waits for
+            # its controller's upkeep.
+            and (
+                not entry.get("own_upkeep", False)
+                or entry["controller_id"] == ap_id
+            )
         ):
             to_push.append(entry)
         else:
@@ -1765,6 +1789,13 @@ def run_cleanup_step(state: GameState) -> None:
             p.agent = p.agent_override_saved
             p.agent_override_saved = None
             p.scheduled_agent_override_by = None
+            # Roto P4: "After that turn, that player takes an extra
+            # turn." (Emrakul, the Promised End).
+            from mtg_bot.effects.generic.roto_walkers import (
+                extra_turn_after_controlled_turn,
+            )
+
+            extra_turn_after_controlled_turn(state, p)
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
     # Reset per-turn loyalty-ability activation tracking (CR 606.3).

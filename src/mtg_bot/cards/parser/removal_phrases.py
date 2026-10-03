@@ -260,9 +260,13 @@ def parse_destroy_all(phrase: str) -> Effect | None:
     verb = m.group("verb")
     np = m.group("np")
     from_x = False
-    if np.endswith(_MV_X_SUFFIX):
-        from_x = True
-        np = np[: -len(_MV_X_SUFFIX)]
+    # "with mana value X or less", optionally before the "that's one or
+    # more colors" qualifier (Ugin, the Spirit Dragon's -X).
+    for tail in ("", " that's one or more colors"):
+        if np.endswith(_MV_X_SUFFIX + tail):
+            from_x = True
+            np = np[: -len(_MV_X_SUFFIX + tail)] + tail
+            break
     plural = m.group("quant") == "all"
     # "artifacts and creatures" is a union in the "destroy all" frame.
     if plural and " and/or " not in np:

@@ -1258,7 +1258,11 @@ class MayExileThatCardFromYourGraveyard(Effect):
     Converter's discard trigger). "That card" is the fixed target
     ``("card_in_graveyard", id)`` supplied by the CARD_DISCARDED event.
     The exiled card is linked to the source ("exiled with this
-    artifact") through ``GameObject.imprinted_on``."""
+    artifact") through ``GameObject.imprinted_on``. ``optional=False``
+    is the mandatory form ("exile that card from your graveyard." --
+    Necropotence)."""
+
+    optional: bool = True
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -1276,7 +1280,7 @@ class MayExileThatCardFromYourGraveyard(Effect):
         card = next((c for c in p.graveyard if c.id == card_id), None)
         if card is None:
             return
-        if p.agent is not None and not p.agent.choose_yes_no(
+        if self.optional and p.agent is not None and not p.agent.choose_yes_no(
             state, controller_id, f"Exile {card.printing.name}?",
         ):
             return
@@ -1290,6 +1294,8 @@ class MayExileThatCardFromYourGraveyard(Effect):
         )
 
     def describe(self) -> str:
+        if not self.optional:
+            return "exile that card from your graveyard"
         return "you may exile that card from your graveyard"
 
 

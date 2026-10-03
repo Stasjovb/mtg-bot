@@ -244,6 +244,12 @@ def apply_copy_on_entry(
     extra = tuple(s for s in pr.enters_as_copy_add_subtypes if s not in base.subtypes)
     if extra:
         changes["subtypes"] = base.subtypes + extra
+    if pr.enters_as_copy_add_triggers:
+        changes["triggered_abilities"] = (
+            tuple(base.triggered_abilities) + tuple(pr.enters_as_copy_add_triggers)
+        )
+    if pr.enters_as_copy_add_keywords:
+        changes["keywords"] = frozenset(base.keywords) | pr.enters_as_copy_add_keywords
     copied = dataclasses.replace(base, **changes) if changes else base
     if clone.original_printing is None:
         clone.original_printing = pr
