@@ -501,7 +501,8 @@ def _apply_role_uniqueness(state: "GameState") -> bool:
 
 def note_spell_cast(state: "GameState", player, card) -> None:
     """``actions._cast_spell``'s hook: record the cast spell's colors
-    for "<player> has cast a <color> spell this turn"."""
+    for "<player> has cast a <color> spell this turn", and spend a
+    pending "the next spell you cast this turn can't be countered"."""
     from mtg_bot.game import effective_colors
 
     turn, colors = player.spell_colors_cast_this_turn
@@ -510,6 +511,11 @@ def note_spell_cast(state: "GameState", player, card) -> None:
     player.spell_colors_cast_this_turn = (
         state.turn_number, colors | effective_colors(state, card),
     )
+    if player.next_spell_uncounterable_turn == state.turn_number:
+        # "The next spell you cast this turn can't be countered."
+        card.cast_uncounterable = True
+        player.next_spell_uncounterable_turn = -1
+        state.log.append(f"{card.printing.name} can't be countered")
 
 
 def spell_colors_cast_this_turn(state: "GameState", player) -> frozenset:

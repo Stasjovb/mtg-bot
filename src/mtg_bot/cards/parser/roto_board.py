@@ -380,6 +380,9 @@ _DRAW_IF_OPPONENT_CAST_COLOR = re.compile(
     r"(?P<c1>white|blue|black|red|green)(?: or (?P<c2>white|blue|black|red|"
     r"green))? spell this turn$"
 )
+# A literal: Veil of Summer is the only card in the pool with this
+# player-scoped "this turn" shape (generalization deferred until a
+# second example exists).
 _YOUR_SPELLS_UNCOUNTERABLE_THIS_TURN = (
     "spells you control can't be countered this turn"
 )
@@ -501,6 +504,11 @@ def parse_roto_board_effect(phrase: str) -> Effect | None:
         )
     if phrase == _YOUR_SPELLS_UNCOUNTERABLE_THIS_TURN:
         return rb.YourSpellsCantBeCounteredThisTurn()
+    if phrase == "the next spell you cast this turn can't be countered":
+        # Mistrise Village -- a literal: the only card in the pool with
+        # this shape (a "next <filter> spell" grammar is deferred until
+        # a second example exists).
+        return rb.NextSpellThisTurnCantBeCountered()
     m = _YOU_AND_PERMANENTS_HEXPROOF_FROM.match(phrase)
     if m is not None:
         qualities = {m.group("q1")}

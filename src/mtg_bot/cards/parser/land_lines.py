@@ -117,7 +117,8 @@ _CONTROL_N_OR_FEWER_OTHER_LANDS_RE = re.compile(
     r"^you control (?P<n>[a-z]+) or fewer other lands$"
 )
 _CONTROL_A_BASIC_TYPE_RE = re.compile(
-    r"^you control an? (?P<t>Plains|Island|Swamp|Mountain|Forest)$"
+    r"^you control an? (?P<t>Plains|Island|Swamp|Mountain|Forest)"
+    r"(?: or an? (?P<t2>Plains|Island|Swamp|Mountain|Forest))?$"
 )
 # "As this land enters, choose a basic land type. Then you may pay N
 # life. If you don't, it enters tapped." + "This land is the chosen
@@ -179,7 +180,11 @@ def _parse_enters_tapped_condition(phrase: str) -> Condition | None:
         return early
     m = _CONTROL_A_BASIC_TYPE_RE.match(phrase)
     if m is not None:
-        return ControlPermanent(HasSubtype(m.group("t")))
+        # "a Mountain or a Forest" (Mistrise Village): either type.
+        pred = HasSubtype(m.group("t"))
+        if m.group("t2"):
+            pred = pred | HasSubtype(m.group("t2"))
+        return ControlPermanent(pred)
     return None
 
 

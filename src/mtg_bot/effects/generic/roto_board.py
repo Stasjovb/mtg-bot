@@ -1783,6 +1783,25 @@ class YouAndPermanentsGainHexproofFromUEOT(Effect):
         )
 
 
+@dataclass(frozen=True)
+class NextSpellThisTurnCantBeCountered(Effect):
+    """"The next spell you cast this turn can't be countered." (Mistrise
+    Village): the controller's next cast this turn is marked
+    uncounterable as it is cast (``roto_board_statics.note_spell_cast``);
+    unused, it lapses with the turn."""
+
+    def resolve(self, state, controller_id, targets=()):
+        state.player_by_id(controller_id).next_spell_uncounterable_turn = (
+            state.turn_number
+        )
+        state.log.append(
+            f"P{controller_id}'s next spell this turn can't be countered"
+        )
+
+    def describe(self) -> str:
+        return "the next spell you cast this turn can't be countered"
+
+
 # ---------------------------------------------------------------------------
 # X-scaled modes (Kozilek's Command)
 # ---------------------------------------------------------------------------
@@ -2004,6 +2023,7 @@ class PutMinusOneCounterOnSelfCost:
 
 __all__ = [
     "ANY_NUMBER_OF_TARGETS",
+    "NextSpellThisTurnCantBeCountered",
     "DrawIfOpponentCastColorThisTurn",
     "YouAndPermanentsGainHexproofFromUEOT",
     "YourSpellsCantBeCounteredThisTurn",

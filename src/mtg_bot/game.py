@@ -3198,6 +3198,9 @@ class Player:
     # applies; ``(turn, qualities)`` this player has hexproof from.
     spell_colors_cast_this_turn: tuple = (-1, frozenset())
     spells_uncounterable_turn: int = -1
+    # "The next spell you cast this turn can't be countered." (Mistrise
+    # Village): the turn it was granted in; consumed by the next cast.
+    next_spell_uncounterable_turn: int = -1
     hexproof_from_this_turn: tuple = (-1, frozenset())
 
 
