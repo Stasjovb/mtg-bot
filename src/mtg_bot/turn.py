@@ -1870,10 +1870,6 @@ def state_based_actions(state: GameState) -> bool:
     from mtg_bot.creature_statics_wg import apply_ascend
 
     apply_ascend(state)
-    # Vintage Roto P3: state triggers (CR 603.8; Dark Depths).
-    from mtg_bot.effects.generic.roto_mana import check_state_triggers
-
-    check_state_triggers(state)
     # Role uniqueness (CR 704.5y) and state triggers (CR 603.8) --
     # Vintage Roto P5 (``mtg_bot.roto_board_statics``).
     from mtg_bot.roto_board_statics import apply_board_state_checks

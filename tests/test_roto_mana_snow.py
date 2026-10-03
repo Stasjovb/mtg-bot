@@ -189,3 +189,23 @@ def test_after_mana_ability_marks_only_snow_sources():
     snowy = put(s, _snow_island(), 0)
     rm.after_mana_ability(s, 0, snowy, 0)
     assert s.players[0].mana_pool[0].snow
+
+
+def test_blood_moon_stops_dark_depths_state_trigger():
+    # The state trigger is a board rule (one mechanism with Drop of
+    # Honey's): under Blood Moon, Dark Depths is a Mountain with no
+    # abilities, so having no ice counters makes no Marit Lage.
+    s, depths = _depths_in_play(ice=0)
+    moon = put(s, printing("Blood Moon"), 1)
+    state_based_actions(s)
+    assert not s.stack
+    s.battlefield.remove(moon)
+    state_based_actions(s)
+    assert len(s.stack) == 1
+
+
+def test_dark_depths_state_trigger_describes_its_condition():
+    (rule,) = printing("Dark Depths").board_rules
+    assert rule.describe().startswith(
+        "When this permanent has no ice counters on it, sacrifice"
+    )

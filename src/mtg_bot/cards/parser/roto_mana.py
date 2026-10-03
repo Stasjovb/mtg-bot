@@ -1046,13 +1046,16 @@ def parse_roto_land_line(line: str, name: str = "") -> RotoLine | None:
         trig = _parse_state_trigger_effect(m.group("eff"))
         if trig is None:
             return None
-        from mtg_bot.effects.generic.roto_mana import (
-            HasNoCountersOfKind,
-            StateTrigger,
-        )
+        # One state-trigger mechanism (CR 603.8): P5's board-rule
+        # ``StateTrigger``, read through the "loses all abilities" /
+        # Blood Moon suppression (``roto_board_statics.rules_in_play``).
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.generic.roto_mana import HasNoCountersOfKind
+        from mtg_bot.roto_board_statics import StateTrigger
 
-        return RotoLine(fields={"state_triggers": (StateTrigger(
-            condition=HasNoCountersOfKind(m.group("kind")), effect=trig,
+        return RotoLine(fields={"board_rules": (StateTrigger(
+            condition=HasNoCountersOfKind(m.group("kind")),
+            ability=TriggeredAbility(effect=trig),
         ),)})
     if name and name in line:
         # An activated ability naming the land itself ("{3}: Remove an

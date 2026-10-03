@@ -2300,50 +2300,8 @@ class HasNoCountersOfKind:
 
         return counter_count(obj, self.kind) == 0
 
-
-@dataclass(frozen=True)
-class StateTrigger:
-    """A state-triggered ability (CR 603.8): it triggers whenever
-    ``condition`` holds for its permanent, and doesn't trigger again
-    while an instance of it is on the stack."""
-
-    condition: object
-    effect: Effect
-
-    def ability(self):
-        from mtg_bot.effects.base import TriggeredAbility
-        from mtg_bot.effects.predicates import Always, Event
-
-        # The event is bookkeeping only: state triggers are pushed by
-        # ``check_state_triggers``, never by event dispatch.
-        return TriggeredAbility(
-            event=Event.LEAVES_BATTLEFIELD, predicate=Always(),
-            effect=self.effect,
-        )
-
-
-def check_state_triggers(state: "GameState") -> None:
-    """Push every state trigger whose condition holds and that isn't
-    already waiting on the stack (called with the state-based actions)."""
-    from mtg_bot.actions import push_triggered_ability
-
-    for obj in state.battlefield:
-        sts = obj.printing.state_triggers
-        if not sts:
-            continue
-        for st in sts:
-            if not st.condition.holds(state, obj):
-                continue
-            if any(
-                item.source is obj and item.ability is not None
-                and item.ability.effect == st.effect
-                for item in state.stack
-            ):
-                continue
-            push_triggered_ability(
-                state, source=obj, ability=st.ability(), ability_index=-1,
-                controller_id=obj.controller_id, label="state",
-            )
+    def describe(self) -> str:
+        return f"this permanent has no {self.kind} counters on it"
 
 
 @dataclass(frozen=True)
@@ -2537,7 +2495,6 @@ __all__ = [
     "HasNoCountersOfKind",
     "RemoveCountersFromSource",
     "SacrificeSourceThen",
-    "StateTrigger",
     "CastSuspendedSourceFree",
     "RemoveTimeCounterFromSuspendedSource",
     "ExileHandDrawThatManyMayPlayThem",

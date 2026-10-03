@@ -1631,10 +1631,6 @@ class CardPrinting:
     # over sacrificeable permanents; the matching "costs {1} less for each
     # permanent sacrificed this way" is a ``cost_reductions`` entry.
     optional_sacrifice_any_number: "object | None" = None
-    # State triggers (CR 603.8): ``effects.generic.roto_mana.StateTrigger``
-    # entries checked with the state-based actions ("When Dark Depths has
-    # no ice counters on it, ...").
-    state_triggers: tuple = ()
     # Cast permissions (``effects.generic.roto_mana``): "You may cast
     # spells from your hand without paying their mana costs."
     # (Omniscience); "Any player may cast creature spells with mana value
