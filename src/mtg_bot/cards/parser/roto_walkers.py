@@ -637,13 +637,35 @@ def _quoted_self_trigger(text: str):
 # ---------------------------------------------------------------------------
 
 
+# "You may exile <N> <desc> cards from your hand rather than pay this
+# spell's mana cost." -- the pitch cost with a count above one
+# (Commandeer); the single-card form is ``spell_builder``'s
+# ``_PITCH_ALT_COST_LINE_RE``.
+_PITCH_N_CARDS_RE = re.compile(
+    rf"^You may exile (?P<n>{_N}) (?P<desc>.+?) cards from your hand rather "
+    r"than pay this spell's mana cost\.$"
+)
+
+
 def parse_roto_casting_keyword(clause: str) -> dict | None:
     """``CardPrinting`` fields for a casting-keyword line the spell
-    builder's own table declined: ``Rebound`` (CR 702.88)."""
+    builder's own table declined: ``Rebound`` (CR 702.88); a pitch cost
+    exiling several cards."""
     if _disabled():
         return None
     if clause == "Rebound":
         return {"rebound": True}
+    m = _PITCH_N_CARDS_RE.match(clause)
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+        if card_filter is None:
+            return None
+        return {
+            "alt_cost_exile_from_hand": card_filter,
+            "alt_cost_exile_from_hand_count": _n(m.group("n")),
+        }
     return None
 
 
@@ -1151,7 +1173,26 @@ def _exchange_two_sharing_type(m):
     return rw.ExchangeControlOfTwoTargetsSharingCardType(targets=(spec, spec))
 
 
+# "gain control of target <desc> spell. You may choose new targets for
+# it" (Commandeer).
+_GAIN_CONTROL_OF_SPELL_RE = re.compile(
+    r"^gain control of target (?P<desc>.+?) spell\. You may choose new "
+    r"targets for it$"
+)
+
+
+def _gain_control_of_spell(m):
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+    from mtg_bot.effects.generic import roto_walkers as rw
+
+    card_filter = parse_card_descriptor(f"a {m.group('desc')} card")
+    if card_filter is None:
+        return None
+    return rw.GainControlOfTargetSpell(card_filter=card_filter)
+
+
 _PHRASE_RECOGNIZERS_3 = (
+    (_GAIN_CONTROL_OF_SPELL_RE, _gain_control_of_spell),
     (_EXCHANGE_TWO_SHARING_TYPE_RE, _exchange_two_sharing_type),
     (_COPY_CAST_SPELL_RE, _copy_cast_spell),
     (_EXILE_TOP_CAST_ONE_RE, _exile_top_cast_one),

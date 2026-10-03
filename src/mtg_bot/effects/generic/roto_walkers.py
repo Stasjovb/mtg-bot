@@ -1903,3 +1903,63 @@ class ExchangeControlOfTwoTargetsSharingCardType(Effect):
         return (
             "exchange control of two target permanents that share a card type"
         )
+
+
+# ---------------------------------------------------------------------------
+# "Gain control of target <filter> spell." (Commandeer)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GainControlOfTargetSpell(Effect):
+    """"Gain control of target <filter> spell. You may choose new targets
+    for it." (Commandeer). The spell's stack item (and its card) change
+    controller -- a permanent spell enters under the new controller --
+    and the new controller re-picks its targets through
+    ``spell_copies._choose_copy_targets`` (the Invert Polarity path)."""
+
+    card_filter: object = None
+
+    def requires_target(self) -> bool:
+        return True
+
+    def _matches(self, item) -> bool:
+        return (
+            item.ability is None and not item.countered
+            and (
+                self.card_filter is None
+                or self.card_filter.matches(item.source.printing)
+            )
+        )
+
+    def legal_targets(self, state, controller_id):
+        return [
+            ("stack", i) for i, item in enumerate(state.stack)
+            if self._matches(item)
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.spell_copies import _choose_copy_targets
+
+        if not targets or targets[0][0] != "stack":
+            return
+        idx = targets[0][1]
+        if not 0 <= idx < len(state.stack) or not self._matches(state.stack[idx]):
+            state.log.append("gain control of spell fizzles")
+            return
+        item = state.stack[idx]
+        item.controller_id = controller_id
+        item.source.controller_id = controller_id
+        if item.targets:
+            item.targets = _choose_copy_targets(
+                state, controller_id, item.source.printing, item.targets,
+            )
+        state.log.append(
+            f"P{controller_id} gains control of {item.source.printing.name}"
+        )
+
+    def describe(self) -> str:
+        return "gain control of target spell; you may choose new targets for it"

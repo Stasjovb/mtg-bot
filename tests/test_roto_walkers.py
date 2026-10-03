@@ -1618,3 +1618,62 @@ def test_exchange_sharing_type_resolution_checks():
     assert a.controller_id == 0 and c.controller_id == 1
     eff.resolve(s, 0, (("permanent", a.id), ("permanent", 999)))
     assert "share a card type" in eff.describe()
+
+
+# ---------------------------------------------------------------------------
+# Commandeer
+# ---------------------------------------------------------------------------
+
+_BLUE = make_instant("Blue Stand-in", "{U}", DrawCards(amount=1))
+_RITUAL = make_instant("Gift Stand-in", "{1}", GainLife(amount=4))
+
+
+def _commandeer_arena(blue_cards=2):
+    s = arena()
+    s.active_player_idx = 1  # the opponent casts on their turn
+    s.priority_player_idx = 0
+    commandeer = to_hand(s, printing("Commandeer"), 0)
+    blues = [to_hand(s, _BLUE, 0) for _ in range(blue_cards)]
+    spell = _cast_on_stack(s, _RITUAL, 1)
+    return s, commandeer, blues, spell
+
+
+def test_commandeer_pitches_two_blue_cards_and_steals_a_spell():
+    s, commandeer, blues, spell = _commandeer_arena()
+    free = CastSpell(commandeer.id, cast_for_free=True)
+    assert free in legal_actions(s, 0)
+    agent(s, 0).targets = [("stack", 0)]
+    apply_action(s, 0, free)
+    assert all(b in s.players[0].exile for b in blues)
+    drain_stack(s)
+    # The stolen spell resolves for its new controller.
+    assert s.players[0].life == 24 and s.players[1].life == 20
+    assert commandeer in s.players[0].graveyard
+
+
+def test_commandeer_pitch_needs_two_blue_cards():
+    s, commandeer, _blues, _spell = _commandeer_arena(blue_cards=1)
+    assert CastSpell(commandeer.id, cast_for_free=True) not in legal_actions(s, 0)
+
+
+def test_gain_control_of_spell_filters_and_retargets():
+    from mtg_bot.effects.generic.roto_walkers import GainControlOfTargetSpell
+
+    eff = printing("Commandeer").spell_effect
+    assert isinstance(eff, GainControlOfTargetSpell)
+    s = arena()
+    _cast_on_stack(s, _BEAR, 1)  # a creature spell can't be targeted
+    shock = _cast_on_stack(s, make_instant(
+        "Ping", "{R}", printing("Ugin, the Spirit Dragon").activated_abilities[0].effect,
+    ), 1)
+    s.stack[-1].targets = (("player", 0),)
+    assert eff.legal_targets(s, 0) == [("stack", 1)]
+    agent(s, 0).targets = [("player", 1)]
+    eff.resolve(s, 0, (("stack", 1),))
+    assert s.stack[1].controller_id == 0 and shock.controller_id == 0
+    assert s.stack[1].targets == (("player", 1),)
+    # Illegal / missing targets fizzle.
+    eff.resolve(s, 0, (("stack", 0),))
+    eff.resolve(s, 0, (("stack", 9),))
+    eff.resolve(s, 0, ())
+    assert "gain control of target spell" in eff.describe()

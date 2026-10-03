@@ -1258,6 +1258,9 @@ class CardPrinting:
     # ``CastSpell(cast_for_free=True)``; a ``CardFilter`` over the other
     # cards in hand.
     alt_cost_exile_from_hand: "object | None" = None
+    # Roto P4: how many such cards the pitch cost exiles ("exile two blue
+    # cards from your hand" -- Commandeer).
+    alt_cost_exile_from_hand_count: int = 1
     # "Splice onto <subtype> {cost}" (CR 702.47): while casting a spell
     # with that subtype, this card may be revealed from hand and its
     # splice cost paid to add its effects to that spell.
