@@ -165,13 +165,13 @@ def test_parser_source_rejects_unknown_pool():
 
 def test_real_roto_pool_contents():
     """The committed roto pool: the dump's 860 Scryfall-backed cards +
-    the five basics, plus the one hand-authored custom card (Meddling
+    the five basics and Wastes, plus the one hand-authored custom card (Meddling
     Wizard, ``data/cube_roto_custom.json``), unique by name. The custom
     conspiracies are never faked into the Scryfall dump, and the three
     left alone have no record at all."""
     names = pools.pool_card_names("roto")
-    assert len(names) == 866
-    assert {"Plains", "Island", "Swamp", "Mountain", "Forest"} <= names
+    assert len(names) == 867
+    assert {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"} <= names
     assert {"Black Lotus", "Smokestack", "Spectacular Spider-Man",
             "Life // Death", "Regrowth"} <= names
     assert "Meddling Wizard" in names
@@ -179,7 +179,7 @@ def test_real_roto_pool_contents():
     dump = json.loads(
         (pools.DATA_DIR / "cube_roto.json").read_text(encoding="utf-8")
     )
-    assert len(dump) == 865
+    assert len(dump) == 866
     assert "Meddling Wizard" not in {c["name"] for c in dump}
     assert pools.CUSTOM_CARD_FILES == ("cube_roto_custom.json",)
     assert pools.ROTO_POOL_FILES == ("cube_roto.json", "cube_roto_custom.json")

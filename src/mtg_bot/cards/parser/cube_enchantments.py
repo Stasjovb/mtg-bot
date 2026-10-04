@@ -106,6 +106,7 @@ CUBE_ENCHANTMENT_NAMES: frozenset[str] = frozenset({
     "Tarmogoyf Nest",
     "Temporary Lockdown",
     "Touch the Spirit Realm",
+    "Unable to Scream",
     "Underworld Breach",
     "Utopia Sprawl",
     "Yawgmoth's Bargain",

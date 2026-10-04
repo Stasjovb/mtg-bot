@@ -120916,5 +120916,152 @@
       "cardmarket": "https://www.cardmarket.com/en/Magic/Products/Search?referrer=scryfall&searchString=Forest&utm_campaign=card_prices&utm_medium=text&utm_source=scryfall",
       "cardhoarder": "https://www.cardhoarder.com/cards?affiliate_id=scryfall&data%5Bsearch%5D=Forest&ref=card-profile&utm_campaign=affiliate&utm_medium=card&utm_source=scryfall"
     }
+  },
+  {
+    "object": "card",
+    "id": "baf8f4f2-9f25-4cd2-8d78-1041e134aeac",
+    "oracle_id": "05d24b0c-904a-46b6-b42a-96a4d91a0dd4",
+    "multiverse_ids": [],
+    "resource_id": "1D7C3D86E8964A33B9AAAA3B2C8B12DCD05F6E96788636372ED69FBF5BC8CAFA",
+    "mtgo_id": 142519,
+    "tcgplayer_id": 642074,
+    "cardmarket_id": 834150,
+    "name": "Wastes",
+    "lang": "en",
+    "released_at": "2025-08-01",
+    "uri": "https://api.scryfall.com/cards/baf8f4f2-9f25-4cd2-8d78-1041e134aeac",
+    "scryfall_uri": "https://scryfall.com/card/eoc/191/wastes?utm_source=api",
+    "layout": "normal",
+    "highres_image": true,
+    "image_status": "highres_scan",
+    "image_updated_at": "2026-07-13T01:26:41Z",
+    "image_uris": {
+      "small": "https://cards.scryfall.io/small/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.jpg?1783906001",
+      "normal": "https://cards.scryfall.io/normal/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.jpg?1783906001",
+      "large": "https://cards.scryfall.io/large/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.jpg?1783906001",
+      "png": "https://cards.scryfall.io/png/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.png?1783906001",
+      "art_crop": "https://cards.scryfall.io/art_crop/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.jpg?1783906001",
+      "border_crop": "https://cards.scryfall.io/border_crop/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.jpg?1783906001",
+      "thumb": "https://cards.scryfall.io/thumb/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.webp?1783906001",
+      "grid": "https://cards.scryfall.io/grid/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.webp?1783906001",
+      "display": "https://cards.scryfall.io/display/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.webp?1783906001",
+      "art": "https://cards.scryfall.io/art/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.webp?1783906001",
+      "crop": "https://cards.scryfall.io/crop/front/b/a/baf8f4f2-9f25-4cd2-8d78-1041e134aeac.webp?1783906001"
+    },
+    "mana_cost": "",
+    "cmc": 0.0,
+    "type_line": "Basic Land",
+    "oracle_text": "{T}: Add {C}.",
+    "colors": [],
+    "color_identity": [],
+    "keywords": [],
+    "produced_mana": [
+      "C"
+    ],
+    "all_parts": [
+      {
+        "object": "related_card",
+        "id": "baf8f4f2-9f25-4cd2-8d78-1041e134aeac",
+        "component": "combo_piece",
+        "name": "Wastes",
+        "type_line": "Basic Land",
+        "uri": "https://api.scryfall.com/cards/baf8f4f2-9f25-4cd2-8d78-1041e134aeac"
+      },
+      {
+        "object": "related_card",
+        "id": "a0764566-617b-45cb-8aad-5a9f606348ae",
+        "component": "combo_piece",
+        "name": "Thendar, the Overminer",
+        "type_line": "Legendary Creature \u2014 Kavu Pirate",
+        "uri": "https://api.scryfall.com/cards/a0764566-617b-45cb-8aad-5a9f606348ae"
+      }
+    ],
+    "legalities": {
+      "standard": "legal",
+      "future": "legal",
+      "historic": "legal",
+      "timeless": "legal",
+      "gladiator": "legal",
+      "pioneer": "legal",
+      "modern": "legal",
+      "legacy": "legal",
+      "pauper": "legal",
+      "vintage": "legal",
+      "penny": "not_legal",
+      "commander": "legal",
+      "oathbreaker": "legal",
+      "standardbrawl": "legal",
+      "brawl": "legal",
+      "competitivebrawl": "legal",
+      "alchemy": "legal",
+      "paupercommander": "legal",
+      "duel": "legal",
+      "oldschool": "not_legal",
+      "premodern": "not_legal",
+      "predh": "not_legal",
+      "tlr": "legal"
+    },
+    "games": [
+      "paper",
+      "mtgo"
+    ],
+    "reserved": false,
+    "game_changer": false,
+    "foil": false,
+    "nonfoil": true,
+    "finishes": [
+      "nonfoil"
+    ],
+    "oversized": false,
+    "promo": false,
+    "reprint": true,
+    "variation": false,
+    "set_id": "b6ec8c6b-b4e6-4cb4-84d6-06234ace3b44",
+    "set": "eoc",
+    "set_name": "Edge of Eternities Commander",
+    "set_type": "commander",
+    "set_uri": "https://api.scryfall.com/sets/b6ec8c6b-b4e6-4cb4-84d6-06234ace3b44",
+    "set_search_uri": "https://api.scryfall.com/cards/search?order=set&q=e%3Aeoc&unique=prints",
+    "scryfall_set_uri": "https://scryfall.com/sets/eoc?utm_source=api",
+    "rulings_uri": "https://api.scryfall.com/cards/baf8f4f2-9f25-4cd2-8d78-1041e134aeac/rulings",
+    "prints_search_uri": "https://api.scryfall.com/cards/search?order=released&q=oracleid%3A05d24b0c-904a-46b6-b42a-96a4d91a0dd4&unique=prints",
+    "collector_number": "191",
+    "digital": false,
+    "rarity": "common",
+    "card_back_id": "0aeebaf5-8c7d-4636-9e82-8c27447861f7",
+    "artist": "Raymond Swanland",
+    "artist_ids": [
+      "e956bacc-077d-4c12-b6bc-ba798b718af9"
+    ],
+    "illustration_id": "8b1f166f-fbc9-42da-8dcd-5a5ea38652c3",
+    "border_color": "black",
+    "frame": "2015",
+    "full_art": false,
+    "textless": false,
+    "booster": false,
+    "story_spotlight": false,
+    "preview": {
+      "source": "The Command Zone",
+      "source_uri": "https://www.youtube.com/watch?v=HxXLWC_JRdM",
+      "previewed_at": "2025-07-09"
+    },
+    "prices": {
+      "usd": "0.74",
+      "usd_foil": null,
+      "usd_etched": null,
+      "eur": "0.42",
+      "eur_foil": null,
+      "tix": "0.26"
+    },
+    "related_uris": {
+      "tcgplayer_infinite_articles": "https://partner.tcgplayer.com/c/4931599/1830156/21018?subId1=api&trafcat=tcgplayer.com%2Fsearch%2Farticles&u=https%3A%2F%2Fwww.tcgplayer.com%2Fsearch%2Farticles%3FproductLineName%3Dmagic%26q%3DWastes",
+      "tcgplayer_infinite_decks": "https://partner.tcgplayer.com/c/4931599/1830156/21018?subId1=api&trafcat=tcgplayer.com%2Fsearch%2Fdecks&u=https%3A%2F%2Fwww.tcgplayer.com%2Fsearch%2Fdecks%3FproductLineName%3Dmagic%26q%3DWastes",
+      "edhrec": "https://edhrec.com/route/?cc=Wastes"
+    },
+    "purchase_uris": {
+      "tcgplayer": "https://partner.tcgplayer.com/c/4931599/1830156/21018?subId1=api&u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F642074%3Fpage%3D1",
+      "cardmarket": "https://www.cardmarket.com/en/Magic/Products?idProduct=834150&referrer=scryfall&utm_campaign=card_prices&utm_medium=text&utm_source=scryfall",
+      "cardhoarder": "https://www.cardhoarder.com/cards/142519?affiliate_id=scryfall&ref=card-profile&utm_campaign=affiliate&utm_medium=card&utm_source=scryfall"
+    }
   }
 ]

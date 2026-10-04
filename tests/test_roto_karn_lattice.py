@@ -474,10 +474,11 @@ def test_liquimetal_coating_plus_karn_shuts_one_land_off():
 
 
 # ---------------------------------------------------------------------------
-# Unable to Scream: its lines and engine support. The card is also a
-# Duskmourn printing (the default ``all`` pool), and the roto grammar is
-# switched off for EoE-era printings so their claimed set can't move, so it
-# stays unclaimed (docs/SEARCH_LIMITATIONS.md); its shapes are pinned here.
+# Unable to Scream: its lines and engine support. It is also a Duskmourn
+# printing, but it is on the roto list, so the narrowed EoE-era guard
+# (`is_eoe_only_printing`) no longer switches the roto grammar off for it,
+# and it is claimed (user decision 2026-10-03 to support the roto pool's
+# Duskmourn cards; EoE's claimed set moves with it).
 # ---------------------------------------------------------------------------
 
 
@@ -653,14 +654,25 @@ def test_magnum_opus_random_games_run_to_completion(roto_source, seed):
 # ---------------------------------------------------------------------------
 
 
-def test_unable_to_scream_stays_unclaimed_behind_the_eoe_era_guard():
+def test_unable_to_scream_is_claimed_with_its_two_pinned_lines():
     from mtg_bot.cards.parser.creature_rmc_grammar import is_eoe_only_printing
     from mtg_bot.cards.parser.source import build_card_record
 
     from tests._roto_helpers import roto_card
 
-    assert is_eoe_only_printing("Unable to Scream")
-    assert build_card_record(roto_card("Unable to Scream")) is None
+    assert not is_eoe_only_printing("Unable to Scream")
+    printing = build_card_record(roto_card("Unable to Scream"))
+    assert printing is not None
+    # The claimed card carries exactly the rules the pinned shapes build.
+    import dataclasses
+
+    like = _unable_to_scream_like()
+    identity = {"name", "mana_cost_str", "mana_cost", "type_line", "oracle_text", "printing_id"}
+    differing = [
+        f.name for f in dataclasses.fields(like)
+        if f.name not in identity and getattr(like, f.name) != getattr(printing, f.name)
+    ]
+    assert differing == []
 
 
 def test_layer_line_recognizers_decline_other_shapes():
@@ -807,3 +819,25 @@ def test_magnum_opus_pimc_search_game_completes(roto_source):
         state.apply(decision)
         decisions += 1
     assert decisions > 0
+
+
+# ---------------------------------------------------------------------------
+# Wastes: the basic land with no basic land type. Its "{T}: Add {C}." is
+# printed rules text (not reminder), and it must not gain a "Wastes" subtype.
+# ---------------------------------------------------------------------------
+
+
+def test_wastes_is_a_subtypeless_basic_that_taps_for_colorless():
+    from mtg_bot.cards.parser.source import build_card_record
+
+    from tests._roto_helpers import roto_card
+
+    wastes = build_card_record(roto_card("Wastes"))
+    assert wastes is not None
+    assert "Basic" in wastes.supertypes
+    assert "Land" in wastes.card_types
+    assert wastes.subtypes == ()
+    assert wastes.produces == frozenset({"C"})
+
+    plains = build_card_record(roto_card("Plains"))
+    assert plains is not None and plains.subtypes == ("Plains",)

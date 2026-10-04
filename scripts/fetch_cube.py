@@ -66,6 +66,10 @@ CUBECOBRA_JSON_URL = "https://cubecobra.com/cube/api/cubeJSON/{cube_id}"
 BASIC_LAND_NAMES: tuple[str, ...] = (
     "Plains", "Island", "Swamp", "Mountain", "Forest",
 )
+# A name list (the roto draft sheet) never lists basics, but its drafters
+# build colorless decks on Wastes, so name-list pools carry it too. Kept out
+# of BASIC_LAND_NAMES so the CubeCobra pools (and their claimed sets) don't move.
+NAME_LIST_BASIC_LAND_NAMES: tuple[str, ...] = BASIC_LAND_NAMES + ("Wastes",)
 
 # Injectable HTTP seams so tests never touch the network.
 GetJson = Callable[[str], dict]
@@ -292,9 +296,9 @@ def build_pool_from_names(
     post: PostJson | None = None,
     get: GetJson | None = None,
     delay_sec: float = REQUEST_DELAY_SEC,
-    basics: tuple[str, ...] = BASIC_LAND_NAMES,
+    basics: tuple[str, ...] = NAME_LIST_BASIC_LAND_NAMES,
 ) -> list[dict]:
-    """Name list as Scryfall objects + the basic lands, deduped."""
+    """Name list as Scryfall objects + the basic lands (and Wastes), deduped."""
     extra = [b for b in basics if b not in set(names)]
     cards = resolve_names(
         list(names) + extra, post=post, get=get, delay_sec=delay_sec,
@@ -369,7 +373,7 @@ def name_list_metadata(
         "custom_cards_without_scryfall": custom,
         "fetched_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "pool_card_count": n_cards,
-        "includes_basic_lands": list(BASIC_LAND_NAMES),
+        "includes_basic_lands": list(NAME_LIST_BASIC_LAND_NAMES),
         "cubecobra_comparison": comparison,
     }
 

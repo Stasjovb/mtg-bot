@@ -23,13 +23,14 @@
     }
   ],
   "fetched_at": "2026-10-02T20:58:43.343401+00:00",
-  "pool_card_count": 865,
+  "pool_card_count": 866,
   "includes_basic_lands": [
     "Plains",
     "Island",
     "Swamp",
     "Mountain",
-    "Forest"
+    "Forest",
+    "Wastes"
   ],
   "cubecobra_comparison": {
     "cube_id": "43fd5f2a-942e-40c3-a563-bf3a7ce0cc22",

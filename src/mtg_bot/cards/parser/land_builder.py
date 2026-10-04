@@ -836,10 +836,15 @@ def _build_land_printing(card: dict) -> CardPrinting | None:
     text = card.get("oracle_text", "").strip()
     if "Basic" in supertypes:
         m = _BASIC_LAND_REMINDER.match(text)
-        if m is None:
-            return None
-        color = m.group(1)
-        return make_basic_land(name=card["name"], color=color)
+        if m is not None:
+            return make_basic_land(name=card["name"], color=m.group(1))
+        # Wastes: the only basic with no basic land type, so its mana
+        # ability is printed rules text rather than parenthesized reminder.
+        if not subtypes and text == _COLORLESS_TAP_LINE:
+            return make_basic_land(
+                name=card["name"], color="C", type_line=card.get("type_line", "Basic Land"),
+            )
+        return None
     # Non-basic land shapes follow.
     plaza = _try_build_plaza_of_heroes_land(
         card, text, supertypes, subtypes,

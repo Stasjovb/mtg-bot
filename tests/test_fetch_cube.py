@@ -248,7 +248,7 @@ def test_resolve_names_sleeps_between_requests(fc, monkeypatch):
 
 
 def test_build_pool_from_names_appends_missing_basics(fc):
-    catalog = {n: {"name": n} for n in ("Mox Pearl", *fc.BASIC_LAND_NAMES)}
+    catalog = {n: {"name": n} for n in ("Mox Pearl", *fc.NAME_LIST_BASIC_LAND_NAMES)}
     post = _collection_by_front_face(catalog)
     pool = fc.build_pool_from_names(
         ["Mox Pearl", "Island"], post=post, get=lambda url: {}, delay_sec=0,
@@ -256,7 +256,7 @@ def test_build_pool_from_names_appends_missing_basics(fc):
     names = [c["name"] for c in pool]
     assert names[:2] == ["Mox Pearl", "Island"]
     assert sorted(names[2:]) == sorted(
-        b for b in fc.BASIC_LAND_NAMES if b != "Island"
+        b for b in fc.NAME_LIST_BASIC_LAND_NAMES if b != "Island"
     )
     assert len(names) == len(set(names))
 
@@ -324,7 +324,7 @@ def test_main_names_mode_writes_pool_meta_and_comparison(
     ]), encoding="utf-8")
     catalog = {"Card a": {"name": "Card a", "id": "a"},
                "a": {"name": "Card a", "id": "a"}}
-    catalog.update({b: {"name": b} for b in fc.BASIC_LAND_NAMES})
+    catalog.update({b: {"name": b} for b in fc.NAME_LIST_BASIC_LAND_NAMES})
     monkeypatch.setattr(fc, "post_json", _collection_by_front_face(catalog))
     monkeypatch.setattr(fc, "get_json", lambda url: _cube_json(["a"]))
     monkeypatch.setattr(fc.time, "sleep", lambda s: None)
@@ -335,7 +335,7 @@ def test_main_names_mode_writes_pool_meta_and_comparison(
     ]) == 0
     cards = json.loads(out.read_text(encoding="utf-8"))
     assert cards[0]["name"] == "Card a"
-    assert len(cards) == 1 + len(fc.BASIC_LAND_NAMES)
+    assert len(cards) == 1 + len(fc.NAME_LIST_BASIC_LAND_NAMES)
     meta = json.loads((tmp_path / "roto.meta.json").read_text(encoding="utf-8"))
     assert meta["cube_name"] == "Roto"
     assert meta["custom_cards_without_scryfall"] == [
@@ -353,7 +353,7 @@ def test_main_names_mode_without_comparison(fc, tmp_path, monkeypatch):
         {"name": "Card a", "scryfall_name": "Card a"},
     ]), encoding="utf-8")
     catalog = {"Card a": {"name": "Card a"}}
-    catalog.update({b: {"name": b} for b in fc.BASIC_LAND_NAMES})
+    catalog.update({b: {"name": b} for b in fc.NAME_LIST_BASIC_LAND_NAMES})
     monkeypatch.setattr(fc, "post_json", _collection_by_front_face(catalog))
     monkeypatch.setattr(fc, "get_json",
                         lambda url: pytest.fail("no CubeCobra call"))
@@ -377,7 +377,7 @@ def test_committed_roto_pool_matches_meta(fc):
     assert meta["pool_card_count"] == len(cards) == len(set(pool_names))
     assert meta["list_entry_count"] == len(sheet) == 864
     assert meta["scryfall_card_count"] == len(names) == 860
-    assert set(names) | set(fc.BASIC_LAND_NAMES) == set(pool_names)
+    assert set(names) | set(fc.NAME_LIST_BASIC_LAND_NAMES) == set(pool_names)
     assert [c["name"] for c in meta["custom_cards_without_scryfall"]] == [
         c["name"] for c in custom
     ]

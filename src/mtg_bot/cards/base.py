@@ -2713,8 +2713,13 @@ def make_shock_land(
     )
 
 
-def make_basic_land(name: str, color: str) -> CardPrinting:
-    type_line = f"Basic Land — {name}"
+def make_basic_land(name: str, color: str, type_line: str | None = None) -> CardPrinting:
+    # The five basics carry their own name as their land type. Wastes is the
+    # exception: a Basic Land with no subtype, so its caller passes the
+    # printed type line rather than inventing a "Wastes" land type (which
+    # Domain and "basic land type" counts would otherwise see).
+    if type_line is None:
+        type_line = f"Basic Land — {name}"
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
