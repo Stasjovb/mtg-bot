@@ -81,7 +81,8 @@ effective_colors(state, obj) -> frozenset[str]        # existing; now covers eve
 
 * **Not on the battlefield** (hand, library, graveyard, exile, stack,
   command): the printed `card_types`, except (a) a card exiled face down
-  has no characteristics (CR 406.3 — returns `()`), (b) an object that is
+  has no characteristics (CR 406.3 — returns `()`) [not adopted, see
+  Status], (b) an object that is
   leaving the battlefield right now reports its last-known types (below).
   No effect in any pool changes the card types of a card outside the
   battlefield (Grist's "it's a 1/1 Insect creature in every other zone" is
@@ -133,7 +134,7 @@ blocks, and it is out of scope here.
 `add_colors`, synthesized Painter's Servant `add_colors`) and gains:
 
 * base colors of a face-down permanent / face-down exiled card: none
-  (CR 708.2a / 406.3);
+  (CR 708.2a / 406.3) [the exiled half was not adopted, see Status];
 * a synthesized `set_colors(∅)` entry from every battlefield source whose
   printing says "All cards that aren't on the battlefield, spells, and
   permanents are colorless." (Lattice), timestamp = the source's
@@ -229,7 +230,8 @@ a separate axis and still apply.
   marker: `GameObject.exiled_face_down`, set by every face-down exile site
   (Necropotence, Memory Jar, the "exile ... face down" effects) and cleared
   whenever a card leaves exile; `effective_card_types` /
-  `effective_colors` treat such a card as characteristic-less.
+  `effective_colors` treat such a card as characteristic-less [not
+  adopted, see Status].
 
 ### Unable to Scream
 
@@ -278,4 +280,70 @@ gap was handled.
 
 ## Status
 
-(Filled in as the work lands.)
+Landed on `feature/roto-karn-lattice` (2026-10-04). Shortcuts and the
+remaining gaps are in `docs/SEARCH_LIMITATIONS.md`, "Card types and colors:
+CR 613 layers 4 and 5".
+
+**API** (`game.py`): `effective_card_types`, `has_card_type`,
+`is_artifact_now`, `LAYER4_ADDABLE_CARD_TYPES` / `normalize_added_card_type`
+(the invariant, raised from `GameState.add_continuous_effect`),
+`snapshot_departure_card_types` / `clear_departure_card_types`
+(`GameObject.lki_card_types`), `sync_creature_type_cache`; `effective_colors`
+gained the face-down base and Lattice's synthesized entry. All four are
+closure-free and pinned in `tests/test_layered_read_closure_free.py`.
+
+**Routed reads** (tokenizer inventory, outside `cards/parser/`, `parity/`,
+`cards/review_render.py`):
+
+| Read | Base | Branch | What's left and why it is exact |
+|---|---:|---:|---|
+| `printing.is_artifact` | 69 | 5 | library / graveyard card filters on a bare printing (`search.py` ×2, `library_lookat.py`, `graveyard.py` ×2): card types off the battlefield are printed |
+| `printing.card_types` | 96 | 68 | fixed card types the invariant keeps printed (Enchantment / Planeswalker / Battle), cards off the battlefield (graveyard counts, spells on the stack, `HasPrintedCardType`, `effects/card_types.py`), printing construction (copy effects), the printing properties themselves, imports of the `card_types` module, and `game.py`'s own reader |
+| color reads of a game object (`mana_cost.colors` in filters and effects, the colorless-Eldrazi proxy `not mana_cost.colored`) | 12 | 0 | (the remaining `colors` tokens are effects' own `self.colors` parameters and the printing-level defaults inside the card filters) |
+| new `is_artifact_now` / `has_card_type` / `effective_card_types` calls | 0 | 100 | |
+| `effective_colors` calls | 16 | 29 | |
+| card-filter call sites now matching the game object (`matches_card`) | 0 | 58 | |
+
+**Deviations from the plan above:**
+
+* A card exiled face down keeps its characteristics: `exiled_face_down` only
+  answers Karn's "face-up artifact card in exile" (and who may look at it
+  stays `publicly_known_to`'s job). Making it characteristic-less would have
+  stripped, for example, a face-down exiled artifact of its artifact-ness in
+  the cast-affordability probe that runs before it reaches the stack.
+* Face-down status counts only on the battlefield (a manifested card that
+  dies keeps a stale `face_down` flag in a public zone).
+* Spell-cost increases ("<Filter> spells cost {N} more") take the spell's
+  game object (`spell_cost_increase(..., card=)`, threaded through
+  `apply_cost_reductions`), so a color filter reads the spell's effective
+  colors.
+* Activation-lock sources that lost their abilities stop locking (all of
+  them, not only Karn).
+* **Unable to Scream** is not claimed: it is also a Duskmourn printing, and
+  the roto grammar is switched off for EoE-era printings. Its two lines
+  parse and its engine support (`attached_grants_card_types`,
+  `attached_prevents_turning_face_up`) is pinned by tests.
+* Printed creature reads were left as they were (see "Creature reads"); the
+  remaining gap is documented with its effect on Karn's +1.
+
+**Behaviour unchanged without a type- or color-changing effect:** every
+claimed printing of the `all`, `cube` and `eoe` pools has the same repr
+(new default-valued fields aside) and the same claimed set as on
+`aafcc5dc`; the roto pool gains exactly Mycosynth Lattice, Karn, the Great
+Creator and Liquimetal Coating. `docs/CUBE_POOL_COVERAGE.md` regenerates
+byte-identical. Seeded random-agent games produce identical full game logs
+on base and branch: 60 on the 17lands EoE deck pool and 30 on the PowerLSV
+cube deck pool.
+
+**Performance** (`docs/BENCHMARKING_FINDINGS.md` §8E): profiled, the routed
+reads cost ~3% over the base on EoE games. That needed one addition to the
+design: `GameState.layered_statics_possible`, computed by
+`simulate.setup_game` from the game's cards (decks and sideboards), lets
+the reads skip the battlefield scan for Lattice-style sources when no card
+of the game carries one (without it the profile was +6%). The existing tests changed only in their test doubles
+(the fake objects gained `zone` / `lki_card_types`, a fake state its
+registry and battlefield lists) and in one private helper's new `state`
+parameter (`legal._spell_kinds_for_card`).
+
+**Claimed cards:** Mycosynth Lattice, Karn, the Great Creator, Liquimetal
+Coating (roto pool 842 → 845 of 865).
