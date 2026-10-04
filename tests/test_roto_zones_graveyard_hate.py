@@ -338,10 +338,12 @@ def test_leyline_of_the_void_is_claimed_in_every_pool_holding_it():
     assert get_active_source().get_printings()[LEYLINE] == pr
 
 
-def test_lifting_the_guard_moves_only_leyline_in_the_eoe_pool():
-    """EoE's claimed set is 482: the 481 it had plus Leyline of the Void.
-    Every other EoE-era printing on the roto list builds exactly as it did
-    while the guard switched the cube / roto grammars off for it."""
+def test_lifting_the_guard_moves_only_leyline_and_unable_to_scream_in_the_eoe_pool():
+    """EoE's claimed set is 483: the 481 it had plus Leyline of the Void
+    (2026-10-03) and Unable to Scream (2026-10-04, once the type layer
+    landed and it joined the enchantment allowlist). Every other EoE-era
+    printing on the roto list builds exactly as it did while the guard
+    switched the cube / roto grammars off for it."""
     from mtg_bot.cards.parser.creature_rmc_grammar import (
         _eoe_only_names,
         rmc_grammar_disabled,
@@ -356,14 +358,16 @@ def test_lifting_the_guard_moves_only_leyline_in_the_eoe_pool():
         EOE_ERA_ON_THE_ROTO_LIST
     )
     eoe = OracleParserCardSource(pool="eoe").get_printings()
-    assert len(eoe) == 482 and LEYLINE in eoe
+    newly_claimed = {LEYLINE, "Unable to Scream"}
+    assert len(eoe) == 483 and newly_claimed <= set(eoe)
     raw = {c["name"]: c for c in load_pool_cards("eoe")}
-    for name in sorted(EOE_ERA_ON_THE_ROTO_LIST - {LEYLINE}):
+    for name in sorted(EOE_ERA_ON_THE_ROTO_LIST - newly_claimed):
         with rmc_grammar_disabled():
             guarded = build_card_record(raw[name])
         assert eoe.get(name) == guarded, name
-    with rmc_grammar_disabled():
-        assert build_card_record(raw[LEYLINE]) is None
+    for name in sorted(newly_claimed):
+        with rmc_grammar_disabled():
+            assert build_card_record(raw[name]) is None, name
 
 
 def test_leyline_of_the_void_lines_build_and_play():

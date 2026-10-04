@@ -66,7 +66,7 @@ What the card-pool branches do to it:
 |---|---|---|
 | `feature/cube-card-pool` `all` (`0b9050ff`) | 993 | +518, 475 renumbered |
 | `feature/roto-default-pool-leyline-wizard` `all` (`d90323b9`) | 1323 | +848, **475 of 475 renumbered**, 474 change row at cap 320 |
-| roto branch, `MTG_BOT_CARD_POOL=eoe` | 482 | +7 (newly claimed EoE-era cards + Leyline), 474 renumbered |
+| roto branch, `MTG_BOT_CARD_POOL=eoe` | 482 (483 on main after Unable to Scream, 2026-10-04) | +7 (newly claimed EoE-era cards + Leyline), 474 renumbered |
 | cube `all` → roto `all` | 993 → 1323 | 992 of 993 renumbered |
 
 No pool setting on the roto branch reproduces `main`'s id space: even
