@@ -10,7 +10,8 @@ reports per-game work:
 * ``decisions`` -- decisions the driver applied;
 * ``priority_calls`` -- ``legal_decisions`` calls at priority windows
   (search included), and how many of them the capability auto-pass
-  short-circuited;
+  short-circuited, and how many the opponent-quiet-window skip
+  (``docs/SEARCH_LIMITATIONS.md`` #17) passed (0 on code without it);
 * ``branching`` -- mean legal-decision count at non-short-circuited
   priority windows, and the share of those that offered an
   ``ActivateAbility``;
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     from mtg_bot.training import HeuristicConfig, PimcConfig
     from mtg_bot.training.self_play import _play_one_match_game
 
-    tally = {"priority_calls": 0, "short_circuited": 0,
+    tally = {"priority_calls": 0, "short_circuited": 0, "quiet_skipped": 0,
              "full_windows": 0, "full_legal": 0, "aa_windows": 0}
     real_legal = MtgGameStateAdapter.legal_decisions
     real_sc = MtgGameStateAdapter._can_short_circuit_to_pass
@@ -67,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
         out = real_legal(self)
         if self._combat_phase is None and not self._resolution_paused:
             tally["priority_calls"] += 1
+            quiet = getattr(self, "_should_skip_opp_quiet_window", None)
+            if len(out) == 1 and quiet is not None and quiet():
+                tally["quiet_skipped"] += 1
             if len(out) > 1:
                 tally["full_windows"] += 1
                 tally["full_legal"] += len(out)
@@ -119,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         "decisions_per_game": tot("decisions") / len(rows),
         "priority_calls_per_game": tot("priority_calls") / len(rows),
         "short_circuit_rate": tot("short_circuited") / max(1, tot("priority_calls")),
+        "quiet_skip_rate": tot("quiet_skipped") / max(1, tot("priority_calls")),
         "full_windows_per_game": tot("full_windows") / len(rows),
         "mean_branching_full_windows": tot("full_legal") / max(1, tot("full_windows")),
         "aa_window_share": tot("aa_windows") / max(1, tot("full_windows")),
