@@ -481,3 +481,27 @@ def test_end_to_end_smoke_random_vs_heuristic(tmp_path):
     assert r.crashed == 0
     assert r.wall_seconds > 0
     assert (out / L.REPORT_FILENAME).is_file()
+
+
+def test_play_pair_keeps_the_quiet_window_skip_off(monkeypatch):
+    """Ladder games play with the production heuristic defaults minus
+    the opponent-quiet-window skip (SEARCH_LIMITATIONS #17)."""
+    import mtg_bot.training.self_play as sp_mod
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+    from mtg_bot.training.self_play import MatchStats
+
+    seen = {}
+
+    def fake_run_match_parallel(**kwargs):
+        seen.update(kwargs)
+        return MatchStats(wins={0: 1, 1: 0}, draws=0, games=1,
+                          avg_decisions=3.0)
+
+    monkeypatch.setattr(sp_mod, "run_match_parallel", fake_run_match_parallel)
+    spec = L.AgentSpec(label="random", factory=L.RandomConfig().build,
+                       description={"kind": "random"})
+    result = L.play_pair(spec, spec, n_games=1, seed=0, n_workers=1,
+                         per_game_timeout_sec=None, deck_pool=[])
+    assert result.wins_a == 1
+    assert seen["heuristics"] == HeuristicsConfig.live_eval()
+    assert seen["alternate_seats"] is True

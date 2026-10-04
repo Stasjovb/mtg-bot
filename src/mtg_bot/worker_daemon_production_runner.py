@@ -492,6 +492,7 @@ def _play_eval_game(
     seat-alternation remap from
     ``_play_one_match_game_alternating_indexed``.
     """
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
     from mtg_bot.training.self_play import _play_one_match_game
 
     n = len(deck_pool)
@@ -521,7 +522,11 @@ def _play_eval_game(
             deck_pool=selected_pool,
             replay_config=None,
             hang_dump_dir=None,
-            heuristics=None,
+            # The production heuristic defaults this path has always
+            # used, minus the opponent-quiet-window skip
+            # (SEARCH_LIMITATIONS #17), which stays OFF for eval / the
+            # arena -- see ``HeuristicsConfig.live_eval``.
+            heuristics=HeuristicsConfig.live_eval(),
             heartbeat_path=None,
         )
         outcome_kind = "completed"

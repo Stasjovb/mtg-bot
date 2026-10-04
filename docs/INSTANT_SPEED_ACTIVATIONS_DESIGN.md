@@ -64,7 +64,12 @@ combat/end with an empty stack (#6), empty-combat skip (#9), opponent's
 postcombat main skip (#10), dead-main-1 skip (#11). These are documented
 search heuristics, not legality, and apply to activations exactly as to
 instants; this change does not touch them. The capability auto-pass is
-taught the new rule (below) so it stops hiding activations.
+taught the new rule (below) so it stops hiding activations. (Follow-up,
+2026-10-04, `feature/roto-quiet-window-skip`: a sixth heuristic, #17,
+auto-passes the non-active player's empty-stack upkeep / draw /
+precombat-main windows to win back most of the search cost -- see
+`docs/SEARCH_LIMITATIONS.md` #17 and `docs/BENCHMARKING_FINDINGS.md`
+§8E.)
 
 ## The change
 
@@ -133,7 +138,10 @@ Measured before/after with `scripts/scout_instant_activation_branching.py`
 (heuristic PIMC, cube decks) a game has ~2x the priority windows that
 need a decision, ~1.4-1.5x the search nodes and ~1.6-1.9x the wall.
 No legality-changing pruning is added; candidate search-side mitigations
-are listed in the `docs/SEARCH_LIMITATIONS.md` entry.
+are listed in the `docs/SEARCH_LIMITATIONS.md` entry. The first of them
+(skip the non-active player's empty-stack upkeep / draw / precombat-main
+windows) was built on 2026-10-04 as SEARCH_LIMITATIONS #17; measured in
+`docs/BENCHMARKING_FINDINGS.md` §8E.
 
 ## Known risk (pre-existing class)
 

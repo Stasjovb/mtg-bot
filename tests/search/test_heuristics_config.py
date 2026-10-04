@@ -24,6 +24,7 @@ def test_default_construction_all_true():
     assert cfg.skip_empty_combat_enabled is True
     assert cfg.skip_opp_postcombat_main_enabled is True
     assert cfg.skip_dead_main1_enabled is True
+    assert cfg.skip_opp_quiet_windows_enabled is True
 
 
 def test_disabled_returns_all_false():
@@ -33,6 +34,31 @@ def test_disabled_returns_all_false():
     assert cfg.skip_empty_combat_enabled is False
     assert cfg.skip_opp_postcombat_main_enabled is False
     assert cfg.skip_dead_main1_enabled is False
+    assert cfg.skip_opp_quiet_windows_enabled is False
+
+
+def test_disabled_turns_off_every_heuristic_flag():
+    """Future-proof: every boolean field is a heuristic toggle and
+    ``disabled()`` (the eval / rust_shadow checker config) must turn
+    all of them off, or a new heuristic would leak into
+    correctness-sensitive adapters."""
+    from dataclasses import fields
+
+    cfg = HeuristicsConfig.disabled()
+    bool_fields = [f.name for f in fields(cfg) if f.type in (bool, "bool")]
+    assert "skip_opp_quiet_windows_enabled" in bool_fields
+    assert all(getattr(cfg, name) is False for name in bool_fields)
+
+
+def test_live_eval_turns_off_only_the_quiet_window_skip():
+    """The live eval paths (v2 arena / ``mtg_bot eval`` / ladder) keep
+    the production defaults they always used, minus #17."""
+    cfg = HeuristicsConfig.live_eval()
+    assert cfg.skip_opp_quiet_windows_enabled is False
+    assert cfg == HeuristicsConfig(skip_opp_quiet_windows_enabled=False)
+    assert cfg.phase_prune_enabled is True
+    assert cfg.skip_opp_postcombat_main_enabled is True
+    assert cfg.decision_source == "python"
 
 
 def test_to_dict_keys_match_field_names():
@@ -43,6 +69,7 @@ def test_to_dict_keys_match_field_names():
         "skip_empty_combat_enabled",
         "skip_opp_postcombat_main_enabled",
         "skip_dead_main1_enabled",
+        "skip_opp_quiet_windows_enabled",
         # B3-S1: the single atomic-revert decision-source flip knob
         # travels with the heuristics through the same serialization.
         "decision_source",
@@ -69,6 +96,7 @@ def test_to_dict_from_dict_round_trip_mixed():
         skip_empty_combat_enabled=False,
         skip_opp_postcombat_main_enabled=True,
         skip_dead_main1_enabled=False,
+        skip_opp_quiet_windows_enabled=False,
     )
     rebuilt = HeuristicsConfig.from_dict(cfg.to_dict())
     assert rebuilt == cfg
@@ -91,6 +119,7 @@ def test_from_dict_missing_key_defaults_to_true():
     assert cfg.skip_empty_combat_enabled is True
     assert cfg.skip_opp_postcombat_main_enabled is True
     assert cfg.skip_dead_main1_enabled is True
+    assert cfg.skip_opp_quiet_windows_enabled is True
 
 
 def test_from_dict_disabled_overlay_pattern():
@@ -112,12 +141,14 @@ def test_from_dict_coerces_non_bool_truthy():
         "skip_empty_combat_enabled": "yes",
         "skip_opp_postcombat_main_enabled": "",
         "skip_dead_main1_enabled": None,
+        "skip_opp_quiet_windows_enabled": 0,
     })
     assert cfg.phase_prune_enabled is True
     assert cfg.force_landdrop_enabled is False
     assert cfg.skip_empty_combat_enabled is True
     assert cfg.skip_opp_postcombat_main_enabled is False
     assert cfg.skip_dead_main1_enabled is False
+    assert cfg.skip_opp_quiet_windows_enabled is False
 
 
 def test_frozen_rejects_mutation():

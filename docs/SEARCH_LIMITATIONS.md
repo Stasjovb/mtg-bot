@@ -329,7 +329,7 @@ at current model strength + EoE-only pool. See
 - Stack is empty
 - Current step is one of: **upkeep, draw step, beginning of combat, end step**
 
-The check fires BEFORE the capability hash check (it's cheaper). Capability check still runs for opp priority and for the active player in other phases.
+The check fires BEFORE the capability hash check (it's cheaper). Capability check still runs for opp priority and for the active player in other phases. (Since 2026-10-04 the non-active player's own empty-stack upkeep / draw / precombat-main windows have a mirror skip, #17; their beginning of combat and end step stay open.)
 
 **Why this is sometimes wrong** under CR: real MTG allows casting instants at any priority moment. There ARE legitimate plays in these phases:
 
@@ -350,7 +350,7 @@ The check fires BEFORE the capability hash check (it's cheaper). Capability chec
 - For training: misses < 0.5% of decisions; all in niche cases the lightly-trained NN couldn't exploit anyway. Bot doesn't learn the niche tactics, but the policy gradient isn't measurably affected.
 - For tournament play: real loss. Combat tricks matter. End-step plays matter. Bot gives up clear value here.
 
-**Mitigation**: configurable via the `--no-phase-priority-prune` flag. Default ON for training and self-play data_gen; should be set OFF for tournament/eval matches against real opponents (or against alternate-arch baselines where you want fair search behavior).
+**Mitigation**: configurable via the `--no-phase-priority-prune` flag. Default ON for training and self-play data_gen; should be set OFF for tournament/eval matches against real opponents (or against alternate-arch baselines where you want fair search behavior). (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training (millions of games; rare miss doesn't shift the gradient).
 
@@ -397,7 +397,7 @@ The player can still cast spells / activate abilities — but cannot end the pri
 - For training: bot ALWAYS plays its land at second main when conditions match — removes the "lazy NN holds lands forever" failure mode that early-stage policies fall into. Net positive for training signal quality.
 - For tournament play: small loss. The held-land cases above are real but rare; expert-level deck-building works around them. Default OFF for eval to be safe.
 
-**Mitigation**: `force_landdrop_enabled=False` on `MtgGameStateAdapter` (or via SelfPlayJobSpec / EvalJobSpec). EvalJobSpec defaults OFF; SelfPlayJobSpec defaults ON.
+**Mitigation**: `force_landdrop_enabled=False` on `MtgGameStateAdapter` (or via SelfPlayJobSpec / EvalJobSpec). EvalJobSpec defaults OFF; SelfPlayJobSpec defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: self-play training (the policy benefits from never seeing the "hold land for no reason" trajectory).
 
@@ -550,7 +550,7 @@ Fires for **both** active and opponent priority windows: with no attackers there
 - For training: removes ~10 priority moments per affected combat phase from the search tree. Fires reliably turns 1-2 (no creatures yet) + occasional board-wipe turns. Composes with phase-prune for ~15-20% additional wall reduction estimated.
 - For tournament play: marginal correctness loss. Empty-combat-instant plays are rare; expert decks rarely need them. Default OFF for eval.
 
-**Mitigation**: `skip_empty_combat_enabled=False` on `MtgGameStateAdapter` (or via the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_empty_combat_enabled=False` on `MtgGameStateAdapter` (or via the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -582,7 +582,7 @@ Fires for **both** active and opponent priority windows: with no attackers there
 | Trigger that fires during opp's main 2 | Engine handles trigger firing; we just can't respond with an instant |
 
 **Failure mode**: bot passes priority during opp's main 2 even when an instant could be cast. Conservative-WRONG. The natural reactive timing for our instants on opp's turn is usually:
-- BEFORE opp's combat (during their precombat main, where capability auto-pass already fires)
+- BEFORE opp's combat (during their precombat main, where capability auto-pass already fires -- since 2026-10-04 #17 skips that empty-stack window too, leaving their beginning of combat as the pre-combat window)
 - AT opp's end step (where this heuristic doesn't apply)
 
 So the dead window we're skipping is genuinely a low-value priority moment for our instant-speed plays.
@@ -594,7 +594,7 @@ So the dead window we're skipping is genuinely a low-value priority moment for o
 - For training: removes 1-2 priority moments per opp turn (we get priority once during opp's main 2; capability check fires when we can't act, this fires when we can but shouldn't). Estimated 5-6% wall delta.
 - For tournament play: marginal correctness loss. Pre-emptive instant timing on opp's main 2 is a niche play. Default OFF for eval.
 
-**Mitigation**: `skip_opp_postcombat_main_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_opp_postcombat_main_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -641,7 +641,7 @@ The "no creatures + no haste + no animator" conjunction means nothing the player
 - For training: removes ~2-4 priority moments per affected turn (active main 1 + opp's response window). Fires reliably turns 1-2 (no creatures yet); rarely after that (once you cast a creature, it sticks). Estimated 2-4% wall delta.
 - For tournament play: marginal correctness loss. Default OFF for eval.
 
-**Mitigation**: `skip_dead_main1_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_dead_main1_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -20169,13 +20169,68 @@ Design note: `docs/INSTANT_SPEED_ACTIVATIONS_DESIGN.md`. **What changed:** `lega
 What is still deliberately simplified:
 
 1. **Explicit mana abilities stay sorcery-window-only as actions.** **Where:** `legal.activation_timing_permits` (`is_mana_ability` -> False off sorcery timing), Rust `push_battlefield_activations`. **What:** CR 605.3a lets a player activate a mana ability whenever they have priority; the engine offers explicit mana abilities (the ones in `activated_abilities` -- Gaea's Cradle, Lion's Eye Diamond, Tinder Wall's "Sacrifice this creature: Add {R}{R}", Vivi Ornitier) as actions only in a sorcery window, and automatic payment uses only `produces` (cube-lands shortcut #1). Kept by scope decision for this change. **Failure mode:** Lion's Eye Diamond can't be cracked in response; floating mana from those sources for an instant-speed spell or activation is impossible. **Fix scope:** drop the `is_mana_ability` clause in both engines and teach the capability check to ignore pure mana abilities (otherwise every utility land defeats auto-pass); ~1 cycle plus a perf re-measure. **Impact:** strength-only, a handful of cube/roto cards.
-2. **Search heuristics prune activation windows exactly as they prune instant windows.** **Where:** `search/engine_adapter.py` (#6 phase prune of the active player's own upkeep / draw / beginning of combat / end step with an empty stack, #9 empty-combat skip, #10 opponent's postcombat main skip, #11 dead main 1). **What:** these documented search heuristics (not legality) now also hide activations in those windows -- e.g. a search seat never cracks a fetch land or activates Sundial of the Infinite in its own end step with an empty stack. `legal_actions` (and so random / heuristic / UI agents) offers them. **Fix scope / impact:** as the existing entries.
+2. **Search heuristics prune activation windows exactly as they prune instant windows.** **Where:** `search/engine_adapter.py` (#6 phase prune of the active player's own upkeep / draw / beginning of combat / end step with an empty stack, #9 empty-combat skip, #10 opponent's postcombat main skip, #11 dead main 1, and since 2026-10-04 #17, the non-active player's empty-stack upkeep / draw / precombat main). **What:** these documented search heuristics (not legality) now also hide activations in those windows -- e.g. a search seat never cracks a fetch land or activates Sundial of the Infinite in its own end step with an empty stack. `legal_actions` (and so random / heuristic / UI agents) offers them. **Fix scope / impact:** as the existing entries.
 3. **Phasing still doesn't hide activated abilities.** **Where:** `battlefield_ability_activations` (and Rust's mirror) don't skip `phased_out` permanents -- the engine-wide phasing simplification ("Robe of Stars phasing substrate"). P1's removed special case did skip them. With instant-speed windows, a creature phased out by Robe of Stars on its controller's turn could activate abilities during the opponent's turn. **Fix scope:** one `phased_out` check in both engines (Rust parity probe for Robe of Stars must move with it). **Impact:** Robe of Stars is the only phasing source in the pools.
 4. **RandomAgent can hold priority with a free repeatable ability.** **Where:** `agents.RandomAgent.choose_action` never passes while a non-pass action exists. A `{0}` non-sorcery ability (Nomads en-Kor, roto only) is now legal while its own activation is on the stack, so a random seat activates it until the driver's decision cap. (Sorcery-speed `{0}` equips -- Lightning Greaves, Shuko -- already looped it across resolutions.) Agent behaviour, not a rule; search seats are bounded by their budget. **Fix scope:** a pass probability in `RandomAgent`, if wanted.
 5. **Rust models no instant-speed loyalty permission or `activate_only_*` / exhaust / boast riders.** **Where:** `parity.cross_engine._python_aa_to_safe_dict` now declines any AA carrying `activate_only_during_your_turn`, `activate_only_if`, `activate_only_as_instant`, `exhaust` or `boast` (none in the bridged EoE set), so a rider Rust can't enforce is never silently dropped across the bridge; The Wandering Emperor isn't bridged.
 
-**Search cost (measured, `docs/BENCHMARKING_FINDINGS.md` §8D):** about twice as many priority windows per game need a real decision (a player holding an activatable ability is no longer auto-passed off their main phase), so heuristic-evaluator search does ~1.4-1.5x the nodes per game at a fixed per-decision budget and ~1.6-1.9x the wall. No legality-changing pruning was added. Candidate search-side (not legality) mitigations, unbuilt: (a) a #6-style prune of the non-active player's empty-stack upkeep / draw / precombat-main windows (#10 already skips their postcombat main); (b) ranking `ActivateAbility` after `PassPriority` in `mtg_priors` at empty-stack, non-combat windows; (c) collapsing "timing-neutral" activations (abilities whose effect reads no combat or stack state) to fewer windows. Each would need its own entry here.
+**Search cost (measured, `docs/BENCHMARKING_FINDINGS.md` §8D):** about twice as many priority windows per game need a real decision (a player holding an activatable ability is no longer auto-passed off their main phase), so heuristic-evaluator search does ~1.4-1.5x the nodes per game at a fixed per-decision budget and ~1.6-1.9x the wall. No legality-changing pruning was added. Candidate search-side (not legality) mitigations: (a) **CHOSEN and built 2026-10-04 (`feature/roto-quiet-window-skip`) -- entry #17:** a #6-style prune of the non-active player's empty-stack upkeep / draw / precombat-main windows (#10 already skips their postcombat main); measured in `docs/BENCHMARKING_FINDINGS.md` §8E; (b) unbuilt: ranking `ActivateAbility` after `PassPriority` in `mtg_priors` at empty-stack, non-combat windows; (c) unbuilt: collapsing "timing-neutral" activations (abilities whose effect reads no combat or stack state) to fewer windows. Each would need its own entry here.
 
 **Unmodelled timing words:** no card in any pool prints "Activate only during combat", "during your upkeep" or "before blockers are declared"; the activated grammar rejects such a line (pinned by `tests/test_instant_speed_activations.py`), so a card with one stays unclaimed rather than losing the restriction.
 
 **Pinned by:** `tests/test_instant_speed_activations.py`, `tests/test_instant_activation_cards.py`, `tests/test_cross_engine_instant_activations.py`.
+
+## 17. Skip our priority in the opponent's empty-stack upkeep, draw step and precombat main (training heuristic) — 2026-10-04, `feature/roto-quiet-window-skip`
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_skip_opp_quiet_window()` and the step set `_OPP_QUIET_WINDOW_STEPS`. It extends #10: both share their preconditions through `_is_opp_empty_stack_priority_window()`, and `training/action_encoding._enumerate_legal` mirrors both so the policy mask agrees with the decision list. Returns `[PassPriority()]` immediately (no `legal_actions` enumeration, no search) when ALL of these hold:
+
+- `skip_opp_quiet_windows_enabled` is True (flag defaults below)
+- Not terminal / not resolution-paused / not in a factored combat sub-decision
+- Stack is empty
+- Step is `UPKEEP`, `DRAW` or `PRECOMBAT_MAIN`
+- Player with priority is the **non-active** player (we're being asked to act on opp's turn)
+
+**Scope**: with #10 (opp's `POSTCOMBAT_MAIN`, its own flag) the non-active player is auto-passed in every empty-stack window of the opponent's turn except the combat phase and the end step. **Kept:** every window with something on the stack, in any step (responses to the opponent's spells, activations and triggers — upkeep and beginning-of-combat triggers included); the opponent's beginning of combat; every combat step (#9 still skips them when nothing attacks); the opponent's end step. The active player's own windows are untouched (that's #6 / #7 / #11).
+
+**What it hides: every action, not just activations.** In a skipped window the non-active player gets no choice at all — instant spells, flash creatures, activated abilities and anything else `legal_actions` offers there are all passed. The capability auto-pass (#3) already passed these windows when the player had nothing to do; this skip passes them when the player does have something.
+
+**Flag defaults**: ON in `HeuristicsConfig()` — `SelfPlayJobSpec`, `data_gen` / the worker self-play stage, `iterate`'s self-play config, `run_match*` called without a config. OFF in `HeuristicsConfig.disabled()` — `EvalJobSpec`, the test-session adapter default, the `rust_shadow` checker — exactly like #10. Also OFF in `HeuristicsConfig.live_eval()`, which the live eval paths pass: the v2 worker eval stage (`worker_daemon_production_runner._play_eval_game`, behind `iterate`'s arena and `mtg_bot eval`) and `mtg_bot ladder` (`play_pair`). Those paths used to pass `heuristics=None`, i.e. the production defaults, so #6 / #7 / #9 / #10 / #11 have always been ON in the arena and the ladder (the "`EvalJobSpec` defaults OFF" lines in those entries describe the legacy `EvalJobSpec` only). `live_eval()` keeps that and turns only this flag off, so arena and ladder games play exactly as they did before this entry landed.
+
+**Why**: since activated abilities of permanents became instant-speed (2026-10-03, "Instant-speed activated abilities of permanents" below), any untapped permanent with a non-mana ability defeats #3 in every window of the opponent's turn. A search game had about twice the priority windows needing a decision, ~44% of the new ones offering only activations plus pass, mostly `{T}` artifacts whose timing rarely matters (Manifold Key, Currency Converter, Grindstone, Ghost Vacuum; `docs/BENCHMARKING_FINDINGS.md` §8D). For the non-active player these three empty-stack windows are the least time-sensitive: most of what they'd do there can be done at the opponent's beginning of combat (still before attackers), in response to the opponent's spell, or at their end step, all of which stay open.
+
+**Plays it misses** (all legal, some of them the best play):
+
+| Play | Window lost | Example | What the search seat can still do |
+|---|---|---|---|
+| Flash creature or instant right after the opponent draws | opp draw step | Vendilion Clique in the opponent's draw step, taking the card they just drew before they can cast it; a cantrip or Brainstorm there | Clique at their beginning of combat — after they've had main 1 to cast the card |
+| Land destruction / mana denial before they use the land | opp upkeep, draw step | Wasteland / Strip Mine / Ghost Quarter on their land; Rishadan Port tapping their land in their upkeep (Port's main use) | the same at beginning of combat or end step, after they've tapped the land for main-phase spells (Port then only denies combat and main-2 mana) |
+| Other instant-speed disruption before their main phase | opp upkeep, draw step | kill their mana creature or Goblin Welder before they use it; bounce or kill a creature before they equip or crew it; instant-speed discard | beginning of combat, after main 1 |
+| Acting at the end of their main 1 rather than at beginning of combat | opp main 1 (empty stack, after they pass) | kill a creature before its "at the beginning of combat" trigger goes on the stack (Ouroboroid); act before beginning-of-combat triggers are put on the stack | respond to the trigger once it's on the stack (it still resolves) or act at beginning of combat |
+| Look at or change their next draw | opp upkeep | Mishra's Bauble on their library before their draw step; Sensei's Divining Top / Scroll Rack on our own library in their upkeep | their end step (sees the following draw) |
+| Graveyard hate before their sorcery-speed graveyard use | opp upkeep, draw, main 1 | Ghost Vacuum / Soul-Guide Lantern exiling their graveyard before a reanimation or delve spell | in response to that spell (stack non-empty — kept) |
+| Flash a creature in before they commit main-phase plays | opp main 1 | flash a blocker in so they see it before casting sorcery-speed spells | beginning of combat (usually better: they can no longer answer at sorcery speed) |
+
+No response is lost: a window with anything on the stack is never skipped.
+
+**Training effect**: self-play never generates these plays, so the network never learns to make them, and it never learns to play around them either — it never sees an upkeep Wasteland or a draw-step Clique from its opponent, so the active side's value and policy won't anticipate them (e.g. sequencing land drops around Port / Wasteland, casting the drawn card before a Clique). The skipped windows also produce no policy targets (a forced pass isn't a training sample).
+
+**Failure mode**: bot passes priority in the opponent's upkeep / draw step / main 1 with an empty stack even when it had a legal and useful action. Conservative-WRONG (never an illegal action; just doesn't take a legal one). The rules engine's `legal_actions` is unchanged, so random / heuristic-agent / UI play sees every window; only seats driven through the search adapter with the flag on pass them.
+
+**Engine parity**: no Rust or cross-engine change. Like #6 / #7 / #9 / #10 / #11 the skip lives only in the Python search adapter. The Rust engine's `legal_decisions` is the rules set and is untouched; the Rust-backed provider `RustGameStateAdapter` (dormant under the production `decision_source="python"`) applies none of the six adapter heuristics; the `rust_shadow` lock-step checker builds its Python side with `HeuristicsConfig.disabled()` (which turns this flag off too) and compares Rust's set against raw `legal.legal_actions`. LEGAL_SET_EQ and the shadow / parity harnesses see no difference. Porting the adapter short-circuits into the Rust provider stays flip work (`docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §3.1 provider table).
+
+**When it matters**:
+
+- For training: removes the non-active player's empty-stack decisions in three steps of every opponent turn; measured cost saving in `docs/BENCHMARKING_FINDINGS.md` §8E. Strength cost: the plays above, never generated and never defended against.
+- For tournament play: a real loss for decks built around Port / Wasteland / Clique / Bauble / flash. Off for the arena and the ladder (`live_eval()`).
+
+**Mitigation**: `skip_opp_quiet_windows_enabled=False` on `MtgGameStateAdapter` (or via `HeuristicsConfig` on the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON; the live arena / `mtg_bot eval` / ladder paths pass it OFF.
+
+**Acceptable for**: training, self-play data_gen.
+
+**NOT acceptable for**: tournament play, eval matches against real opponents, strength comparisons between decks built around land destruction, Rishadan Port, flash or library manipulation.
+
+**Fix scope if/when needed**: trivial to disable per spec. Narrower alternatives: keep a window when the non-active player holds an action whose value depends on being used before the opponent's main phase (land destruction or tapping, library-top manipulation, flash with an ETB that hits hand) — a per-effect allowlist with its own fragility; or let the policy learn to pass these windows (same shape of fix as #6).
+
+**Impact estimate**: see `docs/BENCHMARKING_FINDINGS.md` §8E.
+
+**Pinned by**: `tests/search/test_skip_opp_quiet_windows.py` (skipped windows auto-pass without `legal_actions`; kept windows — beginning of combat, combat steps with an attacker, end step, non-empty stack — still offer the activation under the full production config; mask agreement; flag off), `tests/search/test_heuristics_config.py` (`disabled()` turns every flag off; `live_eval()`), `tests/test_worker_daemon_production_runner.py::test_play_eval_game_keeps_the_quiet_window_skip_off`, `tests/cli/test_ladder.py::test_play_pair_keeps_the_quiet_window_skip_off`.
