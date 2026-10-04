@@ -419,6 +419,11 @@ class SharedTensorNNEvalServer:
         structured_value_head_input: Optional[str] = None,
         structured_value_temperature: Optional[float] = None,
         structured_value_bias: Optional[float] = None,
+        # Stored card vocabulary of a structured ``weights_path`` —
+        # same contract as ``NNEvaluator(card_vocab=...)``: ``None``
+        # resolves it next to the weights, an unstamped checkpoint is
+        # refused, a changed vocabulary is remapped by card name.
+        card_vocab: Any = None,
     ) -> None:
         # Deferred CUDA resolution: same pattern as PR #36's fix to
         # NNEvalServer. Don't call torch.cuda.is_available() in any
@@ -539,7 +544,22 @@ class SharedTensorNNEvalServer:
             )
         else:
             self._model = _ValueMLP(hidden_sizes=effective_hidden)
-        if weights_path is not None and model_factory is None:
+        self.card_vocab_report = None
+        if (
+            weights_path is not None and model_factory is None
+            and self._is_structured
+        ):
+            # Same load path as NNEvaluator: refuse an unstamped
+            # checkpoint, remap a changed card vocabulary by name.
+            from mtg_bot.training.card_vocab import (
+                load_structured_checkpoint,
+            )
+
+            self._model, self.card_vocab_report = load_structured_checkpoint(
+                self._model, Path(weights_path),
+                map_location=self._device, card_vocab=card_vocab,
+            )
+        elif weights_path is not None and model_factory is None:
             state_dict = torch.load(
                 weights_path,
                 map_location=self._device,

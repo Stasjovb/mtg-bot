@@ -528,6 +528,16 @@ class NNEvaluator(Evaluator):
         structured_value_head_input: Optional[str] = None,
         structured_value_temperature: Optional[float] = None,
         structured_value_bias: Optional[float] = None,
+        # The card vocabulary a STRUCTURED ``weights_path`` was trained
+        # on (``ModelMetadata.card_vocab`` / a ``CardVocab``). ``None``
+        # resolves it from the checkpoint's own ``metadata.json`` or
+        # ``<weights>.card_vocab.json`` stamping sidecar; a checkpoint with
+        # neither is REFUSED (``MissingCardVocabError``) — never
+        # guessed. A vocabulary that differs from the current one is
+        # remapped by card name at load (see
+        # ``mtg_bot.training.card_vocab``). Ignored for the MLP
+        # architectures and for random-init (no ``weights_path``).
+        card_vocab: Any = None,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -647,7 +657,38 @@ class NNEvaluator(Evaluator):
             )
         else:
             self.model = _ValueMLP(hidden_sizes=hidden_sizes)
-        if weights_path is not None:
+        # What happened to the checkpoint's printing rows at load
+        # (structured + weights only); ``None`` otherwise.
+        self.card_vocab_report = None
+        # The card vocabulary this evaluator's printing rows are
+        # indexed by: always the CURRENT one for a structured model
+        # (random init is born in it; a loaded checkpoint is remapped
+        # into it). ``save`` stamps it next to the weights. ``None``
+        # for the MLP architectures (no printing identity).
+        self.card_vocab = None
+        if self.is_structured:
+            from mtg_bot.training.card_vocab import current_card_vocab
+
+            self.card_vocab = current_card_vocab()
+        if weights_path is not None and self.is_structured:
+            # The single structured-weights load path: resolve the
+            # checkpoint's stored card vocabulary (refusing an
+            # unstamped one), remap its per-printing rows to the
+            # current vocabulary by name, and rebuild the model when
+            # the remap grew the embedding table.
+            from mtg_bot.training.card_vocab import (
+                load_structured_checkpoint,
+            )
+
+            self.model, self.card_vocab_report = load_structured_checkpoint(
+                self.model, Path(weights_path),
+                map_location=self.device, card_vocab=card_vocab,
+            )
+            # The tokenizer must bucket against the LOADED table size.
+            self._structured_n_printings_cap = (
+                self.model.config.n_printings
+            )
+        elif weights_path is not None:
             state_dict = torch.load(
                 weights_path, map_location=self.device,
                 weights_only=True,
@@ -1284,6 +1325,13 @@ class NNEvaluator(Evaluator):
                 device=device,
                 architecture=architecture,
                 action_encoding_version=action_encoding_version,
+                # The checkpoint's stored card vocabulary (a sidecar
+                # stamp is already merged in by Registry.load_metadata).
+                # Empty -> NNEvaluator resolves it next to weights_path
+                # and refuses an unstamped checkpoint.
+                card_vocab=(
+                    getattr(metadata, "card_vocab", None) or None
+                ),
                 structured_scalar_schema_version=scalar_schema_version,
                 structured_value_head_input=_resolve(
                     training,
@@ -1349,8 +1397,21 @@ class NNEvaluator(Evaluator):
         )
 
     def save(self, path: Path) -> None:
-        """Persist ``state_dict`` to disk. Standard PyTorch convention."""
+        """Persist ``state_dict`` to disk. Standard PyTorch convention.
+
+        A structured model is also stamped with the card vocabulary its
+        printing rows are indexed by (``<path>.card_vocab.json``), so the
+        file can be loaded back — under any later vocabulary — without
+        guessing. MLP weights carry no printing identity and get none.
+        """
         torch.save(self.model.state_dict(), path)
+        if self.is_structured:
+            from mtg_bot.training.card_vocab import write_sidecar
+
+            write_sidecar(
+                self.card_vocab, Path(path),
+                provenance={"source": "NNEvaluator.save"},
+            )
 
     @staticmethod
     def _engine_state(state: GameState) -> EngineGameState:
