@@ -411,6 +411,24 @@ JSON, `metadata.json`, the training card, the CLI). A standalone
 `mtg_bot calibrate-value --version vN` re-fits an already-registered
 version without retraining.
 
+> **Correction (2026-10-04):** "applied at inference" was true only for
+> `NNEvaluator.from_metadata` (calibrate-value, the replay annotator).
+> `NNPimcConfig.build` -- the builder behind every worker self-play and
+> eval game, iterate's arenas and `mtg_bot ladder` -- read the trunk
+> dims from `metadata.json` itself and never passed the calibration
+> (or `value_head_input`). So until `feature/nnpimc-value-calibration`
+> no game was ever played with a calibrated value head: the v8-v14
+> shrink (T 10.7-17.5) and the v15+ sharpen (T 0.49-0.71) never
+> reached search. Every NN-driven self-play shard (cycles 7-10: v8-v10;
+> cycles 11-18: v15/v18/v20-v24) was searched with uncalibrated leaf
+> values -- its visit-count policy targets and, from cycle 11 on, the
+> recorded root values that v17-v21 (root) and v23-v25 (blend:0.8)
+> trained on. The heuristic corpora (v8, v13-v16, v22, v26) are
+> unaffected: no network in the loop. All paths now share one resolver
+> (`nn_evaluator.structured_kwargs_from_metadata`); the ladder's
+> `<v>+nocal` modifier reproduces the old evaluator. Measured effect:
+> `docs/STRENGTH_LADDER.md`, 2026-10-04.
+
 Two guards keep the calibrated gate honest: a zero-variance head is
 never calibrated (every monotone one-parameter family over a constant
 input degenerates into a fitted intercept), and the additive bias is
@@ -548,7 +566,20 @@ touching the production default, measure the handicap at nodes 200 /
 throughput, and on CPU at this trunk size the ladder saw no clear
 speed loss at batch 1.
 
-
+**Follow-up 4 (2026-10-04): both fixes merged to main together.** The
+measurements asked for in (3) are in (`docs/BENCHMARKING_FINDINGS.md`
+§6c): the batch-32 handicap is ~8.5 points at nodes 200 and ~3 at 400,
+and batch 1 costs ~3 % wall under the 16-worker production shape
+(v22 at nodes 200: 2297 s vs 2223 s per 200 ladder games). The
+production default is therefore `SEARCH_LEAF_BATCH_SIZE = 1`
+(`mtg_bot.search.leaf_batch`) for worker self-play, iterate's arenas,
+capture and the ladder. In the same merge every NN seat started
+applying the checkpoint's value calibration (correction above;
++~2 pts at batch 1, within noise -- `docs/STRENGTH_LADDER.md`
+2026-10-04). The next self-play cycles are the first whose data comes
+from a batch-1 searcher with calibrated leaves; ladder rows from before
+2026-10-04 correspond to `vN+b32+nocal` (pre-2026-10-01) or
+`vN+b1+nocal` (2026-10-01 batch-1 re-ladder).
 
 ## Synthesis — what this means for the next iterate cycle
 

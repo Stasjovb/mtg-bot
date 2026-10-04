@@ -530,7 +530,11 @@ now the single production constant, used by the self-play runner
 `NNPimcConfig.batch_size` keeps its 32 default for explicit opt-in
 (GPU workers, benches). Every "vs heuristic" number in the lineage
 before 2026-10-01 was measured through this handicap (NN seats at 32,
-heuristic seat at 1) and reads ~5-8 points low.
+heuristic seat at 1) and reads ~5-8 points low. (Those NN seats -- and
+the batch-1 rows above -- also ran without the checkpoint's value
+calibration, which `NNPimcConfig.build` only applies since 2026-10-04;
+the ladder label `vN+b32+nocal` reproduces the old seat exactly. See
+`docs/STRENGTH_LADDER.md` 2026-10-04.)
 
 ## 7. `effective_power` / layered-read hot path — closure removal (2026-09-23)
 
