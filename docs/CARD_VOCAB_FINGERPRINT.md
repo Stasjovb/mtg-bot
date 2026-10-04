@@ -275,3 +275,39 @@ covers it and `CardVocab` refuses an unknown scheme.
   (every worker game, `mtg_bot ladder`) reads the trunk dims from
   `metadata.json` but not `value_calibration` / `value_head_input`, so
   those paths run the value head uncalibrated.
+
+## 9. Compatibility check against the roto branch (2026-10-04)
+
+Done in a throwaway **detached** worktree (no branch, nothing pushed):
+`origin/feature/roto-default-pool-leyline-wizard` (`d90323b9`) with
+`git merge --no-ff --no-commit feature/vocab-fingerprint`.
+
+* **Merge**: clean, no conflicts. Only `CLAUDE.md` and
+  `training/data_gen.py` were auto-merged, in regions far apart. At
+  merge time, update the roto branch's CLAUDE.md line "Networks trained
+  on the EoE pool ... do not transfer to the cube pool; retrain from
+  scratch": they now load, with every shared card's embedding intact
+  and new cards at fresh init.
+* **Real checkpoints**: copies of s2 `v1`, `v8`, `v22`, `v26` were
+  stamped on this branch (`card-vocab stamp --use-metadata-commit
+  --sidecar`), then loaded in the merged tree via
+  `Registry.load_metadata` + `NNEvaluator.from_metadata`. Each logged
+  `CARD VOCABULARY REMAP ... kept 475, new 848, dropped 0` with
+  `n_printings 320 -> 1324`. All 475 shared cards' rows are bit-exact in
+  both `printing_embed` and `hand_belief_queries` (each copied from its
+  old modulo-bucketed row), and every other parameter is identical.
+* **Outputs**: v22 on a real game state (shared EoE cards) gives
+  **bit-equal value and policy logits** in the remapped 1323-name space
+  and in its original 475-name / cap-320 space. A naive load of the same
+  weights under the roto ids differs (policy logits up to 1.16 apart).
+* **Distributed path**: in the merged tree, the coordinator app served
+  v22's sidecar-merged metadata, `fetch_weights_if_missing` cached it
+  (the cached `metadata.json` carries `card_vocab`), and
+  `NNPimcConfig.build` on that cache loaded the remapped net.
+* **Tests in the merged tree**: full suite, 53 failed / 20691 passed.
+  That is exactly `main`'s 52 baseline failures plus
+  `test_shrunk_vocabulary_drops_removed_cards`, which assumed the
+  vocabulary fits in 600 rows; it was fixed on this branch
+  (`35d774e2`) by deriving table sizes from the live vocabulary. With
+  that fix merged in, all 224 card-vocab-related tests pass in the
+  merged tree.
