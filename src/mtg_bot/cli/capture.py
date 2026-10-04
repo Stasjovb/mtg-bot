@@ -20,6 +20,8 @@ training. Replays land at
 
 from __future__ import annotations
 
+from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+
 import argparse
 import time
 from pathlib import Path
@@ -82,7 +84,7 @@ def main(argv=None) -> None:  # pragma: no cover
         weights_path=str(weights_path),
         samples=args.samples,
         inner_nodes=args.nodes,
-        batch_size=32,
+        batch_size=SEARCH_LEAF_BATCH_SIZE,
         with_policy=True,
         puct=True,
         hidden_sizes=hidden_sizes,

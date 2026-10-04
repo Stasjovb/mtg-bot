@@ -764,7 +764,17 @@ def _launch(
         fleet = fleet_factory(cfg.aws, paths)
         if not dry_run:
             instances = fleet.launch_fleet()
-            aws_urls = fleet.wait_for_healthy(instances)
+            try:
+                aws_urls = fleet.wait_for_healthy(instances)
+            except BaseException:
+                # The finalize hook that tears the fleet down is only
+                # registered once the cycle lifecycle opens (below), so
+                # a health timeout / Ctrl-C here used to leak running
+                # spot instances (2 x c7i.4xlarge left billing after a
+                # tailscaled-readiness failure, 2026-09-27). Terminate
+                # before propagating.
+                fleet.terminate_fleet("wait_for_healthy_failed")
+                raise
         # In dry-run we DON'T spin real instances -- print what
         # would happen and return without touching AWS at all.
 
