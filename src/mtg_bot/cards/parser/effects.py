@@ -3623,7 +3623,14 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Roto P6 (keyword mechanics, face-changing & pregame).
     from mtg_bot.cards.parser.roto_keywords import parse_p6_effect
 
-    return parse_p6_effect(phrase)
+    eff = parse_p6_effect(phrase)
+    if eff is not None:
+        return eff
+    # Card types and colors (CR 613 layers 4 / 5): Liquimetal Coating,
+    # Karn, the Great Creator.
+    from mtg_bot.cards.parser.roto_layers import parse_roto_layer_effect
+
+    return parse_roto_layer_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

@@ -324,7 +324,8 @@ def _parse_quote_final_line(line: str, card: dict) -> WGLine | None:
 
 
 _ACTIVATION_LOCK_RE = re.compile(
-    r"^Activated abilities of (?P<types>[a-z, ]+?) can't be activated\.$"
+    r"^Activated abilities of (?P<types>[a-z, ]+?)"
+    r"(?P<opponents> your opponents control)? can't be activated\.$"
 )
 _PLURAL_TYPES = {
     "artifacts": "Artifact", "creatures": "Creature",
@@ -334,17 +335,23 @@ _PLURAL_TYPES = {
 
 
 def _parse_activation_lock_line(line: str, card: dict) -> WGLine | None:
-    """``Activated abilities of <types> can't be activated.`` (Clarion
-    Conqueror) -> ``locks_activated_abilities_of`` (mana abilities
-    included, as printed)."""
+    """``Activated abilities of <types>[ your opponents control] can't be
+    activated.`` (Clarion Conqueror, Null Rod, Stony Silence; Karn, the
+    Great Creator) -> ``locks_activated_abilities_of`` /
+    ``locks_opponents_activated_abilities_of`` (mana abilities included,
+    as printed)."""
     m = _ACTIVATION_LOCK_RE.match(line)
     if m is None:
         return None
     words = re.split(r", and |, or |, | and | or ", m.group("types"))
     if not words or not all(w in _PLURAL_TYPES for w in words):
         return None
+    field_name = (
+        "locks_opponents_activated_abilities_of" if m.group("opponents")
+        else "locks_activated_abilities_of"
+    )
     return WGLine(fields={
-        "locks_activated_abilities_of": tuple(_PLURAL_TYPES[w] for w in words),
+        field_name: tuple(_PLURAL_TYPES[w] for w in words),
     })
 
 
