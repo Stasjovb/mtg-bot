@@ -940,6 +940,7 @@ class CreateNTokensFromLastExileRecall(Effect):
         printing = TOKEN_PRINTINGS[self.token_name]
         for _ in range(count):
             token = state.new_object(printing, controller_id, Zone.BATTLEFIELD)
+            token.entered_battlefield_turn = state.turn_number
             state.battlefield.append(token)
         state.log.append(
             f"P{controller_id} creates {count} {self.token_name} tokens "
@@ -952,6 +953,35 @@ class CreateNTokensFromLastExileRecall(Effect):
             f"graveyard this way"
         )
 
+
+
+@dataclass(frozen=True)
+class SacrificeSelfIfNoNamedCounters(Effect):
+    """"If there are no <kind> counters on this <permanent>, sacrifice
+    it." (Gemstone Mine's mana-ability rider). Checks the resolving
+    source's ``named_counters`` and sacrifices it when none of ``kind``
+    remain. No-op if the source already left the battlefield."""
+
+    kind: str
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import named_counter_count
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        source = state.resolving_source
+        if source is None or source not in state.battlefield:
+            return
+        if named_counter_count(source, self.kind) == 0:
+            _sacrifice(state, source)
+
+    def describe(self) -> str:
+        return (
+            f"if there are no {self.kind} counters on this permanent, "
+            f"sacrifice it"
+        )
 
 
 @dataclass(frozen=True)
@@ -975,15 +1005,18 @@ class SacrificeSelf(Effect):
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
-    ) -> None:
+    ) -> bool:
         from mtg_bot.turn import sacrifice as _sacrifice
 
         source = state.resolving_source
         if source is None:
-            return
+            return False
         if source not in state.battlefield:
-            return
+            return False
         _sacrifice(state, source)
+        # ``True`` lets ``IfYouDo`` gate "you may sacrifice this. If you
+        # do, …" (The Fantasticar) on the sacrifice actually happening.
+        return True
 
     def describe(self) -> str:
         return "sacrifice this permanent"

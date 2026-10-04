@@ -139,6 +139,21 @@ class IsArtifact(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsLegendary(ObjectPredicate):
+    """The object's printing carries the ``"Legendary"`` supertype.
+
+    Composes with the type atoms for "legendary creature" filters
+    (Karakas's "Return target legendary creature to its owner's
+    hand."). Players have no ``printing`` and evaluate False.
+    """
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        return "Legendary" in obj.printing.supertypes
+
+
+@dataclass(frozen=True)
 class IsEnchantment(ObjectPredicate):
     """The object is an enchantment.
 
@@ -265,6 +280,35 @@ class IsTapped(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class HasPowerToughness(ObjectPredicate):
+    """The object's effective power and toughness are exactly
+    ``power``/``toughness`` ("a 1/1 creature" — Sword of the Meek)."""
+
+    power: int
+    toughness: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_power, effective_toughness
+
+        return (
+            effective_power(state, obj) == self.power
+            and effective_toughness(state, obj) == self.toughness
+        )
+
+
+@dataclass(frozen=True)
+class IsHarnessed(ObjectPredicate):
+    """The object is harnessed (CR 701.64 — The Mind Stone's
+    ``Harness``). Gates the Infinity (``∞ —``) abilities of Infinity
+    Stones: composed as ``Source(IsHarnessed())`` on their triggers."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "harnessed", False))
+
+
+@dataclass(frozen=True)
 class IsSource(ObjectPredicate):
     """The object IS the currently-resolving source.
 
@@ -371,6 +415,29 @@ class IsBlocking(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class BlockedBySource(ObjectPredicate):
+    """The object is a creature the resolving source is blocking --
+    Tinder Wall's "target creature it's blocking".
+
+    Reads ``state.resolving_source`` (pinned during target enumeration
+    and resolution, like ``IsSource``). While the source is on the
+    battlefield its live block decides (``source.blocking``; a blocker
+    removed from combat blocks nothing). Once it has left -- Tinder Wall
+    is sacrificed as part of the cost -- the ability uses the source's
+    last known information (CR 608.2h): the attacker it was blocking
+    still lists it among its blockers (``blocked_by``; an attacker stays
+    blocked when its blocker leaves, CR 509.1h)."""
+
+    def test(self, obj, state):
+        source = getattr(state, "resolving_source", None)
+        if source is None or not hasattr(obj, "printing"):
+            return False
+        if any(o is source for o in state.battlefield):
+            return getattr(source, "blocking", None) == obj.id
+        return source.id in getattr(obj, "blocked_by", ())
+
+
+@dataclass(frozen=True)
 class HasKeyword(ObjectPredicate):
     """The object currently has the given keyword.
 
@@ -400,6 +467,7 @@ _COUNTER_ATTRS: dict[str, str] = {
     "+1/+1": "plus_one_counters",
     "charge": "charge_counters",
     "stun": "stun_counters",
+    "silver": "silver_counters",
     "loyalty": "loyalty_counters",
 }
 
@@ -453,6 +521,26 @@ class HasPowerAtMost(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class HasPowerAtLeast(ObjectPredicate):
+    """The object's effective power is at least ``n`` ("with power N or
+    greater" -- Vaultborn Tyrant, the ferocious gate). Same measuring
+    rules as :class:`HasPowerAtMost`."""
+
+    n: int
+
+    def test(self, obj, state):
+        if not hasattr(obj, "printing"):
+            return False
+        from mtg_bot.game import effective_power
+
+        try:
+            power = effective_power(state, obj)
+        except Exception:
+            return False
+        return power >= self.n
+
+
+@dataclass(frozen=True)
 class HasToughnessAtMost(ObjectPredicate):
     """The object's effective toughness is less than or equal to ``n``.
 
@@ -474,3 +562,80 @@ class HasToughnessAtMost(ObjectPredicate):
         except Exception:
             return False
         return toughness <= self.n
+
+
+@dataclass(frozen=True)
+class HasCardType(ObjectPredicate):
+    """The object's printed card types include ``card_type`` — the
+    zone-agnostic check the spell-cast trigger family needs
+    (``Whenever you cast a noncreature spell`` / ``an instant or
+    sorcery spell``), where the subject is a card on the stack."""
+
+    card_type: str
+
+    def test(self, obj, state):
+        printing = getattr(obj, "printing", None)
+        return printing is not None and self.card_type in printing.card_types
+
+
+# ---------- kicker ----------
+
+
+@dataclass(frozen=True)
+class ManaValueAtMostSourceX(ObjectPredicate):
+    """"with mana value X or less" where X is the resolving source's X
+    (``GameObject.entered_x_value``, Thieving Skydiver's kicker X)."""
+
+    def test(self, obj, state):
+        src = getattr(state, "resolving_source", None)
+        printing = getattr(obj, "printing", None)
+        if src is None or printing is None:
+            return False
+        return printing.mana_cost.total <= src.entered_x_value
+
+
+# ---------- optional additional costs (Squad / Offspring) ----------
+
+
+@dataclass(frozen=True)
+class SquadCostPaid(ObjectPredicate):
+    """"if its squad cost was paid" (CR 702.157a)."""
+
+    def test(self, obj, state):
+        return getattr(obj, "squad_paid_count", 0) > 0
+
+
+@dataclass(frozen=True)
+class OffspringCostPaid(ObjectPredicate):
+    """"if its offspring cost was paid" (CR 702.175a)."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "offspring_paid", False))
+
+
+# ---------- drawing-player predicates (DRAWS_CARD / WOULD_DRAW_A_CARD) ----------
+
+
+@dataclass(frozen=True)
+class DrawIsFirstInOwnDrawStep(ObjectPredicate):
+    """The subject Player's in-flight draw is the first card they draw
+    in their own draw step (CR 504.1's turn-based draw). Negated, it is
+    the "except the first one they draw in each of their draw steps"
+    rider (Orcish Bowmasters, Hullbreacher). ``turn.draw_card`` raises
+    ``Player.drawing_first_in_draw_step`` while that draw's replacement
+    and trigger dispatch run."""
+
+    def test(self, obj, state):
+        return bool(getattr(obj, "drawing_first_in_draw_step", False))
+
+
+@dataclass(frozen=True)
+class HasDrawnNCardsThisTurn(ObjectPredicate):
+    """The subject Player has drawn exactly ``n`` cards this turn —
+    evaluated right after a draw, so ``n=2`` reads "draws their second
+    card each turn" (Faerie Mastermind)."""
+
+    n: int
+
+    def test(self, obj, state):
+        return getattr(obj, "cards_drawn_this_turn", None) == self.n

@@ -11,7 +11,9 @@ import sys
 def main() -> int:
     from mtg_bot.cards.parser.source import OracleParserCardSource
 
-    pr = OracleParserCardSource().get_printings()
+    from mtg_bot.parity.effect_coverage import PARITY_POOL
+
+    pr = OracleParserCardSource(pool=PARITY_POOL).get_printings()
     names = [
         # Warp + static remnants (potential MTL-substrate siblings)
         "Starfield Vocalist",

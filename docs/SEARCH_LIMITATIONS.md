@@ -158,7 +158,10 @@ Two flavors:
 
 - **Opp side** (priority on the non-active player): instant-speed-only
   capability check — cards in hand castable at instant speed,
-  warp-from-graveyard / impulse-from-exile at instant speed.
+  warp-from-graveyard / impulse-from-exile at instant speed, and
+  activated abilities of permanents that aren't sorcery-speed /
+  loyalty / mana abilities (since 2026-10-03, the exact
+  `legal.battlefield_ability_activations` answer).
 - **Active side** (priority on the active player): instant-speed
   union plus, when at sorcery-window timing (stack empty + main
   phase + active priority), sorcery-speed castables, land plays with
@@ -198,18 +201,18 @@ meaningful action available. Note this is conservative-WRONG — the
 bot's miss is "didn't take a chance to act" — never "took an illegal
 action" or "made an impossible play."
 
-**Engine-contract interaction**: today's `legal_actions` enumerator
-returns early at non-sorcery timing BEFORE walking the activated-
-ability block (see `legal.py` — `if not _is_sorcery_timing: return
-actions` after the hand-cast loop). This means BOTH opp at non-active
-priority AND active player during instant-only windows (combat
-substeps, upkeep/draw/end with non-empty stack, etc.) never receive
-`ActivateAbility` actions from the engine. The capability check
-matches that contract: at non-sorcery timing,
-`_has_instant_speed_activatable` returns False unconditionally. If
-a future engine change DOES start surfacing `ActivateAbility` at
-non-sorcery timing, the capability-check function is the place to
-extend (the structural hash already covers permanent shape).
+**Engine-contract interaction** (updated 2026-10-03,
+`feature/roto-instant-activations`): `legal_actions` offers activated
+abilities of permanents whenever their controller has priority (CR
+117.1b), keeping sorcery-speed, loyalty and mana abilities in sorcery
+windows (`legal.activation_timing_permits`). The capability check's
+`_has_instant_speed_activatable` calls the same enumerator
+(`legal.battlefield_ability_activations`, `first_only=True`), so it is
+exact for battlefield activations — a player with an activatable
+ability is no longer auto-passed outside a sorcery window. (Before
+this change `legal_actions` returned before the activated-ability
+block outside a sorcery window and the check returned False except
+for roto P1's spell-targeting abilities.)
 
 **When it matters**: very rare in the current EoE pool + synthetic
 G/R deck. Common enough in formats with lots of cost-reduction or
@@ -326,7 +329,7 @@ at current model strength + EoE-only pool. See
 - Stack is empty
 - Current step is one of: **upkeep, draw step, beginning of combat, end step**
 
-The check fires BEFORE the capability hash check (it's cheaper). Capability check still runs for opp priority and for the active player in other phases.
+The check fires BEFORE the capability hash check (it's cheaper). Capability check still runs for opp priority and for the active player in other phases. (Since 2026-10-04 the non-active player's own empty-stack upkeep / draw / precombat-main windows have a mirror skip, #17; their beginning of combat and end step stay open.)
 
 **Why this is sometimes wrong** under CR: real MTG allows casting instants at any priority moment. There ARE legitimate plays in these phases:
 
@@ -347,7 +350,7 @@ The check fires BEFORE the capability hash check (it's cheaper). Capability chec
 - For training: misses < 0.5% of decisions; all in niche cases the lightly-trained NN couldn't exploit anyway. Bot doesn't learn the niche tactics, but the policy gradient isn't measurably affected.
 - For tournament play: real loss. Combat tricks matter. End-step plays matter. Bot gives up clear value here.
 
-**Mitigation**: configurable via the `--no-phase-priority-prune` flag. Default ON for training and self-play data_gen; should be set OFF for tournament/eval matches against real opponents (or against alternate-arch baselines where you want fair search behavior).
+**Mitigation**: configurable via the `--no-phase-priority-prune` flag. Default ON for training and self-play data_gen; should be set OFF for tournament/eval matches against real opponents (or against alternate-arch baselines where you want fair search behavior). (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training (millions of games; rare miss doesn't shift the gradient).
 
@@ -394,7 +397,7 @@ The player can still cast spells / activate abilities — but cannot end the pri
 - For training: bot ALWAYS plays its land at second main when conditions match — removes the "lazy NN holds lands forever" failure mode that early-stage policies fall into. Net positive for training signal quality.
 - For tournament play: small loss. The held-land cases above are real but rare; expert-level deck-building works around them. Default OFF for eval to be safe.
 
-**Mitigation**: `force_landdrop_enabled=False` on `MtgGameStateAdapter` (or via SelfPlayJobSpec / EvalJobSpec). EvalJobSpec defaults OFF; SelfPlayJobSpec defaults ON.
+**Mitigation**: `force_landdrop_enabled=False` on `MtgGameStateAdapter` (or via SelfPlayJobSpec / EvalJobSpec). EvalJobSpec defaults OFF; SelfPlayJobSpec defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: self-play training (the policy benefits from never seeing the "hold land for no reason" trajectory).
 
@@ -547,7 +550,7 @@ Fires for **both** active and opponent priority windows: with no attackers there
 - For training: removes ~10 priority moments per affected combat phase from the search tree. Fires reliably turns 1-2 (no creatures yet) + occasional board-wipe turns. Composes with phase-prune for ~15-20% additional wall reduction estimated.
 - For tournament play: marginal correctness loss. Empty-combat-instant plays are rare; expert decks rarely need them. Default OFF for eval.
 
-**Mitigation**: `skip_empty_combat_enabled=False` on `MtgGameStateAdapter` (or via the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_empty_combat_enabled=False` on `MtgGameStateAdapter` (or via the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -579,7 +582,7 @@ Fires for **both** active and opponent priority windows: with no attackers there
 | Trigger that fires during opp's main 2 | Engine handles trigger firing; we just can't respond with an instant |
 
 **Failure mode**: bot passes priority during opp's main 2 even when an instant could be cast. Conservative-WRONG. The natural reactive timing for our instants on opp's turn is usually:
-- BEFORE opp's combat (during their precombat main, where capability auto-pass already fires)
+- BEFORE opp's combat (during their precombat main, where capability auto-pass already fires -- since 2026-10-04 #17 skips that empty-stack window too, leaving their beginning of combat as the pre-combat window)
 - AT opp's end step (where this heuristic doesn't apply)
 
 So the dead window we're skipping is genuinely a low-value priority moment for our instant-speed plays.
@@ -591,7 +594,7 @@ So the dead window we're skipping is genuinely a low-value priority moment for o
 - For training: removes 1-2 priority moments per opp turn (we get priority once during opp's main 2; capability check fires when we can't act, this fires when we can but shouldn't). Estimated 5-6% wall delta.
 - For tournament play: marginal correctness loss. Pre-emptive instant timing on opp's main 2 is a niche play. Default OFF for eval.
 
-**Mitigation**: `skip_opp_postcombat_main_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_opp_postcombat_main_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -638,7 +641,7 @@ The "no creatures + no haste + no animator" conjunction means nothing the player
 - For training: removes ~2-4 priority moments per affected turn (active main 1 + opp's response window). Fires reliably turns 1-2 (no creatures yet); rarely after that (once you cast a creature, it sticks). Estimated 2-4% wall delta.
 - For tournament play: marginal correctness loss. Default OFF for eval.
 
-**Mitigation**: `skip_dead_main1_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON.
+**Mitigation**: `skip_dead_main1_enabled=False` on `MtgGameStateAdapter` (or via Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON. (2026-10-04 correction: `EvalJobSpec` is the legacy SSH-path spec. The live eval paths — the v2 worker eval stage behind `iterate`'s arena and `mtg_bot eval`, and `mtg_bot ladder` — play with the production defaults, so this heuristic is ON there; see #17 "Flag defaults".)
 
 **Acceptable for**: training, self-play data_gen.
 
@@ -16970,6 +16973,7 @@ staying True on `nonsafe_triggered_ability`).
 1. **AA[1] recall-variant rider divergence (load-bearing).** The recall Effect's `grant_flying_counter: bool` + `grant_subtype_and_pt: Option<(String, i32, i32)>` payload round-trips bit-equal on the wire (Python forward emit + Rust `parse_effect` extract + Rust `to_pydict` arm + Python reverse arm all handle the riders), but **Rust's `apply_effect` resolve arm DOES NOT apply the grants at recall time** — the recalled creatures land on the activator's bf without a flying counter, without a Spirit subtype overlay, and without a 1/1 base P/T continuous-effect layer. Python's resolve arm DOES apply the grants (`PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl.resolve` at `exile.py:993` stamps flying counters and pushes a `StaticAbility` overlay for the subtype + base P/T). The cross-engine divergence is real but bounded to Ghost Vacuum's AA[1] resolve — a code path no other live EoE printing exercises.
 
 2. **`sorcery_speed` activation-time legality gate (defense-in-depth).** Rust's `ActivatedAbility.sorcery_speed: bool` slot is data-carrying only at C2 — the activation-time legality check (CR 605.3a: a sorcery-timing AA can only be activated during the active player's main phase with an empty stack) is NOT enforced on the Rust side. Today Rust admits the activation regardless of timing; only Python enforces the gate (via the priority-pass machinery + `ActivatedAbility.sorcery_speed` check at activation time). The slot exists so the bridge round-trip stays bit-equal and a follow-up cycle can wire the gate without re-walking the registry.
+   **Closed at legal-emit time 2026-10-03** (`feature/roto-instant-activations`): `GameState::push_battlefield_activations` (`state_ops_legal.rs`) skips `sorcery_speed` abilities outside a sorcery window, mirroring Python's `legal.activation_timing_permits`; until then the gate was moot because every Rust AA emission sat behind the sorcery-timing early return. `apply_action` doesn't re-check timing (neither does Python's `_activate_ability`).
 
 **Why it's OK:**
 - The bridge-floor + Rust struct + parse arms close the Phase 4C C2 substrate; Ghost Vacuum FLIPs DECLINED → ADMITTED end-to-end at the production-deck admit gate (the predicate + Artifact builder + loader-side admit-set all admit). The Phase 4C C3 PROBED-tier slot lands at `tests/test_ghost_vacuum_parity.py` via AA[0] exile-from-graveyard resolve byte-equality + bridge round-trip + Rust register acceptance.
@@ -18798,3 +18802,1455 @@ incomplete CR conformance), add a section here with:
 **Impact estimate.** Calibration: zero inference cost (one float, folded into the existing `tanh`), and it takes the 6,000-shard warm start from held-out MSE 1.294 (REJECT) to ≈0.90 (PASS) — see `docs/SCALING_DIAGNOSTICS.md` D5. `trunk_no_printing`: **~1.5× per NN eval at batch 1 on CPU** (the production self-play shape), 1.33× at batch 16/256, 1.3–1.6× on CUDA, and ~1.35× per training epoch — measured 2026-09-25 on the production trunk (`emb 128 / 2 layers / hidden 256`, seq_len 64) via `scripts/bench_value_head_input.py`. Strength effect is UNMEASURED by the eval gate; only held-out value quality has been measured.
 
 **Pinned by:** `tests/training/test_value_calibration.py` (28 cases, incl. the synthetic corr-0.3 saturated predictor scoring >1 raw and <1 calibrated, and the zero-variance head that must NOT be calibrated), `tests/training/test_structured_model.py` (`test_trunk_no_printing_value_ignores_card_identity` + `test_default_trunk_value_does_see_card_identity` as its control, `test_trunk_no_printing_adds_no_parameters`), `tests/search/test_nn_evaluator_structured.py` (`test_from_metadata_applies_the_stored_value_calibration`, `test_from_metadata_missing_calibration_is_the_identity`), `tests/cli/test_calibrate_value_cli.py` (10 cases).
+
+## Cube lands (line-composed land grammar): automatic mana payment, hand abilities, life-costed taps — 2026-09-27, `feature/cube-lands`
+
+**Where:** `src/mtg_bot/actions.py` (`_untapped_lands`, `_land_auto_pays`, `_land_tap_life_cost`, `auto_tap_for_cost`, `_activate_hand_ability`, `apply_land_etb_replacements`); `src/mtg_bot/legal.py` (hand-activated-ability loop); `src/mtg_bot/cards/parser/land_lines.py` (mana-folding rules); `src/mtg_bot/search/_player_capabilities.py::_has_sorcery_speed_activatable` (unchanged, see below).
+
+**What the shortcuts are.**
+
+1. **Automatic payment only uses a land's `produces` set.** Lands built by the line-composed grammar set `mana_only_from_produces=True`: a land contributes to `can_pay_cost` / `auto_tap_for_cost` only through its free (or life-costed) `{T}: Add` production. Mana abilities with any other cost or shape — Gaea's Cradle / Tolarian Academy (scaling), Mishra's Workshop (spend restriction), Sunken Ruins (filter, `{U/B}` input), Gemstone Mine (counter cost), Starting Town's `{T}, Pay 1 life: Add one mana of any color`, Arena of Glory's exert ability — are explicit mana abilities, usable only by activating them (which `legal_actions` offers only in a sorcery window -- mana abilities keep that handling while other activated abilities became instant-speed on 2026-10-03, see "Instant-speed activated abilities of permanents") and floating the mana. So none of them can pay for an instant-speed cast.
+2. **Multi-mana taps under-produce on automatic payment.** City of Traitors (`{T}: Add {C}{C}`) is listed in `produces` as `C`, so automatic payment taps it for ONE `{C}`; the explicit ability yields both. Never produces mana the card couldn't; only wastes one.
+3. **Life-costed taps never pay to 0.** Horizon Canopy-style `{T}, Pay 1 life: Add {G} or {W}.` folds into `produces` + `produces_life_cost`; automatic payment taps free lands first and offers life-costed lands only while the controller stays at >= 1 life (the same conservative gate `legal_actions` applies to explicit `pay_life` costs). CR 119.4 would allow paying down to exactly 0.
+4. **(Closed by `feature/cube-keywords`.)** Hand-activated abilities (Cycling, Channel) are now enumerated before the sorcery-window early return, so they are offered at instant speed (unless the ability itself is `sorcery_speed`).
+5. **Search auto-pass doesn't know hand abilities.** `_has_sorcery_speed_activatable` walks battlefield permanents only; a main-phase priority window whose ONLY legal non-pass actions are hand abilities (e.g. cycling a Triome after the land drop) can be auto-passed by the search layer. The engine's `legal_actions` still lists them, and the policy codec cannot encode hand-sourced `ActivateAbility` (it raises `EncodingOverflowError`, which the mask / target builders skip) — the NN never picks them; MCTS / random / heuristic agents can.
+6. **Hybrid filter input.** Sunken Ruins' `{U/B}` cost is paid by any mana (the existing `ManaCost.hybrid` "treated as generic-1" simplification).
+
+**Why they're OK.** Every shortcut under-uses a card (fewer payment windows, one wasted `{C}`, never dying to a pain tap) rather than letting it do something its oracle text doesn't allow; printed restrictions (Workshop's artifact-only mana, Cradle's zero-creature case, fetch lands' lack of any mana ability) are enforced because such lands are never phantom generic sources.
+
+**Failure mode.** Lines that need instant-speed mana from those lands (holding up a counterspell off Gaea's Cradle, cycling at end of turn, channeling Otawara in combat) are unavailable to every agent; search may skip a cycling-only turn.
+
+**Fix scope estimate.** (1): non-mana battlefield activations are instant-speed since 2026-10-03; surfacing explicit mana abilities at every priority moment is the remaining piece (drop the `is_mana_ability` clause of `legal.activation_timing_permits` and its Rust mirror; teach the capability check to ignore pure mana abilities) — ~1 cycle. (4) is closed. (2): an explicit-activation step inside `auto_tap_for_cost` mirroring `_activate_sac_for_mana_for_cost` — ~half a cycle. (5): teach `_has_sorcery_speed_activatable` about `hand_activated_abilities` and add an action-codec slot family for hand-sourced activations (a v-chain break) — ~1 cycle.
+
+**Impact estimate.** Strength cost only for cube decks running these lands; no EoE printing sets any of the new fields, so EoE behavior and Rust parity are unchanged.
+
+**Pinned by:** `tests/test_parser_land_lines.py`, `tests/test_cube_land_mechanics.py`, `tests/test_cube_land_mechanics_batch2.py`, `tests/test_cube_land_mechanics_batch3.py`.
+
+## Cube planeswalker bucket — engine shortcuts behind the claimed walkers (2026-09-27, `feature/cube-planeswalkers`)
+
+Claimed walkers: The Wandering Emperor, Elspeth Storm Slayer, Jace Wielder of Mysteries, Narset Parter of Veils, Teferi Time Raveler, Minsc & Boo, Saheeli Sublime Artificer, Jace the Mind Sculptor, Teferi Hero of Dominaria, Dack Fayden, Karn Scion of Urza (plus Tezzeret, Cruel Captain, unchanged). Each shortcut below is deliberate; none drops a printed clause.
+
+**1. Search auto-pass doesn't know the new instant-speed permissions.**
+*Where:* `src/mtg_bot/search/_player_capabilities.py` (`_instant_speed_castable_in_hand`, `_has_instant_speed_activatable`) vs `src/mtg_bot/legal.py` (`_instant_speed_loyalty_activations`, `_may_cast_sorceries_as_flash`). *What:* `legal_actions` now offers The Wandering Emperor's loyalty abilities outside sorcery timing the turn she entered, and sorcery spells at instant speed under Teferi, Time Raveler's +1. The search-side capability short-circuit still believes no activated ability and no sorcery is ever usable off sorcery timing, so an MCTS/PIMC seat auto-passes those priority windows. Non-search agents (random / heuristic / UI) see the full legal set. Search code was out of scope for this bucket. *Failure mode:* under search, Emperor's flash-in-then-activate line and Teferi's +1 are never used off sorcery timing (Emperor still gets her sorcery-speed activations). *Fix scope:* two structural checks in the capability module (+ the hash already covers `continuous_effects` length and permanent shape) — under an hour. *Impact:* strength-only (missed lines for the two cards); zero perf cost. **Emperor half resolved 2026-10-03** (`feature/roto-instant-activations`: the capability check now uses `legal.battlefield_ability_activations`, which honours her permission); Teferi's flash-sorceries half remains.
+
+**2. Minsc & Boo's reflexive "When you do" target is chosen at activation.**
+*Where:* `effects/generic/cube_walkers.py::SacrificeCreatureThenDamageEqualToItsPower`. Same precedent as Boilerbilges Ripper / Selfcraft Mechan: the any-target for "deals X damage" is picked when the -2 is activated (before the sacrifice and before X is known) and the damage + Hamster draw resolve inline, not as a separate reflexive trigger opponents can respond to. *Failure mode:* the controller can't retarget after seeing which creature was sacrificed; opponents get no priority window between the sacrifice and the damage. *Fix scope:* a reflexive-trigger substrate (push a synthetic TriggeredAbility mid-resolution with its own target selection), ~1 cycle, shared with the precedents. *Impact:* small strength distortion only.
+
+**3. "At the beginning of the next end step" rides the controller's own end step.**
+*Where:* `cube_walkers.py::AtBeginningOfNextEndStep` on `state.delayed_triggers` (`turn.run_delayed_end_step_triggers` fires entries on the scheduling controller's turn). Correct for every producer in the pool (Teferi, Hero of Dominaria's +1 is sorcery-speed, so the next end step is this turn's). An instant-speed producer during an opponent's turn would fire at its controller's next end step instead of the opponent's. The recognizer only claims untargeted delayed effects (a delayed trigger's targets would be chosen when it triggers). *Fix scope:* key queue entries on the upcoming end step instead of the controller's turn, ~half a cycle.
+
+**4. Planeswalkers take burn but not combat damage.**
+*Where:* `effects/base.py::_apply_damage` now removes loyalty for a `("planeswalker", id)` damage target (CR 120.3c), so "any target" burn aimed at a walker works. Attacking a planeswalker (CR 506.3 / 508.1b) is still unmodeled — `combat.py` has no walker defenders, and changing attack declarations touches the action encoding / training code. *Failure mode:* planeswalkers are only answerable by spells/abilities, never by combat; walkers are stronger than printed. *Fix scope:* a combat-defender substrate + action-encoding extension, multi-cycle.
+
+**5. "<name> can be your commander." has no in-game effect.**
+*Where:* `cards/parser/planeswalker_builder.py::_CAN_BE_YOUR_COMMANDER_LINE`. A deck-construction permission (CR 903.3d) that only matters in the Commander variant; the engine plays no format with a command-zone commander, so there is nothing observable to model.
+
+**6. Synthesized tokens are colorless.**
+*Where:* `cards/parser/effects_ext.py` (`_CREATE_STAT_TOKEN`, `_CREATE_NAMED_TOKEN`) → `make_token_creature`. Printed P/T, subtypes, keywords, legendary and artifact are carried; color is not, because a printing's color comes from its mana cost and tokens have none (same gap as every registered `TOKEN_PRINTINGS` entry). *Failure mode:* "permanent that's one or more colors", protection-from-color, color-matters counts misjudge tokens. *Fix scope:* a `color_indicator` on `CardPrinting` read by `effective_colors`, ~half a cycle.
+
+**7. Winning the game preempts a same-resolution empty-library draw.**
+*Where:* `turn.py::win_the_game`. The engine records "drew from an empty library" as an immediate loss in `draw_card`; the rules make it a state-based action (CR 704.5b). `win_the_game` therefore clears that pending flag for the winner (only that reason) — matching Jace, Wielder of Mysteries' -8 ("Draw seven cards. Then if your library has no cards in it, you win the game."), where the win happens before any SBA check.
+
+**8. Indefinite control changes set `controller_id` directly; the tuck bypasses `move_off_battlefield`.**
+*Where:* `cube_walkers.py::GainControlOfTargetPermanently` / `GainControlOfTriggeringSpellTargets` (Dack Fayden) follow `GainControlOfTargetSliverPermanently`'s precedent (no layer-2 registry entry; a later UEOT steal's cleanup revert can snap control back to its captured baseline). `PutTargetIntoOwnersLibraryNthFromTop` (Teferi, Hero of Dominaria's -3) leaves the battlefield the way `_bounce_to_hand` does — no leaves-the-battlefield triggers fire for the tucked permanent. *Fix scope:* route both through the registry / `move_off_battlefield` with a library destination, ~half a cycle.
+
+**9. New per-turn / per-object state isn't in the search fingerprint.**
+*Where:* `Player.cards_drawn_this_turn` (Narset's cap) and `GameObject.entered_battlefield_turn` (Emperor's static) are not hashed by `search/canonical_state.py` / `search/info_set.py` (search code out of scope). *Failure mode:* two states differing only in those fields share a transposition entry — e.g. an opponent's second draw under Narset. Rare and bounded.
+
+**10. Karn's silver counters ride the exiled card object.**
+*Where:* `GameObject.silver_counters`, set by `RevealTopNOpponentChoosesOneRestExiledWithCounter` and cleared by `PutCardYouOwnWithCounterFromExileIntoHand`. The engine keeps one `GameObject` per card across zones, so a silver-countered card that leaves exile by some OTHER effect and is later exiled again would still carry the counter (CR 400.7 says it's a new object with none). No card in the pool moves cards out of exile that way today. *Fix scope:* clear per-zone counters on every exile exit, ~an hour.
+
+**11. Two-target copy effects enumerate slots per filter; the copy is a printing swap.**
+*Where:* `actions._activate_ability` consults an effect's optional `legal_targets_for_slot` hook (Saheeli, Sublime Artificer's -2) so each target slot uses its own filter and stays distinct. The copy itself follows the Cytoshape layer-1 precedent (`original_printing` snapshot + `is_copy` registry entry reverted at cleanup / zone change), keeping the copier's token status. The spell-cast pipeline does not have the per-slot hook yet (activation-only).
+## Hexproof / shroud / protection: targeting filtered at choice chokepoints; partial-target resolution not re-checked — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `src/mtg_bot/keyword_rules.py` (`filter_targetable`, `targets_all_illegal_on_resolution`, `current_damage_source`); call sites in `legal.py::_targets_are_satisfiable` / the activated-ability legality gate, `actions.py::_select_spell_targets` (incl. Aura enchant picks), `_activate_ability`, `push_triggered_ability`, `resolve_top_of_stack`; damage prevention in `effects/base.py::_apply_damage` and `combat.py::_prevented_by_protection`.
+
+**What the shortcuts are.**
+1. Target enumeration is per-effect (`Effect.legal_targets` overrides), so hexproof / shroud / protection are applied as a post-filter where an enumerated pool becomes a choice, not inside each enumerator. Nested sub-effects that enumerate their own targets internally at resolution (none in the pool today) would bypass the filter.
+2. On resolution (CR 608.2b) the spell/ability is removed only when EVERY target became illegal through these rules. A multi-target spell where only SOME targets gained protection still affects all of them (damage to a protected creature is still prevented by the damage path).
+3. Non-combat damage source = the resolving ability's source, else the resolving spell. "Fight"/"deals damage equal to its power" effects whose real source is a creature on the battlefield are checked against the spell/ability source instead. Two bespoke EoE damage paths (`bespoke.py` enchanted-creature damage) don't check protection.
+4. Player-level protection/hexproof (`you gain protection from everything`, `protection from the chosen player`) is not modeled; the parser refuses those qualities.
+
+**Failure mode / impact.** Rare multi-target and fight edge cases over-apply damage/effects to a protected permanent. No perf-relevant change beyond one `effective_keywords` walk per battlefield candidate target.
+
+**Fix scope estimate.** Per-slot resolution re-check + threading a `damage_source` through `_apply_damage`: ~1 day.
+
+
+## Hand-activated abilities (cycling family) ride `ActivateAbility` with a HAND source; the policy codec can't encode them — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `CardPrinting.hand_activated_abilities` (`cards/base.py`, shared with the cube-lands Channel/Cycling grammar), enumeration in `legal.py` (instant-speed hand loop), `actions._activate_hand_ability`, parser `printing_keywords._parse_cycling_line` + `parser/source._split_hand_abilities`.
+
+**What the shortcut is.** Cycling / landcycling / typecycling reuse the existing `ActivateAbility(source_id, ability_index)` action with `source_id` naming a card in hand (index into `hand_abilities`) rather than adding a new action type. `training/action_encoding.encode` has no slot for a hand-sourced activation and raises `EncodingOverflowError`, which MCTS/ISMCTS/data_gen already tolerate (prior 0, visit-count-only exploration; dropped from policy targets). The search-side instant-speed capability check (`search/_player_capabilities.py`) doesn't know about hand abilities, so an auto-pass shortcut can skip a cycling window (conservative-wrong: never illegal, just a missed option). Rust engine does not model hand abilities (Python-only).
+
+**Fix scope estimate.** A dedicated action-codec slot range (v-chain break) + capability-check awareness: ~1 day, owned by the NN/search side.
+
+
+## Monarch / initiative / Undercity: inherent triggers and room abilities resolve without the stack — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `src/mtg_bot/designations.py` (hooks called from `turn.run_beginning_of_upkeep_triggers`, `turn.run_beginning_of_end_step_triggers`, `combat._resolve_damage_step`, `turn.run_untap_step`, `actions._declare_attackers`).
+
+**What the shortcuts are.**
+1. The monarch's end-step draw, the initiative's upkeep venture, the combat-damage steal, and every Undercity room ability resolve immediately at the hook instead of being put on the stack (CR 724.2 / 725.2 / 309.4c say they are triggered abilities). Nobody can respond to them; ordering relative to other same-step triggers is "after the dispatched triggers are stacked" (so they resolve first).
+2. Room targets are picked at resolution by the agent (no separate target-legality recheck). Trap!'s target pool is the opponents (a player never wants to target themself).
+3. Goad (Arena room) is modeled for two players: the goaded creature is force-added to its controller's attack declaration while eligible; the "attacks a player other than the goader if able" half is moot with two players.
+4. Designation state (`Player.is_monarch` / `has_initiative` / `dungeon_room` / `dungeons_completed`, `GameObject.goaded_by`) is not part of `search/canonical_state` hashing, so transposition lookups can conflate states differing only in a designation. Rust engine does not model any of it (Python-only).
+
+**Fix scope estimate.** Stack-based designation triggers need a synthetic command-zone source object: ~1 day. Canonical-state hashing: search-side, ~1 hour.
+
+
+## Battle cry applied at attack declaration without the stack; prowess/persist are stacked — 2026-09-27, `feature/cube-keywords`
+
+**Where:** `combat._fire_battle_cry_pumps` (sibling of the pre-existing `_fire_exalted_pumps`), `actions.fire_prowess_triggers`, `actions.push_persist_trigger`.
+
+**What the shortcut is.** Battle cry (CR 702.91) is a triggered ability; like Exalted in this engine it is applied immediately when attackers are declared, so no player can respond between the declaration and the +1/+0. Prowess and persist DO use the stack (synthesized `TriggeredAbility` pushed via `push_triggered_ability`, ability indexes 2000 / 2001 so they stay off the printed-ability once-per-turn ledger). Python-only: the Rust engine models none of shroud / protection-DEBT / prowess / battle cry / shadow / persist / devoid / energy / cycling.
+
+**Impact.** Negligible — battle cry's pump is never worth responding to in the pool. Fix scope: synthesize a stack trigger like prowess, ~1 hour.
+
+## Cube spells-B: card-flow / casting-substrate shortcuts — 2026-09-27, `feature/cube-spells-b`
+
+**Where:** `src/mtg_bot/effects/generic/card_flow.py`, `reanimation.py`, `mass_effects.py`, `cheat_into_play.py`, `divided_damage.py`, `spell_copies.py`, `graveyard_casting.py`, `incubate.py`; `src/mtg_bot/alt_casting.py`; the casting hooks in `actions._cast_spell` / `legal.legal_actions`; `turn.apply_graveyard_exile_replacement`; `effects/generic/library_lookat.Scry(bottom_choice=True)`.
+
+**What the shortcuts are.**
+
+1. **"In any order" orderings are not offered.** Scry (`bottom_choice=True`) keeps the kept cards on top and the bottomed cards on the bottom in their original order; look-at-top-N effects (Stock Up, Dig Through Time, Lim-Dûl's Vault's bottoming) put the rest on the bottom in library order. Ponder, Brainstorm's put-back and Lim-Dûl's Vault's final top-of-library order ARE real choices (successive `choose_card_from_library` / `choose_discard` picks).
+2. **Which graveyard cards pay delve / escape is not a choice.** The count is (`choose_x` for delve); the cards are taken oldest-first, cards with flashback / escape last.
+3. **"Untap up to N lands" untaps only the controller's own lands**, most-colors-first. Untapping an opponent's land is legal but never useful to the caster.
+4. **Dominated X values are pruned.** "Pay X life" offers X in `[0, life - 1]` (paying your whole life total loses) and, when the spell's effect exposes `useful_x_cap`, no more than that: Toxic Deluge stops at the toughest creature's toughness, Fire Covenant at the total toughness + loyalty of the opponents' creatures / planeswalkers.
+5. **Divided damage needs at least one target** ("any number of target creatures" with zero targets does nothing and is pruned), opponents' permanents are listed first, and a mana-X total smaller than the number of chosen targets drops the surplus targets (X is chosen after targets in this engine; for "pay X life" X is now chosen before targets, per CR 601.2b).
+6. **Yawgmoth's Will's graveyard-to-exile replacement** is applied precisely on the battlefield-leaving path (`move_off_battlefield` — no "dies" trigger) and the spell-leaving-the-stack path; every other entry (discard, mill, ...) is caught by a sweep at the end of `state_based_actions`, so those cards briefly exist in the graveyard (discard triggers still see a discard; the card is exiled before any player gets priority).
+7. **Chain of Smog's copy is offered only while some legal target has cards in hand** — copying against empty hands does nothing, and two always-accepting agents would otherwise copy forever.
+8. **Lim-Dûl's Vault's repeat loop stops** once another payment would drop the caster to 0 life or every card of the library has been seen.
+9. **Demonic Consultation's name choice** is one of the distinct names in the caster's library, or one "name not in your library" option (which exiles the whole library) — naming a specific card that isn't in the library is equivalent.
+10. **Granted flashback (the Flashback card) lives on the card object** until cleanup or until it's cast; a card that leaves the graveyard and returns the same turn keeps the grant (CR 400.7 would make it a new object).
+11. **Decision hooks are reused, not added:** Brainstorm's put-back uses `choose_discard`; Exhume / Flash / Through the Breach / look-at-top picks use `choose_card_from_library` (the existing zone-agnostic precedent); Council's Judgment's non-caster votes use `choose_sacrifice`; Demonic Consultation's name uses `choose_mode`; Phyrexian life payment, splice, buyback-style "may pay" riders use `choose_yes_no`.
+12. **Search layer not taught the new casting routes** (search code was out of scope): `search/_player_capabilities.py` doesn't know flashback / escape / Yawgmoth's-Will graveyard casts, plotted cards in exile, delve / pitch / conditional-free cost reductions, or MDFC land faces, so a priority window whose ONLY non-pass options are those can be auto-passed by the capability short-circuit. `search/canonical_state.py` doesn't include the new per-object / per-player flags (`flashback_granted_until_eot`, `plotted_turn`, `cast_via_flashback`, `is_spell_copy`, `mdfc_front_printing`, `exile_instead_of_leaving`, `Player.may_play_from_graveyard_this_turn` / `graveyard_exile_replacement_this_turn` / `spells_cast_this_game`, `StackItem.division` / `spliced` / `buyback_paid`), so transposition caching can merge states that differ only in them. The action codec maps the new `CastSpell` flags (`use_flashback`, `use_buyback`, `use_escape`, `use_plot`) onto existing slots (graveyard / hand variant 0), sharing a prior with the plain variant; `decode` of graveyard variant 0 still returns the warp form.
+13. **Impulse-play from exile is sorcery-speed only** (pre-existing `legal_actions` behavior): an instant exiled by Expressive Iteration can only be cast in a main phase.
+
+**Why it's OK.** Items 1–3, 8, 9 remove choices that are dominated or nearly so; 4, 5, 7 prune strictly dominated actions; 6 and 10 are narrow timing approximations whose visible effect is limited to discard / zone-change bookkeeping; 11 reuses decision surfaces that already reach the search layer; none changes EoE behavior (no EoE printing uses any of these effects or fields), so Rust parity is untouched.
+
+**Failure mode.** Ordering-sensitive lines (stacking two specific cards under a scry, choosing which graveyard cards to delve to keep a threshold count) play slightly worse; the search auto-pass (12) can skip a turn whose only play is a flashback / escape / plotted cast; transposition caching (12) can conflate a card with and without granted flashback.
+
+**Fix scope estimate.** (1)/(2): an ordering / subset decision hook on the Agent protocol + resolution channel — ~1 cycle. (12): teach `_player_capabilities` and `canonical_state` the new fields (~half a cycle, search-owned) and give the codec distinct variants for the new cast forms (a v-chain break). (6): route every graveyard entry through one helper — ~half a cycle, touches ~25 call sites.
+
+**Impact estimate.** Zero perf cost on EoE games (every hook is gated on a cube-only field). Small strength cost for cube decks playing these cards.
+
+**Pinned by:** `tests/test_cube_spells_*.py` (card-flow, alt-casting, reanimation, misc, graveyard-casting, copies, divided damage, polarity / Sunfall, splice, MDFC, plot, escape).
+---
+
+## PowerLSV cube artifact bucket — deliberate simplifications (2026-09-27, `feature/cube-artifacts`)
+
+Engine / parser shortcuts taken while modeling the cube's artifacts
+(mana rocks, utility artifacts, Equipment, Vehicles). Each is local to
+the new mechanics; none changes EoE-pool behavior.
+
+1. **Draw-step triggers need an actual draw.** `turn.run_draw_step`
+   (both turn loops call it only when the active player draws)
+   dispatches `Event.BEGINNING_OF_DRAW_STEP` after the draw. The
+   starting player's skipped turn-1 draw step therefore fires no
+   "at the beginning of your draw step" triggers. *OK because* the only
+   consumer (Mana Vault's tapped tax) can't be tapped before turn 1's
+   draw step. *Fix scope:* a dispatch in `simulate.run_step` and the
+   search adapter's `_enter_step` (search code, out of this bucket).
+2. **"Whenever you create one or more creature tokens" is batched per
+   resolved stack item** (`actions._flush_creature_token_creations`,
+   latched by `put_into_battlefield`). A single resolution that creates
+   creature tokens through two separate instructions counts once (CR
+   would count two events). *Impact:* Staff of the Storyteller may
+   under-count in that rare case.
+3. **Sunburst counts colors of the mana the auto-payer spent**
+   (`auto_tap_for_cost(color_sources=…)` + `max_distinct_colors`). Units
+   whose color is the controller's choice (`any` coins, multi-color
+   lands paying generic) are assigned to maximize the count, but the
+   engine's payment allocation itself (which coin pays which pip) is
+   the existing greedy one, which can spend a flexible coin on a
+   colored pip a land could have paid. *Impact:* Pentad Prism can enter
+   with fewer counters than optimal play would get.
+4. **Crew never taps the Vehicle itself and counts negative power as 0**
+   (`game.crew_candidates` / `crew_power`). Both are strictly dominated
+   choices, not legality changes that matter.
+5. **Vehicles enter summoning-sick** (`put_into_battlefield`) even
+   though non-creature permanents otherwise don't — the flag is only
+   read while the Vehicle is a creature (attack / `{T}` gates check
+   `is_creature_now` first), which is exactly CR 302.6.
+6. **Bolas's Citadel:** a spell cast from the top of the library this
+   way has X = 0 (its mana cost is replaced by life equal to its printed
+   mana value), and when both Citadel and Mm'menon grants apply to the
+   same artifact the cast pays life (`actions._cast_spell`).
+7. **"If you cast it" (The One Ring's protection)** rides the existing
+   `ConditionalIfCastFromHand`, which always runs its inner effect (its
+   docstring's documented degradation, pinned by the Weftwalking Rust
+   parity test). A One Ring put onto the battlefield without being cast
+   would wrongly grant protection.
+8. **Player protection from everything (The One Ring)** prevents damage
+   (every player-damage site, honoring can't-be-prevented combat
+   damage) and removes the player from every target-selection site
+   (`game.drop_protected_players`). Resolution-time target re-checks
+   don't re-test it (a target chosen before the protection began still
+   resolves). The engine has no player-attached permanents, so the
+   "can't be enchanted" half is vacuous.
+9. **Graveyard-functioning triggers (Sword of the Meek)** evaluate with
+   the card's `controller_id` as last recorded (a card that died while
+   stolen keeps its thief as "you" for `Controlled(YOU)` until it moves
+   again) and hand the event's `obj` subject to the ability as its
+   fixed target.
+10. **Coveted Jewel's `ATTACKERS_UNBLOCKED` event assumes a single
+    defending player** (2-player engine) and reassigns control
+    indefinitely by overwriting `controller_id` (same model as
+    Sliver Overlord / Wishclaw Talisman), not via a layer-2 entry.
+11. **Sensei's Divining Top's reorder rides spells-B's `ReorderTopCards`**
+    (`effects/generic/card_flow.py`), which builds the order top-down
+    through `choose_card_from_library` picks instead of a dedicated
+    ordering hook.
+12. **Wizard's Rockets' "put into a graveyard from the battlefield"**
+    uses the parser's existing LEAVES_BATTLEFIELD mapping for that
+    phrase (also fires if exiled) — pre-existing simplification shared
+    with Chromatic Star / Nutrient Block.
+13. **Creature tokens are synthesized by the keyword substrate's
+    `keyword_actions._synthesize_creature_token_effect`** (carries
+    colors). The artifact bucket only adds the Pilot token's quoted
+    rider ("This token crews Vehicles as though its power were N
+    greater.") as `crew_power_bonus`; any other quoted rider leaves the
+    phrase unparsed rather than dropping the rider.
+14. **Enter-with-counters is one field.** The artifact bucket's
+    "enters with N <kind> counters" lines (Wishclaw Talisman's wish
+    counters, Reckoner Bankbuster's charge counters) ride the lands'
+    `enters_with_named_counters`; sunburst stays separate;
+    `put_into_battlefield` applies it through `add_counters` so
+    dedicated-kind counters (+1/+1, loyalty, charge) land on their
+    dedicated fields.
+15. **Activated abilities whose effect is several sentences** (Wishclaw
+    Talisman) fall back to a sentence-by-sentence parse in
+    `activated.py` only after the whole-effect parse failed; spell
+    text keeps the base compound grammar (so Ponder's nested shape is
+    unchanged).
+
+## PowerLSV cube "spells A" (removal / counters / burn) — parser pins and engine approximations (2026-09-27, `feature/cube-spells-a`)
+
+### Rust-parity-pinned lossy legacy spells
+
+**Where:** `src/mtg_bot/cards/parser/precise_grammar.py` (`RUST_PARITY_PINNED_SPELLS`, `legacy_parity_pinned`); consumed by `effects._parse_spell_effect_phrase` and `spell_builder._parse_spell_oracle_text` (the single-parseable-mode modal fallback is restricted separately by `spell_builder._LEGACY_PARTIAL_MODAL_CLAIMS`).
+
+**What the shortcut is.** The compositional phrase grammar models "target creature or planeswalker", "counter target spell unless its controller pays {N}", and other surfaces faithfully, but five Edge-of-Eternities-era spells were claimed earlier through lossy legacy recognizers (planeswalker target arm dropped, pay-or-counter tax dropped, riders dropped, or only one of several modes kept) and their simplified models are pinned by cross-engine parity tests against the Rust engine: Divert Disaster, Don't Make a Sound, Archenemy's Charm, Scorching Dragonfire, Break Down the Door (plus Get Out / Untimely Malfunction for the single-parseable-mode modal fallback). While one of those names is being parsed the compositional grammar is switched off, so they keep the legacy models. Every other card with the same printed surfaces (including the cube's Mana Leak, Sear, Baleful Mastery, Unholy Heat, Mine Collapse, …) now parses faithfully, and the single-parseable-mode fallback no longer claims non-legacy modal spells (Suplex, Sheoldred's Edict must parse every mode).
+
+**Why it's OK.** It keeps the Python and Rust engines in lock-step for the EoE fixtures while letting the cube pool be modeled faithfully; the pinned behaviour is exactly what shipped before.
+
+**Failure mode.** The five pinned EoE spells still misplay (e.g. Divert Disaster counters even if the controller could pay {2}; Archenemy's Charm can't exile a planeswalker).
+
+**Fix scope estimate.** Per card: teach the Rust engine the faithful effect (the Python side already exists), update the parity pins, delete the name from the set.
+
+**Impact estimate.** None on the cube pool; unchanged from before for the EoE pool.
+
+### Noncombat damage to planeswalkers
+
+**Where:** `src/mtg_bot/effects/base.py::_apply_damage` (`"planeswalker"` target kind).
+
+**What changed / residual gap.** Damage to a planeswalker target now removes loyalty counters (CR 120.3c) and the existing loyalty-0 SBA kills it. The Rust engine's damage arm still ignores planeswalker targets; the EoE pool has a single planeswalker (Tezzeret, Cruel Captain) so the Python/Rust gap only shows when an "any target" burn spell targets it.
+
+### Regeneration vs. effect-destroy
+
+**Where:** `src/mtg_bot/effects/generic/targeted_removal.py::destroy_permanent`.
+
+**What the shortcut is.** The compositional removal effects (`RemoveTargetPermanents`, `DestroyAllMatching`) honor a regeneration shield on "destroy" (CR 701.15) and skip it for "can't be regenerated" printings, but the legacy destroy classes (`Destroy`, `DestroyTargetCreature`, …, all routed through `turn.destroy`) still never regenerate — only SBA lethal damage does. Changing `turn.destroy` would alter the Rust-parity-pinned EoE behaviour (Swarmyard shields).
+
+**Failure mode.** A shielded creature dies to a legacy destroy effect it should survive. **Fix scope:** route `turn.destroy` through the shield check once the Rust side mirrors it.
+
+### Countered-spell destination is not part of the search hash
+
+**Where:** `src/mtg_bot/game.py::StackItem.countered_destination` (set by `effects/generic/counterspells.py::CounterSpell.resolve`, consumed by `actions.resolve_top_of_stack` / `move_spell_off_stack`).
+
+**What the shortcut is.** Memory Lapse / Remand / Force of Negation / No More Lies record where the countered card goes on the `StackItem`; the search-side canonical-state hash (`search/canonical_state.py`, `search/info_set.py`) hashes `countered` but not the new destination field (search code is out of scope for the card campaign). Two states that differ only in whether a countered spell will go to the graveyard or back to its owner's hand collide in the transposition cache until the item is popped (one priority pass later).
+
+**Impact estimate.** Negligible: the window is a single priority pass with a countered spell on the stack. **Fix scope:** add the field to the two hashers.
+
+### Spell-level fizzle for multi-effect spells
+
+**Where:** `effects/combinators.py::Sequence` (pre-existing engine behaviour, newly exercised by Remand).
+
+**What the shortcut is.** CR 608.2b says a spell whose every target has become illegal doesn't resolve at all. The engine re-checks legality per effect, so a `Sequence` like Remand ("Counter target spell. … Draw a card.") still draws a card when its target spell has already left the stack. Pre-existing for every multi-sentence targeted spell (Radiant Strike, …).
+
+**Fix scope.** A spell-level legality pre-check in `resolve_top_of_stack`; deferred because it changes EoE behaviour pinned by Rust parity.
+
+### Printed alternative costs share the `cast_for_free` action variant
+
+**Where:** `src/mtg_bot/cards/spell_costs.py::select_alternative_cost` / `payable_alternative_costs`, `actions._cast_spell` (alt-cost branch), `legal._own_free_cast`.
+
+**What the shortcut is.** CR 118.9 alternative costs (Force of Will, Daze, Force of Negation / Vigor, Snuff Out, Mine Collapse, Baleful Mastery, Overload on Damn / Winds of Abandon) ride the casting substrate's existing `CastSpell(cast_for_free=True)` variant — the same one `alt_casting`'s pitch costs and conditional free casts use — so there is ONE cast-time alternative-cost path and the action encoding is unchanged (the codec already has a `cast_for_free` slot). The variant means "cast for an alternative cost" rather than naming WHICH one: a free-cast permission wins, and when a card prints several payable alternatives the caster's agent picks among them with `choose_mode` inside the cast. No printed card in either pool has two payable alternatives at once, so today the variant is unambiguous. Two further approximations: (1) `search/_player_capabilities.py`'s priority short-circuit only checks mana costs, so with that heuristic enabled a player whose only castable card is a free-cast (e.g. Force of Will with no untapped lands) can be skipped; (2) when several candidates can pay an alternative cost the pick reuses existing hooks: `choose_discard` for the exiled hand card (as `alt_casting.pay_pitch_cost` does), `choose_sacrifice` for the returned / sacrificed permanent.
+
+**Fix scope.** Teach `_player_capabilities` about `CardPrinting.alternative_costs` (search code, out of scope for the card campaign); give each alternative cost its own codec variant with the next encoding version if a card with two payable alternatives ever lands.
+
+### "Dies this turn -> exile instead" rider is a per-object flag
+
+**Where:** `src/mtg_bot/game.py::GameObject.exile_if_dies_this_turn`, set by `effects/generic/spell_damage.py::DealDamageExileIfDiesThisTurn` (Suplex), consumed by `turn.move_off_battlefield`, cleared at cleanup.
+
+**What the shortcut is.** The replacement is stored on the object rather than as a registered replacement effect, and the search-side hashes don't include the flag, so two states differing only in whether a damaged creature carries the rider share a transposition entry for the rest of the turn. **Impact:** negligible. **Fix scope:** add the flag to `search/canonical_state.py` / `search/info_set.py`.
+
+### Overload cast needs the single-target version's target
+
+**Where:** `legal.py` cast emission (`_targets_are_satisfiable` checks the printing's base, single-target shape).
+
+**What the shortcut is.** An Overload cast (Damn, Winds of Abandon) is only offered when the non-overloaded "target" version has a legal target, so overloading onto a board with no legal target for the single-target version isn't offered. Such a cast would do nothing, so no strategic option is lost.
+
+### Multi-mode spells: mode choice padding and per-mode single targets
+
+**Where:** `src/mtg_bot/effects/generic/multi_modal.py::ChooseModes` (Kolaghan's Command, Fiery / Mystic Confluence, Collective Brutality, Three Steps Ahead), `actions._choose_modes_at_cast` / `_select_spell_targets`.
+
+**What the shortcut is.** Modes are chosen through the agent's existing `choose_modes` hook, which (for the search resolution channel and `RandomAgent`) returns a set of distinct indices. For "choose three, you may choose the same mode more than once" the engine pads a short pick by cycling the agent's own picks (a single pick of mode 2 becomes 2/2/2), so mixed repeated selections like 1/1/2 are only reachable by agents that return duplicates themselves. For Spree / Escalate the pick is trimmed from the end until the extra costs are payable. Every mode of these cards takes zero or one target, which `ChooseModes` enforces (multi-target modes stay unclaimed).
+
+**Fix scope.** Expose repeat-mode multisets as a first-class resolution-channel decision (search code).
+
+### Spell copies: new targets are re-picked, Replicate copies skip the cast trigger
+
+**Where:** `src/mtg_bot/actions.py::push_spell_copy` (the substrate's one copy primitive) via `effects/generic/spell_copies.py::DealDamageThenChainCopy` (Chain Lightning) and `actions._cast_spell`'s replicate step (`_choose_replicate_times`).
+
+**What the shortcut is.** CR 707.10c lets the copier keep the original targets or choose new ones; the engine simply asks the copier's agent to pick targets from the full legal pool (the old target is always among the options), so "keep" and "change" are one decision. Replicate's copies are put on the stack directly at cast rather than by a separate "when you cast" trigger, so players can't respond between the cast and the copies (the copies still resolve before the original). The number of replicate payments is asked through `choose_x` (0..max affordable, capped at 10). `GameState.resolving_spell` / `GameObject.is_spell_copy` are not part of the search-side hashes.
+
+### Converge counts the colors of the lands the auto-tapper happened to pick
+
+**Where:** the Sunburst substrate's color tracking — `actions.auto_tap_for_cost(color_sources=...)` + `max_distinct_colors`, recorded for every cast on `GameObject.sunburst_colors_spent` and read by `value_predicates.HasManaValueAtMostColorsSpent` (Prismatic Ending).
+
+**What the shortcut is.** The count is the maximum number of distinct colors the mana actually spent could have produced (dual lands count as whichever color helps), but *which* lands are tapped is decided by `auto_tap_for_cost`'s greedy order, which doesn't try to diversify colors. With two Plains and an Island available, an X=1 Prismatic Ending may be paid with both Plains (1 color) even though Plains + Island (2 colors) was possible. Convoke-tapped creatures don't count toward converge.
+
+**Fix scope.** A converge-aware land picker in `auto_tap_for_cost` (touches every cast; deferred).
+
+### "Whenever <event> this turn" triggers are command-zone holders
+
+**Where:** `src/mtg_bot/effects/generic/spell_misc.py::CreateThisTurnTriggeredAbility` (Forth Eorlingas!), `GameObject.expires_at_cleanup`, removed in `turn.run_cleanup_step`.
+
+**What the shortcut is.** A delayed triggered ability (CR 603.7c) is not an object, but the engine models it as a synthetic command-zone object in `state.emblems` (the trigger source `dispatch_event` already scans) that is dropped at cleanup. The NN tokenizer and the search hashes therefore see it as an emblem for the rest of the turn. "One or more creatures ... deal combat damage to one or more players" reuses the once-per-turn aggregated combat-damage observer, which equals once per combat under the engine's one-combat-per-turn model.
+
+**Impact / fix scope.** Negligible (one turn, one card). A first-class delayed-trigger list with its own tokenizer slot would remove the emblem aliasing.
+
+### Galvanic Discharge's energy payment is a `choose_x`
+
+**Where:** `src/mtg_bot/effects/generic/spell_damage.py::DealDamagePaidInEnergy`.
+
+**What the shortcut is.** "You may pay any amount of {E}" is asked through the existing `choose_x` hook (`[0, energy]`, card name "energy to pay"); the default / random / tactical agents pay everything, so saving energy for a later Galvanic Discharge is only reachable through the search's X decision.
+
+
+## PowerLSV cube enchantment bucket — deliberate simplifications (2026-09-27, `feature/cube-enchantments`)
+
+Engine / parser shortcuts behind the claimed cube enchantments
+(`cards/parser/cube_enchantments.py`, `cards/parser/enchantment_phrases.py`,
+`effects/generic/enchantment_mechanics.py`). None changes EoE-pool
+behavior (every EoE printing parses identically).
+
+1. **Necromancy's "as though it had flash" is the `flash` keyword** on the
+   printing. The only observable difference (a permanent "having flash")
+   isn't read by anything in the pool.
+2. **Cleanup-step delayed triggers resolve without priority**
+   (`enchantment_mechanics.run_delayed_cleanup_triggers`, called at the end
+   of `turn.run_cleanup_step`). Necromancy cast when a sorcery couldn't have
+   been is sacrificed at the next cleanup step; its leaves trigger (and any
+   other trigger that sacrifice causes) is resolved immediately in stack
+   order and SBAs are checked. CR 514.3a would give players priority and
+   run another cleanup step, so no one can respond to those triggers.
+   *Impact:* negligible (responses to "sacrifice that creature" are rare).
+3. **Reanimation Auras' new enchant restriction** ("enchant creature put
+   onto the battlefield with this Aura") is modeled as enchant creature via
+   `GameObject.aura_enchant_override = "creature"`. The Aura is only ever
+   attached by its own trigger, so this differs only if another effect
+   tried to move the Aura to a different creature (none in the pool).
+4. **Oath of Druids' target is picked by the Oath controller's agent**, not
+   by "that player" (the upkeep's active player). The legal set (opponents
+   of the active player with more creatures) has at most one member in
+   two-player games, so the choice is forced. If the revealed cards contain
+   no creature card, nothing moves (the revealed library stays in order) —
+   the "If the first player does" clause fails.
+5. **Squandered Resources reads the sacrificed land's mana through
+   `effective_land_produces` on the graveyard object** (last-known
+   information approximated by its printed types; a type-changing effect
+   that stopped applying when it left isn't seen). The ability is a
+   manually activated mana ability only — the automatic cost payer
+   (`_classify_sac_for_mana`, sacrifice-self sources only) never
+   sacrifices lands for it.
+6. **Fastbond's "any number of lands"** is `grants_additional_land_per_turn
+   = 1_000_000` so every land-drop reader (legal actions and the search
+   capability check) agrees without a second code path; no game can play
+   that many lands.
+7. **Underworld Breach's granted escape vs. a printed escape:** a card with
+   its own escape always uses its printed escape terms
+   (`alt_casting.escape_terms`); the player can't choose Breach's cost
+   instead. Which other graveyard cards are exiled is automatic (the
+   existing escape/delve convention).
+8. **"Exiled with it" (Parallax Wave) rides the imprint link**
+   (`GameObject.imprinted_on` = source id + ETB timestamp). If the Wave
+   left and re-entered the battlefield before its leaves trigger resolved,
+   the re-entry overwrites the timestamp and the trigger returns nothing
+   (CR would still return the first object's cards).
+9. **New per-object state is not part of search hashing.** The fields
+   `aura_enchant_override`, `linked_creature` and
+   `cast_without_sorcery_timing` (`game.GameObject`) aren't in the
+   canonical-state / info-set hashes (search code is outside this bucket),
+   so two states differing only in them can share a transposition entry.
+## PowerLSV cube creatures bucket (red / multicolor / colorless) — engine shortcuts (2026-09-27, `feature/cube-creatures-rmc`)
+
+Shortcuts behind the creatures claimed by the R / multicolor / colorless
+bucket. New mechanics live in `src/mtg_bot/effects/generic/cube_creatures_rmc.py`
+(abbreviated `rmc.` below) with small hooks in `actions.py`, `legal.py`,
+`turn.py`, `combat.py` and `game.py`; the grammar is
+`src/mtg_bot/cards/parser/creature_rmc_grammar.py`. Pre-existing
+shortcuts this bucket leans on (activated abilities offered only at
+sorcery timing, hybrid mana paid as generic) are unchanged and not
+repeated here.
+
+1. **Exile play permissions** (`rmc.ExilePlayPermission`: Ragavan,
+   Robber of the Rich, Laelia, Inti, Headliner Scarlett, ...). The
+   permission rides the exiled card (`GameObject.exile_play_permission`),
+   so it works from any player's exile zone; plays are offered by
+   `legal._exile_permission_plays`. Expiry runs at the cleanup step
+   (`rmc.expire_exile_play_permissions` from `turn.run_cleanup_step`), so
+   an "until your next end step" card stays playable during that end
+   step itself (CR ends it as the end step begins). The permission is
+   cleared only when the card is played through it or expires, so a card
+   that leaves exile some other way and is exiled again by an unrelated
+   effect keeps a stale permission (CR 400.7 would make it a new object
+   with none). The action codec has no
+   slot for "cast a card from an opponent's exile", so those plays share
+   the plain `CastSpell` variant, and `canonical_state` doesn't hash the
+   permission. *Impact:* small — the permission is usually used or lost
+   within a turn. *Fix scope:* hash the permission; add a codec slot.
+2. **Dash / escape** stamp `StackItem.alt_cost`, copied onto the
+   permanent at resolution (`GameObject.dashed` / `escaped`). The dash
+   cast reuses the `CastSpell` codec variant with `use_dash=True` (the
+   legal-action dedup key includes the flag), so the policy head can't
+   tell a dash cast from a hard cast. The end-step return is keyed on
+   the ETB timestamp (`rmc.ReturnDashedPermanentToHand`) so a permanent
+   that re-entered isn't bounced.
+3. **Cascade** (`rmc.Cascade`) casts the hit during the cascade
+   trigger's resolution (`rmc.cast_card_from_exile_for_free`), picking
+   its targets immediately. Rules-equivalent for two players.
+4. **Boast** abilities were only offered at sorcery timing, like every
+   other activated ability -- (resolved 2026-10-03 by `feature/roto-instant-activations`; see "Instant-speed activated abilities of permanents" at the end of this doc): they are
+   offered whenever their controller has priority after the creature
+   attacked; the once-per-turn latch is `GameObject.boasted_turn`.
+5. **Reflexive triggers resolve inline.** "You may X. When you do, Y"
+   (`rmc.MayDoThenReflexive`: Generous Plunderer, Inti) chooses Y's
+   targets with the enclosing ability and resolves Y right after X
+   instead of putting a new trigger on the stack (the Minsc & Boo
+   precedent). *Impact:* opponents lose a response window between X
+   and Y.
+6. **Non-combat damage from these effects carries no source.** Fights
+   (`rmc.SourceFightsTarget`), Pyrogoyf-style event damage
+   (`rmc.DealDamageFromEvent`) and Batroc's per-kick damage go through
+   `effects.base._apply_damage`, which is source-agnostic, so the
+   source's deathtouch / lifelink / infect don't apply. Power is read at
+   resolution; when the source has left the battlefield, last-known
+   power comes from `rmc.find_object_anywhere` (printed power + counters).
+7. **Graveyard watch sweeps.** Blightsteel Colossus's "would be put into
+   a graveyard from anywhere → shuffle into library" is applied directly
+   when it leaves the battlefield (`turn.move_off_battlefield`). From
+   other zones (discard, mill) it is applied by `rmc.sweep_graveyard_watch`
+   at the next state-based-action pass, so the card sits in the
+   graveyard briefly (a graveyard count read in between sees it).
+   Emrakul's "is put into a graveyard from anywhere" trigger is detected
+   by the same sweep (`Player.graveyard_arrival_watch`).
+8. **Laelia's "one or more cards are put into exile from your library
+   and/or your graveyard"** is a snapshot diff (`Player.library_graveyard_watch`)
+   swept by `rmc.sweep_library_graveyard_exile_watch` at each SBA pass.
+   Everything exiled between two passes is one batch (one trigger). That
+   matches CR for a single instruction but merges two separate exile
+   instructions inside one resolution. A card that entered the graveyard
+   and was exiled within one resolution (never seen by a sweep) is
+   missed, and the snapshot starts at the first SBA pass after Laelia
+   enters. *Impact:* Laelia can under-count in rare mill-then-exile
+   sequences.
+9. **Wolverine's heal-then-damage replacement** (`rmc.heal_before_damage`)
+   applies once per combat damage step (`combat.healed_this_step`)
+   because all combat damage is dealt simultaneously; non-combat damage
+   applies it per damage event.
+10. **"Defending player"** (annihilator, Ragavan, Robber of the Rich,
+    `rmc.DefendingPlayerSacrificesPermanents`) is the single opponent
+    (two-player engine).
+11. **"One or more" batches** (`rmc.OneOrMoreBatch`, Inti's "whenever you
+    discard one or more cards") suppress a new trigger while one from
+    the same source is still on the stack. Per-card dispatches of one
+    discard all land before anyone gets priority, so that's right for a
+    single instruction. A second, separate discard made while the first
+    trigger is still waiting doesn't trigger again. *Impact:* Inti can
+    under-trigger in response chains.
+12. **Outside-the-game lines are inert.** Companion, "Choose a
+    Background" and draft-matters lines (Lurrus's companion clause,
+    Cogwork Librarian) parse to nothing: the engine has no sideboard,
+    companion zone or draft. Those cards are claimed for their in-game
+    abilities only.
+13. **Zirda's activation reduction** (`rmc.activation_cost_reduction`)
+    reduces generic mana only and keeps the total at one mana or more,
+    which covers every printed activation cost in the pool.
+14. **Lurrus's permission** (`rmc.lurrus_castable`) uses the first
+    unused Lurrus-style permanent whose cap fits; with two, a player may
+    cast two permanents per turn, as CR allows.
+15. **Multikicker count** (Batroc the Leaper): the number of extra kicks
+    is chosen through `Agent.choose_x` after the kicked `CastSpell`
+    variant is picked (`rmc.choose_extra_kicks`, capped at 10). The
+    policy head sees one "kicked" action for every kick count.
+16. **Die rolls** (`rmc.RollDieTable`, "Name Sticker" Goblin) use
+    `state.rng`; the roll is not a chance node in search.
+17. **New per-object / per-player fields are not hashed** by
+    `canonical_state`: `GameObject.exile_play_permission`, `dashed`,
+    `escaped`, `boasted_turn`, `monstrous`, `exhausted_abilities`,
+    `entered_via_cast`, `entered_from_zone`, `kick_count`,
+    `graveyard_cast_used_turn`; `Player.experience_counters`,
+    `cant_gain_life`, `graveyard_arrival_watch`,
+    `library_graveyard_watch`. Transposition lookups may merge states
+    that differ only in these. *Fix scope:* extend `canonical_state`.
+18. **Search capability short-circuits don't know graveyard abilities or
+    exile permissions.** A player whose only play is an exile permission
+    or a graveyard-zone ability (escape, Lurrus casts, graveyard
+    activations) may be auto-passed by search's "nothing to do" priority
+    shortcut.
+19. **"Becomes the target" dispatch sites** (`rmc.fire_becomes_target`,
+    Leovold, Nadu): spell cast, activated ability (battlefield, hand,
+    graveyard), triggered ability put on the stack with chosen targets,
+    and spell copies. Targets changed later by redirect effects don't
+    re-dispatch.
+20. **EoE-only guard.** `cards/parser/source._build_printing` disables
+    this bucket's grammar (`creature_rmc_grammar.rmc_grammar_disabled`)
+    for printings that exist only in the EoE-era pools, so no EoE
+    printing's parse changes (the Rust parity tests are pinned to those
+    parses).
+
+## PowerLSV cube W/G creature bucket — deliberate simplifications (2026-09-27, `feature/cube-creatures-wg`)
+
+Engine / parser shortcuts behind the W/G creatures (parser:
+`cards/parser/creature_wg_lines.py`, `creature_wg_effects.py`; effects:
+`effects/generic/cube_creatures_wg.py`; rules hooks: `evoke.py`,
+`creature_statics_wg.py`, `graveyard_casting_wg.py`). None changes an
+EoE printing (the two EoE-era printings the new shapes would have
+claimed -- Kona, Rescue Beastie and Enduring Courage -- are pinned off
+the bucket's grammar in `creature_wg_effects.EOE_PINNED_NAMES`; Enduring
+Innocence, a bucket card that is also a Duskmourn printing, becomes
+claimed in both pools).
+
+1. **Evoke trigger order is fixed** (`evoke.EVOKE_SACRIFICE_TRIGGER`,
+   appended after the printed abilities). The evoke sacrifice trigger is
+   pushed last and so resolves first; the controller doesn't choose the
+   order of the simultaneous ETB triggers (CR 603.3b). No cube Incarnation
+   cares (their ETB targets are chosen on trigger and the effects don't
+   need the creature on the battlefield), but a flicker-in-response line
+   (sacrifice trigger still on the stack) is only reachable with the
+   printed ETB resolving second.
+2. **"Exiled with" links** (the base's `GameObject.imprinted_on`, `cube_creatures_wg.
+   LinkExiledCardsToSource`) pin a card to one battlefield incarnation of
+   its source (id + ETB timestamp) and are consumed by the linked
+   ability. A linked card that leaves exile and later returns to exile by
+   another route keeps a stale tag; consumers scan exile only, so the tag
+   is inert unless the same source incarnation is still around.
+3. **Reflexive triggers resolve immediately** (`ReflexiveWhenYouDo` --
+   Leatherhead, Guide of Souls). "You may <cost>. When you do, <effect>"
+   chooses the reflexive trigger's target and resolves it inside the
+   parent ability instead of putting a new object on the stack, so no
+   player gets priority between paying and the effect (CR 603.12).
+4. **Two-player readings.** Questing Beast's "target planeswalker that
+   player controls" is "target planeswalker an opponent controls"; Adeline
+   and Mobilize tokens attack the (single) defending player, never a
+   planeswalker; Ursine Monstrosity's random opponent and Okoye's "attacks
+   the monarch" use the engine's one defending player.
+5. **Batched "one or more ... enter" trigger** (Enduring Innocence) is the
+   per-object ENTERS trigger with `once_per_turn`; the recognizer only
+   accepts the form with "This ability triggers only once each turn.",
+   where the two are equivalent.
+6. **"Put into a graveyard from anywhere"** (Worldspine Wurm) rides the
+   R/multi/colorless bucket's graveyard watch
+   (`cube_creatures_rmc.sweep_graveyard_watch`, see that section); this
+   bucket only adds the `ShuffleSourceIntoOwnersLibrary` effect.
+7. **Cast restrictions are a `legal_actions` post-filter**
+   (`creature_statics_wg.filter_cast_restrictions` / `filter_activation_locks`
+   -- Voice of Victory, Archon of Emeria, Clarion Conqueror). Casts that
+   happen inside a resolving effect (free casts from an effect) aren't
+   re-checked. Clarion Conqueror also locks mana abilities (as printed);
+   the automatic payer never taps artifact lands for their mana, so a
+   locked artifact land still pays through `auto_tap_for_cost`'s land
+   path (none is in the cube pool).
+8. **Anointed Peacekeeper names among visible cards.** "Choose any card
+   name" offers the (sorted) names of the opponent's hand, graveyard and
+   nontoken battlefield cards (`creature_statics_wg.choose_card_name_as_enters`);
+   naming a card the opponent hasn't shown isn't offered. *Impact:* the
+   bot can't pre-emptively name a known deck card that isn't visible.
+9. **Elite Spellbinder rides the Lightstall exile permission**
+   (`cast_from_exile_with_lightstall_surcharge` + `exile_cast_extra_surcharge`),
+   inheriting its sorcery-timing-only cast from exile (an exiled instant
+   can't be cast at instant speed).
+10. **Serra Paragon's land permission** is spent only when no unlimited
+    land-from-graveyard permission (Icetill Explorer, Mole Man,
+    Yawgmoth's Will) covers the play -- the player-favorable choice is
+    made for them. Its granted rider is a per-object counter
+    (`GameObject.leaves_to_graveyard_exile_gain_life`) fired from
+    `move_off_battlefield`, not a layer-6 granted ability.
+11. **Keyword counters survive "lose all abilities"**
+    (`game.KEYWORD_COUNTER_KINDS` in `effective_keywords`), following the
+    existing flying-counter precedent rather than CR 613's timestamp
+    interaction.
+12. **Scythecat Cub's resolution count** (`GameObject.resolutions_this_turn`)
+    is per object and survives a same-turn flicker (the engine keeps the
+    object id).
+13. **New per-object / per-player state is not part of search hashing**:
+    `evoked`, `exiled_until_opponent_monarch_of`,
+    `resolutions_this_turn`,
+    `cast_uncounterable`, `must_attack_turn`, `exile_cast_extra_surcharge`,
+    `graveyard_permission_used_turn`, `leaves_to_graveyard_exile_gain_life`,
+    `chosen_card_name`, `bestowed`, `earthbent` (`GameObject`) and
+    `has_citys_blessing` (`Player`) aren't in the canonical-state /
+    info-set hashes (search code is outside this bucket), so two states
+    differing only in them can share a transposition entry.
+14. **Reconfigure / Bestow type changes are read through
+    `game.is_creature_now` only** (Lion Sash attached; a bestowed
+    Springheart Nantuko). Code that tests `printing.is_creature` directly
+    still sees the printed creature. A bestowed spell on the stack keeps
+    its printed types (a "counter target creature spell" can target it),
+    and bestow is offered only at the creature's own timing.
+15. **Earthbend and Figure of Fable characteristic changes** are
+    self-sourced registry entries (they end only when the permanent leaves
+    the battlefield); `set_creature_subtypes` replaces the whole subtype
+    list (fine for creatures, whose subtypes are all creature types).
+    Figure of Fable's level-ups run through the R/multi/colorless bucket's
+    `SourceBecomesIfSubtype` (shared with Figure of Destiny), which now
+    replaces the creature types via `set_creature_subtypes` (CR 205.1b)
+    instead of adding them.
+16. **"Whenever you tap a creature for mana"** (Badgermole Cub) fires after
+    a creature's {T} mana ability activated through `ActivateAbility`;
+    creatures tapped by the automatic sacrifice-for-mana payer don't add
+    the extra mana.
+17. **Ascend** is checked with the state-based actions
+    (`creature_statics_wg.apply_ascend`), i.e. before the next priority --
+    equivalent for every cube card with Ascend on a permanent.
+18. **Eternalize** (Fanatic of Rhonas; `creature_wg_lines._parse_eternalize_line`,
+    `cube_creatures_wg.eternalized_printing`) is a graveyard-activated
+    ability on the R/multi/colorless bucket's `graveyard_activated_abilities`
+    substrate. The token is built from the card's printed characteristics
+    at resolution (its copiable values; nothing modifies a card in exile)
+    and keeps the Eternalize ability, which is inert on a token. Kicker on
+    a creature (Sowing Mycospawn, `_parse_kicker_line`) reuses the spell
+    kicker pipeline; its `{C}` pip is paid as generic (the engine-wide
+    `parse_mana_cost` treatment of `{C}`).
+19. **"Copy this spell"** (Sage of the Skies, `cube_creatures_wg.CopyThisSpell`)
+    of a permanent spell puts a copy whose printing already carries the
+    Token supertype on the stack (CR 707.10f makes it a token "as it
+    resolves"); the only difference is a Token supertype while the copy
+    is on the stack, which nothing in the pool reads.
+20. **"When you cast this spell" intervening-ifs** (`ThisSpellWasKicked`,
+    `CastAnotherSpellThisTurn`) are checked only as the trigger is put on
+    the stack (the engine's general intervening-if treatment); for these
+    two the resolution-time recheck can't come out differently.
+    `CastAnotherSpellThisTurn` reads `Player.spells_cast_this_turn >= 1`,
+    relying on `actions._cast_spell` stacking the spell's own cast
+    triggers before it counts the cast.
+21. **Targeted spells and "becomes the target"** (Surrak, Elusive Hunter):
+    `cube_creatures_rmc.fire_becomes_target` now also dispatches
+    `BECOMES_TARGET` for a spell targeted on the stack, with the spell as
+    the `target_spell` subject (not `target`), so the existing "a
+    permanent you control becomes the target" observers never see spells.
+    The "Activate only if you control a creature with power N or greater"
+    rider (Fanatic of Rhonas) is a `legal_actions` gate
+    (`ActivationCost.requires_own_creature_power_at_least`), like the
+    utility lands that already carry it.
+## PowerLSV cube blue / black creatures — deliberate simplifications (2026-09-27, `feature/cube-creatures-ub`)
+
+New engine code lives in `src/mtg_bot/effects/generic/cube_creatures_ub.py`, `src/mtg_bot/creature_casting_ub.py` and the parser module `src/mtg_bot/cards/parser/cube_creatures_ub.py`; the hooks it adds to shared paths are listed per entry.
+
+### Cast-time optional costs (Squad, Offspring) and Emerge are prompts / an uncoded `CastSpell` field
+
+**Where:** `creature_casting_ub.offer_creature_additional_costs` (called from `actions._cast_spell`), `creature_casting_ub.emerge_cast_actions` / `pay_emerge_sacrifice`, `CastSpell.use_emerge`.
+
+**What the shortcut is.** Squad payments (`choose_x`, 0..affordable, capped at 10) and the Offspring payment (`choose_yes_no`) are asked while the spell is cast, splice-style, rather than being separate `CastSpell` variants, so the search can only branch on them through those agent hooks. `CastSpell(use_emerge=True)` is a new field the policy codec doesn't encode (it collides with the normal hand-cast slot, like `use_escape`). The emerge sacrifice is paid when the cost is determined (CR 601.2f/h collapsed), before targets are chosen.
+
+**Impact / fix scope.** Small (Sicarian Infiltrator, Thundertrap Trainer, Crabomination). First-class cast variants + codec slots would expose the choices to the NN policy.
+
+### Casting spells while an effect resolves reuses the per-card permissions
+
+**Where:** `creature_casting_ub.cast_now` / `can_cast_now` / `cast_from_hand_for` (Malcolm, Crabomination, Bilbo, Miracle).
+
+**What the shortcut is.** The card is given a one-shot graveyard / exile permission (or an alternative mana cost for Miracle) and cast through the normal `_cast_spell` pipeline, so it lands on the stack above the resolving ability (CR 608.2g) and timing is ignored, as the rules require. Which card to cast is asked through `choose_card_from_library` (a generic "pick one of these ids" hook) and consent through `choose_yes_no`.
+
+### Exile play permissions ride the base's `ExilePlayPermission`
+
+**Where:** `cube_creatures_rmc.grant_exile_play` (used by Fallen Shinobi, Urza, Dauthi Voidwalker, Black Widow, and `creature_casting_ub.cast_now` for exiled cards).
+
+**What the shortcut is.** Nothing beyond the base substrate's own notes: "mana of any type can be spent" (Black Widow) is its `any_color_mana` (colored pips paid as generic), and a free permission never demands a pitch alternative cost.
+
+### Dauthi Voidwalker's replacement: redirect on the main paths, SBA catch-all elsewhere
+
+**Where:** `game.void_exile_replacement_active` / `exile_with_void_counter`, `turn.move_off_battlefield`, `actions._send_to_graveyard_or_library`, `turn.apply_void_exile_replacement` (run by `state_based_actions`), `Player.void_graveyard_snapshot`.
+
+**What the shortcut is.** Permanents leaving the battlefield and spells leaving the stack are exiled with a void counter before they reach the graveyard (they never "die"). Cards that reach an opponent's graveyard through other paths (discard, mill, surveil, look-at-top "into your graveyard") land there first and are swept to exile at the next state-based-action check — the same precedent as Yawgmoth's Will — so a trigger that looks at the graveyard in between can briefly see them. Cards already in the graveyard when a void source enters are snapshotted and stay.
+
+**Fix scope.** A single "put into graveyard" choke point for every zone move (touches ~30 sites).
+
+### "Cards are put into a library from anywhere" fires per zone-change call
+
+**Where:** `turn.note_cards_put_into_library` + `Event.CARDS_PUT_INTO_LIBRARY`, called from every zone change into a library (battlefield tucks, stack -> library, hand / graveyard shuffles and put-backs, exile -> library).
+
+**What the shortcut is.** Wan Shi Tong's "one or more cards" trigger fires once per effect batch, but `move_off_battlefield` moves one permanent per call, so a hypothetical effect tucking several permanents at once would trigger once per permanent. Library-internal moves (looks, scry, "put the rest on the bottom") correctly don't fire. The mulligan's bottoming isn't instrumented (no permanent can observe it).
+
+### Draw-step "first card" bookkeeping
+
+**Where:** `Player.draw_step_first_draw_pending / drawing_first_in_draw_step` (`turn.run_draw_step`, `turn.draw_card`), `object_predicates.DrawIsFirstInOwnDrawStep`, `Event.WOULD_DRAW_A_CARD` + `modifiers.InsteadForSourceController`, `ReplacementEffect.affects`.
+
+**What the shortcut is.** Only the draw performed by the turn-based action counts as "the first one they draw in each of their draw steps" (Orcish Bowmasters, Hullbreacher); if another effect replaced that draw (none in the pool can while the exemption applies), the next draw in the step would not be treated as the first. Per-card draw replacements apply once per card inside a multi-card draw (CR 121.6).
+
+### Printing-level statics ignore "loses all abilities"
+
+**Where:** `CardPrinting.min_blockers` (Troll of Khazad-dûm), `blocks_only_with_subtype` (Wan Shi Tong's Spirits), `squad_cost` / `offspring_cost` / `emerge_cost` / `miracle_cost`, `artifact_ability_cost_reduction` (Forensic Gadgeteer, which does check the wipe), `void_exile_replacement` (checks the wipe).
+
+**What the shortcut is.** A few new printing flags are read directly rather than through the layer-6 ability walk, so an effect that makes the permanent lose all abilities (The Wondrous Wasp, Tishana's Tidebinder) doesn't switch off Troll's blocking restriction or a Spirit token's block restriction. Dauthi's replacement and Gadgeteer's reduction do honor the wipe.
+
+**Fix scope.** Move these to `StaticAbility` / `ContinuousModifier` declarations when a second card needs them.
+
+### Modal ETBs pick targets before modes; "choose up to one" adds a no-mode option
+
+**Where:** `creature_builder._parse_modal_trigger_block` (Ertai Resurrected), `ModalChooseOne` + `ChooseNoMode`, `ModalChooseOneNotYetChosen` (Gollum).
+
+**What the shortcut is.** As for every modal trigger in the engine, the target is chosen from the union of the modes' pools when the trigger is put on the stack and the mode at resolution (a mismatch fizzles). "Choose up to one" is modeled as an extra "choose no mode" mode. Gollum's "choose one that hasn't been chosen" records the used modes on the permanent (a new object after a zone change starts fresh).
+
+### Improvise, Saddle and clones
+
+**Where:** `actions._apply_improvise` / `_improvise_max_contribution`, `creature_casting_ub.improvise_tap_order`; `creature_casting_ub.pay_saddle_cost`; `creature_casting_ub.apply_copy_on_entry`.
+
+**What the shortcut is.** Improvise is checked like convoke (upper-bound affordability), and the engine -- not the agent -- picks which artifacts to tap: artifacts without mana abilities first, as many as the generic cost needs, before any land is tapped. Keeping an artifact untapped instead of a land is therefore not a searchable choice. Saddle picks riders one at a time through `choose_permanent_to_tap` (plain power; crew-only bonuses don't apply). Phyrexian Metamorph / Superior Spider-Man copy the target's printing (its copiable values); Superior Spider-Man's "When you do, exile that card." is a trigger put on the stack right after it enters.
+
+### Subtlety removes a spell from mid-stack by index; Deep-Cavern Bat's hand exile
+
+**Where:** `cube_creatures_ub.OwnerPutsTargetSpellOnTopOrBottom`, `cube_creatures_ub.LookAtHandMayExileNonlandUntilSourceLeaves`, `GameObject.exiled_until_leaves_from_hand`, `turn._release_exiled_until_leaves`.
+
+**What the shortcut is.** Stack targets are `("stack", index)` pairs, so when Subtlety pulls a spell out from under other stack items, the engine re-indexes those items' `targets` above the removed spell; nothing else stores stack indices today, but a future effect that does would need the same fix-up. The owner's top/bottom choice goes through `choose_yes_no`. Deep-Cavern Bat's pick goes through `choose_card_from_opponent_hand`, and the card returns to its owner's hand (not the battlefield) through the base's until-leaves release hook.
+
+## PowerLSV cube non-normal layouts (DFCs, Sagas, Class, leveler, split) — deliberate simplifications (2026-09-27, `feature/cube-layouts`)
+
+Engine code: `src/mtg_bot/layouts.py` (face changes, Saga lore, Class levels, day/night, waterbend, mayhem), `src/mtg_bot/effects/generic/layout_effects.py` / `layout_face_effects.py`; parser: `cards/parser/layout_builder.py` (dispatch), `dfc_builder.py`, `split_builder.py`, `saga_builder.py`, `class_builder.py`, `leveler_builder.py`, `layout_grammar.py`, `layout_face_grammar.py`. Every face change is a swap of `GameObject.printing` (front kept in `mdfc_front_printing`, restored on every zone change and when a spell leaves the stack).
+
+### ~~Saga lore counters are added at the end of the draw step~~ -- CLOSED (cube glue bucket)
+
+**Where:** `turn.run_beginning_of_precombat_main_triggers` -> `layouts.run_saga_lore_counters`.
+
+The glue bucket added a precombat-main hook to BOTH turn loops (`simulate.run_step` and the search adapter's `_enter_step`), and the lore counter now rides it: it is added as the precombat main phase begins (CR 714.3b), before that phase's triggers (chapter abilities and "at the beginning of your first main phase") are put on the stack. Pinned by `tests/test_layouts_saga.py` and `tests/test_cube_glue_turn_loop.py`.
+
+### Transform bookkeeping (CR 701.28f) and copies of DFCs
+
+**Where:** `layouts.transform_permanent`, `layout_effects.TransformSource`.
+
+**What the shortcut is.** "Transform CARDNAME" from an activated / triggered ability resolves even if the permanent already transformed after the ability was put on the stack (CR 701.28f says it then does nothing): activating Ulvenwald Oddity's ability twice in response to itself flips it back. A token copy of a DFC copies the face that's up and never transforms (correct), but a non-token copy effect (`original_printing`) of a transformed permanent isn't specially handled.
+
+**Impact.** Negligible; fix = a per-object transform counter captured on the stack item.
+
+### Faces of split cards / MDFCs share the hand-cast policy slot and are enumerated per face
+
+**Where:** `CastSpell.cast_face`, `layouts.face_cast_actions` (called from `legal.legal_actions`).
+
+**What the shortcut is.** Casting a split half or a modal DFC's back face is a new `CastSpell` field the action codec doesn't encode (it collides with the normal hand-cast slot, like `use_bestow`). Legality of each face is computed by re-running the core legal-action enumerator with the card turned to that face, so `legal_actions` costs one extra enumeration per castable face while such a card is in a castable zone.
+
+**Impact.** Small (Life // Death, Jennifer Walters, Norman Osborn). Codec slots would expose the choice to the NN policy.
+
+### Class levels, day/night and level counters aren't in the search hashes
+
+**Where:** `layouts.gain_class_level` (the level printings share the card's name), `GameState.day_night` / `previous_turn_active_spells`, the leveler's `named_counters["level"]`.
+
+**What the shortcut is.** `search/info_set.py` and `search/canonical_state.py` hash the printing name, not the Class level; they don't hash day/night or named counters. ISMCTS may merge information sets that differ only in a Class's level, the day/night designation or a leveler's level count.
+
+**Impact / fix scope.** Small (Does Machines, Outland Liberator, Hexdrinker); fix = add the fields to both hashes (search-side change).
+
+### Reflexive "When you do" targets are chosen with the enclosing ability
+
+**Where:** `layout_face_grammar` `_WHEN_YOU_DO` (Ajani, Nacatl Avenger's 0).
+
+**What the shortcut is.** "Create a Cat token. When you do, if you control a red permanent other than Ajani, he deals damage ... to any target": the reflexive trigger's target is picked when the loyalty ability is activated (the `MayDoThenReflexive` precedent), and the intervening-if is checked on resolution.
+
+### Two-player readings of attack / defending-player text
+
+**Where:** `layout_face_grammar` ("a creature attacks you or a planeswalker you control" -> attacker controlled by an opponent; "other attacking creatures gain ..." -> your other attackers), `effects_ext._CONTROLLER_SUFFIXES` ("defending player controls" -> an opponent controls).
+
+**What the shortcut is.** Exact in two-player games (the only format the engine plays); wrong in multiplayer.
+
+### "Do this only once each turn" and "one or more <Cats> die"
+
+**Where:** The Sensational She-Hulk's trigger (`once_per_turn`, the parser's existing reading of the rider), Ajani, Nacatl Pariah's `OneOrMoreBatch` dies trigger.
+
+**What the shortcut is.** She-Hulk's trigger fires at most once a turn even when the controller declined the optional damage (the printed rider only limits doing it). Ajani's batch trigger doesn't fire again for a second Cat death while the first instance is still on the stack even if the deaths were separate events.
+
+### Choice hooks reused for new decisions
+
+**Where:** `EachChoosesOneOfEachTypeSacrificesRest` (Ajani's -4: `choose_legend_keep`, "which one stays"), `EachPlayerExilesUntilNonlandMayCastFree` (Etali: one `choose_yes_no` per castable card, in exile order), `pay_waterbend` (`choose_x` for the helper count, clamped to what the rest of the mana can't pay; `choose_permanent_to_tap` for which).
+
+**What the shortcut is.** The decisions exist but ride generic hooks; with several permanents of multiple listed types, Ajani's -4 lets a permanent satisfy more than one category (one pick per type).
+
+### Mayhem needs the discard to be reported
+
+**Where:** `turn.fire_opponent_discards_triggers` stamps `GameObject.discarded_turn`; `layouts.mayhem_castable`.
+
+**What the shortcut is.** A discard that doesn't go through the discard-observer funnel (the cleanup-step hand-size discard) doesn't stamp the card, so Green Goblin's granted mayhem can't cast it. Mayhem casts use the graveyard-permission cast path (normal timing, mana cost).
+
+## PowerLSV cube adventurer and preparation cards — deliberate simplifications (2026-09-27, `feature/cube-adventure-prepared`)
+
+Engine: `layouts.exile_on_adventure` / `is_adventure_cast`, `layouts.become_prepared` / `stop_being_prepared` / `prepare_copy_cast`; parser: `cards/parser/adventure_builder.py`. A multi-face card whose layout isn't modeled (or whose faces don't build) is now unclaimed instead of built as a vanilla creature from its face-less top-level record (`source._build_printing_unpinned`).
+
+### The prepare-spell copy is a spell-copy object with a fixed caster
+
+**Where:** `layouts.become_prepared`.
+
+**What the shortcut is.** The copy of the prepare spell is an exiled `GameObject` flagged `is_spell_copy` (so it ceases to exist when it leaves the stack) carrying a never-expiring `ExilePlayPermission` for the creature's controller *at the time it became prepared*; if control of the prepared creature changes, the permission doesn't follow the new controller (the rulings say only the current controller may cast it). "Becomes unprepared" effects other than casting the copy or the creature leaving the battlefield aren't modeled (no card in the pool prints one). The "if you control eight or more lands" gate of Emeritus of Abundance is checked when the ability triggers, not again on resolution (the parser's existing intervening-if convention).
+
+**Impact.** Tiny (Emeritus of Abundance only).
+
+### Adventure casts share the face-cast action
+
+**Where:** `CastSpell(cast_face=<Adventure name>)` via `layouts.castable_faces`.
+
+**What the shortcut is.** Casting the Adventure half rides the split/MDFC face-cast machinery (same uncoded `cast_face` field, per-face legality enumeration). The on-an-adventure exile permission (`ExilePlayPermission.primary_only`) allows only the creature to be cast from exile.
+
+## PowerLSV cube "glue" bucket — deliberate simplifications (2026-09-27, `feature/cube-glue`)
+
+The last sixteen normal-layout cube cards (Chandra, Torch of Defiance; Oko, Thief of Crowns; Wrenn and Six; Ugin, Eye of the Storms; Kaito, Bane of Nightmares; Nissa, Who Shakes the World; Tamiyo, Collector of Tales; Comet, Stellar Pup; Shelldock Isle; Coalition Relic; Mana Drain; Fear of Missing Out; Mawloc; Cloak and Dagger, Entwined; Tidehollow Sculler; Gleemox). Engine code: `src/mtg_bot/effects/generic/cube_glue.py`, `src/mtg_bot/player_protections.py`, `src/mtg_bot/cube_glue_statics.py`, hooks in `turn.py` / `simulate.py` / `search/engine_adapter.py` (step hooks only) / `actions.py` / `legal.py` / `game.py`; grammar: `src/mtg_bot/cards/parser/cube_glue_grammar.py` (last `_parse_effect` fallback, switched off for EoE-only printings through the shared `creature_rmc_grammar` guard). Kaito, Bane of Nightmares and Fear of Missing Out are also Duskmourn printings, so -- like Enduring Innocence in the W/G bucket -- they become claimed in the `eoe` / `all` pools too; no other EoE printing's parse changes.
+
+### "This card is banned." is a deck-construction statement
+
+**Where:** `printing_keywords._DECK_CONSTRUCTION_STATEMENT_LINE` (artifact builder). **What:** Gleemox's line (and the "A deck can have any number of / up to N cards named <this card>." family, CR 100.2a) only constrains deck building; the engine plays already-built decks, so the recognizer claims exactly that class of statement and records nothing -- the same treatment as "<name> can be your commander." **Failure mode:** none in play; a deck builder that consults the printing won't see the ban. **Fix scope:** a `CardPrinting.deck_construction` note if a deck builder ever needs it (~minutes).
+
+### Main-phase trigger points and delayed "your next main phase" triggers
+
+**Where:** `turn.run_beginning_of_precombat_main_triggers` (new `Event.BEGINNING_OF_PRECOMBAT_MAIN`), `turn.run_delayed_main_phase_triggers`; called from `simulate.run_step` and `search/engine_adapter._enter_step`. **What:** Coalition Relic's "your first main phase" is the precombat main phase; Mana Drain's delayed trigger (`delayed_triggers` entry, `"step": "main"`) fires at the controller's next main phase (the same turn's second main phase if the counter resolved before it, else their next turn's first). The Saga lore counter (layouts bucket) now rides the same hook. Mana added there floats until cleanup (the engine's pre-existing pool model). Mana Drain's amount is the countered spell's mana value as it last existed on the stack (X included); if the spell wasn't countered, nothing is scheduled. **Failure mode:** none known; the delayed trigger is an ordinary stack object. **Impact:** zero cost when no such trigger exists (one empty dispatch per main phase).
+
+### Additional combat phases (Fear of Missing Out)
+
+**Where:** `turn.next_step` (used by `simulate.run_turn` and the adapter's `_advance_to_next_step`), `GameState.extra_combat_phases`, `AdditionalCombatPhaseAfterThisPhase`. **What:** "After this phase, there is an additional combat phase" re-enters BEGINNING_OF_COMBAT after END_OF_COMBAT, reusing the existing `Step` values (the step enum feeds the NN tokenizer, so no new step kinds). Resolving outside a combat phase adds the combat after the turn's next combat phase rather than directly after "this" phase (no card in the pool can do that); pending phases are dropped at cleanup. "Attacks for the first time each turn" counts the source in `Player.attacked_this_turn`. **Failure mode:** the search-side canonical-state hash doesn't include `extra_combat_phases` (search code out of scope beyond the step hook), so two states differing only in a pending extra combat can share a transposition entry for the rest of that combat. **Fix scope:** one field in `search/canonical_state.py` (~minutes).
+
+### "Loses all abilities": printed triggers in dispatch, last-known information
+
+**Where:** `actions.dispatch_event` skips the printed triggered abilities of a source with a layer-6 `lose_all_abilities` registry entry, and of a departed object whose `GameObject.left_without_abilities` was recorded by `turn.move_off_battlefield`. **What:** Oko's Elk (and a Lignify-style Aura's creature) no longer triggers. Humility-style synthesized wipes (`wipes_all_creature_abilities`, no card in either pool) and the printing-level flags listed in the U/B section (`min_blockers`, ...) still don't consult the wipe. **Fix scope:** route those flags through the layer-6 walk (~half a cycle).
+
+### Indefinite characteristic changes are self-sourced registry entries
+
+**Where:** `TargetBecomesCreatureIndefinitely` (Oko's +1), `PutCountersUntapItBecomesCreature` (Nissa's +1). **What:** entries are sourced by the affected permanent (the Earthbend precedent) so they survive the planeswalker leaving and end when the permanent leaves. An Elk'd noncreature that entered this turn is marked summoning-sick (CR 302.6 approximated by `entered_battlefield_turn`); a land animated by Nissa after being under your control since the turn began can attack (haste makes it moot).
+
+### Exchange of control and "they control" readings
+
+**Where:** `ExchangeControlOfTargets` (Oko's -5), `RevealHandMayExileCardOrChosenCreatureUntilSourceLeaves` (Cloak and Dagger). **What:** the exchange sets `controller_id` directly (the Dack Fayden precedent, no layer-2 entry); Cloak and Dagger's "creature they control" is "creature an opponent controls" (two players) and the choice between a hand card and the chosen creature goes through the generic `choose_card_from_library` id picker after a `choose_yes_no`.
+
+### Tamiyo's protection is checked at the discard / sacrifice sites
+
+**Where:** `player_protections.opponent_effect_blocked_for`, `GameState.resolving_item_controller_id` (set by `actions.resolve_top_of_stack`), consulted by `turn.sacrifice` and the effect-driven discard sites (`card_flow.discard_card`, the discard effect classes, `life.py`, the Fanatic / Memory Jar / cube R-multi hand discards). **What:** a discard or sacrifice that happens while an opponent-controlled spell/ability resolves is skipped. Costs are paid by their own controller outside the opponent's resolution, so they're never blocked. Osseous Sticktwister's "sacrifice or discard or take damage" choice (an EoE punisher) still offers the blocked options; choosing one does nothing (and avoids the damage). A discard site added later that bypasses these helpers would ignore the protection. **Fix scope:** a single discard choke point (see the U/B section's graveyard choke-point note).
+
+### Nissa's extra mana rides automatic payment only
+
+**Where:** `actions.extra_mana_grants_for_tapped_lands`, `_can_pay_from` / `_virtual_pretap` in `can_pay_cost`, `_pretap_lands_for_extra_mana` in `auto_tap_for_cost`. **What:** "Whenever you tap a Forest for mana, add an additional {G}" is folded into the automatic payer: affordability tries pre-tapping 1..all Forests (fewest other colors first), and payment taps Forests into the pool first while the cost isn't otherwise payable, floating any surplus {G} for the rest of the turn. The Forest's own mana is taken as {G}. Phyrexian-split affordability doesn't know the bonus. **Failure mode:** a dual Forest may be pre-tapped for {G} when its other color was needed only if every alternative failed; surplus floating mana is spent later that turn or lost at cleanup. **Impact:** the extra check runs only when the normal affordability check fails and a grant exists (a battlefield scan).
+
+### Kaito is a creature during your turn via UEOT entries
+
+**Where:** `cube_glue_statics` (applied by `turn.run_untap_step` and on entering during your turn from `actions.put_into_battlefield`). **What:** `is_creature_now` has no game-state argument, so the static writes cleanup-expiring layer 4/6/7 entries as each of the controller's turns begins (and when Kaito enters then -- summoning-sick). The "one or more loyalty counters" condition isn't re-checked mid-turn (at 0 loyalty the state-based action removes him). A control change mid-turn doesn't re-evaluate it. Damage to a planeswalker creature both marks damage and removes loyalty (CR 120.3c/e) in `_apply_damage` and combat damage. **Failure mode:** planeswalkers still can't be attacked (planeswalker-bucket note 4), so Kaito is never a combat defender.
+
+### "Opponent who lost life this turn"
+
+**Where:** `Player.lost_life_this_turn` / `life_checkpoint`, `turn.note_life_losses` (run at every state-based-action check and by the reader). **What:** a drop in life total between two checks latches the flag; a loss fully regained inside one resolution is missed. Reset as every turn begins.
+
+### Comet's die table and extra loyalty activations
+
+**Where:** `planeswalker_builder` + `cube_glue_grammar.parse_glue_die_row` / `assemble_die_table` -> `rmc.RollDieTable`; `GameObject.extra_loyalty_activations`, `legal.loyalty_activation_available`. **What:** the roll uses `state.rng` (not a chance node in search, like the R/multi bucket's die rolls); "a creature or player" (untargeted) is chosen with the `choose_target` hook; "you may activate Comet's loyalty ability two more times this turn" widens CR 606.3's once-per-turn gate. `extra_loyalty_activations` isn't in the search hash.
+
+### Hideaway and "play the exiled card"
+
+**Where:** `HideawayLookExileOneFaceDown`, `PlayExiledCardFreeIfAnyLibraryAtMost`. **What:** the hidden card is linked through the imprint link (source id + ETB timestamp); "a library has twenty or fewer cards" is checked on resolution; a land can be played only on your turn with a land play left (it uses the land play), a spell is cast free through `cast_now` (timing ignored). The "may" is a `choose_yes_no`.
+
+### Emblems as static sources and printing-level grants
+
+**Where:** `game._static_bonuses` / `_layer6_entries_for` scan `state.emblems`; `CreateEmblemWithAbilities.static_abilities` / `printing_fields`; `StaticScope.CARD_TYPE_PREFIX` (noncreature card-type scope); `CardPrinting.grants_retrace_to` (`graveyard_casting_wg.retrace_grant_filters`). **What:** emblem anthems (Kaito's Ninjas, Nissa's indestructible lands) and Wrenn and Six's retrace grant. Retrace keeps the W/G bucket's notes (the discarded land is chosen with `choose_discard`).
+
+### Other resolution-time choices
+
+Ugin's -11 and Nissa's -8 "any number" searches pick one card at a time through `choose_card_from_library` until the agent returns `None` (random / default agents take everything); Tamiyo's +1 names one of the distinct nonland names in your library or a "not in your library" option (the Demonic Consultation convention); Comet's "return a card with mana value 2 or less" (untargeted) uses the same id picker. Chandra's +1 casts through `cast_now` (the spell goes above the ability; if it's a land, uncastable, or declined, 2 damage to each opponent) and an uncast card stays in exile with no permission. Tidehollow Sculler follows the printed two-trigger text: if it leaves before its ETB resolves, the card is exiled forever.
+
+**New per-object / per-player / per-game state not hashed by search** (search code out of scope): `GameObject.left_without_abilities`, `extra_loyalty_activations`; `Player.lost_life_this_turn`, `life_checkpoint`; `GameState.extra_combat_phases`, `resolving_item_controller_id` (transient). Rust engine models none of this bucket (Python-only; no EoE parity surface changes).
+
+## Delirium and card-type counting (2026-09-28, `feature/cube-fixes-1`)
+
+Every "card types among cards in <zone>" count now goes through `mtg_bot.effects.card_types` (`card_types_of`, `count_card_types`, `delirium_active`): Delirium at both predicate tiers (`state_predicates.Delirium` for trigger gates, `conditions.DeliriumActive` for statics / "instead if" spell riders / activation restrictions — both carry the printed `min_card_types=4` and delegate to the one function), the Lhurgoyfs, Ursine Monstrosity, Keen-Eyed Curator, Occult Epiphany and Atraxa. What was wrong before: the delirium type set listed only the pre-2024 name "Tribal" (a Kindred card counted for nothing), each goyf / Ursine / Curator / Epiphany / Atraxa helper carried its own type tuple, and a card whose printing was still a back face / split half off the stack would have been read by that face. The shared helper folds Tribal into Kindred, unions a split card's halves (CR 709.4), reads a DFC by its front face (CR 712.8a — an MDFC land such as Shatterskull Smashing is a *sorcery* card in a graveyard, so it does NOT give delirium a land), reads an adventurer by its normal characteristics (CR 715.4) and skips tokens / spell copies (not cards).
+
+Remaining gaps:
+
+- **Intervening-if not rechecked on resolution.** **Where:** `cards/parser/triggers.py` (`_INTERVENING_IF_PHRASES`, the `StateBound(Delirium())` gate on Fear of Missing Out and the Duskmourn delirium triggers). **What:** the gate is tested when the ability triggers only; CR 603.4 also requires it on resolution. **Why OK:** losing a card type between trigger and resolution needs instant-speed graveyard hate in that window. **Failure mode:** the ability resolves even though delirium was lost. **Fix scope:** a `TriggeredAbility` intervening-if field the resolve path re-tests (the gate is currently AND-ed into the event predicate, which also holds non-rechecked trigger conditions such as "second spell each turn"). **Impact:** negligible.
+- **Duskmourn-pool delirium riders are still dropped by the spell builder** (`spell_builder._is_delirium_drop_clause`, `_DELIRIUM_MODAL_HEADER_RE`): Impossible Inferno / Violent Urge / Demonic Counsel's "Delirium — If ..., <extra effect>", Drag to the Roots' delirium cost reduction and Let's Play a Game's "choose one or more instead". These are EoE-era-pool cards (not in the cube) left unchanged so no EoE parse changes in this branch; each could now compose over `DeliriumActive` (`IfConditionElse` / a `CostReduction` condition / a delirium-gated mode count).
+
+## Opening-hand actions are setup-agent decisions (2026-09-28, `feature/cube-fixes-1`)
+
+**Where:** `mtg_bot/opening_hand.py` (`apply_opening_hand_actions`), called from `simulate.setup_game` after the final keep; `CardPrinting.opening_hand_action` (parsed by `cards/parser/opening_hand_lines.py`). **What:** CR 103.6 opening-hand actions — Gemstone Caverns' "you may begin the game with it on the battlefield with a luck counter on it; if you do, exile a card from your hand" (non-starting player only) — are asked of the seat's *setup* agent through the generic `Agent.choose_yes_no` hook, with the exiled card picked through `choose_discard`. In self-play / data-gen the setup agents are `RandomAgent`s (a coin flip and a random exile), `DefaultTacticalAgent` always says yes and exiles the first card; search / the NN never see the decision (it happens before the first searched state, like the mulligan). **Why OK:** it is one binary pre-game choice on one cube card, and "yes" is almost always right. **Failure mode:** a self-play seat declines a free accelerant half the time; the policy cannot learn the choice. **Fix scope:** a pre-game decision node in the search adapter (shared with mulligans). **Impact:** small, one card. Callers that alternate the starting seat must pass `setup_game(..., starting_player_idx=...)` (data-gen now does) — patching `active_player_idx` afterwards would offer Gemstone Caverns to the wrong player. Leyline of Mutation (EoE-era pool) prints the bare form of the same line and still takes the enchantment builder's honest-no-op path; routing it through `parse_opening_hand_line` is a one-line change deferred so that pool's parses don't move in this branch. The Rust engine has no opening-hand hook, no `produces_with_counter` and no `SourceHasCounter`; Gemstone Caverns no longer matches its parity-probe shape (`AddManaToPool(any)`).
+
+## Vintage Roto P1: stack & restrictions — deliberate simplifications (2026-10-02, `feature/roto-p1-stack-restrictions`)
+
+Roto-only cards (not in the default `all` pool when this landed; roto was folded into `all` on 2026-10-03, so these shortcuts now reach default-pool games -- see "Vintage Roto in the default pool" below). Engine code: `src/mtg_bot/roto_restrictions.py` (taxes, the cost floor, prohibitions; descriptors on `CardPrinting.roto_statics`), `src/mtg_bot/effects/generic/roto_stack.py`; grammar: `src/mtg_bot/cards/parser/roto_stack.py` (last fallback of the creature / artifact / cube-enchantment builders and of `effects._parse_effect`, switched off for EoE-only printings through the shared `creature_rmc_grammar` guard). Hooks: `creature_statics_wg.spell_cost_increase` (taxes), `legal._filter_cast_restrictions_wg` (prohibitions), `legal._can_cast` / `_free_cast_tax_payable`, `creature_casting_ub.can_cast_now` and `actions._cast_spell` (the floor), `actions._untapped_lands` (activation locks on lands). The Rust engine models none of these cards (Python-only; no EoE parity surface changes).
+
+### Trinisphere's floor: affordability of alternative-cost casts
+
+**Where:** `legal._legal_actions_core._free_cast_tax_payable`, `legal._can_cast` (`spell_cost=True`), `roto_restrictions.apply_minimum_spell_cost`. **What:** the cast pipeline applies the floor exactly (after every increase, reduction, kicker, X and alternative cost; Phyrexian pips paid with life count toward the total). The legal-action *affordability probe* for a cast without paying the mana cost or for a printed alternative cost (Force of Will, Daze, Baleful Mastery) checks "can pay {3} generic (or the tax, if larger)" rather than the alternative cost's own mana plus the floor; a kicked / buyback variant is probed with the floor applied to the combined cost. **Why OK:** only a printed alternative cost that itself costs colored mana (Baleful Mastery's {1}{B}) can be misjudged, and only while a Trinisphere is untapped. **Failure mode:** such a cast is offered when its colored part can't be paid (automatic payment then underpays, the engine's pre-existing behavior for unpayable costs) or vice versa. **Fix scope:** route the alternative-cost probe through `apply_minimum_spell_cost` with the alternative's mana (~an hour). **Impact:** negligible.
+
+### Activation locks on lands' mana abilities
+
+**Where:** `actions._untapped_lands`. **What:** a land whose current card types an "Activated abilities of <types> can't be activated." static names (an artifact land under Null Rod / Stony Silence, an animated manland under Clarion Conqueror) is no longer offered to automatic payment. The roto pool's artifact lands (Seat of the Synod & co.) are artifact lands since P3 (their mana rides automatic payment through `produces`), so this check is what locks them under Null Rod / Stony Silence. **Impact:** one battlefield scan per `_untapped_lands` call.
+
+### Counter-a-spell activated abilities are offered at instant speed; nothing else is -- superseded
+
+**Superseded 2026-10-03** by the general rule (`feature/roto-instant-activations`): `roto_restrictions.instant_speed_spell_targeting_activations` is deleted; every non-sorcery-speed, non-loyalty, non-mana battlefield ability -- these included, with any cost -- is offered whenever its controller has priority. The original note follows.
+
+
+**Where:** `roto_restrictions.instant_speed_spell_targeting_activations`, called from `legal._legal_actions_core`'s non-sorcery-timing branch and from `search/_player_capabilities._has_instant_speed_activatable`. **What:** the engine offers battlefield activated abilities only in an empty-stack sorcery window (the cube-lands entry above), where an ability that targets a spell can never have a target. Abilities whose effect targets only stack objects (`CounterSpell`, `CounterTargetSpell`, the U/B `CounterTargetStackObject` / `ThenItsControllerDraws` wrapper, the P1 stack effects) are now also offered whenever their controller has priority -- Glen Elendra Guardian's "{1}{U}, Remove a counter from this creature: Counter target noncreature spell. Its controller draws a card." Only abilities whose cost is mana, `{T}` and composable cost atoms (`ActivationCost.extra_costs`) are offered there; a stack-targeting ability with another cost field (sacrifice, discard, ...) stays sorcery-window-only (none exists in the pools). **Failure mode:** none for the claimed card. **Impact:** an extra battlefield scan per priority moment only while the stack is non-empty (pre-checked on printed abilities).
+
+### "Any number of target spells" in search
+
+**Where:** `effects/generic/roto_stack.ExileTargetSpells` (Mindbreak Trap), `actions._select_spell_targets`. **What:** the target loop asks `choose_target` once per slot (capped at 64) and an agent that answers `None` stops adding targets; the search's resolution channel exposes each slot as a forced pick among the legal targets (no "stop" option -- the existing treatment of every "up to N" target), so a searched Mindbreak Trap exiles every spell on the stack, the caster's own included. **Failure mode:** the trap can't spare its controller's own spells under search. **Fix scope:** a decline option for optional target slots in `search/resolution_channel` (shared with every "up to N" effect). **Impact:** small.
+
+### Uncounterable spells ignore ward; counterspells still can't target them
+
+**Where:** `actions._cast_spell` (the ward check is skipped when `CounterTargetSpell._is_uncounterable` holds), `spell_cost_lines._is_uncounterable_line` (reminder text stripped -- Long Goodbye). **What:** ward is "counter that spell unless its controller pays" (CR 702.21a); a spell that can't be countered isn't countered, so the engine no longer auto-pays (or counters) for it. This also changes the claimed cube cards with "This spell can't be countered." (a fix). Pre-existing convention kept: counterspell effects exclude uncounterable spells from their legal targets (CR 101.2 makes them legal targets that simply aren't countered), so a Swan Song / Strix Serenade can't be cast at an uncounterable spell just for the rider. **Impact:** negligible.
+
+### Removing a spell from the middle of the stack
+
+**Where:** `effects/generic/roto_stack.pop_stack_item` (Venser, Shaper Savant; Mindbreak Trap). **What:** stack targets are positional `("stack", i)`; when an effect removes a spell that isn't on top, every other stack item's stack targets are re-pointed (a target that pointed at the removed spell becomes `("stack", -1)`, which every counter / bounce effect treats as illegal). Older effects that delete from the middle of the stack (`ReturnTargetSpellToOwnersHand`, `ReturnTargetSpellOrNonlandPermanentToHand`, the U/B Subtlety effect) don't all do this; a counterspell aimed at a spell one of those removes can point at a different object. **Fix scope:** route them through `pop_stack_item` (~minutes each; P1 left them alone so no claimed card's behavior moves).
+
+### Mana value of spells with X on the stack
+
+**Where:** `effects/generic/roto_stack.stack_mana_value` / `SpellManaValueIs` / `CounterSpellMVAtMostCount`. **What:** Mental Misstep, Spell Snare and Spellstutter Sprite read a spell's mana value with its chosen X (CR 202.3e); the pre-existing `value_predicates.HasManaValueAtMost` (used by older counterspell filters such as "with mana value 4 or less") still reads X as 0 on the stack. **Fix scope:** have `mana_value_of` consult the stack item (changes claimed cube cards; left for a parity-pinned follow-up).
+
+### "Choose a card name" offers the opponents' card names
+
+**Where:** `roto_restrictions.nameable_card_names` / `choose_card_name_as_enters` (hooked from `actions.put_into_battlefield`), `ChooseCardNameAsEnters` (Pithing Needle, Phyrexian Revoker, Disruptor Flute, Meddling Mage). **What:** the rules allow any card name; the engine offers the distinct names of every card an opponent owns, in any zone (their deck list -- public in a rotisserie draft; nonland names for "nonland card name"), and the controller picks one through `choose_mode`, which search explores as a decision. Naming one of your own cards (or a card not in the game) is never offered. With no opponent cards the permanent names nothing. A split card / MDFC is matched by the name of the face it is cast as or of its front face, not by its combined name. **Why OK:** a name outside the opponents' cards can only restrict yourself. **Failure mode:** a Needle can't be pointed at your own card to dodge a symmetric effect (no card in the pool needs that). **Impact:** one decision with up to ~40 options per such permanent entering.
+
+### Named locks and the auto-payer
+
+**Where:** `roto_restrictions.filter_actions` (legal), `actions._sac_for_mana_sources`. **What:** a named activation lock drops `ActivateAbility` / `ActivateStation` proposals for battlefield, hand and graveyard sources with the chosen name (mana abilities too, unless the card says "unless they're mana abilities"), and keeps a locked sac-for-mana ability (Lotus Petal) out of automatic payment. Lands' mana production rides automatic payment, which no named lock reaches -- Phyrexian Revoker can't name a land and Pithing Needle excepts mana abilities, so no claimed card needs it. Morph's turn-face-up is a special action (not locked), as in the rules.
+
+### Player-scoped "this turn" restrictions are emblems
+
+**Where:** `roto_restrictions.create_this_turn_emblem` (`CantCastSpellsThisTurn`, `CreaturesCantAttackThisTurn`), `combat.eligible_attackers` (`filter_attackers`), `creature_casting_ub.can_cast_now`. **What:** Silence / Orim's Chant / Ranger-Captain of Eos leave a command-zone emblem carrying a `CastProhibition` / `AttackProhibition` that turn cleanup removes (the `CreateThisTurnTriggeredAbility` mechanism). Casts during an effect's resolution (`can_cast_now`) honor the roto prohibitions; the W/G bucket's statics (Archon of Emeria) still don't (pre-existing). Ranger-Captain's and High Noon's sacrifice abilities were offered only in a sorcery window -- (resolved 2026-10-03 by `feature/roto-instant-activations`; see "Instant-speed activated abilities of permanents" at the end of this doc); both are now offered whenever their controller has priority (pinned by `tests/test_instant_activation_cards.py`). **Impact:** an emblem scan per legal-action call while one exists.
+
+### Cast triggers bound to the spell and its caster
+
+**Where:** `effects/generic/roto_stack._CastEventBound` (`CounterEventSpell`, `SourceDealsDamageToCaster`, `DrawUnlessCasterPays`), `cards/parser/roto_stack._cast_trigger`. **What:** "that spell" is the cast event's spell (by id, `event_subject_id`), "that player" its caster (a fixed `("player", id)` target -- not a targeting choice, so hexproof doesn't matter). Counter-that-spell triggers don't target; an uncounterable spell is left alone and a spell already gone is ignored. "Unless that player pays {N}" is the payer's `choose_yes_no` (a search decision), offered only when payable; Esper Sentinel's X is its power on resolution (last known if it left). Mystic Remora's "you may draw" asks the payer first, then the controller. "their first noncreature spell each turn" reads the caster's noncreature-spell count (copies aren't cast; spells cast before the trigger source arrived count). The intervening "if no mana was spent to cast it" (Vexing Bauble, Lavinia) is checked when the spell is cast only -- the mana spent can't change afterwards. **Failure mode:** none known.
+
+### Mana spent to cast a spell
+
+**Where:** `GameObject.mana_spent_to_cast`, set in `actions._cast_spell` from automatic payment's per-unit record (one entry per mana unit paid -- the same record Sunburst reads; integration of P1 and P3, which had each added the field). **What:** the total of mana paid (after convoke / improvise / delve, which pay without mana, and after Phyrexian pips paid with life were taken out). Mana from a sac-for-mana source that floated into the pool is counted; mana floating from earlier and left unspent isn't. **Impact:** none.
+
+### Cumulative upkeep (mana costs only)
+
+**Where:** `effects/generic/roto_stack.CumulativeUpkeep`, `cards/parser/roto_stack._cumulative_upkeep`. **What:** age counters are named counters; the whole accumulated cost is paid or declined at once (`choose_yes_no`, offered only when payable), else the permanent is sacrificed (CR 702.24a). Only mana cumulative upkeep costs parse; life / sacrifice forms stay unclaimed.
+
+### Lavinia's mana-value cap and X
+
+**Where:** `roto_restrictions.cast_prohibited` / `max_x_allowed`, `actions._choose_and_apply_x`. **What:** a noncreature spell is castable while its mana value with X = 0 is within the caster's land count; X is then capped so the mana value with X stays within it (the X choice offers only legal values). **Failure mode:** none known.
+
+### The world rule
+
+**Where:** `roto_restrictions.apply_world_rule`, called from `turn.state_based_actions` (CR 704.5k; closes the former "world rule not implemented" gap). The newest world permanent (by `etb_timestamp`) stays; on a tie all go. Nether Void is the only World card in any pool.
+
+### Strict Proctor's watcher trigger
+
+**Where:** `roto_restrictions.fire_entering_trigger_watchers` (hooked at the end of `actions.push_triggered_ability` for abilities whose event is `ENTERS`), `CounterTriggerUnlessPays`. **What:** "Whenever a permanent entering causes a triggered ability to trigger, counter that ability unless its controller pays {2}" is a trigger on a trigger; the engine synthesizes it right after each ENTERS-event triggered ability goes on the stack (every such ability is pushed through `push_triggered_ability`), so the Proctor's trigger lands directly above the ability it watches and resolves first (APNAP / controller ordering of simultaneous triggers isn't asked). "That ability" is fixed by position (`("stack", i)`, kept current by `pop_stack_item`), not targeted; the payment is the ability controller's `choose_yes_no`. Leaves-the-battlefield and other non-entering triggers are untouched. **Impact:** a battlefield scan per ENTERS trigger.
+
+### Harsh Mentor's activation event
+
+**Where:** `Event.ACTIVATES_ABILITY`, dispatched by `actions._activate_ability` after a non-mana ability of a battlefield permanent goes on the stack. **What:** mana abilities never dispatch it (they return before), nor do hand / graveyard abilities (not "on the battlefield"). `ActivateStation` (a Spacecraft's station ability) doesn't dispatch it -- no Spacecraft is in the roto pool. **Impact:** one dispatch per activation.
+
+### Chancellor of the Annex's reveal
+
+**Where:** `effects/generic/roto_stack.RevealForFirstSpellTax` (an `opening_hand_action` with its own `apply`; `opening_hand.apply_opening_hand_actions` calls it). **What:** the reveal is a setup-agent decision like Gemstone Caverns' (see "Opening-hand actions are setup-agent decisions"); it leaves a game-long command-zone emblem whose delayed trigger fires on each opponent's first spell of the game (once per opponent by construction). The emblem isn't in the search hash.
+
+### Aven Interrupter: plotting a spell, the graveyard / exile tax
+
+**Where:** `effects/generic/roto_stack.ExileTargetSpellPlotted`, `creature_casting_ub.casting_origin` (`from_exile`, set at its three call sites and around the free-cast tax in `actions._cast_spell` / `legal._free_cast_tax_payable`), `roto_restrictions.SpellTax.from_graveyard_or_exile`. **What:** the exiled spell gets `plotted_turn` = this turn, so the existing plot machinery lets its owner cast it free, as a sorcery, on a later turn; a copy ceases to exist. The tax applies to spells an opponent casts from a graveyard or from exile -- including those cast without paying their mana cost (a plotted card) -- and not to casts from the top of a library. Casts during an effect's resolution (`can_cast_now(free=True)`) don't check any tax's affordability (pre-existing for every tax). **Impact:** none.
+
+### P1 state not in the search hashes
+
+**Where:** `search/canonical_state._shape_key` / `_canonical_state_tuple` (search code out of scope, like the cube buckets; the recipe mirrors the Rust native fingerprint). **What:** `GameObject.chosen_card_name` (also Anointed Peacekeeper's, pre-existing), `GameObject.mana_spent_to_cast`, age counters (named counters, pre-existing) and command-zone emblems (the "this turn" prohibitions, Chancellor of the Annex's reveal) aren't in the canonical state key, so two search states differing only in them can share a transposition entry. **Failure mode:** a Pithing Needle naming A and one naming B, or a turn with and without Silence active, can be conflated by the transposition table. **Fix scope:** add the fields / an emblem digest to the canonical tuple together with the Rust fingerprint (~an hour plus the parity pin). **Impact:** rare (needs two lines reaching the same position with different names / emblems).
+
+## Vintage Roto P3: mana, costs and cast permissions — deliberate simplifications (2026-10-02, `feature/roto-p3-mana-costs`)
+
+Roto-only cards of `docs/ROTO_COVERAGE_PLAN.md` section 4. Grammar: `src/mtg_bot/cards/parser/roto_mana.py` (last `_parse_effect` fallback and other single-call hooks, switched off for EoE-only printings through the shared `creature_rmc_grammar` guard); engine: `src/mtg_bot/effects/generic/roto_mana.py`. Python-only: the Rust engine models none of these cards (none is in the EoE parity pool).
+
+### Jeska's Will's commander clause is false in every simulated game
+
+**Where:** `roto_mana.rewrite_spell_clauses` (hooked at the top of `spell_builder._parse_spell_oracle_text_body`). **What:** "Choose one. If you control a commander as you cast this spell, you may choose both instead." is read as "Choose one —". The engine plays two-player games with no commander designation (CR 903.3: only the Commander variant has commanders), so no player ever controls one and the condition is false; the header is exactly a choose-one there. **Failure mode:** none unless a Commander variant is added. **Fix scope:** a commander designation plus a cast-time mode-count condition on `ModalChooseOne` (~half a cycle, only if the variant ever exists).
+
+### Spire of Industry's any-color ability is an explicit mana ability
+
+**Where:** `land_lines._try_build_line_composed_land` (unchanged) + `roto_mana.parse_activate_only_if_condition`. **What:** the free `{T}: Add {C}` folds into `produces` (automatic payment); the life-costed "Activate only if you control an artifact" any-color ability stays explicit, so it inherits the cube-lands shortcut #1 above (offered only in a sorcery window, so it can't pay for an instant-speed cast). **Failure mode / fix scope:** as cube-lands #1.
+
+### "This mana can't be spent to cast nonartifact spells" (The Mightstone and Weakstone)
+
+**Where:** `roto_mana.roto_coin_satisfies` (hooked as the last check of `actions._coin_satisfies_context`); the battlefield activation paths (`legal.py` activated-ability loop, `actions._activate_ability`) now add an `"activated_ability"` payment-context tag. **What:** the coin pays for artifact spells and for activated abilities of permanents. Every other payment that isn't a spell cast — hand / graveyard abilities, Room unlocks, station, ward and "unless its controller pays" costs — still reaches the payer with the default `"spell"` context, so the coin is not spent there. **Why OK:** it only under-uses the mana (never spends it on a nonartifact spell). **Failure mode:** a player with only Mightstone mana floating can't pay a ward tax or a Mana Leak with it. **Fix scope:** tag each of those payment sites (~an hour). The modal ETB rides `roto_mana.extract_modal_trigger_blocks` (hooked into `artifact_builder`), which reuses the creature builder's modal-trigger grammar.
+
+### Cavern of Souls: the creature-type choice is narrowed to your own creature types
+
+**Where:** `roto_mana.choose_creature_type_as_enters` / `creature_types_owned_by` (hooked at the end of `actions.apply_land_etb_replacements`), `AddAnyColorManaForChosenCreatureType`, `roto_spell_kinds` (hooked into the casting contexts `legal._spell_kinds_for_card` and `actions._cast_spell`). **What:** "choose a creature type" is offered (`choose_mode`) over the creature types of creature cards the controller owns in any zone, sorted -- a type none of your cards has can't satisfy the own-spell restriction, so the narrowing loses no outcome. With no creature card owned the choice is recorded as `None` and the restricted mana pays for nothing. The choice is made only on the two land-entry paths that run `apply_land_etb_replacements` (the land drop and fetch-style searches); a land put onto the battlefield by another effect enters without a choice. Changelings match every type (`creature_type:*`); other type-changing effects on a spell aren't read (the printing's subtypes are). As a non-`produces` mana ability it inherits cube-lands shortcut #1 (sorcery window only). **Fix scope:** route the other land-entry paths through `apply_land_etb_replacements` (~an hour).
+
+### Dreadhorde Arcanist: power read from the source object on resolution
+
+**Where:** `roto_mana.MayCastTargetGraveyardCardFree` / `_source_power`. **What:** "mana value less than or equal to this creature's power" is checked when targets are chosen and again on resolution (CR 608.2b) against `effective_power` of the source object. If the Arcanist has left the battlefield, that object's remaining counters and registry entries stand in for last-known information. The spell is cast during the resolution through the U/B bucket's `cast_now` (timing ignored, CR 608.2g); "may" is a `choose_yes_no`. **Failure mode:** an Arcanist that died with a pump that expired by layer bookkeeping could read a slightly different power than its LKI. **Impact:** negligible.
+
+### Cast permissions are offered by one legal-actions hook
+
+**Where:** `roto_mana.permission_cast_actions`, called once from `legal._legal_actions_core` just before the instant-speed early return (so Teferi's sorcery-speed confinement, Deafening Silence and the W/G cast filters still apply to its actions); `actions._cast_spell` accepts the casts through `_roto_top_of_library_cast_allowed`. **What:** Mystic Forge's "cast artifact spells and colorless spells from the top of your library" (`CardPrinting.cast_from_top_of_library_kinds`; the artifact-only grant of Mm'menon keeps `grants_cast_artifact_from_top_of_library`, both parsed by the one `printing_keywords.parse_cast_from_top_kinds` regex) offers the top card at its own timing (instants / flash at any priority, everything else in a sorcery window), unlike Mm'menon's pre-existing sorcery-window-only block. "Colorless" is read through `effective_colors`. "You may look at the top card of your library any time" stays the existing perfect-information anchor. Mind's Desire reuses Urza's `ShuffleThenExileTopMayPlayFree` (storm through the existing `has_storm` path); Hex Magic's exiled cards carry an `UNTIL_END_OF_YOUR_NEXT_TURN` exile play permission at normal cost.
+
+### Suspend (Lotus Bloom) and cards with no mana cost
+
+**Where:** `roto_mana.split_roto_card_lines` (hooked into `source.build_card_record`: peels `Suspend N—<cost>` off before the per-type builders and flags `has_no_mana_cost`), `suspend_card` (the special action, `CastSpell(id, use_suspend=True)` dispatched in `actions.apply_action`), `push_suspend_upkeep_triggers` (hooked into `turn.run_beginning_of_upkeep_triggers`), `RemoveTimeCounterFromSuspendedSource` / `CastSuspendedSourceFree`; `legal._can_cast` refuses every paid cast of a `has_no_mana_cost` card (CR 202.1b / 601.2f). **What:** suspending is offered at the card's own timing ("if you could begin to cast this card", so a non-flash permanent needs a sorcery window) and doesn't count as a cast. Each of the owner's upkeeps stacks one "remove a time counter" trigger per suspended card (intervening "if" re-checked); removing the last counter stacks the free-cast trigger, which casts through `cast_now` (timing ignored) after a `choose_yes_no`, or leaves the card exiled. A creature cast this way gets a layer-6 haste entry targeting the card; it ends when the permanent leaves the battlefield, and `move_spell_off_stack` now drops every registry entry targeting a spell that leaves the stack without resolving onto the battlefield (CR 400.7), so a countered suspended creature doesn't keep it. **Action codec:** like Plot, `use_suspend` isn't a codec variant, so the policy head maps the suspend action to the normal-cast slot of the card (Lotus Bloom has no normal cast; a card with both would collide). **Fix scope:** a codec variant (a v-chain break).
+
+### Snow: the supertype, snow mana and {S}
+
+**Where:** `cards/base.py:parse_mana_cost` (`{S}` is the pseudo-color `"S"` in `ManaCost.colored`, skipped by `ManaCost.colors`), `ManaCoin.snow`, `actions._coin_matches_color` / `_snow_mana_lands` (the {S} branch of `_can_pay_from` and `auto_tap_for_cost`), `roto_mana.after_mana_ability` (hooked after a mana ability resolves in `actions._activate_ability`), `roto_mana.split_roto_card_lines` / `land_lines` (the printed Snow supertype survives the per-type builders). **What:** an {S} pip is paid only by a snow coin (minted by a snow permanent's explicit mana ability) or by tapping an untapped snow land that makes mana (CR 107.4h). Sacrifice-for-mana sources (Treasure-style) never pay {S}; no snow one exists in the pools. "You may spend mana as though it were mana of any color" exile permissions (`exile_permission_cast_cost`, Robber of the Rich) fold an {S} pip into generic like the colored ones -- over-permissive, but no such permission can reach Arcum's Astrolabe in the pools. With only Dark Depths (no mana ability) and Arcum's Astrolabe as snow permanents in the roto pool, Astrolabe is effectively castable only off another snow source or for free. **Fix scope:** keep `"S"` out of `exile_permission_cast_cost`'s fold (~minutes).
+
+### Dark Depths: state triggers and self-named counter lines
+
+**Where:** `roto_mana.parse_roto_land_line` (self-named "enters with ten ice counters", the `{3}` ability with the name rewritten to "this land", "When ~ has no ice counters on it, ..."), P5's board-rule `roto_board_statics.StateTrigger` (`CardPrinting.board_rules`, pushed by `apply_board_state_checks` at the end of `turn.state_based_actions`; P3's parallel `state_triggers` field and checker were folded into it at integration), `SacrificeSourceThen`. **What:** a state trigger (CR 603.8) is pushed whenever its condition holds at a state-based-action check and no instance of it from that permanent is already on the stack; like every board rule it is gone while its source has lost its abilities (Blood Moon makes Dark Depths a Mountain with no abilities, so no Marit Lage). Marit Lage is created only if the sacrifice happened. The `{3}` activation is offered whenever its controller has priority (instant-speed activations, 2026-10-03). A Thespian's Stage copy of Dark Depths has no ice counters and triggers at once (its printing carries the state trigger).
+
+### Omniscience, Aluren and Dream Halls
+
+**Where:** `roto_mana.static_free_cast_permission` (hooked into `alt_casting.free_cast_permission`), the cast-permission hook (`permission_cast_actions`), `spell_costs.alternative_costs_for` / `DREAM_HALLS_COST` (read by `legal`'s `_own_free_cast` and `actions._cast_spell`). **What:** Omniscience and Aluren are "cast without paying its mana cost" permissions for hand casts (`CastSpell(cast_for_free=True)`), so no printed alternative or pitch cost is demanded; Omniscience's free casts keep the card's timing, Aluren's are offered at any priority (its flash applies only to the free cast) for every player's creature spells with mana value 3 or less. Cost increases still apply (CR 601.2f). Spells cast from other zones (graveyard / exile permissions) aren't offered these permissions. Dream Halls is a granted alternative cost appended to every spell's printed ones, so the caster picks among them with the usual `choose_mode`; a granted cost never sets "this spell's alternative cost was paid" (Baleful Mastery, Overload read only the card's own). With a Pyrokinesis-style pitch card the granted cost is preferred and the pitch is never asked. **Bug fixes riding along:** a free cast through an exile permission or an effect's "cast it without paying its mana cost" from a graveyard (`cast_now`) no longer pays the card's printed alternative or pitch cost, and an alternative-cost cast no longer also pays a pitch cost.
+
+### Karoo lands (Simic Growth Chamber)
+
+**Where:** `land_lines._mixed_mana_colors` (the line-composed land builder), `roto_mana.ReturnPermanentYouControlToHand`. **What:** `{T}: Add {G}{U}.` stays an explicit mana ability that yields both, and its colors are listed in `produces`, so automatic payment taps it for ONE of them (the cube-lands shortcut #2 already made for `{C}{C}`). The enters trigger's "return a land you control" is chosen on resolution with `choose_sacrifice`.
+
+### Mana triggers: Forbidden Orchard, High Tide, Kinnan; Jegantha's colored-only mana
+
+**Where:** `roto_mana.after_mana_ability` (after every explicit mana ability) and the automatic-payment tap loop (`push_tapped_for_mana_triggers`), `CardPrinting.tapped_for_mana_triggers` / `extra_mana_when_you_tap_nonland_for_mana`, `GrantExtraManaOnLandTapUntilEndOfTurn` + `ueot_land_tap_mana_grants` (read by `actions.extra_mana_grants_for_tapped_lands`), the `"colored_only"` coin tag (skipped by the generic loops of `_can_pay_from` / `auto_tap_for_cost`). **What:** "Whenever you tap this land for mana" stacks its trigger whenever the land is tapped by a mana ability or by automatic payment. High Tide is a cleanup-expiring layer-0 registry entry; its extra {U} rides the Nissa machinery (pre-tapping Islands only while the cost isn't otherwise payable; surplus floats), for every player. Kinnan's extra mana is a triggered mana ability resolved immediately after a nonland permanent's explicit mana ability, of a type that ability produced (`choose_mana_color` when several). Jegantha's mana pays colored pips only; hybrid pips, which the engine pays as generic (the `ManaCost.hybrid` simplification), therefore can't use it -- an under-use. **Failure mode:** none beyond the shared shortcuts (explicit mana abilities in a sorcery window only; Forbidden Orchard's any-color ability is explicit, cube-lands #1).
+
+### Energy: Wrath of the Skies, Amped Raptor; Phyrexian Dreadnought
+
+**Where:** `roto_mana.GetXEnergyPayAnyDestroyMVAtMostPaid`, `GetEnergyThenExileUntilNonlandCastForEnergy`, `SacrificeSourceUnlessSacrificeTotalPower`; `GameObject.entered_from_hand_cast` (set in `actions.put_into_battlefield` when the object resolved from the stack with `cast_via_hand`, the persistent provenance the enters trigger reads). **What:** Wrath's "any amount of {E}" is `choose_x` over all of the controller's energy. Amped Raptor's exiled card is cast during the trigger's resolution (`cast_now`, timing ignored) after paying energy equal to its mana value; if it can't or won't be cast it stays exiled. Phyrexian Dreadnought's "any number of creatures with total power 12 or greater" is picked one creature at a time until the total is reached (the agent can't overpay on purpose; overpaying never helps).
+
+### Mana spent to cast: Together as One, Exhibition Tidecaller
+
+**Where:** `GameObject.mana_spent_to_cast` (set in `actions._cast_spell` from the payment's per-unit record next to `sunburst_colors_spent`), `roto_mana.ConvergeDrawDamageGainLife`, `MillTargetPlayerMoreIfManaSpent`. **What:** converge X is the existing Sunburst count (each flexible unit's color picked to maximize the count). Together as One's two target instances must be different (the targeting pipeline removes a picked target from later slots), although CR 115.3 would let the same player be both "target player" and "any target" -- an under-permissive choice. Opus reads the triggering spell's `mana_spent_to_cast` (0 for a free cast; Phyrexian life and convoke/improvise taps aren't mana).
+
+### Abilities that work from exile (Greater Gargadon)
+
+**Where:** `CardPrinting.exile_activated_abilities` (`roto_mana.ExileZoneAbility`), `roto_mana.exile_ability_actions` (inside the bucket's `legal` hook), `activate_exile_ability` (the exile branch of `actions._activate_ability`'s source lookup). **What:** "Sacrifice an artifact, creature, or land: Remove a time counter from this card. Activate only if this card is suspended." is offered to the card's owner at any priority while it is suspended and the sacrifice is payable; the ability uses the stack with the exiled card as its source. Like hand-activated abilities (cube-keywords note), the policy codec can't encode an exile-sourced `ActivateAbility`, so the NN never picks it (MCTS / heuristic / random agents can).
+
+### Carpet of Flowers: "each of your main phases"
+
+**Where:** `roto_mana.parse_roto_enchantment_line` (two triggers, `BEGINNING_OF_PRECOMBAT_MAIN` and `BEGINNING_OF_POSTCOMBAT_MAIN`), `HasNotAddedManaWithThisAbilityThisTurn` (trigger gate, re-checked on resolution), `MayAddManaPerTargetOpponentsSubtype`, `GameObject.ability_mana_added_turn`. **What:** the engine's turn has two main phases (plus none added by extra combats), each with a beginning-of-main trigger point. "If you haven't added mana with this ability this turn" is tracked per permanent (both triggers are the one printed ability); declining, or X = 0, doesn't count as having added mana. The mana floats until the engine empties pools at cleanup (the pre-existing pool model, so mana added in the first main phase is still available in the second).
+
+### Artifact lands (Seat of the Synod, Vault of Whispers, Great Furnace, Darksteel Citadel)
+
+**Where:** `land_lines._try_build_line_composed_land` (accepts the `("Artifact", "Land")` card types through `roto_mana.extra_land_card_types` and keeps them on the printing), `roto_mana._keyword_only_line` (Darksteel Citadel's "Indestructible"), and a guard in `artifact_builder._build_artifact_printing` (a card with the Land type is never claimed as a plain artifact). **What it fixes:** these were claimed as plain artifacts with no Land type, so they couldn't be played as a land drop and never tapped for mana. Now they're lands (land drop, automatic payment through `produces`) and artifacts (artifact counts, "Activate only if you control an artifact", artifact removal). An artifact land whose text the land grammar doesn't parse stays unclaimed. No shortcut of its own; the shared land shortcuts apply.
+
+### Vivi Ornitier
+
+**Where:** `roto_mana._once_each_turn_ability` (the creature builder's last-fallback hook), `OnceEachTurnCost` (`GameObject.once_each_turn_used`), `AddFormulaManaInAnyCombination` (an `AddManaInAnyCombination`, so the `{0}` ability is a mana ability), the "<effect on this creature> and it deals ..." sequence. **What:** "Activate only during your turn and only once each turn" is the `activate_only_during_your_turn` gate plus a once-per-turn cost atom. As an explicit mana ability it shares the engine-wide sorcery-window shortcut (cube-lands #1), so its mana can't be made in response during your turn.
+
+### Chthonian Nightmare: X chosen through the target
+
+**Where:** `roto_mana.PayXEnergyCost` (cost atom via `roto_mana.parse_roto_cost_piece`, a cost-piece fallback of the activated grammar) and P2's `roto_zones.ReturnSelfToOwnersHandCost` (P3's identical return-to-hand atom was dropped at integration), `x_from_cost_atoms` (hooked just before `_activate_ability` pays `extra_costs`), `ReturnTargetGraveyardCreatureWithMVX`. **What:** CR 601.2b announces X before targets; here the target (a creature card in your graveyard with mana value up to your energy) is chosen and X is set to its mana value, then that much energy is paid. The outcome set is identical (an X matching no card leaves no legal target), only the decision order differs. On resolution the card must still have mana value exactly X. The ability is sorcery-speed and leaves the stack independent of the returned Nightmare.
+
+### Grim Reaper's Sprint: an additional combat after a main phase
+
+**Where:** `roto_mana.AdditionalCombatAfterThisMainPhase`, `roto_next_step` (hooked at the top of `turn.next_step`, shared by both turn loops), two cleanup-expiring layer-0 registry kinds (so they're cloned and hashed with `state.continuous_effects`); Morbid through `roto_mana.parse_roto_cost_reduction_line` (the first check of `cost_reduction._parse_cost_reduction_line`, condition `CreatureDiedThisTurn` over `GameState.creatures_died_this_turn`); the Aura lines ("Enchant creature", "Enchanted creature gets +2/+2 and has haste") through the cube enchantment builder's roto hook (`_Accumulator.granted_keywords` now reaches `make_aura`). **What:** in the postcombat main phase the extra combat comes right after that phase and is followed by the end step (CR 500.8; no extra main phase is printed). In the precombat main phase the engine's existing pending-combat counter places the extra combat right after the regular combat instead of before it -- main 1, combat, extra combat, main 2 rather than main 1, extra combat, combat, main 2: the same two combats with nothing to do between them, so no outcome changes.
+
+### Utopia Sprawl: Auras on lands and per-land extra mana
+
+**Where:** `CardPrinting.aura_enchant_subtype` / `enters_choosing_color` / `enchanted_land_adds_chosen_color`, `roto_mana.enchantable_land` (read by the Aura cast-target picker and resolution check in `actions` and the Aura state-based action in `turn`), `choose_color_as_enters` (as-enters branch of `put_into_battlefield`, `GameObject.chosen_color`), `enchanted_land_mana_grants` (keyed by the enchanted land's id in `actions.extra_mana_grants_for_tapped_lands`, whose helpers now accept land-id keys next to subtype keys). **What:** the triggered mana ability rides the Nissa automatic-payment machinery (pre-tap only while a cost isn't otherwise payable; surplus floats for the turn); its mana goes to the enchanted Forest's controller. Like every Aura in the engine, Utopia Sprawl can be cast with no legal target and then fizzles on resolution (the existing Aura shortcut). The color is chosen with `choose_mana_color`. The land-Aura substrate is generic: "Enchant land" (no subtype, `aura_enchant_subtype=""`) parses too, for Tarmogoyf Nest, which still needs its other lines.
+
+### Isochron Scepter: casting a copy of a card
+
+**Where:** the Imprint recognizer in `artifact_effects` (now parameterized: Chrome Mox's "nonartifact, nonland" keeps its type-exclusion form, other descriptors become `ImprintCardFromHand.card_filter`), `roto_mana.CopyImprintedCardMayCastFree`. **What:** the copy (CR 707.12) is a new object in exile marked `is_spell_copy`, cast through `cast_now` with a free exile permission during the ability's resolution (timing ignored, CR 608.2g); it is a cast (storm / prowess / cast triggers see it) and ceases to exist when it leaves the stack. If it isn't cast it ceases to exist at once. "You may copy ... If you do, you may cast the copy" is one `choose_yes_no` (a copy that isn't cast has no effect).
+
+### Wistfulness: which colors of mana were spent
+
+**Where:** `GameObject.mana_spent_color_sources` / `spent_color_choice` (recorded in `actions._cast_spell` from the payment's per-unit color sets), `roto_mana.spent_mana_choice` / `ManaSpentToCastSource` (the enters triggers' intervening-if). **What:** the engine pays costs automatically, so a flexible unit (a dual land, an "any" coin) has no committed color. When a "{C}{C} was spent" condition is first read, the controller settles the colors: the largest set of the card's conditions that can hold together is taken, and between several such sets (evoked with two dual-land mana: GG or UU) the controller picks with `choose_mode`. Hybrid `{G/U}` pips are paid as generic by the engine; the unit paying one still records the colors it could have been, so it counts toward either condition. A creature that entered without being cast (reanimated) satisfies no condition.
+
+### Channel: life-for-{C} rides automatic payment
+
+**Where:** `roto_mana.GrantLifeForColorlessUntilEndOfTurn` (a cleanup-expiring layer-0 registry entry for the caster), `life_mana_units_needed` (an extra affordability check in `actions.can_pay_cost`), `pay_life_for_mana` (at the start of `actions.auto_tap_for_cost`). **What:** "any time you could activate a mana ability, you may pay 1 life. If you do, add {C}" is used by automatic payment only, for the part of a cost the pool and lands can't cover, and never down to 0 life (the cube-lands life-cost convention; CR 119.4 would allow exactly 0). There is no separate action to float Channel mana, and the payer always prefers lands over life -- a player can't keep lands untapped by paying life instead. **Failure mode:** lines that want to hold lands up while paying life (or float {C} for a later payment in the same phase) are unavailable. **Fix scope:** a player-level mana-ability action (needs a codec slot).
+
+### Firestorm: "discard X cards" and "X damage to each of X targets"
+
+**Where:** `CardPrinting.additional_cost_discard_x` (the casting substrate's additional-cost bodies, via `roto_mana.roto_additional_cost_fields`), `roto_mana.choose_additional_cost_x` / `pay_discard_x` (hooked next to the "pay X life" choice and payment in `actions._cast_spell`), `DealXDamageToEachOfXTargets` (`cast_time_shape` fixes the target count to X). **What:** X is announced before targets with `choose_x`, bounded by the other cards in hand and by the number of legal targets (exactly X distinct targets are required, CR 601.2c); the discards are picked with `choose_discard`. X counts as the spell's X even when it's cast without paying its mana cost (it isn't the mana cost's X).
+
+### Rottenmouth Viper: optional sacrifices for a cost reduction
+
+**Where:** `CardPrinting.optional_sacrifice_any_number` plus a `cost_reductions` entry whose condition is `roto_mana.PerPermanentSacrificedForCost`; `roto_mana.optional_sacrifice_for_cost` wraps the cost determination in `actions._cast_spell` (one added context manager on the existing `with _casting_origin(...)`); `CounterOnSourceThenPunishPerCounter` for the enters/attacks trigger. **What:** the number of permanents is chosen with `choose_x` (raised to the least number that keeps the reduced cost payable) and the permanents with `choose_sacrifice`, before mana is paid; a permanent whose loss would make the reduced cost unpayable (a Treasure the payment needs) isn't offered. So a permanent can't be tapped or sacrificed for mana *and* then sacrificed for the reduction in the same cast (CR 601.2g-h would allow tapping a mana creature for mana before sacrificing it). The `legal_actions` affordability probe counts every eligible permanent except sac-for-mana sources (sacrificing one of those instead of using its mana saves at most the generic it would have paid, so the probe is exact). Each opponent's "unless" choice is `choose_mode` among the options they can actually perform, once per blight counter. **Failure mode:** tapping a mana creature for mana and then sacrificing it to the Viper isn't available. **Fix scope:** sacrifice as part of 601.2h payment after explicit mana abilities, which needs a cast-time mana-ability window.
+
+## Vintage Roto P5: board-state prison & layers (2026-10-02, `feature/roto-p5-prison-layers`)
+
+Roto-only cards of package P5 (`docs/ROTO_COVERAGE_PLAN.md` section 3). Grammar: `src/mtg_bot/cards/parser/roto_board.py` (the last fallback of `effects._parse_effect`, `activated._classify_cost_piece` and the creature / artifact / cube-enchantment builders' line loops; switched off for EoE-only printings through the shared `creature_rmc_grammar` guard, so no EoE or cube parse moves). Engine: `src/mtg_bot/effects/generic/roto_board.py` (effects, cost atoms) and `src/mtg_bot/roto_board_statics.py` (board rules). The Rust engine models none of this package (roto is not a parity pool).
+
+### Board rules are a printing field read through one suppression check
+
+**Where:** `CardPrinting.board_rules`, `roto_board_statics.rules_in_play` / `abilities_suppressed`; consumers `combat.eligible_attackers` / `eligible_blockers`. **What:** static abilities that change the game's rules (Moat, Ensnaring Bridge, Carrion Feeder's "This creature can't block.") are rule objects on the printing rather than `StaticAbility` anthems. Unlike the older printing-level flags (see "Printing-level statics ignore 'loses all abilities'"), every read skips a source with a layer-6 `lose_all_abilities` registry entry, a creature source while a `wipes_all_creature_abilities` permanent is out, and a land whose basic land type is set by Blood Moon (CR 305.7). **Failure mode:** none known. **Impact:** one battlefield scan per attacker / blocker enumeration when no board rule exists.
+
+### Choice hooks reused for new decisions
+
+The Filigree Sylex's "Remove ten oil counters from among permanents you control" asks the activator's `choose_target` hook over `("permanent", id)` options once per counter (`RemoveCountersFromAmongPermanentsCost`); the default agents take the first holder. Winter Orb's untap choice (which land untaps, CR 502.3) is the same hook over the tapped lands (`roto_board_statics.untap_step_held`). Smokestack's and Tangle Wire's per-counter picks use `choose_sacrifice` / `choose_permanent_to_tap`, all chosen before any is sacrificed / tapped. None of these choices is a search decision node (they are made by the seat's agent mid-resolution, like every other in-resolution choice).
+
+### Simultaneous upkeep triggers resolve in printed order
+
+**Where:** `turn.run_beginning_of_upkeep_triggers` -> `actions.dispatch_event` (engine-wide). **What:** CR 603.3b lets a player order their simultaneous triggers; the engine pushes them in printed order, so the last printed resolves first. Smokestack's "each player's upkeep" sacrifice resolves before its "you may put a soot counter" in its controller's upkeep (the newly added counter only counts from the next upkeep), and Tangle Wire's tap trigger resolves before its Fading counter removal (the controller taps one more permanent than an optimal ordering would). **Failure mode:** the Smokestack / Tangle Wire controller can't pick the other order. **Fix scope:** a trigger-ordering decision in `dispatch_event` (engine-wide; shared with the evoke note in the W/G bucket).
+
+### Granted triggered abilities ride a dispatch hook
+
+**Where:** `roto_board_statics.fire_granted_triggers`, called at the end of `actions.dispatch_event`. **What:** The Tabernacle at Pendrell Vale's 'All creatures have "At the beginning of your upkeep, destroy this creature unless you pay {1}."' is a board rule; every creature on the battlefield observes events with the granted ability (source = the creature, controller = its controller, `ability_index=-1` so it has no once-per-turn ledger). Layer-6 timestamps are honoured against "loses all abilities" (a later wipe -- registry entry or Humility-style permanent -- removes the grant, an earlier one doesn't); the grant is not listed by `effective_triggered_abilities`. "Unless you pay {1}" is offered mid-resolution (`pay_mana_during_resolution`, a `choose_yes_no` when affordable; mana abilities are tapped automatically).
+
+### Combat-only activated abilities stay unclaimed -- resolved
+
+**Resolved 2026-10-03** (`feature/roto-instant-activations`): activated abilities are offered whenever their controller has priority, and Tinder Wall is claimed (`BlockedBySource` reads "target creature it's blocking", last known information once the Wall is sacrificed). Seal of Cleansing, Pernicious Deed, Engineered Explosives, The Filigree Sylex, Claws of Gix and Carrion Feeder activate at instant speed. The original note follows.
+
+
+`legal.legal_actions` offers non-mana activated abilities of permanents at sorcery timing only (the "Engine-contract interaction" note near the top of this doc). Tinder Wall's "{R}, Sacrifice this creature: It deals 2 damage to target creature it's blocking." can only ever be activated during combat, so claiming the card would ship a dead ability; it stays unclaimed until instant-speed activations exist. Package cards whose activations are merely restricted to the controller's main phases by that limitation (Seal of Cleansing, Pernicious Deed, Engineered Explosives, The Filigree Sylex, Claws of Gix, Carrion Feeder) share the engine-wide shortcut.
+
+### Land types: "in addition" keeps rules-text mana; Blood Moon strips the rest
+
+**Where:** `game.effective_land_produces`, `game.effective_triggered_abilities`, `actions.dispatch_event` / `actions.apply_land_etb_replacements` (via `roto_board_statics.lands_without_rules_text` / `land_enters_without_rules_text`). **What:** a basic land type added "in addition to its other land types" (Urborg, Yavimaya; also the Dryad demo) now adds that type's mana to whatever a nonbasic land's rules text produces (Wasteland taps for {C} or {B} under Urborg) instead of replacing it; a basic land's mana is entirely its type's (CR 305.6), so its printed `produces` never counts as rules text. A type SET by Blood Moon / Magus of the Moon (CR 305.7) still replaces it, and the land now also loses its rules-text triggered abilities (they neither trigger nor appear in `effective_triggered_abilities`) and its own "as / enters" replacements when it enters under the effect (a shock land enters untapped without paying life, a surveil land enters untapped and doesn't surveil); external replacements (Archon of Emeria, Lightstall Inquisitor's grant) still apply. The Rust engine models neither Magus's static nor these lands, so no parity surface moves. **Gaps:** (1) a land with a per-tap life cost (Mana Confluence, City of Brass -- `produces_life_cost`) that gains a basic land type still pays life for the added color, because a land carries one `produces` set and one life cost; (2) a nonbasic land leaving the battlefield under Blood Moon isn't marked `left_without_abilities`, so a printed leaves / dies trigger of it would still fire (no such land in the roto pool); (3) other printing-level flags on lands besides board rules aren't consulted (none in the roto pool are abilities Blood Moon removes). **Fix scope:** per-ability mana payment for (1); a moon check next to the layer-6 LKI flag in `turn.move_off_battlefield` for (2).
+
+### Equipment triggers, modal activations and keyword loss
+
+**Where:** `Event.DEALS_COMBAT_DAMAGE_ANY` / `Event.BECOMES_BLOCKED` (`roto_board_statics.fire_combat_damage_dealt` / `fire_becomes_blocked`, called from `combat._resolve_damage_step` / `combat.declare_blockers`); `roto_board.claim_equipment_lines`; `EventSubjectDealsDamageToEachOpponent`; the layer-6 `lose_keyword` kind in `game.effective_keywords`. **What:** (1) "Whenever equipped creature deals combat damage" (Umezawa's Jitte) fires once per creature per combat damage step whatever it hit (CR 510.2), and "becomes blocked" (Ichorclaw Myr) once per blocked attacker per declaration. (2) A modal activated ability ("Remove a charge counter from Umezawa's Jitte: Choose one --") is a `ModalChooseOne`: like the engine's modal triggers, the target is chosen from the union of the modes' pools on activation and the mode on resolution (CR 602.2b picks the mode first); a mode whose target wasn't chosen fizzles. Activated abilities were offered at sorcery timing only, so Jitte's +2/+2 was never used mid-combat -- (resolved 2026-10-03 by `feature/roto-instant-activations`; see "Instant-speed activated abilities of permanents" at the end of this doc). (3) In "Whenever equipped creature becomes tapped, it deals 1 damage to each opponent." (Hawkeye's Bow) the equipped creature is the damage source (bound on trigger, last-known information on resolution); noncombat lifelink / infect aren't modeled engine-wide, so only "deals damage" observers see the difference. (4) "Target creature loses <keyword> until end of turn." (Emerald Charm) is walked in layer-6 timestamp order with grants, but keyword *counters* (a flying counter) are folded in after the walk and so survive it. **Fix scope:** a cast-time mode pick for activated abilities (shared with modal triggers); timestamps on keyword counters.
+
+### P/T statics, one-off resolutions and readings
+
+- **Cast "during your main phase" is read on resolution** (`IfResolvingInYourMainPhase`, Might of Old Krosa): a step never ends with an object on the stack (CR 500.2), so a spell its controller cast in their main phase resolves in that main phase; a copy of the spell (never cast) would wrongly get the main-phase bonus if it resolved then -- no copy effect in the pool copies a pump spell.
+- **Untargeted "return a creature you control"** (Shrieking Drake) is P3's `roto_mana.ReturnPermanentYouControlToHand` (the Simic Growth Chamber shape; P5's identical recognizer was dropped at integration): picked on resolution through the `choose_sacrifice` hook over the controller's matching permanents (a reused "which of my permanents" hook).
+- **Turnabout's two choices** (card type, tap or untap) are made on resolution through two `choose_mode` calls.
+- **Aether Vial** was offered at sorcery timing only, like every non-mana activation -- (resolved 2026-10-03 by `feature/roto-instant-activations`; see "Instant-speed activated abilities of permanents" at the end of this doc); Vial now drops creatures at instant speed (pinned by `tests/test_instant_activation_cards.py`).
+- **Graveyard-count statics** (`CardsInYourGraveyard`: Elvish Reclaimer's threshold, Knight of the Reliquary's per-land-card bonus) read each graveyard card's printed (front-face) characteristics through `CardFilter.matches`.
+- **"Any number" / "up to N" targets under search** (Paradoxical Outcome's `ReturnAnyNumberDrawPerOwned` -- a count bound of `ANY_NUMBER_OF_TARGETS`, which the target loop never reaches; Terastodon's "up to three"): the search's `ResolutionTargetDecision` offers only the legal targets, never "stop here", so a search seat (and `DefaultTacticalAgent`) always takes every eligible target -- Paradoxical Outcome returns all of its caster's nonland, nontoken permanents. Other agents may stop early by returning `None`. **Fix scope:** a "no more targets" option on target decisions (search-side).
+- **Argentum Masticore's reflexive trigger uses the stack.** "When you discard a card this way, destroy target ..." is pushed as its own triggered ability after the discard (CR 603.12), with its target chosen then among permanents at most the discarded card's mana value -- unlike the W/G bucket's inline `ReflexiveWhenYouDo`.
+- **Nethergoyf's escape exile is chosen by the engine.** "Exile any number of other cards from your graveyard with four or more card types among them" (`CardPrinting.escape_exile_card_types`, the negative second element of `alt_casting.escape_terms`) exiles the fewest other cards that cover four card types, greedily and without asking -- the same "not offered as a choice, like delve" convention as the plain escape exile. A player who'd rather keep specific cards (to keep their own goyf big, or a flashback card) can't choose.
+- **"Cast this spell only before the combat damage step."** (Berserk; `roto_board_statics.CastOnlyBeforeStep`, filtered in `legal._filter_cast_restrictions_wg`) compares the current step with the step order of a turn, so in an additional combat phase (Fear of Missing Out) it is castable again before that combat's damage step.
+- **Scale Up / Embiggen / Berserk / Vines of Vastwood are faithful compositions of existing layers**: cleanup-expiring `set_creature_subtypes` / `set_colors` / `set_base_pt` entries (Scale Up, and its Overload through the base's target -> each rewrite), a resolution-time type count over effective subtypes (Embiggen), a delayed next-end-step destroy keyed on `Player.attacked_this_turn` (Berserk), and a registry restriction carrying the caster's id read by `keyword_rules.can_be_targeted_by` at targeting and resolution (Vines -- "your opponents" are the caster's, not the creature controller's as with hexproof).
+- **State triggers ride the state-based-action check** (`roto_board_statics.apply_board_state_checks`, called at the end of `turn.state_based_actions`): Drop of Honey's "When there are no creatures on the battlefield, sacrifice this enchantment." triggers whenever an SBA check finds no creature and its ability isn't already on the stack (CR 603.8, read off the stack itself). Role uniqueness (CR 704.5y: Monstrous Rage's Monster Role) is applied in the same hook.
+- **Omnath, Locus of Creation's resolution count** is `GameObject.ability_resolutions` (turn number, ETB timestamp, count); not part of the search hash, so two states differing only in how many times Omnath's landfall resolved this turn can share a transposition entry.
+- **Discover (Zoyowa's Justice)** reuses cascade's free cast (`cast_card_from_exile_for_free`) and `state.rng` for the random bottom order (not a search chance node); "may cast" is a `choose_yes_no`, and a declined or uncastable hit goes to its owner's hand (CR 701.57a).
+- **Phasing stays unmodeled**: Talon Gates of Madara ("up to one target creature phases out") remains unclaimed -- the engine's phasing only clears combat damage (see the Robe of Stars entry), not the CR 702.26c "treated as though it doesn't exist" rule its ability needs.
+- **Multi-mode spells with X-dependent modes** (Kozilek's Command; `ChooseModes.count_from_x` / `select_targets(x_value=...)`, `GameObject.mode_target_counts`): X is announced before targets (CR 601.2b) when a mode's targets depend on it, and an "up to X" mode may take fewer targets -- the per-mode counts ride on the spell so resolution splits the flat target tuple correctly. Mode availability for an X-dependent mode assumes any X (CR 700.2a lets the caster choose it whenever some X would give it a target); if the X then announced leaves the mode without a target, that mode does nothing. Modes other than X-dependent "up to" ones still take zero or exactly one target. The Kindred card type is now kept on Kindred instants and sorceries (graveyard card-type counts see it).
+- **Veil of Summer's "this turn" facts are turn-stamped player fields** (`Player.spell_colors_cast_this_turn`, `spells_uncounterable_turn`, `hexproof_from_this_turn`): a stale stamp reads as empty, so nothing resets them at cleanup. A spell's colors are recorded as it is cast (`roto_board_statics.note_spell_cast`, its effective colors then). Hexproof from a color (CR 702.11d) is a `hexproof from <color>` keyword on the permanents (cleanup-expiring layer-6 grants, so a permanent entering later isn't covered) and a turn-stamped quality set on the player, both read by `keyword_rules` (`can_be_targeted_by`, `filter_targetable`); none of these fields are in the search hash.
+- **"<This spell> gains <quoted triggered ability>" from its own cast trigger** (Thief of Existence; `ExileThenSourceGainsTrigger`, `roto_board_statics.GRANT_MARK`): the grant is a layer-6 `grant_triggered_ability` registry entry on the spell object that carries over to the permanent it becomes (the engine keeps one object across stack -> battlefield) and is fired by the P5 hook in `actions.dispatch_event` (departing objects included for leaves triggers); it is dropped once the object is neither a spell on the stack nor on the battlefield (a countered Thief), and when the permanent leaves. The `{C}` pip of its mana cost is paid as generic (the engine-wide `parse_mana_cost` treatment).
+
+### P5 cards left unclaimed (and why)
+
+Honest unclaims -- each needs engine work beyond a faithful claim today:
+
+- **Mycosynth Lattice** (drafted), **Liquimetal Coating**, **Unable to Scream** -- "is an artifact in addition to its other types" (and Lattice's "colorless" for cards in every zone and "spend mana as though it were mana of any color"). The engine has no effective card-type layer: `CardPrinting.is_artifact` / `card_types` are read directly at ~100 sites (target filters, sacrifice candidates, affinity counts, artifact-activation mana restrictions, "artifact enters" triggers ...), and card colors outside the battlefield / stack are read from the printing. Routing only some of those sites would be an approximation, so these stay unclaimed until an `effective_card_types` layer-4 read replaces the direct reads. Unable to Scream also needs a "can't be turned face up" restriction on the morph special action.
+- **Dress Down** -- "Creatures lose all abilities." The creature-wide wipe flag (`wipes_all_creature_abilities`, the Humility demo) is consulted for keywords and P5 board rules only; printed activated / triggered abilities, static P/T contributions from creature sources (`_source_layer6_wiped` is memoized on the registry and doesn't see a battlefield-sourced wipe), continuous modifiers and characteristic-defining P/T would all keep working. Completing it means a battlefield-dependent input into that memoized hot path.
+- **Heliod, Sun-Crowned** -- "As long as your devotion to white is less than five, Heliod isn't a creature." `game.is_creature_now` takes no game state, so a devotion-conditioned type removal would only be re-evaluated between state checks (wrong at the moment Heliod enters, for "a creature enters" triggers). Its other two lines would parse with small additions (a "you gain life" event, "another target creature gains lifelink"), but the card isn't claimed without the first.
+- **Tarmogoyf Nest** -- a Kindred Enchantment Aura with "Enchant land": casting an Aura onto a land isn't supported by `actions._select_spell_targets` / Aura resolution (only creature / artifact / graveyard-card Auras), which P3's Utopia Sprawl ("Enchant Forest") also needs -- built once there rather than twice; it also needs an attached-Aura activated-ability grant and a Tarmogoyf token definition.
+- **Talon Gates of Madara** -- "up to one target creature phases out": phasing is only partially modeled (see the Robe of Stars entry: CR 702.26c "treated as though it doesn't exist" is not), and the hand ability "{4}: Put this card from your hand onto the battlefield." has no land hand-ability path.
+- **Tinder Wall** -- see "Combat-only activated abilities stay unclaimed" above.
+
+## Vintage Roto P2 (library, graveyard & hand) — deliberate simplifications (2026-10-02, `feature/roto-p2-library-graveyard`)
+
+New grammar lives in `src/mtg_bot/cards/parser/roto_zones.py` (the last fallback of `effects._parse_effect`, switched off for EoE-only printings like the cube buckets) and new engine code in `src/mtg_bot/effects/generic/roto_zones.py`. Roto-only cards were outside the default pool when this landed (folded into `all` on 2026-10-03) and the Rust engine models none of them (Python-only; no parity surface changes).
+
+### Tutor descriptors and multi-card searches
+
+**Where:** `roto_zones.RotoCardFilter`, `SearchAnyNumberTotalManaValueOntoBattlefield`, `ControllerMaySearchOntoBattlefield`, `search_pick`. **What:** "with power / toughness N or less" reads the card's *printed* power and toughness; a card with none (a noncreature, or a `*` creature whose characteristic-defining ability sets it) counts as 0, so a Tarmogoyf in the library always matches "power 2 or less" (CR 604.3 says its CDA applies in every zone). Protean Hulk's "any number of creature cards with total mana value 6 or less" is picked one card at a time through `choose_card_from_library` (each pick limited to the remaining budget; `None` stops), and the found cards enter one after another through `put_into_battlefield` rather than simultaneously (the base's any-number searches do the same). **Why OK:** no roto tutor target with a power-setting CDA matters for these tutors; simultaneity only changes the order ETB triggers see each other. **Failure mode:** a `*`-power creature is findable by Imperial Recruiter / Reveillark's bound regardless of its live power. **Fix scope:** evaluate CDAs off the battlefield (needs a zone-aware power reader). **Impact:** negligible.
+
+### Exile-instead graveyard replacements (Rest in Peace, Sanctifier en-Vec, Leyline of the Void's shape)
+
+**Where:** `roto_zones.GraveyardExileInstead` (a `CardPrinting.zone_abilities` spec); hooks `turn.move_off_battlefield` (permanents -- redirected before landing, so an affected creature never dies), `actions._send_to_graveyard_or_library` (spells leaving the stack), `actions.put_into_battlefield` (`note_exile_instead_source_entered` snapshots `Player.graveyard_exile_instead_snapshot`) and `turn.state_based_actions` (`apply_graveyard_exile_instead`, run before every graveyard watcher). **What:** like the base's Yawgmoth's Will and Dauthi Voidwalker replacements, a card put into a graveyard by any other path (discard, mill, a search into the graveyard, ...) lands there and is exiled by the state-based catch-all at the next SBA check; P2's own effects call `roto_zones.put_into_graveyard`, which applies the replacement immediately. Cards already in a graveyard when the source entered stay (the snapshot is pruned each sweep so a card that leaves and comes back is caught at the next sweep). With several applicable replacements the order is fixed (the card's own "would be put into a graveyard" self-replacement, Yawgmoth's Will, then these, then Dauthi's void counter) rather than chosen by the affected player (CR 616.1). **Why OK:** the gap between a discard/mill and the next SBA check is inside one resolution. **Failure mode:** within one resolution an effect that discards or mills and then reads or returns cards from that graveyard (a base-pool "mill, then return a card milled this way" effect) can still see the card; a card that leaves the graveyard and returns within one resolution keeps its snapshot exemption. **Fix scope:** route every graveyard insertion (about 45 sites) through one zone-move helper. **Impact:** small; graveyard hate in roto is mostly about reanimation and flashback targets, which the catch-all removes before anyone has priority.
+
+Leyline of the Void's two lines parse (the exile-instead line here and the opening-hand line through `opening_hand_lines.parse_opening_hand_line`). When this landed the card stayed unclaimed: it is a Duskmourn printing, so `is_eoe_only_printing` switched the roto grammar off for it. Since 2026-10-03 (user decision) it is claimed -- see "Leyline of the Void is claimed" in the 2026-10-03 section below.
+
+### Hand disruption: named discard, symmetric attrition, flashback paid by sacrifice
+
+**Where:** `roto_zones.ChooseNameTargetDiscardsAllWithName` / `candidate_card_names` (Cabal Therapy, Cabal Therapist), `EachPlayerSequence` (Smallpox, Pox), `FlashbackSacrificeCost` + hooks in `legal.legal_actions` (flashback offer) and `actions` (payment next to the other additional costs), `RevealHandChooseExileUntilSourceLeaves`, `LookAtHandMayBottomCardThenDraw`, `RevealHandChooseFromHandAndGraveyardExile`. **What:** "choose a nonland card name" offers (through `choose_mode`) the distinct matching names among the cards the *target* player owns in any zone, sorted -- CR 201.3 allows any name, but a name outside their cards can never hit, so the narrowing only drops dominated options; it does tell the caster which names are in the target's deck (the deck list, not the hand). "Each player discards a card / sacrifices a creature" is done one player at a time in turn order from the active player (each choosing and acting before the next chooses) rather than all choices first and one simultaneous event (CR 101.4); a later player sees the earlier players' discards. Kitesail Freebooter and Vendilion Clique pick the card through `choose_card_from_opponent_hand`, Dreams of Steel and Oil's graveyard pick through `choose_card_from_library` (an id picker over a public zone). Cabal Therapy's flashback cost is the empty mana cost plus the sacrifice, paid during cost payment with `choose_sacrifice`. **Why OK:** the naming narrowing only removes never-hitting names; the APNAP ordering changes information only for symmetric discards, where the later player rarely gains anything. **Failure mode:** a player bluffing a card they don't play can't be "named" (no effect anyway); in symmetric discards the non-active player answers with knowledge of the active player's discard. **Fix scope:** a simultaneous-choice helper for "each player" actions. **Impact:** negligible.
+
+### Recursion: counters on arrival, untargeted returns, copies
+
+**Where:** `roto_zones.ReturnTargetsFromYourGraveyardToBattlefield` (Persist, Pre-War Formalwear, Reveillark), `MillThenReturnCardFromGraveyardToHand` (Takenuma), `CopyIfCastFromGraveyard` (Sevinne's Reclamation), `ReturnSelfToOwnersHandCost` (Recurring Nightmare), `ExileTargetGraveyardCardThen` (Deathrite Shaman). **What:** Persist's "with a -1/-1 counter on it" puts the counter on right after the creature enters (before any state-based check or trigger resolution) rather than as an enters-with replacement, so a "whenever a counter is put on" observer would see it; Pre-War Formalwear attaches only if it is still on the battlefield when its trigger resolves (otherwise the creature still returns). Takenuma's untargeted "return a creature or planeswalker card" is picked on resolution through `choose_card_from_library` (an id picker over the graveyard). Sevinne's Reclamation's copy (only when cast with flashback -- `cast_via_flashback`) takes one new target through `choose_target`, keeping the original's when the agent answers outside the legal set; declining the copy is `choose_yes_no`. Deathrite Shaman's "Exile target X card from a graveyard. <Y>." is one effect so a target that left the graveyard stops Y as well (CR 608.2b); none of its abilities are mana abilities (they target). **Why OK / impact:** no roto card observes counters being placed; the rest are faithful choices exposed as engine decisions.
+
+### Draw replacements: dredge and Chains of Mephistopheles
+
+**Where:** `roto_zones.replace_draw` (hook at the top of `turn.draw_card`, after the "can't draw more than one card" check and before the empty-library check), `Dredge`, `DiscardInsteadOfDraw`, `_APPLIED_DRAW_REPLACEMENTS`. **What:** for each single draw the affected player picks, through one `choose_mode`, among "dredge <card> (N)" for each dredge card in their graveyard with at least N cards in their library, and either "discard instead (Chains)" (mandatory when a Chains applies) or "draw the card". Dredge replaces the whole draw (mill N through `put_into_graveyard`, return the card). Chains' "discard a card instead; if you do, draw a card" performs a nested `draw_card` that the same Chains doesn't replace again (CR 614.5, tracked in a module-level map for the duration of the nested call) but a second Chains or dredge may -- matching the Gatherer rulings (two Chains: discard twice, then draw; once the hand is empty the next Chains mills and no draw happens). The P2 replacements are offered before the base's `WOULD_DRAW_A_CARD` replacements (Hullbreacher) rather than in an order the affected player chooses; Chains' own discard ignores "opponents can't make you discard" protections (it is the drawing player's replacement discard); and only draws that go through `turn.draw_card` see these replacements (a few base effects move cards library-to-hand themselves). A dredged first draw of the draw step consumes that step's "first draw" exemption. **Why OK:** the alternative orderings matter only with Hullbreacher-style replacements in play together with dredge/Chains. **Failure mode:** a player can't order Hullbreacher's replacement before dredge; a draw made by one of those direct-move base effects can't be dredged. **Fix scope:** fold the P2 options into `dispatch_replacement` once it can offer optional replacements from graveyard cards. **Impact:** small.
+
+### Look at / reveal-until
+
+**Where:** `roto_zones.DefendingPlayerRevealsTopPutsIntoHandIf`, `DefendingPlayerExilesTopN`, `LookAtTopPutUpToOntoBattlefield`, `LookAtTopPutIntoHandMoreIfInstantAndSorcery`, `RevealUntilPutIntoHandRestIntoGraveyard`, `EachOpponentExilesUntilTotalManaValue`, `ExileTopMayTakeUnlessSameName`. **What:** "defending player" is the attacking controller's opponent (the base's two-player attack-trigger convention). "Put the rest on the bottom of your library in any order" keeps the looked-at cards' library order (the base's `LookAtTopCardsPutIntoHand` shortcut, no ordering decision). Collected Company's "up to two" picks one card at a time through `choose_card_from_library` (`None` stops) and the chosen creatures enter one after another. **Impact:** negligible (bottom order rarely matters).
+
+### Bargain, multi-card tutors and put-from-hand
+
+**Where:** `roto_zones.Bargain` + `pay_zone_cast_costs` (the cast-pipeline hook in `actions._cast_spell`, which also pays flashback sacrifices) and `GameObject.cast_bargained`; `SearchExileFaceDownCastFreeIfBargained`, `SearchManaValueOnePlusSacrificed`, `DiscardCardCost`, `SacrificeLandsSearchThatMany`, `SearchLibraryAndOrGraveyardXThenPump`, `SearchDifferentNamesOpponentSplits`, `DoomsdayPile`, `EachPlayerMayPutFromHand`, `EurekaLoop`, `EachPlayerChoosesLowestCreatureEnters`. **What:** Bargain is offered *while casting* (a `choose_yes_no`, then `choose_sacrifice`) instead of as a separate `CastSpell` variant, so it is a resolution-channel decision rather than a policy-head action slot; `cast_bargained` is not part of the search hash (it lives only while the spell is on the stack). "Exile it face down" is modelled as exiled and revealed to its owner only. Scapeshift's "any number" is `choose_x` then one `choose_sacrifice` per land; Gifts Ungiven's searcher picks one card at a time (`None` stops) and the opponent's two picks use their own `choose_card_from_library`; Doomsday's pick order is the new library's top-down order (so "in any order" is a real decision); Finale of Devastation asks whether to search the library at all (`choose_yes_no`) so a graveyard-only search doesn't shuffle. Show and Tell, Eureka and Stronghold Gambit use `choose_card_from_hand` per player in turn order and the cards enter one after another (triggers wait on the stack as usual). **Impact:** Bargain's decision isn't learnable by the policy head (search still explores it).
+
+### Library-search hooks (Opposition Agent, Wan Shi Tong, Archive Trap)
+
+**Where:** `src/mtg_bot/effects/generic/roto_search.py` (`library_search` decorator / `run_library_search`, `searched_card_taken`, `_ControlledSearchAgent`, `OpponentSearchedLibrary`, `OpponentSearchedLibraryThisTurn`); the decorator and the found-card check are applied to every library search in the engine: `search.py` (five classes), `card_flow.SearchLibrary`, `cube_glue.SearchAnyNumberExileCastFreeThisTurn` / `SearchAnyNumberOntoBattlefield`, `cheat_into_play.SacrificeArtifactTutorArtifactPayDifference` and the P2 tutors; `Player.library_searched_turn`. **What:** while an opponent controls an Opposition Agent, the searcher's agent is swapped for a proxy whose `choose_card_from_library` calls are answered by that opponent (only search picks are delegated -- the rulings note that is all the control normally amounts to); each found card is exiled with an `ExilePlayPermission` (while exiled, any-color mana) for the Agent's controller instead of going where the search puts it, and the rest of the effect continues without it (multi-zone searches -- Doomsday, Finale of Devastation -- exile the cards found in every zone). With several Agents the most recently entered one wins (its controller picks; the owner's choice between the exile effects is not offered). "Whenever an opponent searches their library" is a marker-predicate trigger stacked right after the search's resolve returns; Archive Trap's "pay {0} rather than its mana cost" is the base's `free_cast_condition` (cast without paying the mana cost), which is the same payment. A search is anything wrapped by the decorator: base effects that search without it (none known; `SearchLibraryForBasicLandTapped` still picks the first basic itself, so an Agent can't choose among basics there) aren't seen. **Why OK:** every engine search site is covered today. **Failure mode:** a future search effect that forgets the decorator is invisible to the hooks. **Fix scope:** route searches through one helper. **Impact:** small.
+
+### Graveyard-functioning dies triggers, Triumph's pile, Scroll Rack, Winota, Deem Inferior
+
+**Where:** `roto_zones.CreaturePutIntoGraveyardOf` + `IfSourceInGraveyard` (Bridge from Below, through the base's `functions_in_graveyard` dispatch), `SelfPutIntoYourGraveyard` + `ExileSelfAndTopNShuffleOnTop` (Triumph of Saint Katherine), `ScrollRackSwap`, `AttackerYouControlWithoutSubtype` + `LookTopMayPutAttackingGainKeyword` (Winota), `PerCardDrawnThisTurn` (Deem Inferior's cost reduction, through a one-line hook in `cost_reduction._parse_cost_reduction_line`); `cube_creatures_ub`'s owner's-choice tuck now accepts both printed word orders. **What:** "a creature is put into <whose> graveyard from the battlefield" rides `Event.DIES` and reads the dying card's printed creature type and its owner (whose graveyard it went to), so an animated noncreature permanent dying doesn't count. Triumph's "your graveyard" is checked as "its controller owned it"; its pile is shuffled with `state.rng` (no chance node in search). Scroll Rack's swaps are picked with `choose_card_from_hand` (`None` stops) and the return order with one `choose_card_from_library` pick per position. Winota's Human enters attacking the attacking player's opponent (two-player engine) and gets indestructible through the base's until-end-of-turn keyword grant. **Impact:** negligible.
+
+### Graveyard zone-change watch (Narcomoeba, Slogurk, Kishla Skimmer, Gau)
+
+**Where:** `roto_zones.sweep_graveyard_zone_watch` (run by `run_zone_sweeps`, the P2 hook in `turn.state_based_actions`, after the exile-instead catch-all), `zone_watch_active` (`GameState.p2_zone_watch`, decided once per game by scanning every zone for a watching card), `note_left_library` (called by the draw hook for the card a non-replaced draw takes, and by Gamble for the card it puts into hand), `Player.zone_watch` / `card_left_graveyard_turn` / `left_library_ids`; marker predicates `PutIntoYourGraveyardFromYourLibrary`, `LandCardPutIntoYourGraveyard`, `CardLeftYourGraveyardDuringYourTurn`, and the real predicate `CardLeftYourGraveyardThisTurn`. **What:** like the base's Emrakul / Laelia watches, zone changes are found by comparing each player's library and graveyard with the previous state-based-action sweep, so these abilities go on the stack at the next SBA check rather than the instant the card moves. A graveyard arrival counts as "from your library" when the card was in the library at the last sweep and didn't leave it by a draw (or Gamble's tutor) since; a card that leaves the library some other way and reaches the graveyard within one resolution (a look-at-top "put into your hand" followed by a discard) would be mistaken for a mill. A card that enters and leaves a graveyard between two sweeps (Takenuma's mill-then-return of a just-milled card) is seen neither arriving nor leaving. "Only once each turn" is the base `once_per_turn` ledger. The relevance flag is computed once per game: a determinized search state that samples a watching card the real game didn't contain won't watch for it. **Why OK:** every move these cards care about is a resolution's end result in normal play. **Failure mode:** the rare same-resolution round trips above. **Fix scope:** origin-tagged zone moves (one helper for every library/graveyard insertion). **Impact:** small. Gaea's Blessing (a sorcery with the same "from your library" trigger) stays unclaimed: its "Target player shuffles up to three target cards from their graveyard into their library" needs a player target plus card targets restricted to that player's graveyard (not modelled), as does Memory's Journey.
+
+### Golgari Grave-Troll: counted entry, one regeneration shield
+
+**Where:** `roto_zones.EntersWithCountersPerGraveyardCard` + `on_enter_battlefield` (the P2 entry hook in `actions.put_into_battlefield`, which also takes the exile-instead snapshot), `RegenerateSource`. **What:** the counters are counted from its controller's graveyard as it enters, before its enters triggers. Regeneration uses the base's single `regeneration_shield` flag, so activating the ability twice in a turn still leaves one shield (CR 701.15 would stack two); the second activation's counter is spent for nothing. **Impact:** small (double regeneration in one turn is rare).
+
+## Vintage Roto P4: planeswalkers, copies, control & turns — deliberate simplifications (2026-10-02, `feature/roto-p4-walkers-turns`)
+
+Roto-only cards (the `roto` pool, opt-in when this landed; folded into `all` on 2026-10-03). Engine code: `src/mtg_bot/roto_turns.py` (turn structure + the sideboard), `src/mtg_bot/effects/generic/roto_walkers.py`; grammar: `src/mtg_bot/cards/parser/roto_walkers.py` (last fallbacks, switched off for EoE-only printings through the shared `creature_rmc_grammar` guard). Engine hooks: `turn.next_step` (the single turn-structure hook, so `simulate.run_turn` and the search adapter can't diverge), `turn.run_delayed_end_step_triggers` (`own_next_end_step`), `turn.run_delayed_upkeep_triggers` (`own_upkeep`), `turn.run_cleanup_step` (an extra turn after a controlled turn), `legal._legal_actions_core` (only passing while the turn ends), `simulate.setup_game(sideboards=...)`, `actions` (Phyrexian life pips at cast, Compleated as it enters, "-X" loyalty, the Gilded Drake fizzle exemption, Rebound, dependent spell targets), `game.gain_life` (`Event.GAINS_LIFE`); state: `GameState.turn_ending`, `Player.sideboard` / `extra_turn_after_controlled_turn`, `GameObject.phyrexian_life_pips`, `StaticAbility.skips_your_draw_step`, `ActivationCost.loyalty_x`, `CardPrinting.rebound` / `enters_as_copy_add_triggers` / `enters_as_copy_add_keywords`. Parser hooks: `effects._parse_effect`, `statics._parse_static_ability_line`, `triggers._parse_predicate_trigger_phrase`, `planeswalker_builder` (loyalty bodies, "-X" / Compleated lines), `cube_creatures_ub._parse_enter_as_copy_line` ("except" riders), `spell_builder._casting_keyword_fields` (Rebound), `cost_reduction` ("card type among cards in your graveyard"), `removal_phrases.parse_destroy_all` ("with mana value X or less that's one or more colors"), `artifact_effects` (the "[you may ]exile that card from your graveyard" recognizer). No EoE or cube printing's parse changes (claimed-printing reprs compared pool by pool); the Rust engine models none of this package (no parity surface).
+
+### "Skip your draw step." and "End the turn."
+
+**Where:** `roto_turns.turn_structure_next_step` (via `turn.next_step`), `roto_turns.end_the_turn`, `legal._legal_actions_core`. **What:** a skipped draw step doesn't happen at all (no draw, no draw-step triggers, no priority -- CR 614.10): upkeep is followed by the precombat main phase. "End the turn" (Sundial of the Infinite, Day's Undoing; CR 723.1) exiles every spell on the stack (the resolving one included; copies and abilities cease to exist), removes creatures from combat and raises `GameState.turn_ending`; while it is set only `PassPriority` is legal, so the current step closes and `next_step` jumps to cleanup. **Gaps:** (1) an ability that triggers while the turn is being ended goes on the stack at once and resolves in the current step's closing priority round instead of waiting for the cleanup step (CR 723.1d / 514.3a: the engine's cleanup step has no priority); (2) [resolved 2026-10-03, `feature/roto-instant-activations`: Sundial is offered whenever its controller has priority during their turn -- in response to a spell, in the upkeep or end step -- subject to the search heuristics that prune the active player's own empty-stack upkeep / draw / beginning-of-combat / end-step windows (#6)]; (3) `turn_ending` is transient (set from resolution to the end of that step) and not in the search hash. **Failure mode:** missed Sundial lines (strength only). **Fix scope:** a cleanup priority window in both turn loops (~half a cycle) and the instant-speed activation entry's fix.
+
+### "At the beginning of your next end step"
+
+**Where:** `roto_turns.schedule_at_your_next_end_step`, `turn.run_delayed_end_step_triggers` (`own_next_end_step`). **What:** the delayed trigger fires at its controller's first end step from the scheduled turn on, however many extra turns intervene (Necropotence's "Put that card into your hand"). It fires even if the source left the battlefield (CR 603.7c) and does nothing if the exiled card left exile (CR 400.7). **Failure mode:** none known.
+
+### Final Fortune's "that turn" and the extra-turn order
+
+**Where:** `roto_walkers.TakeExtraTurnWithEndStepTrigger`, `GameState.extra_turn_queue`. **What:** the engine's extra-turn queue is FIFO (pre-existing, Nexus of Fate / Time Warp), whereas CR 500.7 takes the most recently created extra turn first; Final Fortune joins the same queue so the engine stays self-consistent, and "that turn" is the turn number `turn_number + <queue length after the append>`. A turn skipped by Time Vault's replacement doesn't advance the turn counter, which would shift that arithmetic; a *copy* of Final Fortune has no source object to anchor the delayed loss trigger (`turn._push_delayed_entries` skips sourceless entries), so a copied Final Fortune grants the turn without the loss. **Failure mode:** the loss lands on the wrong turn only when Final Fortune is combined with another pending extra turn and Time Vault's skip, or is copied. **Fix scope:** LIFO insertion plus queue entries that carry their riders (~hours; touches the existing extra-turn effects and the Rust bridge's queue mirror).
+
+### Necropotence
+
+**Where:** `artifact_effects._MAY_EXILE_THAT_CARD_FROM_YOUR_GRAVEYARD` (now parameterized on "you may"), `roto_walkers.ExileTopCardsToHandAtYourNextEndStep`. **What:** "Whenever you discard a card" sees every discard that goes through the discard-observer funnel (`turn.fire_opponent_discards_triggers`); the cleanup step's hand-size discard does not go through it (pre-existing, see "Mayhem needs the discard to be reported"), so cards Necropotence's controller discards to hand size stay in the graveyard. The face-down exiled card is hidden through `GameObject.publicly_known_to` (empty), but the PIMC determinizer treats exile as a public zone, so search rollouts see its identity. **Failure mode:** graveyard size slightly overstated after a big Necropotence turn; search peeks at the face-down cards. **Fix scope:** route the cleanup discard through the funnel with a cleanup priority window (shared with the end-the-turn gap above).
+
+### The sideboard and "a card you own from outside the game" (Wish)
+
+**Decision (user, 2026-10-02):** wish effects fetch from the player's sideboard; in a roto draft the sideboard is the drafter's picks that didn't make the main deck. **Where:** `Player.sideboard` (a tuple of printings -- cards outside the game aren't game objects, CR 400.11), `simulate.setup_game(sideboards=...)` (explicit input, empty by default so existing games are unchanged), `roto_turns.take_from_outside_the_game`, `roto_walkers.PutCardFromOutsideTheGameIntoHand`. **What:** the fetched copy becomes a new object in hand and is revealed. The pick among matching names (or "reveal nothing") reuses the generic `choose_mode` hook. **Gaps:** no production caller passes sideboards yet (self-play deck pools carry none; `decks.Deck` has no sideboard field), so in self-play Burning Wish finds nothing and only exiles itself; sideboards aren't in the search hash, the NN observation or the determinizer (an opponent's sideboard is visible to search -- harmless in roto, where every pick is public). **Fix scope:** a `sideboard` list on the roto deck pool entries + one keyword at the data-gen `setup_game` call (~hours, once a roto deck pool exists).
+
+### Planeswalkers: "−X" costs, Compleated, sentence-composed loyalty bodies
+
+**Where:** `ActivationCost.loyalty_x`, `roto_walkers.choose_and_pay_loyalty_x` (hook in `actions._activate_ability`), `roto_walkers.apply_compleated` (hooks in the cast pipeline and `actions.put_into_battlefield`), `GameObject.phyrexian_life_pips`, `parser.roto_walkers.parse_roto_loyalty_body` / `parse_roto_walker_line` (hooks in `planeswalker_builder`). **What:** X is chosen through `choose_x` (0 up to the walker's loyalty) and the X counters are removed as X is announced, before targets (CR 602.2b orders them: X, targets, then costs -- the only observable difference would be a target legality that depends on the walker's loyalty). X rides the stack item as `resolving_x_value`. Compleated (CR 702.150) counts the Phyrexian pips the caster paid with life when the walker was *cast*; the count is consumed as it enters. A cast walker that is countered or bounced keeps the stale count until its next cast, so if it later enters without being cast it would enter with fewer counters (no card in the pool does that to a planeswalker). A loyalty body of several sentences becomes their `Sequence` (the spell builder's composition) only when no later sentence starts with an anaphoric word (It/That/Those/They/If/Otherwise/...) and at most one sentence targets. **Failure mode:** none known in the pool.
+
+### Liliana of the Veil's piles, Ugin's deployment, symmetric discards
+
+**Where:** `SeparatePermanentsIntoPilesSacrificeChosen`, `PutUpToNCardsFromHandOntoBattlefield`, P2's `roto_zones.EachPlayerSequence` (Liliana's +1; P4's same-behaviour `EachPlayerDiscards` was dropped at integration), `EachOpponentExilesCardsFromHand`. **What:** the pile separation is one `choose_yes_no` per permanent (yes = pile 1; the 2^n partitions are not one enumerated decision), the victim picks a pile through `choose_mode`. Ugin's "put up to seven permanent cards from your hand onto the battlefield" picks one card at a time through `choose_card_from_library` (`None` stops) and the chosen cards enter one after another, not simultaneously (an earlier entrant's "whenever another creature enters" sees the later ones; CR 603.6a would let simultaneous entrants see each other too -- the difference is only which triggers see which). "Each player discards a card" runs in APNAP order, each player choosing as they go rather than all choosing first (CR 101.4); "each opponent exiles two cards from their hand" reuses the `choose_discard` hand picker. **Failure mode:** search can't learn a pile split as a single decision. **Fix scope:** a factored pile decision in the resolution channel (~a cycle).
+
+### Clones, control and flicker
+
+**Where:** `parser.roto_walkers.parse_copy_exception` (hook in `cube_creatures_ub._parse_enter_as_copy_line`), `CardPrinting.enters_as_copy_add_triggers` / `enters_as_copy_add_keywords` (applied by `creature_casting_ub.apply_copy_on_entry`), `parse_roto_trigger_phrase` (hook in `triggers._parse_predicate_trigger_phrase`), `ExchangeControlOfSourceAndTarget`, `GainControlUntapHasteUEOT`, `ExileTargetThenReturnUnderOwnersControl`. **What:** Phantasmal Image's granted "When this creature becomes the target of a spell or ability, sacrifice it." is a `BECOMES_TARGET` trigger fired by `cube_creatures_rmc.fire_becomes_target` (the spell / ability targeting sites). Gilded Drake's exchange sets `controller_id` directly (the Oko / Dack Fayden precedent; no layer-2 entry) and leaves both permanents summoning-sick; "This ability still resolves if its target becomes illegal" is `still_resolves_if_targets_illegal`, which lifts the CR 608.2b fizzle in `actions._resolve_top_of_stack_item` (the effect then re-checks the target, hexproof included, and sacrifices the Drake). A flickered permanent returns as the same `GameObject` id with its counters cleared (`turn._reset_left_battlefield_object`) and a fresh ETB. **Failure mode:** none known.
+
+### Rebound
+
+**Where:** `CardPrinting.rebound` (parsed by `parse_roto_casting_keyword`, hook in `spell_builder._casting_keyword_fields`), `roto_walkers.exile_with_rebound` (hook in `actions._resolve_top_of_stack_item`), `MayCastExiledSourceFree`, `turn.run_delayed_upkeep_triggers` (`own_upkeep`). **What:** "cast from your hand" is the existing `GameObject.cast_via_hand` flag. The delayed trigger waits for its controller's next upkeep and casts through `creature_casting_ub.cast_now` (the spell goes on the stack above the trigger; timing restrictions don't apply -- CR 702.88a casts it during the trigger's resolution, so that's the rule). **Failure mode:** none known.
+
+### Nicol Bolas, God-Pharaoh; "your opponents control"
+
+**Where:** `TargetOpponentExilesUntilNonlandCastFree`, `parser.roto_walkers._damage_to_target_list`, the `_YOUR_OPPONENTS_CONTROL` retry in `parse_roto_effect`, the "with mana value X or less that's one or more colors" suffix in `removal_phrases.parse_destroy_all`. **What:** the +2's nonland card carries a this-turn, free, cast-only `ExilePlayPermission` (the impulse family's permission object). "Your opponents control" is read as "an opponent controls" -- identical with two players, which is all the engine plays. **Failure mode:** a multiplayer game would read "your opponents" as one opponent.
+
+### Enter the Infinite, Nissa, Dihada, Saheeli, Kaya
+
+**Where:** `NoMaximumHandSizeUntilYourNextTurn`, `PumpCreaturesYouControlPerCount`, `CreateTokenWithPTEqualTo`, `GrantKeywordsUntilYourNextTurn`, `GainControlOfAllUntapHasteUEOT`, `RevealTopPutMatchingInHandRestInGraveyard`, `CreateTokenCopyOfTargetWithExceptions`, `ExileTargetThenTokenCopyUnlessAura`, `SearchUpToNDifferentNamesOntoBattlefield`, `EachOpponentMayScry`. **What:** "You have no maximum hand size until your next turn" is a command-zone emblem carrying the static, expiring as its controller's next turn begins (`GameObject.expires_at_untap_of`). Token-copy "except" riders become copiable values (CR 707.9b): added types, set base P/T, a set color (`face_colors`), added keywords; the copy loses any back face. Saheeli's token gets haste for as long as it exists (it is exiled at the next end step anyway). Kaya's -3 copies the exiled card's printing (its copiable values in exile) and checks "wasn't an Aura" on the permanent as it last existed. "Any number" / "up to N" picks go through `choose_card_from_library` one card at a time (`None` stops). "Each opponent may scry 1" is a `choose_yes_no` plus the real scry decision. **Failure mode:** none known.
+
+### Emrakul, the Promised End: controlling a turn, then an extra turn
+
+**Where:** `ControlTargetOpponentDuringNextTurn`, `extra_turn_after_controlled_turn` (hook in `turn.run_cleanup_step`), `Player.extra_turn_after_controlled_turn`, `PerCardTypeInYourGraveyard` (`cost_reduction._per_each_condition`). **What:** "you gain control of target opponent during that player's next turn" reuses The Dominion Bracelet's agent swap: the caster's agent object makes the opponent's decisions for that turn (installed at their untap step, reverted at its cleanup). The search adapter still attributes those decisions to the controlled player's seat (an MCTS rollout through that turn plays the controlled player's policy, not the controller's) -- the Bracelet precedent. The extra turn "after that turn" is put at the front of the extra-turn queue (most recent first, CR 500.7). The cost reduction counts card types among cards in the caster's graveyard through the shared delirium count. **Failure mode:** under search the controlled turn isn't searched from the controller's perspective. **Fix scope:** controller-aware seat mapping in the adapter (~a cycle; shared with the Bracelet).
+
+### Chain of Vapor, Sin, Chandra, Hope's Beacon
+
+**Where:** `BounceThenChainCopyBySacrificingLand`, `ExileRandomGraveyardCardTokenCopyRepeatIfLand`, `CopyTriggeringSpell`, `GroupedExilePlayPermission` / `ExileTopMayCastOneFromAmongUntilEndOfNextTurn`, the "deals X damage to each of up to N targets" recognizer (`DealDamageByFormula` with N optional slots). **What:** Chain of Vapor's copy is offered to the bounced permanent's last controller (`choose_yes_no`, `choose_sacrifice` for the land, the Chain Lightning copy path); every copy costs a land, so chains terminate. Sin's "at random" uses `state.rng` (not a chance node in search, like the other engine die rolls / random picks). Chandra's copy trigger copies the cast spell it names through the trigger's event subject (`StackItem.event_subject_id`); new targets go through `spell_copies._choose_copy_targets`, which re-picks a single target (the Storm / Chain of Smog precedent -- a multi-target spell's copy keeps one target). Chandra's +1 gives each exiled instant / sorcery a cast-only permission until the end of her controller's next turn; the group's permissions all lapse once any card of the group has left exile -- normally because it was cast, but a card leaving exile some other way also ends the others' permission. **Failure mode:** copies of multi-target spells; a sibling removed from exile by another effect. **Fix scope:** a multi-slot copy-target picker; a cast-time hook that consumes the group (~hours each).
+
+### "Whenever you gain life" (Professor Dellian Fel)
+
+**Where:** `Event.GAINS_LIFE` dispatched by `game.gain_life` (the amount rides the trigger's `counter_amount`), `parse_roto_trigger_phrase` ("you gain life"), `TargetOpponentLosesThatMuchLife`. **What:** every life gain that goes through `gain_life` (spells, abilities, combat lifelink) fires one event per gain; a life gain written directly to `Player.life` elsewhere (one bespoke EoE effect) doesn't. "That much" reads the event amount; the phrase's only printing in any pool follows "Whenever you gain life". **Impact:** one empty dispatch per life gain in games without a listener.
+
+### Bilbo, Luckwearer: a target that depends on an earlier target
+
+**Where:** `ExchangeControlOfTwoTargetsSharingCardType`; `actions._select_spell_targets` now honours `legal_targets_for_slot` for spell effects that set `slot_targets_depend_on_chosen` (the activated-ability picker already did). **What:** the second target of "two target nonland permanents that share a card type" is offered only among permanents sharing a card type with the first; card types are read as the permanent currently has them (creature-ness through `is_creature_now`). The exchange sets `controller_id` directly (the Oko precedent). **Failure mode:** none known.
+
+### Commandeer: a two-card pitch cost and gaining control of a spell
+
+**Where:** `CardPrinting.alt_cost_exile_from_hand_count` (parsed by `parse_roto_casting_keyword`; `alt_casting.pitch_options` / `pay_pitch_cost`), `GainControlOfTargetSpell`. **What:** "exile two blue cards from your hand rather than pay this spell's mana cost" is payable only with two other matching cards in hand; each is picked through `choose_discard`. Gaining control of a spell changes its stack item's and card's controller (a permanent spell enters under the new controller) and the new controller re-picks one target through `spell_copies._choose_copy_targets` (the Invert Polarity path -- a multi-target spell keeps a single re-picked target). **Failure mode:** stealing a multi-target spell. **Fix scope:** the multi-slot copy-target picker noted under Chandra.
+
+**New per-object / per-player / per-game state not hashed by search** (search code out of scope): `GameState.turn_ending` (transient: from an "End the turn." resolution to the end of that step), `Player.sideboard`, `Player.extra_turn_after_controlled_turn`, `GameObject.phyrexian_life_pips` (transient: from cast to entering). The delayed-trigger keys added here (`own_next_end_step`, `own_upkeep`) ride `delayed_triggers`, which the canonical state already hashes key by key. Cards still unclaimed in this package and what each needs: Karn, the Great Creator (P1's "activated abilities of <artifacts> can't be activated" static reachable from the planeswalker builder; an "until your next turn" animation whose creature-ness ends at the controller's untap step -- `run_untap_step` doesn't rebuild `permanent_is_creature`; a face-down marker on exiled cards for "a face-up artifact card you own in exile"); Gideon of the Trials (damage prevention by / to a source -- P6 -- and a "can't lose / can't win" emblem); Grist, the Hunger Tide (characteristics outside the battlefield: "it's a 1/1 Insect creature" in every other zone); Mockingbird (amount of mana spent to cast -- P3); Return the Favor (Spree modes -- P6 -- plus copying abilities and changing targets); Shuri, Wakandan Inventor (spell-type-aware external cost reductions -- P3); Agatha's Soul Cauldron and Scheming Fence (a permanent gaining another object's activated abilities; Fence also needs P1's as-enters choice).
+
+## Vintage Roto P6: keyword mechanics, face-changing & pregame — deliberate simplifications (2026-10-02, `feature/roto-p6-keywords-pregame`)
+
+Shortcuts taken while claiming the roto P6 package (`docs/ROTO_COVERAGE_PLAN.md` section 6). Roto was an opt-in pool when this landed; since 2026-10-03 it is part of the default `all` pool, so these shortcuts apply to default-pool games too.
+
+### Conspiracies: a decklist entry is the command-zone choice; deck size is checked only on request
+
+**Where:** `mtg_bot/conspiracies.py` (`begin_game_with_conspiracies`), called once from `simulate.setup_game` right after the libraries are built; `Player.conspiracies`; `CardPrinting.conspiracy_rules` (built by `cards/parser/conspiracy_builder.py`). **What:** (1) Conspiracy Draft (CR 905) lets a player choose which conspiracies from their card pool go into the command zone; the engine treats every conspiracy named in a decklist as chosen (the decklist is the pool brought to the game) and asks nothing. (2) The engine had no deck-legality check at all; `setup_game(minimum_deck_size=N)` now enforces CR 100.2a's minimum moved by "Your minimum deck size is reduced by five" (Advantageous Proclamation), but no production caller passes it (17lands and generated cube decks are built at 40+), and no deck builder exploits the reduction (`cube_decks` never builds a 35-card deck; it now also never counts a conspiracy as a deck spell). (3) Power Play's "chosen at random" between several claimants uses the setup RNG, consumed only in that case. (4) Conspiracy objects are not part of `hash_state`, serialization or the NN tokenizer. **Why OK:** Power Play and Advantageous Proclamation have no downside, so putting them in is always right; neither has an ability that works once the game has begun, so nothing a search could observe depends on them. **Failure mode:** a future conspiracy with a downside or an in-game ability would need a real choice and state hashing; a deck below 40 cards is accepted unless the caller opts into the check. **Fix scope:** small (a pre-game decision hook; a `minimum_deck_size` default once a format concept exists). **Impact:** none on play.
+
+### Opening-hand reveals and Serum Powder are setup-agent decisions
+
+**Where:** `mtg_bot/opening_hand.py` (`RevealFromOpeningHand`, `ExchangeHandWhileMulliganing`, `apply_mulligan_window_actions`), called from `simulate.setup_game` (the mulligan loop and the post-keep opening-hand pass); parsed by `cards/parser/roto_keywords.py` (`build_with_pregame_lines`, run from `source.build_card_record`). **What:** Chancellor of the Tangle's "You may reveal this card from your opening hand" and Serum Powder's "Any time you could mulligan ..., you may exile all the cards from your hand, then draw that many cards" are asked of the seat's setup agent through `Agent.choose_yes_no`, exactly like Gemstone Caverns (see "Opening-hand actions are setup-agent decisions" above): `RandomAgent` flips a coin, search and the NN never see the choice. Serum Powder is offered once per mulligan window, before `choose_mulligan` (and again after each use, since the player could still mulligan); it is not offered at a forced keep (`max_mulligans`) or when `enable_mulligans=False` (no mulligan window exists). Chancellor's mana is a `"step": "main"` delayed trigger whose source is the revealed card; like every delayed trigger it is skipped if that card no longer exists (it always does -- a card is never removed from the game). The mana stays until cleanup (the engine's mana pool empties only at cleanup, an existing simplification). **Why OK:** both are one binary pre-game choice; revealing Chancellor is always right. **Failure mode:** random self-play seats waste half of these. **Fix scope:** a pre-game decision node in the search adapter (shared with mulligans and Gemstone Caverns). **Impact:** small, two roto cards.
+
+### Delver of Secrets: revealing a non-matching card isn't offered
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`LookAtTopMayRevealIfMatches`). **What:** "Look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform this creature." The "you may reveal" choice (`Agent.choose_yes_no`) is asked only when the top card is an instant or sorcery; any other card is looked at and never revealed. **Why OK:** revealing a non-matching card has no game effect besides giving the opponent information -- a dominated option -- and skipping it saves a decision every upkeep. **Failure mode:** a future "whenever a player reveals a card" trigger would never see those reveals. **Fix scope:** one branch. **Impact:** none today.
+
+### Damage prevention and redirection (Maze of Ith, Cephalid Illusionist, Nomads en-Kor, Black Panther)
+
+**Where:** `mtg_bot/effects/generic/roto_damage.py` (`route_damage`, hooked at the top of `effects/base._apply_damage`; `route_combat_damage_events`, hooked in `combat._resolve_damage_step` after the protection filter); `CardPrinting.replacement_statics` (`PreventAllDamageToSelf`). **What:** (1) "Prevent all combat damage that would be dealt to and dealt by <creature> this turn" and Nomads' redirection shields are `layer=0` registry entries ending at cleanup. (2) Prevention is applied before redirection, always -- CR 616.1 lets the affected creature's controller order them; it only matters for a creature that both prevents damage to itself and holds a shield. Redirected damage is re-checked against the recipient's own prevention and shields. (3) A shield whose recipient has left the battlefield (or is the creature itself) is used up and the damage stays where it was. (4) Effects that write damage straight onto a creature instead of calling `_apply_damage` bypass both routers: `MayHaveSourceDealDamageToTarget` (`effects/generic/damage.py`) and `PainForAllETBEffect`'s creature branch (`effects/bespoke.py`) -- EoE-era bespoke effects. (5) Black Panther's printed prevention is a printing-level static, so like other printing-level statics it ignores "loses all abilities". **Why OK:** the ordering case needs two prevention/redirection sources on one creature; the bypassing effects are EoE-pool cards that never meet roto cards in a game. **Failure mode:** in a mixed pool those two effects would damage Black Panther / ignore a Nomads shield. **Fix scope:** route the two bypass sites through `_apply_damage`; an ordering choice through `Agent.choose_replacement_order`. **Impact:** negligible.
+
+"Damage can't be prevented this turn" (Impractical Joke; `roto_damage.damage_cant_be_prevented`, a layer-0 registry entry ending at cleanup) is consulted by every prevention check that goes through the engine's helpers: `game.player_damage_prevented` (protection from everything), `creature_statics_wg.combat_damage_unpreventable` (Darkness-style combat prevention, combat protection, the combat One Ring check, Maze of Ith), the protection check in `effects/base._apply_damage`, and Black Panther's static. Requiem Monolith's optional ping (`damage.MayHaveSourceDealDamageToTarget`, EoE pool) checks protection itself and still treats it as preventing the damage. Impractical Joke's two sentences are recognized as one phrase (`roto_keywords._parse_cant_be_prevented_phrase`) because the damage sentence alone is claimed first by the base grammar's documented creature-only reading of "creature or planeswalker"; the P6 recognizer composes the target faithfully (creature or planeswalker).
+
+### "Regenerate this creature" uses the engine's one-shield flag
+
+**Where:** P2's `mtg_bot/effects/generic/roto_zones.py` (`RegenerateSource`; Blight Mamba, Golgari Grave-Troll -- P6's identical recognizer was dropped at integration). **What:** CR 701.15 makes each resolved regeneration a separate shield; the engine models a shield as the boolean `GameObject.regeneration_shield` (Swarmyard's existing model, mirrored by the Rust engine), so activating Blight Mamba twice in a turn still replaces only one destruction. **Why OK:** regenerating twice in one turn needs two separate lethal events after both activations. **Failure mode:** a second destruction that turn isn't regenerated; a player who pays twice wastes the mana (the search may still activate twice). **Fix scope:** a shield count on `GameObject` plus the Rust mirror. **Impact:** negligible.
+
+### Vizier of Remedies sees only real -1/-1 counter placements
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`FewerMinusOneCountersOnYourCreatures`, `adjust_minus_one_counters`), called from `game.add_minus_one_counters` (which `game.add_counters(..., "-1/-1", n)` now routes through). **What:** "that many -1/-1 counters minus one" applies to every -1/-1 counter the engine actually places (effects, entering-with counters such as persist's return, `add_counters`). Infect damage to a creature is not one of them: the engine's combat infect folds into until-end-of-turn P/T penalties instead of -1/-1 counters (an existing simplification in `combat._resolve_damage_step`), so Vizier doesn't soften infect. **Why OK:** the infect fold is the engine's existing model and the interaction needs Vizier facing an infect deck. **Failure mode:** an infect creature dealing N damage to a Vizier player's creature gives -N/-N instead of -(N-1)/-(N-1), and it wears off at end of turn instead of staying. **Fix scope:** real -1/-1 counters for infect (touches combat + Rust parity). **Impact:** small.
+
+### Toxic is a "toxic N" keyword string; "becomes the target of a spell/ability" reads the top stack object
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`toxic_amount`, `apply_toxic` -- hooked in `combat._resolve_damage_step` before the combat-damage-to-player triggers; `TargetingIs`), `effects/generic/cube_creatures_rmc.fire_becomes_target` (the new `targeting` subject). **What:** (1) Toxic N is stored as the keyword `"toxic N"` in the printing's keyword set; CR 702.164c makes instances cumulative, and distinct values do add up, but two instances of the same N on one creature collapse in the set. (2) Whether a target was chosen by a spell or an ability is read from the stack object pushed just before `fire_becomes_target` runs (every caller pushes first); a caller that didn't would make "of a spell" / "of an ability" triggers (Venerated Rotpriest, Loki) not fire rather than misfire. **Why OK:** no roto card grants a second instance of toxic. **Failure mode:** a creature with two toxic 1 instances gives one poison counter instead of two. **Fix scope:** a toxic count field. **Impact:** none today.
+
+### "Whenever an opponent attacks you" is the opponent's attack
+
+**Where:** `cards/parser/roto_keywords.parse_p6_trigger_phrase` (Emberwilde Captain). **What:** the trigger is the opponent's `YOU_ATTACK` event. The engine's attackers always attack the defending player (there are no planeswalker or battle attacks), so every opponent attack is an attack on you. **Failure mode:** if planeswalker attacks are ever modeled, an attack only on your planeswalker would wrongly trigger it. **Fix scope:** check each attacker's attack target once one exists. **Impact:** none today.
+
+### Split second, and granted "becomes tapped" triggers (Legolas's Quick Reflexes)
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` -- `filter_split_second` (hooked at the end of `legal._filter_cast_restrictions_wg`, which both `_legal_actions_core` exits pass through) and `fire_granted_becomes_tapped_triggers` (hooked in `turn.tap_permanent`). **What:** (1) While a spell with split second is on the stack (CR 702.61b), `legal_actions` drops every `CastSpell` except plotting (a special action), `ActivateStation`, and each `ActivateAbility` whose ability isn't a mana ability; `TurnFaceUp` and other special actions stay. The search capability layer (`search/_player_capabilities.py`) is not taught about split second: it may still report an instant-speed capability, so the bot can open a decision node whose only legal action is passing. (2) A granted "Whenever this creature becomes tapped" ability fires from `tap_permanent`, like the printed ones; engine paths that set `tapped` directly without `tap_permanent` fire neither. **Why OK:** (1) is a wasted node, never an illegal action; (2) matches the existing printed-trigger behavior. **Fix scope:** teach the capability check; route remaining tap sites through `tap_permanent`. **Impact:** negligible.
+
+### Battlefield abilities are activated only at sorcery timing -- Maze of Ith is never activatable in a game -- resolved
+
+**Resolved 2026-10-03** (`feature/roto-instant-activations`): Maze of Ith, Cephalid Illusionist, Nomads en-Kor and Blight Mamba are activated on the opponent's turn, in response and mid-combat (behavioural tests in `tests/test_instant_activation_cards.py`). The original note follows.
+
+
+**Where:** the existing engine contract in `legal._legal_actions_core` (outside a sorcery window it returns before the activated-ability block; see "Engine-contract interaction" near the top of this file). **What this means for P6 claims:** Maze of Ith's "{T}: Untap target attacking creature. Prevent all combat damage ..." can never be activated in a game, because no creature is attacking during a sorcery window. Cephalid Illusionist's prevention ability, Nomads en-Kor's redirection and Blight Mamba's regeneration can be activated only in their controller's main phase with an empty stack, and their effects end at that turn's cleanup, so they protect only during their controller's own turn (combat on that turn). Their effects are modeled and tested by activating them directly; only the activation window is missing. **Why OK:** it is the engine-wide model every claimed card with an instant-speed activated ability already lives under (it was not introduced here). **Failure mode:** these cards are much weaker in self-play than in paper; Maze of Ith is a land with no usable ability. **Fix scope:** surfacing non-sorcery-speed activated abilities at every priority window (`legal_actions`, the search capability layer, the action codec, Rust parity) -- an engine-wide decision for the user. **Impact:** large for these four cards, none elsewhere in P6.
+
+### Flip cards reuse the front-face snapshot (Erayo, Soratami Ascendant)
+
+**Where:** `mtg_bot/cards/parser/flip_builder.py`, `mtg_bot/effects/generic/roto_keywords.py` (`FlipSource`, `NthSpellOfTurn`, `CastersNthSpellThisTurn`, `CounterThatSpell`). **What:** a non-creature flipped half (Erayo's Essence) is composed line by line through the generic clause grammar rather than the enchantment builder's per-name opt-in, since it is never a card of its own. A flipped permanent (CR 710) is modeled by swapping its printing to the flipped half and keeping the unflipped printing in `GameObject.mdfc_front_printing` -- the snapshot transformed DFCs use -- so leaving the battlefield unflips it (`restore_mdfc_front`). There is no separate "flipped" status: a later transform effect can't flip it back (it has no transform back face) and nothing else reads flip status today. "The fourth spell of a turn" sums every player's `spells_cast_this_turn`. **Why OK:** matches CR 710 for everything the pool can do to a flip card. **Failure mode:** a copy of a flipped permanent copies the flipped printing but not a "flipped" status (CR 710.4 says the copy is flipped too, which this matches by accident). **Fix scope:** a flipped status if a card ever needs it. **Impact:** none.
+
+### Echo is tracked by a per-controller mark
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`EchoDue`, `EchoUpkeep`; Karmic Guide). **What:** "if this permanent came under your control since the beginning of your last upkeep" is modeled as "this permanent hasn't yet met an upkeep of its current controller": the echo trigger leaves a `layer=0` registry mark keyed by the permanent and the controller (dropped when it leaves the battlefield). Payment goes through `pay_mana_during_resolution` (asked only when affordable; `choose_yes_no`). **Why OK:** exact for a permanent that enters and stays under one controller, and for control changing to a new player. **Failure mode:** a permanent whose control returns to a player who already met its echo isn't asked again; a countered echo trigger leaves no mark, so echo is asked again next upkeep. **Fix scope:** per-object "came under control" timestamps. **Impact:** negligible.
+
+### "Deals damage to a player" and the per-turn damage tally (Vessel of the All-Consuming)
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`after_damage_to_player`, `after_combat_damage_to_players`, `DealtDamageToThatPlayerThisTurnAtLeast`, `TargetPlayerLosesTheGame`), hooked in `effects/base._apply_damage` (player branch, after life loss) and `combat._resolve_damage_step` (the same hook as toxic); `Event.DEALS_DAMAGE_TO_PLAYER` (`source`, `player`). **What:** the event and the tally cover damage dealt through those two paths. Damage to a player written directly by bespoke EoE effects (`DealDamageEachOpponent`, Ancient Tomb's `DealDamageToControllerAndAddMana`, the `bespoke.py` sites) does not fire it -- the same bypass list as the prevention routers above. The tally (a `layer=0` registry entry ending at cleanup) is kept only for objects with a "deals damage to a player" trigger, so damage an object dealt before it gained such a trigger isn't counted; the object id is the key, so an object that leaves and returns keeps its tally. The intervening "if" is evaluated when the trigger fires (the tally can only grow within a turn, so a resolution recheck would agree). "They lose the game" sets `has_lost`; state-based actions end the game. **Why OK:** none of the bypassing effects are sources that carry this trigger. **Failure mode:** none in the roto pool. **Fix scope:** route the bypass sites through `_apply_damage`. **Impact:** none today.
+
+### Angel's Grace: the life floor covers the engine's main damage paths
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`PlayerRuleUntilEndOfTurn`, `player_cant_lose`, `player_cant_win`, `life_after_damage`); guards in `turn.state_based_actions` (life and poison losses), `turn.draw_card` (drawing from an empty library), `turn.win_the_game` and `TargetPlayerLosesTheGame`; `life_after_damage` at the two damage-to-life sites (`effects/base._apply_damage`, combat). **What:** "can't lose" and "opponents can't win" are honored at every loss / win site the engine has. "Damage that would reduce your life total to less than 1 reduces it to 1 instead" applies to damage through `_apply_damage` and combat; damage written straight to `life` by bespoke EoE effects (the bypass list above: `DealDamageEachOpponent`, Ancient Tomb's self-damage, `bespoke.py`, Requiem Monolith's ping, `life.py`'s damage-like loss) isn't floored -- the player still can't lose this turn, but ends it at that lower life. An empty-library draw attempted while the player can't lose is simply forgotten (no loss once the effect ends), matching CR 704.5b's "since the last check". **Why OK:** the bypassing effects are EoE-pool cards. **Failure mode:** in a mixed pool those effects can leave an Angel's Grace player below 1 at end of turn, so they lose at the next check. **Fix scope:** route the bypass sites through `_apply_damage` (same as the prevention routers). **Impact:** negligible.
+
+### Speed changes immediately and isn't in the search hashes
+
+**Where:** `mtg_bot/effects/generic/roto_keywords.py` (`update_speed`, called at the end of `turn.note_life_losses`, i.e. at every state-based-action check); `Player.speed` / `Player.speed_increased_turn`. **What:** (1) "Start your engines!" gives speed 1 at the next state-based-action check after the permanent arrives. (2) The once-each-turn speed increase (CR 702.179: a triggered ability of the player that uses the stack) is applied immediately at the next check after an opponent of the active player loses life, without a stack object -- so it can't be responded to, and life lost and regained inside one resolution is missed (the engine's `lost_life_this_turn` latch). (3) Speed is not part of `hash_state` / the canonical search key (like Class levels and day/night, see above), so the search may share a node between states that differ only in speed. **Why OK:** nothing in the pool responds to a speed increase; speed only feeds Momentum Breaker's life gain. **Failure mode:** a transposition-table hit across different speeds; a speed increase one priority window earlier than paper. **Fix scope:** add speed to the canonical player key; a player-sourced stack trigger. **Impact:** negligible.
+
+### Cleave is an alternative cost choosing between two parsed texts
+
+**Where:** `mtg_bot/cards/parser/roto_keywords.py` (`_split_cleave`, `_build_cleave`; Dread Fugue, a P2 card). **What:** "Cleave {cost}" (CR 702.148) becomes `AlternativeCost(mana=cost)` and the spell's effect `IfConditionElse(AlternativeCostWasPaid(), <text with the bracketed words removed>, <text with the brackets dropped>)` -- the overload pattern. Both texts are built by the same builder chain, so a card claims only when both parse. **Why OK:** exact for a spell whose only alternative cost is cleave; another alternative cost on the same card would also count as "paid" (none in the pool). **Fix scope:** tag the alternative cost. **Impact:** none.
+
+## Vintage Roto integration: the six packages together (2026-10-02, `feature/roto-integration`)
+
+P1-P6 were merged in the order P1, P3, P5, P2, P4, P6 (`git merge --no-ff`, one merge commit each). Every claimed printing's parse was compared with the branch that claimed it (a default-insensitive normalized repr of every printing in the `all`, `cube`, `eoe` and `roto` pools): `all` / `cube` / `eoe` are unchanged (993 / 546 / 481) and `docs/CUBE_POOL_COVERAGE.md` is byte-identical to the base.
+
+### Roto fallbacks run in merge order; the first package that parses a line wins
+
+**Where:** `effects._parse_effect` (P1 `roto_stack` -> P3 `roto_mana` -> P5 `roto_board` -> P2 `roto_zones` -> P4 `roto_walkers` -> P6 `roto_keywords`), the creature builder's last fallback (P1 -> P3 -> P5 -> P2), the cube enchantment builder (P3 / P2 line recognizers before the clause grammar; P1 then P5 after it), `activated._classify_cost_piece` (P3 -> P2 atoms, then P1, then P5), the predicate-trigger phrases (P5 -> P4 -> P6), `spell_builder` casting keywords (P2 -> P4), `turn.next_step` (P4's turn structure before P3's additional combat, so an ended turn goes straight to cleanup), `legal._filter_cast_restrictions_wg` (P1 prohibitions, P5 cast timing, P6 split second -- all conjunctive), `combat.eligible_attackers` (P1's this-turn prohibitions, then P5's board rules), `source.build_card_record` (P3's card-level split, then P6's peel-and-build). **What:** each package's grammar is still a last resort that declines what it doesn't know, so the order only matters where two packages read the same text. The repr comparison found every such case; each was resolved by keeping one implementation (below), except Wrath of the Skies, where P5's general "destroy each <np>" grammar reads P3's singular card-type list with an "or" label -- P3's Wrath recognizer now tries its own list first so the printed "and" is kept (same predicate either way).
+
+### Duplicate implementations removed (one kept)
+
+- **Blight Mamba** "Regenerate this creature.": P2's `roto_zones.RegenerateSource` (also Golgari Grave-Troll) kept; P6's recognizer and class dropped.
+- **Kiora, Behemoth Beckoner** "untap target permanent": P5's tap / untap target grammar kept; P4's `_UNTAP_TARGET_RE` dropped.
+- **Shrieking Drake** "return a creature you control to its owner's hand": P3's `roto_mana.ReturnPermanentYouControlToHand` (the Simic Growth Chamber shape; `choose_sacrifice` picker) kept; P5's identical regex and effect dropped.
+- **Liliana of the Veil** "Each player discards a card.": P2's `roto_zones.EachPlayerSequence` (Smallpox's shape) kept; P4's `EachPlayerDiscards` dropped (the same APNAP, choose-as-you-go discard through the discard funnel).
+- **"Return this <permanent> to its owner's hand" as a cost** (Chthonian Nightmare, Recurring Nightmare): P2's `ReturnSelfToOwnersHandCost` kept; P3's `ReturnSourceToHandCost` dropped.
+- **"Sacrifice this enchantment" cost piece**: P1's kept; P5's unreachable copy dropped.
+- **`GameObject.mana_spent_to_cast`** (P1 and P3 each added it): one field, set once from automatic payment's per-unit record.
+- **Phyrexian pips paid with life** (P1's Trinisphere floor, P4's Compleated): one measurement (the cost difference) feeds both.
+- **State triggers** (CR 603.8; P3's `CardPrinting.state_triggers` for Dark Depths, P5's board-rule `StateTrigger` for Drop of Honey): folded into P5's board rule, which honours "loses all abilities" and Blood Moon -- the P3 checker did not, so Dark Depths with no ice counters under Blood Moon would still have made Marit Lage.
+- **Opening-hand actions** follow P6's protocol (`timing` + `apply`); P1's Chancellor of the Annex reveal had no `timing`, which the merged mulligan-window scan reads.
+
+### Cards claimed once the packages met
+
+- **Mockingbird** (`creature_casting_ub.apply_copy_on_entry`, `CardPrinting.enters_as_copy_max_mv_mana_spent`): the U/B clone grammar's optional "with mana value less than or equal to the amount of mana spent to cast this creature" plus P4's "except it's a Bird ... and it has flying" rider. The cap is the clone's `mana_spent_to_cast` as it resolves from the stack (0 for a copy, which isn't cast). Like every "enter as a copy" clone in the engine, the copy is offered only when it resolves as a spell; a Mockingbird put onto the battlefield another way enters as itself (it would have had no mana spent to cast it, so only mana value 0 creatures could have been copied). **Impact:** negligible.
+- **Tarmogoyf Nest** (`roto_board._enchanted_has_create_token`, `CardPrinting.attached_grants_activated_abilities`, `actions.apply_aura_static_grants_on_attach`): a Kindred Enchantment Aura (the cube enchantment builder keeps the Kindred type and its subtypes, so a Nest in a graveyard counts two card types); "Enchant land" is P3's land-Aura substrate; the granted "{1}{G}, {T}: Create a Tarmogoyf token." is a layer-6 `grant_activated_ability` entry on the land while the Aura is attached; the token is built from the card's reminder text (a {1}{G} Lhurgoyf creature token whose characteristic-defining P/T is Tarmogoyf's `dynamic_pt_formula`, green from its mana cost). Like every Aura in the engine, the grant is applied when the Aura resolves attached. **Engine change:** `game.effective_activated_abilities` no longer drops abilities *granted* to a land whose basic land type Blood Moon / Magus of the Moon sets -- CR 305.7 removes only the land's rules-text abilities, so the enchanted land keeps the Nest's ability (and Urza's Saga keeps a chapter-granted mana ability). **Impact:** negligible outside these interactions.
+
+### Leftovers still unclaimed (what each needs)
+
+- **Karn, the Great Creator**: P1's activation locks apply to every controller's permanents of the named types (Karn locks only *opponents'* artifacts) and aren't reachable from the planeswalker builder; the +1 needs an "until your next turn" animation whose creature-ness ends at its controller's untap step (`run_untap_step` doesn't rebuild creature-ness); the -2 needs a face-down marker on exiled cards ("a face-up artifact card you own in exile").
+- **Gideon of the Trials**: "until your next turn, prevent all damage target permanent would deal" (P6's prevention covers combat damage dealt to and by a creature this turn and a printed "prevent all damage that would be dealt to ~"; a by-source, all-damage prevention lasting until your next turn is missing), a planeswalker that becomes a creature "that's still a planeswalker" until end of turn, and an emblem whose can't-lose / can't-win rule is conditioned on controlling a Gideon planeswalker (P6's player rules are until-end-of-turn effects).
+- **Shuri, Wakandan Inventor**: a spell-type-aware external cost reduction ("Artifact spells you cast cost {1} less") and a permanent that "becomes a copy of a second target artifact you control until end of turn, except it isn't legendary" (the engine's copy effects only happen as a permanent enters).
+- **Return the Favor**: Spree parses (base `modal_spells`), but its modes need copying an activated or triggered ability on the stack and changing the target of a spell or ability.
+- **Agatha's Soul Cauldron**, **Scheming Fence**: a permanent having all activated abilities of other objects (and "spend mana as though it were mana of any color" for them); the Fence also needs an as-enters choice of a nonland permanent (P1's as-enters choice is a card name).
+- **Grist, the Hunger Tide**: characteristics outside the battlefield ("it's a 1/1 Insect creature" in every other zone).
+- **Heliod, Sun-Crowned**: a devotion-conditioned type removal (`is_creature_now` takes no game state).
+- Waiting on the user's decisions at the time (left alone by P1-P6): the sorcery-timing restriction on battlefield activated abilities (Tinder Wall; Maze of Ith & co. were claimed under it), Leyline of the Void's Duskmourn/EoE gate, folding roto into the default pool, the custom conspiracies. All four were decided on 2026-10-03: the sorcery-timing restriction was lifted and Tinder Wall claimed (`feature/roto-instant-activations`); roto joined the default pool, Leyline of the Void was claimed and Meddling Wizard built, the other three custom conspiracies left alone (`feature/roto-default-pool-leyline-wizard`). See "Instant-speed activated abilities of permanents" and "Vintage Roto in the default pool, Leyline of the Void, Meddling Wizard" below.
+
+## Instant-speed activated abilities of permanents (2026-10-03, `feature/roto-instant-activations`)
+
+Design note: `docs/INSTANT_SPEED_ACTIVATIONS_DESIGN.md`. **What changed:** `legal_actions` used to offer battlefield activated abilities only in an empty-stack main phase of their controller's turn (an early return before the activated-ability block), with two narrow exceptions (The Wandering Emperor; roto P1's spell-targeting abilities). It now follows CR 117.1b / 602.5: `legal.battlefield_ability_activations` is called from both exits of `_legal_actions_core`, and the per-ability timing predicate `legal.activation_timing_permits` keeps sorcery-speed abilities ("Activate only as a sorcery.", equip, reconfigure, saddle, level up), planeswalker loyalty abilities (CR 606.3; The Wandering Emperor's permission honoured) and mana abilities in sorcery windows. Every other gate (costs, targets, "only during your turn / if / once [each turn]", exhaust, boast, loyalty once-per-turn, activation locks, split second) runs in every window. The search capability check (`search/_player_capabilities._has_instant_speed_activatable`) calls the same enumerator, and Rust mirrors the rule (`GameState::push_battlefield_activations` in `state_ops_legal.rs`, which also starts enforcing `sorcery_speed`). The action codec is unchanged (the `ActivateAbility` slot is timing-independent).
+
+What is still deliberately simplified:
+
+1. **Explicit mana abilities stay sorcery-window-only as actions.** **Where:** `legal.activation_timing_permits` (`is_mana_ability` -> False off sorcery timing), Rust `push_battlefield_activations`. **What:** CR 605.3a lets a player activate a mana ability whenever they have priority; the engine offers explicit mana abilities (the ones in `activated_abilities` -- Gaea's Cradle, Lion's Eye Diamond, Tinder Wall's "Sacrifice this creature: Add {R}{R}", Vivi Ornitier) as actions only in a sorcery window, and automatic payment uses only `produces` (cube-lands shortcut #1). Kept by scope decision for this change. **Failure mode:** Lion's Eye Diamond can't be cracked in response; floating mana from those sources for an instant-speed spell or activation is impossible. **Fix scope:** drop the `is_mana_ability` clause in both engines and teach the capability check to ignore pure mana abilities (otherwise every utility land defeats auto-pass); ~1 cycle plus a perf re-measure. **Impact:** strength-only, a handful of cube/roto cards.
+2. **Search heuristics prune activation windows exactly as they prune instant windows.** **Where:** `search/engine_adapter.py` (#6 phase prune of the active player's own upkeep / draw / beginning of combat / end step with an empty stack, #9 empty-combat skip, #10 opponent's postcombat main skip, #11 dead main 1, and since 2026-10-04 #17, the non-active player's empty-stack upkeep / draw / precombat main). **What:** these documented search heuristics (not legality) now also hide activations in those windows -- e.g. a search seat never cracks a fetch land or activates Sundial of the Infinite in its own end step with an empty stack. `legal_actions` (and so random / heuristic / UI agents) offers them. **Fix scope / impact:** as the existing entries.
+3. **Phasing still doesn't hide activated abilities.** **Where:** `battlefield_ability_activations` (and Rust's mirror) don't skip `phased_out` permanents -- the engine-wide phasing simplification ("Robe of Stars phasing substrate"). P1's removed special case did skip them. With instant-speed windows, a creature phased out by Robe of Stars on its controller's turn could activate abilities during the opponent's turn. **Fix scope:** one `phased_out` check in both engines (Rust parity probe for Robe of Stars must move with it). **Impact:** Robe of Stars is the only phasing source in the pools.
+4. **RandomAgent can hold priority with a free repeatable ability.** **Where:** `agents.RandomAgent.choose_action` never passes while a non-pass action exists. A `{0}` non-sorcery ability (Nomads en-Kor, a roto card, so in the default pool too since the roto fold) is now legal while its own activation is on the stack, so a random seat activates it until the driver's decision cap. (Sorcery-speed `{0}` equips -- Lightning Greaves, Shuko -- already looped it across resolutions.) Agent behaviour, not a rule; search seats are bounded by their budget. Uniform-random playouts (`search.evaluator.RandomRolloutEvaluator`, used only by tests) drag the same way: one 12-node ISMCTS from a position where a seat controls Nomads en-Kor ran past 60 s (`tests/test_roto_combined_interactions.py` uses a tap ability instead). **Fix scope:** a pass probability in `RandomAgent`, if wanted.
+5. **Rust models no instant-speed loyalty permission or `activate_only_*` / exhaust / boast riders.** **Where:** `parity.cross_engine._python_aa_to_safe_dict` now declines any AA carrying `activate_only_during_your_turn`, `activate_only_if`, `activate_only_as_instant`, `exhaust` or `boast` (none in the bridged EoE set), so a rider Rust can't enforce is never silently dropped across the bridge; The Wandering Emperor isn't bridged.
+
+**Search cost (measured, `docs/BENCHMARKING_FINDINGS.md` §8D):** about twice as many priority windows per game need a real decision (a player holding an activatable ability is no longer auto-passed off their main phase), so heuristic-evaluator search does ~1.4-1.5x the nodes per game at a fixed per-decision budget and ~1.6-1.9x the wall. No legality-changing pruning was added. Candidate search-side (not legality) mitigations: (a) **CHOSEN and built 2026-10-04 (`feature/roto-quiet-window-skip`) -- entry #17:** a #6-style prune of the non-active player's empty-stack upkeep / draw / precombat-main windows (#10 already skips their postcombat main); measured in `docs/BENCHMARKING_FINDINGS.md` §8E: ~8-10% fewer search nodes and ~10-15% less wall per game, about a fifth to a quarter of this change's cost, because the same activators are still live in the windows it keeps; (b) unbuilt: ranking `ActivateAbility` after `PassPriority` in `mtg_priors` at empty-stack, non-combat windows; (c) unbuilt: collapsing "timing-neutral" activations (abilities whose effect reads no combat or stack state) to fewer windows. Each would need its own entry here.
+
+**Unmodelled timing words:** no card in any pool prints "Activate only during combat", "during your upkeep" or "before blockers are declared"; the activated grammar rejects such a line (pinned by `tests/test_instant_speed_activations.py`), so a card with one stays unclaimed rather than losing the restriction.
+
+**Pinned by:** `tests/test_instant_speed_activations.py`, `tests/test_instant_activation_cards.py`, `tests/test_cross_engine_instant_activations.py`.
+
+## Vintage Roto in the default pool, Leyline of the Void, Meddling Wizard (2026-10-03, `feature/roto-default-pool-leyline-wizard`)
+
+The user's 2026-10-03 decisions on three of the items "waiting on the user's decisions" above (the sorcery-timing one is `feature/roto-instant-activations`'s).
+
+### Roto is part of the default `all` pool
+
+**Where:** `cards/pools.py` (`POOLS["all"] = EOE_POOL_FILES + CUBE_POOL_FILES + ROTO_POOL_FILES`). **What:** the default card source claims 1321 printings (was 993): the 328 roto-only claims join, and every printing already in `all` is unchanged (claimed-printing reprs compared pool by pool) because the roto dump is read last and the first file wins on a shared name -- the 515 cards roto shares with the EoE-era dumps or the cube (basics included) keep the record they had. `cube` (546) and `eoe` (481) don't move here; `docs/CUBE_POOL_COVERAGE.md` is byte-identical. **Consumers:** (1) building the default source at import goes from ~0.7 s to ~0.95 s per process. (2) The NN printing vocabulary (`state_tokenizer._printing_to_id_map`, the sorted names of the active source folded into `DEFAULT_N_PRINTINGS = 320` ids) grows from 993 to 1321 names: 978 of the 993 existing names get a different embedding id and a bucket is shared by 4.1 names on average (was 3.1). A network trained against the 993-name vocabulary would read scrambled printing embeddings, and model metadata records no vocabulary fingerprint, so nothing would say so -- the same silent hazard the cube fold already created for the EoE-trained v-chain. (3) The Rust production-deck loader (`trajectory._filter_deck_to_bridge_supported`) resolves names through the active source: a roto-only name used to be "unresolved" (dropped, or `NonAdmittedCardError` under `RAISE`); now it resolves, and 28 of the 328 pass the loader's admit predicates (Phantasmal Image, Body Double, Serum Powder, Strict Proctor, Meddling Mage, ...) although the roto behavior they carry (enters-as-copy riders, pregame actions, cast restrictions) lives in `CardPrinting` fields the predicates don't inspect and the bridge doesn't carry. 60 cube-only cards (Force of Will, Time Walk, the Moxen, ...) were already in that position. Nothing reaches this path today: `decision_source` defaults to `python` and no production deck pool names a roto-only card. The two roto land Auras (Utopia Sprawl, Tarmogoyf Nest) were admitted by `_printing_is_bridge_simple_aura` as if they enchanted creatures (Rust's cast-time host picker reads any kind but "artifact" as "creature"); that predicate now declines Aura kinds other than creature / artifact and the land-Aura riders, which `tests/test_aura_substrate_phase1.py`'s admit-set pin caught. (4) Unaffected: deck generation (`scripts/build_cube_deck_pool.py` reads the `cube` pool explicitly), the cube and 17lands deck pools (name lists), `tests/_test_decks.simple_test_decklist` (pinned to EoE names), the parity walkers (`parity.effect_coverage.PARITY_POOL = "eoe"`). `art.CardIndex.load()` indexes the roto dump too. **Fix scope:** a vocabulary fingerprint in model metadata checked at load (small); the Rust loader admitting only parity-pool printings, or its predicates rejecting every non-default field the bridge doesn't carry (small-medium). **Impact:** none on today's games beyond the larger source; a network has to be retrained for the cube anyway.
+
+### Leyline of the Void is claimed; the EoE-era guard follows the target lists
+
+**Where:** `cards/parser/creature_rmc_grammar._eoe_only_names` / `is_eoe_only_printing` (the guard every cube / roto grammar shares through `_DISABLED`), `cards/parser/cube_enchantments.CUBE_ENCHANTMENT_NAMES`. **What:** the guard used to switch the cube grammars off for "EoE-era printings outside the cube"; it now means "EoE-era printings on neither target list (cube, roto)". That opens it for the 11 EoE-era printings on the roto list -- not for the rest of the Duskmourn / EoE dumps -- and only Leyline of the Void's build changes: the other ten build exactly as they did with the guard on (`tests/test_roto_zones_graveyard_hate.py::test_lifting_the_guard_moves_only_leyline_in_the_eoe_pool`). Leyline is opted into the enchantment builder's name list and is claimed in the `eoe` (481 -> 482, accepted by the user), `roto` (841 -> 842) and default (1321 -> 1322) pools. A per-name exception was the narrower mechanism, but the guard's purpose ("this grammar targets the cube; don't move printings that only exist in the legacy dumps") applies to the roto list the same way now that roto is a target pool in the default source, so the definition was fixed instead of adding another per-name gate. **Rust / parity:** the parity metric (`docs/POOL_PARITY.md`, pool = the `eoe` claims) now has 482 cards; Leyline lands in BLOCKED (subsystem-gated): the walkers see no `Effect`, because its two abilities are a `zone_abilities` replacement spec and an `opening_hand_action`, so the subsystem attribution (`scripts/scout_r58_subsystem_attribution.py`) gained two rows for exactly those Rust gaps -- "zone-move replacement" and "pregame / opening-hand action" (Gemstone Caverns, BLOCKED since its cube-era reparse, also trips the second) -- instead of leaving it in the unclassified residual. Duskmourn is outside the parity campaign's scope (2026-05-31 cut: 100% PROBED is the non-DSK goal; the other DSK BLOCKED cards stay blocked), and the Rust engine can't play the card: it has no exile-instead replacement on graveyard-bound moves (its ~80 graveyard insertions have no single chokepoint), no CR 103.6 opening-hand step in its setup, and no bridge field for either; the production-deck loader declines the printing (no admit predicate passes), so it can never enter a Rust-authoritative game. **Impact:** none on Rust; Python plays it fully.
+
+### Meddling Wizard: a hand-authored custom conspiracy; the reveal is per-card knowledge
+
+**Where:** `data/cube_roto_custom.json` (the record; `pools.CUSTOM_CARD_FILES`, read by the `roto` pool after the Scryfall dump), `cards/parser/roto_keywords.parse_conspiracy_rule_line` (a literal, the only card with the shape), `conspiracies.OpponentRevealsHandAfterMulligans` / `reveal_hands_after_mulligans`, called once by `simulate.setup_game` after the mulligan loop (kept hands bottomed) and before the opening-hand actions; `game.hide_hand_moved_into_library`, called by `cube_walkers.PutCardsFromHandOnTopOfLibrary` and `roto_zones.ScrollRackSwap`; `cube_walkers.ExileTargetPlayersLibraryThenShuffleHandIn` now shuffles through `game.shuffle_library`. **What:** the card has no Scryfall record, so its record is authored from the draft sheet (row 724) in Scryfall's shape with `"custom_card": true` and a `custom_source` naming the sheet row and text; the rules sentence is the sheet's verbatim, the reminder is the printed conspiracy reminder. It is claimed in the `roto` (842 -> 843 of 866) and default pools; the three other custom conspiracies stay without a record (`pools.pool_custom_cards`). As a conspiracy it starts in the command zone (P6's protocol). After the mulligans each opponent's hand is revealed to its controller as per-card knowledge (`game.reveal_to`): the determinizer keeps those cards fixed and the ISMCTS information set hashes them, for as long as the viewer can still tell where they are (`docs/HIDDEN_INFO_MODEL.md`, "Private reveals to one player"). "At the beginning of each game, after mulligans" is read as "right after the mulligan process": it precedes the CR 103.6 opening-hand actions, which only move cards from the hand to public zones, so either order leaves the Wizard's controller knowing the same cards. In a game with `enable_mulligans=False` the reveal still happens after the opening hands are dealt. **Why OK:** that is the card's whole effect. **Failure mode:** (1) after a face-down put-back from a revealed hand (Brainstorm, Scroll Rack) the viewer forgets the whole hand, not just the cards that moved -- under-informed by design; (2) the NN input never shows the opponent's known hand cards (anonymous slots), so only the search, not the network's evaluation of a position, uses them; (3) the reveal is not a pregame decision and has no agent hook (there is nothing to decide); (4) like the other conspiracies, the Wizard object is not part of `hash_state`, serialization or the NN tokenizer -- its effect lives on the revealed cards' knowledge, which is; (5) the Rust engine has no conspiracies or command zone, its determinizer ignores `publicly_known_to`, and the production-deck loader declines the printing. **Fix scope:** a hand-belief token / known-card tokens in the NN input (NN roadmap Step 4 territory); a position-set knowledge model (Option B) for partial put-backs. **Impact:** games with a Wizard search with the opponent's real opening hand -- a large information edge, as printed.
+
+## 17. Skip our priority in the opponent's empty-stack upkeep, draw step and precombat main (training heuristic) — 2026-10-04, `feature/roto-quiet-window-skip`
+
+**Location**: `MtgGameStateAdapter.legal_decisions` (`src/mtg_bot/search/engine_adapter.py`) — see `_should_skip_opp_quiet_window()` and the step set `_OPP_QUIET_WINDOW_STEPS`. It extends #10: both share their preconditions through `_is_opp_empty_stack_priority_window()`, and `training/action_encoding._enumerate_legal` mirrors both so the policy mask agrees with the decision list. Returns `[PassPriority()]` immediately (no `legal_actions` enumeration, no search) when ALL of these hold:
+
+- `skip_opp_quiet_windows_enabled` is True (flag defaults below)
+- Not terminal / not resolution-paused / not in a factored combat sub-decision
+- Stack is empty
+- Step is `UPKEEP`, `DRAW` or `PRECOMBAT_MAIN`
+- Player with priority is the **non-active** player (we're being asked to act on opp's turn)
+
+**Scope**: with #10 (opp's `POSTCOMBAT_MAIN`, its own flag) the non-active player is auto-passed in every empty-stack window of the opponent's turn except the combat phase and the end step. **Kept:** every window with something on the stack, in any step (responses to the opponent's spells, activations and triggers — upkeep and beginning-of-combat triggers included); the opponent's beginning of combat; every combat step (#9 still skips them when nothing attacks); the opponent's end step. The active player's own windows are untouched (that's #6 / #7 / #11).
+
+**What it hides: every action, not just activations.** In a skipped window the non-active player gets no choice at all — instant spells, flash creatures, activated abilities and anything else `legal_actions` offers there are all passed. The capability auto-pass (#3) already passed these windows when the player had nothing to do; this skip passes them when the player does have something.
+
+**Flag defaults**: ON in `HeuristicsConfig()` — `SelfPlayJobSpec`, `data_gen` / the worker self-play stage, `iterate`'s self-play config, `run_match*` called without a config. OFF in `HeuristicsConfig.disabled()` — `EvalJobSpec`, the test-session adapter default, the `rust_shadow` checker — exactly like #10. Also OFF in `HeuristicsConfig.live_eval()`, which the live eval paths pass: the v2 worker eval stage (`worker_daemon_production_runner._play_eval_game`, behind `iterate`'s arena and `mtg_bot eval`) and `mtg_bot ladder` (`play_pair`). Those paths used to pass `heuristics=None`, i.e. the production defaults, so #6 / #7 / #9 / #10 / #11 have always been ON in the arena and the ladder (the "`EvalJobSpec` defaults OFF" lines in those entries describe the legacy `EvalJobSpec` only). `live_eval()` keeps that and turns only this flag off, so arena and ladder games play exactly as they did before this entry landed.
+
+**Why**: since activated abilities of permanents became instant-speed (2026-10-03, "Instant-speed activated abilities of permanents" above), any untapped permanent with a non-mana ability defeats #3 in every window of the opponent's turn. A search game had about twice the priority windows needing a decision, ~44% of the new ones offering only activations plus pass, mostly `{T}` artifacts whose timing rarely matters (Manifold Key, Currency Converter, Grindstone, Ghost Vacuum; `docs/BENCHMARKING_FINDINGS.md` §8D). For the non-active player these three empty-stack windows are the least time-sensitive: most of what they'd do there can be done at the opponent's beginning of combat (still before attackers), in response to the opponent's spell, or at their end step, all of which stay open.
+
+**Plays it misses** (all legal, some of them the best play):
+
+| Play | Window lost | Example | What the search seat can still do |
+|---|---|---|---|
+| Flash creature or instant right after the opponent draws | opp draw step | Vendilion Clique in the opponent's draw step, taking the card they just drew before they can cast it; a cantrip or Brainstorm there | Clique at their beginning of combat — after they've had main 1 to cast the card |
+| Land destruction / mana denial before they use the land | opp upkeep, draw step | Wasteland / Strip Mine / Ghost Quarter on their land; Rishadan Port tapping their land in their upkeep (Port's main use) | the same at beginning of combat or end step, after they've tapped the land for main-phase spells (Port then only denies combat and main-2 mana) |
+| Other instant-speed disruption before their main phase | opp upkeep, draw step | kill their mana creature or Goblin Welder before they use it; bounce or kill a creature before they equip or crew it; instant-speed discard | beginning of combat, after main 1 |
+| Acting at the end of their main 1 rather than at beginning of combat | opp main 1 (empty stack, after they pass) | kill a creature before its "at the beginning of combat" trigger goes on the stack (Ouroboroid); act before beginning-of-combat triggers are put on the stack | respond to the trigger once it's on the stack (it still resolves) or act at beginning of combat |
+| Look at or change their next draw | opp upkeep | Mishra's Bauble on their library before their draw step; Sensei's Divining Top / Scroll Rack on our own library in their upkeep | their end step (sees the following draw) |
+| Graveyard hate before their sorcery-speed graveyard use | opp upkeep, draw, main 1 | Ghost Vacuum / Soul-Guide Lantern exiling their graveyard before a reanimation or delve spell | in response to that spell (stack non-empty — kept) |
+| Flash a creature in before they commit main-phase plays | opp main 1 | flash a blocker in so they see it before casting sorcery-speed spells | beginning of combat (usually better: they can no longer answer at sorcery speed) |
+
+No response is lost: a window with anything on the stack is never skipped.
+
+**Training effect**: self-play never generates these plays, so the network never learns to make them, and it never learns to play around them either — it never sees an upkeep Wasteland or a draw-step Clique from its opponent, so the active side's value and policy won't anticipate them (e.g. sequencing land drops around Port / Wasteland, casting the drawn card before a Clique). The skipped windows also produce no policy targets (a forced pass isn't a training sample).
+
+**Failure mode**: bot passes priority in the opponent's upkeep / draw step / main 1 with an empty stack even when it had a legal and useful action. Conservative-WRONG (never an illegal action; just doesn't take a legal one). The rules engine's `legal_actions` is unchanged, so random / heuristic-agent / UI play sees every window; only seats driven through the search adapter with the flag on pass them.
+
+**Engine parity**: no Rust or cross-engine change. Like #6 / #7 / #9 / #10 / #11 the skip lives only in the Python search adapter. The Rust engine's `legal_decisions` is the rules set and is untouched; the Rust-backed provider `RustGameStateAdapter` (dormant under the production `decision_source="python"`) applies none of the six adapter heuristics; the `rust_shadow` lock-step checker builds its Python side with `HeuristicsConfig.disabled()` (which turns this flag off too) and compares Rust's set against raw `legal.legal_actions`. LEGAL_SET_EQ and the shadow / parity harnesses see no difference. Porting the adapter short-circuits into the Rust provider stays flip work (`docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §3.1 provider table).
+
+**When it matters**:
+
+- For training: removes the non-active player's empty-stack decisions in three steps of every opponent turn: ~8-10% fewer search nodes per game, ~10-15% less wall (Impact estimate below). Strength cost: the plays above, never generated and never defended against.
+- For tournament play: a real loss for decks built around Port / Wasteland / Clique / Bauble / flash. Off for the arena and the ladder (`live_eval()`).
+
+**Mitigation**: `skip_opp_quiet_windows_enabled=False` on `MtgGameStateAdapter` (or via `HeuristicsConfig` on the Spec). `EvalJobSpec` defaults OFF; `SelfPlayJobSpec` defaults ON; the live arena / `mtg_bot eval` / ladder paths pass it OFF.
+
+**Acceptable for**: training, self-play data_gen.
+
+**NOT acceptable for**: tournament play, eval matches against real opponents, strength comparisons between decks built around land destruction, Rishadan Port, flash or library manipulation.
+
+**Fix scope if/when needed**: trivial to disable per spec. Narrower alternatives: keep a window when the non-active player holds an action whose value depends on being used before the opponent's main phase (land destruction or tapping, library-top manipulation, flash with an ETB that hits hand) — a per-effect allowlist with its own fragility; or let the policy learn to pass these windows (same shape of fix as #6).
+
+**Impact estimate** (measured, `docs/BENCHMARKING_FINDINGS.md` §8E, heuristic PIMC on cube decks): the skip passes ~6% of priority calls (8% at 200 nodes); per game ~10% fewer windows needing a decision and ~8-10% fewer search nodes at 40 nodes (paired geo-mean over 256 games: windows 0.924, 95% CI 0.883-0.968; nodes 0.925, 0.896-0.955), ~11-13% fewer at 200 nodes (11 games), a few percent cheaper per node, ~10-15% less wall. About half of the windows it removes come back in the kept ones (the same untapped activators are still live at beginning of combat, in combat and at the end step). On the §8D protocol games it wins back about a fifth of instant activations' window increase and a quarter of their node increase; the rest of that cost sits in the active player's own main phases and the combat steps.
+
+**Pinned by**: `tests/search/test_skip_opp_quiet_windows.py` (skipped windows auto-pass without `legal_actions`; kept windows — beginning of combat, combat steps with an attacker, end step, non-empty stack — still offer the activation under the full production config; mask agreement; flag off), `tests/search/test_heuristics_config.py` (`disabled()` turns every flag off; `live_eval()`), `tests/test_worker_daemon_production_runner.py::test_play_eval_game_keeps_the_quiet_window_skip_off`, `tests/cli/test_ladder.py::test_play_pair_keeps_the_quiet_window_skip_off`.
+
+## The 2026-10-03/04 roto branches together (`feature/roto-combined`)
+
+`feature/roto-combined` merges `feature/roto-default-pool-leyline-wizard` and then `feature/roto-quiet-window-skip` (#17, itself built on the instant-speed change) into `feature/roto-instant-activations`. The claim counts quoted in the instant-speed and default-pool sections are each branch's own; together they add up: Tinder Wall (instant-activations), Leyline of the Void and Meddling Wizard (default pool) -> `roto` 844 of 866, the default `all` source 1324, `eoe` 482, `cube` 546 (`docs/CUBE_POOL_COVERAGE.md` byte-identical). With roto in the default pool, the instant-speed activation rule reaches roto-only permanents through the default card source too (pinned by `tests/test_roto_combined_interactions.py`), and Meddling Wizard's post-mulligan reveal is untouched by the extra priority windows: it happens in `simulate.setup_game`, before the first turn's first priority window, and the knowledge it records follows the cards across instant-speed activations exactly as across spells (same test file). #17 is search-side only (no claim, rules or Rust change); under the self-play defaults it auto-passes the Wizard controller's own empty-stack decisions in the opponent's upkeep / draw / main 1 as it does everyone's, so the search that uses the revealed hand in those windows runs where #17 is off (`HeuristicsConfig.live_eval()` / `disabled()`); the same test file pins both.

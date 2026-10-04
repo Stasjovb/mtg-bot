@@ -616,6 +616,16 @@ class Scry(Effect):
     """
 
     amount: int = 1
+    # ``bottom_choice=True`` runs the real CR 701.18 decision: each
+    # looked-at card goes through the controller's ``choose_surveil``
+    # hook (the shared keep-on-top-vs-remove decision; ``True`` = put
+    # it on the bottom). Cards kept stay on top in their original
+    # order; bottomed cards go to the bottom in their original order
+    # (reordering is not offered — ``docs/SEARCH_LIMITATIONS.md``).
+    # The default ``False`` keeps the first-slice keep-all-on-top
+    # shortcut that the Rust ``Effect::ScryN`` arm mirrors, so the
+    # EoE cross-engine bridge stays bit-equal.
+    bottom_choice: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -629,6 +639,25 @@ class Scry(Effect):
         # Clamp to library size (CR 701.18d). With keep-all-on-top,
         # neither path mutates the library — only the log changes.
         n = min(self.amount, len(p.library))
+        if self.bottom_choice and n > 0:
+            from mtg_bot.game import reveal_to
+
+            examined = list(p.library[:n])
+            bottom = [
+                c for c in examined
+                if p.agent is not None
+                and p.agent.choose_surveil(state, p.id, c.id)
+            ]
+            for c in bottom:
+                p.library.remove(c)
+            for c in bottom:
+                p.library.append(c)
+            for c in examined:
+                reveal_to(c, controller_id)
+            state.log.append(
+                f"P{controller_id} scries {n} ({len(bottom)} to the bottom)"
+            )
+            return
         state.log.append(f"P{controller_id} scries {n} (kept all on top)")
 
     def describe(self) -> str:

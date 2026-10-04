@@ -13,7 +13,7 @@ from mtg_bot.game import (
 
 
 def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    attackers = [
         o for o in state.battlefield
         if o.controller_id == player_id
         and is_creature_now(o)
@@ -21,15 +21,38 @@ def eligible_attackers(state: GameState, player_id: int) -> list[GameObject]:
         and (not o.summoning_sick or "haste" in effective_keywords(state, o))
         and "defender" not in effective_keywords(state, o)
     ]
+    # "Creatures can't attack this turn." (roto P1: Orim's Chant).
+    from mtg_bot.roto_restrictions import filter_attackers
+
+    attackers = filter_attackers(state, attackers)
+    # "... can't attack." board rules (Vintage Roto P5: Moat, Ensnaring
+    # Bridge).
+    from mtg_bot.roto_board_statics import (
+        filter_attackers as filter_board_rule_attackers,
+    )
+
+    return filter_board_rule_attackers(state, attackers)
 
 
 def eligible_blockers(state: GameState, player_id: int) -> list[GameObject]:
-    return [
+    blockers = [
         o for o in state.battlefield
         if o.controller_id == player_id
         and is_creature_now(o)
         and not o.tapped
     ]
+    if blockers and state.continuous_effects:
+        # "... can't block this turn" (cube creatures bucket: Aragorn,
+        # Headliner Scarlett, Zirda).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            creature_cant_block,
+        )
+
+        blockers = [o for o in blockers if not creature_cant_block(state, o)]
+    # "This creature can't block." board rules (Carrion Feeder).
+    from mtg_bot.roto_board_statics import filter_blockers
+
+    return filter_blockers(state, blockers)
 
 
 def can_block(
@@ -60,10 +83,7 @@ def can_block(
     legal. (Damage-prevention and targeting protections are handled
     elsewhere; only the block-legality clause lives here.)
     """
-    from mtg_bot.game import (
-        effective_colors, effective_protection_from_colors,
-        is_cant_be_blocked,
-    )
+    from mtg_bot.game import is_cant_be_blocked
 
     attacker_kws = effective_keywords(state, attacker)
     blocker_kws = effective_keywords(state, blocker)
@@ -72,14 +92,35 @@ def can_block(
             return False
     if is_cant_be_blocked(state, attacker):
         return False
+    # "<This> can't be blocked by <creatures with ...>." (Questing Beast).
+    from mtg_bot.creature_statics_wg import blocking_forbidden
+
+    if blocking_forbidden(state, blocker, attacker):
+        return False
     if blocker.printing.can_only_block_creatures_with_flying:
         if "flying" not in attacker_kws:
             return False
-    attacker_protect = effective_protection_from_colors(state, attacker)
-    if attacker_protect:
-        blocker_colors = effective_colors(state, blocker)
-        if attacker_protect & blocker_colors:
-            return False
+    # "can't block or be blocked by non-<Subtype> creatures"
+    for restricted, other in ((blocker, attacker), (attacker, blocker)):
+        sub = restricted.printing.blocks_only_with_subtype
+        if sub:
+            from mtg_bot.game import effective_subtypes
+
+            if sub not in effective_subtypes(state, other):
+                return False
+    # Shadow (CR 702.28b): creatures with shadow can block or be blocked
+    # only by creatures with shadow.
+    if ("shadow" in attacker_kws) != ("shadow" in blocker_kws):
+        return False
+    from mtg_bot.keyword_rules import blocked_by_protection
+
+    if blocked_by_protection(state, attacker, blocker):
+        return False
+    # Landwalk (CR 702.14; roto P6).
+    from mtg_bot.effects.generic.roto_keywords import blocked_by_landwalk
+
+    if blocked_by_landwalk(state, attacker, blocker):
+        return False
     return True
 
 
@@ -119,6 +160,7 @@ def declare_attackers(state: GameState, attacker_ids: list[int]) -> None:
     # each Exalted permanent the attacker's controller has applies its
     # own +1/+1.
     _fire_exalted_pumps(state)
+    _fire_battle_cry_pumps(state)
     # Once-per-pass ``Event.YOU_ATTACK`` dispatch (DSK "Whenever you
     # attack" family — Razorkin Hordecaller, Most Valuable Slayer,
     # Lionheart Glimmer). Distinct from ``Event.ATTACKS`` which fires
@@ -170,7 +212,7 @@ def _fire_exalted_pumps(state: GameState) -> None:
     for source in state.battlefield:
         if source.controller_id != controller_id:
             continue
-        if "exalted" in source.printing.keywords:
+        if "exalted" in effective_keywords(state, source):
             exalted_count += 1
     if exalted_count == 0:
         return
@@ -180,6 +222,24 @@ def _fire_exalted_pumps(state: GameState) -> None:
         f"{attacker.printing.name} gets +{exalted_count}/+{exalted_count} "
         f"until end of turn (Exalted x{exalted_count})"
     )
+
+
+def _fire_battle_cry_pumps(state: GameState) -> None:
+    """Battle cry (CR 702.91a): "Whenever this creature attacks, each
+    other attacking creature gets +1/+0 until end of turn." Applied at
+    declaration like Exalted (no stack)."""
+    attackers = [o for o in state.battlefield if o.attacking]
+    for crier in attackers:
+        if "battle cry" not in effective_keywords(state, crier):
+            continue
+        for other in attackers:
+            if other.id == crier.id:
+                continue
+            state.grant_pt_pump_ueot(
+                source_id=crier.id, target_id=other.id, power=1, toughness=0,
+                description=f"{crier.printing.name}: battle cry",
+            )
+        state.log.append(f"{crier.printing.name}'s battle cry")
 
 
 def _fire_attacks_triggers(state: GameState, attacker) -> None:
@@ -275,6 +335,32 @@ def declare_blockers(state: GameState, assignments: dict[int, int]) -> None:
             state, Event.BLOCKS, label="blocks",
             blocker=blocker, attacker=attacker,
         )
+    # "Whenever this creature becomes blocked" (Vintage Roto P5): once
+    # per blocked attacker.
+    from mtg_bot.roto_board_statics import fire_becomes_blocked
+
+    fire_becomes_blocked(state, assignments)
+    # "Whenever one or more creatures … attack you and aren't blocked"
+    # (Coveted Jewel): once per declaration, if any attacker is
+    # unblocked. The attacking player rides along as the fixed target.
+    unblocked = [
+        o for o in state.battlefield if o.attacking and not o.blocked_by
+    ]
+    if unblocked:
+        attacking_player = state.player_by_id(unblocked[0].controller_id)
+        defender = next(
+            (
+                p for p in state.players
+                if p.id != attacking_player.id and not p.has_lost
+            ),
+            None,
+        )
+        if defender is not None:
+            dispatch_event(
+                state, Event.ATTACKERS_UNBLOCKED, label="attackers-unblocked",
+                fixed_targets=(("player", attacking_player.id),),
+                player=attacking_player, defender=defender,
+            )
 
 
 def _deals_in_step(kws: frozenset[str], *, first_strike_step: bool) -> bool:
@@ -329,9 +415,39 @@ def _source_bypasses_prevention(state: GameState, source_id: int) -> bool:
     damage prevention effects (e.g. Darkness) when the creature's oracle
     text says "Combat damage can't be prevented." (Frenzied Baloth).
     """
+    from mtg_bot.creature_statics_wg import combat_damage_unpreventable
+
     for obj in state.battlefield:
         if obj.id == source_id:
-            return obj.printing.combat_damage_cant_be_prevented
+            # Also "Combat damage that would be dealt by creatures you
+            # control can't be prevented." (Questing Beast).
+            return combat_damage_unpreventable(state, obj)
+    return False
+
+
+def _prevented_by_protection(
+    state: GameState, kind: str, target_id: int, source_id: int,
+) -> bool:
+    """True when protection on the damaged creature prevents this
+    combat-damage event (and the source's damage can be prevented)."""
+    from mtg_bot.keyword_rules import is_protected_from
+
+    if kind != "creature":
+        return False
+    target = next((o for o in state.battlefield if o.id == target_id), None)
+    source = next((o for o in state.battlefield if o.id == source_id), None)
+    if target is None or source is None:
+        return False
+    from mtg_bot.creature_statics_wg import combat_damage_unpreventable
+
+    if combat_damage_unpreventable(state, source):
+        return False
+    if is_protected_from(state, target, source):
+        state.log.append(
+            f"combat damage from {source.printing.name} to "
+            f"{target.printing.name} is prevented (protection)"
+        )
+        return True
     return False
 
 
@@ -491,6 +607,20 @@ def _resolve_damage_step(
         if not damage_events_typed:
             return
 
+    # Protection (CR 702.16e): damage a protected creature would be
+    # dealt by a source with the protected-from quality is prevented —
+    # unless the source's damage can't be prevented (CR 614.16).
+    damage_events_typed = [
+        ev for ev in damage_events_typed
+        if not _prevented_by_protection(state, ev[0], ev[1], ev[3])
+    ]
+    # Roto P6: per-creature combat prevention (Maze of Ith), "prevent all
+    # damage dealt to <self>" (Black Panther), redirection shields
+    # (Nomads en-Kor).
+    from mtg_bot.effects.generic.roto_damage import route_combat_damage_events
+
+    damage_events_typed = route_combat_damage_events(state, damage_events_typed)
+
     # Combat damage in MTG is simultaneous, so aggregate damage to each
     # player into a single end-of-step log line ("P0 takes 5 (life:
     # 15)") instead of one line per attacker. Creature damage,
@@ -498,6 +628,8 @@ def _resolve_damage_step(
     # one can independently matter for triggers and SBAs.
     player_life_damage: dict[int, int] = {}
     sources_hit_player: list[tuple[int, int, int]] = []
+    healed_this_step: set[int] = set()
+    sources_hit_creature: list[tuple[int, int, int]] = []
     for (
         kind, target_id, amount, source_id, source_kws, source_controller,
     ) in damage_events_typed:
@@ -506,6 +638,16 @@ def _resolve_damage_step(
         has_infect = "infect" in source_kws
         if kind == "player":
             p = state.player_by_id(target_id)
+            if (
+                p.protected_from_everything
+                and not _source_bypasses_prevention(state, source_id)
+            ):
+                # Protection from everything (The One Ring) prevents the
+                # damage — and with it lifelink / "deals combat damage to
+                # a player" triggers for this event.
+                from mtg_bot.game import player_damage_prevented
+                player_damage_prevented(state, target_id)
+                continue
             if has_infect:
                 # Infect: damage to a player becomes that many poison
                 # counters instead of life loss. Per-event log preserved
@@ -516,7 +658,11 @@ def _resolve_damage_step(
                     f"from infect (now {p.poison_counters})"
                 )
             else:
-                p.life -= amount
+                from mtg_bot.effects.generic.roto_keywords import (
+                    life_after_damage,
+                )
+
+                p.life = life_after_damage(state, p, amount)  # roto P6
                 player_life_damage[target_id] = (
                     player_life_damage.get(target_id, 0) + amount
                 )
@@ -539,8 +685,25 @@ def _resolve_damage_step(
                         f"from infect"
                     )
                 else:
+                    if (
+                        obj.printing.heals_other_damage_when_dealt_damage
+                        and obj.id not in healed_this_step
+                    ):
+                        # Wolverine: prior damage healed once per damage
+                        # step (combat damage is one simultaneous event).
+                        from mtg_bot.effects.generic.cube_creatures_rmc import (
+                            heal_before_damage,
+                        )
+
+                        heal_before_damage(obj)
+                        healed_this_step.add(obj.id)
                     obj.damage += amount
                     obj.damaged_this_turn = True
+                    if obj.printing.is_planeswalker:
+                        # CR 120.3c: a planeswalker creature also loses
+                        # loyalty (Kaito, Bane of Nightmares).
+                        obj.loyalty_counters -= amount
+                sources_hit_creature.append((source_id, target_id, amount))
                 if "deathtouch" in source_kws:
                     obj.marked_lethal = True
                 # Fire "whenever enchanted creature is dealt damage"
@@ -566,9 +729,58 @@ def _resolve_damage_step(
             f"P{target_id} takes {total} (life: {p.life})"
         )
 
+    # Roto P6: toxic (CR 702.164) and "deals damage to a player".
+    from mtg_bot.effects.generic.roto_keywords import (
+        after_combat_damage_to_players,
+    )
+
+    after_combat_damage_to_players(state, sources_hit_player)
+
     # Fire "whenever this creature deals combat damage to a player" triggers
     # for each (source, target_player) pair that actually dealt damage.
     _fire_combat_damage_to_player_triggers(state, sources_hit_player)
+    # The monarch / the initiative change hands on combat damage.
+    from mtg_bot.designations import on_combat_damage_to_players
+
+    on_combat_damage_to_players(state, sources_hit_player)
+    _fire_combat_damage_to_creature_triggers(state, sources_hit_creature)
+    # "Whenever <this creature> deals damage" (Event.DEALS_DAMAGE).
+    from mtg_bot.layouts import fire_combat_deals_damage
+
+    fire_combat_deals_damage(state, sources_hit_player + sources_hit_creature)
+    # "Whenever equipped creature deals combat damage" (any recipient;
+    # Vintage Roto P5).
+    from mtg_bot.roto_board_statics import fire_combat_damage_dealt
+
+    fire_combat_damage_dealt(state, sources_hit_player + sources_hit_creature)
+
+
+def _fire_combat_damage_to_creature_triggers(
+    state: GameState, sources_hit_creature: list[tuple[int, int, int]],
+) -> None:
+    """Dispatch ``Event.DEALS_COMBAT_DAMAGE_TO_CREATURE`` per
+    (source, damaged creature) pair — Kaldra Compleat's granted
+    "Whenever this creature deals combat damage to a creature, exile
+    that creature." The damaged creature is the fixed target. Kept
+    separate from DEALS_COMBAT_DAMAGE, whose observers assume a player
+    target."""
+    if not sources_hit_creature:
+        return
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    for source_id, target_id, amount in sources_hit_creature:
+        source = next((o for o in state.battlefield if o.id == source_id), None)
+        target = next((o for o in state.battlefield if o.id == target_id), None)
+        if source is None or target is None:
+            continue
+        dispatch_event(
+            state, Event.DEALS_COMBAT_DAMAGE_TO_CREATURE,
+            label="combat-damage-to-creature",
+            combat_damage_amount=amount,
+            fixed_targets=(("creature", target_id),),
+            source=source, target=target,
+        )
 
 
 def _fire_enchanted_dealt_damage_triggers(

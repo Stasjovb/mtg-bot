@@ -274,17 +274,20 @@
 //! Python's `ActivateAbility(source_id, ability_index)` constructor
 //! call is at lines 827-829.
 //!
-//! **Emission order vs Python.** Python's ActivateAbility loop lives
-//! AFTER the sorcery-timing early-return at lines 303-304. Although
-//! activated abilities are nominally instant-speed (per the CR),
-//! Python's `legal_actions` only emits them when sorcery timing
-//! holds. The individual `ability.sorcery_speed` check at line 620 is
-//! then a no-op (function already returned before this point if it
-//! wasn't sorcery timing). First-slice mirrors that: ActivateAbility
-//! lives INSIDE the sorcery-timing block, after PlayLand + CastSpell
-//! emission, before any post-block work. The instant-speed window for
-//! mana abilities is a Python-side limitation we inherit unchanged
-//! for trajectory parity.
+//! **Emission order / timing vs Python** (`feature/roto-instant-
+//! activations`, 2026-10-03). Activated abilities are activatable
+//! whenever their controller has priority (CR 117.1b) unless the
+//! ability or a rule restricts it. Python's
+//! `legal.battlefield_ability_activations` is called from both exits
+//! of `_legal_actions_core`; Rust mirrors it with
+//! `GameState::push_battlefield_activations`, called (a) just before
+//! the non-sorcery early return (after the instant-speed CastSpell
+//! pass) and (b) at the sorcery-timing tail after PlayLand + sorcery
+//! CastSpell (the pre-change position, so sorcery-window emission
+//! order is unchanged). Outside a sorcery window the helper skips
+//! `sorcery_speed` abilities, planeswalker (loyalty) abilities and
+//! mana abilities — the last is the shared simplification that
+//! explicit mana abilities are offered in a sorcery window only.
 //!
 //! **Two-path emission (CE20 Slice 1):** Rust's `CardPrinting`
 //! now carries BOTH a legacy `mana_produced: Option<Vec<String>>`
@@ -2843,12 +2846,21 @@ impl GameState {
         }
 
         // Post-instant-speed sorcery-timing gate. Everything after
-        // this point (PlayLand, sorcery-speed CastSpell,
-        // ActivateAbility) is sorcery-speed only, so if it isn't
-        // sorcery timing we return here with whatever
+        // this point (PlayLand, sorcery-speed CastSpell, the
+        // sorcery-window ActivateAbility pass, ActivateStation) needs
+        // sorcery timing, so if it isn't sorcery timing we emit the
+        // instant-speed activations and return with whatever
         // PassPriority + DeclareAttackers / DeclareBlockers +
         // instant-speed CastSpell emissions we've already pushed.
         if !is_sorcery_timing {
+            // CR 117.1b / 602.5: activated abilities of permanents
+            // are activatable whenever their controller has
+            // priority unless the ability or a rule restricts its
+            // timing (`push_battlefield_activations` applies the
+            // per-ability gate). Mirrors Python's
+            // `legal.battlefield_ability_activations` call in the
+            // non-sorcery exit of `_legal_actions_core`.
+            self.push_battlefield_activations(py, idx, false, &mut actions)?;
             return Ok(actions);
         }
 
@@ -3326,12 +3338,136 @@ impl GameState {
             actions.push(cast_spell_dict(py, obj.id)?);
         }
 
-        // Python lines 612-829: ActivateAbility emission for activated
-        // abilities on permanents the priority player controls. We
-        // are INSIDE the sorcery-timing block at this point (Python's
-        // line 303-304 early return guarantees the same gating); the
-        // per-ability `ability.sorcery_speed` filter at line 620
-        // would be a no-op in this position.
+        // Battlefield ActivateAbility emission at sorcery timing
+        // (every non-loyalty / loyalty / mana / sorcery-speed
+        // ability is eligible here). See
+        // `push_battlefield_activations` for the per-ability timing
+        // gate shared with the non-sorcery window.
+        self.push_battlefield_activations(py, idx, true, &mut actions)?;
+
+        // **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-
+        // only, 2026-05-25).** Sorcery-speed ActivateStation emit
+        // loop. For each Spacecraft this player controls, emit
+        // `(spacecraft_id, crew_id)` pairs for every untapped non-
+        // summoning-sick own creature (excluding the Spacecraft
+        // itself). Mirrors Python's `legal.py:831-852` shape exactly
+        // — same N×M product over (own Spacecraft × own eligible
+        // crew creatures) gated on sorcery timing.
+        //
+        // **Eligible crew = printed creature only.** Python keys on
+        // `crew.printing.is_creature` (the printed flag) — a stationed
+        // Spacecraft is NOT eligible to crew another Spacecraft (a
+        // Spacecraft can't crew another Spacecraft, per the bench-
+        // facing rule text). Rust mirrors that strict printed-creature
+        // gate.
+        //
+        // **Phase-1 admit-side guarantee.** With Galvanizing Sawship
+        // staying DECLINED at the admit gate post-C2 (Cycle 3 owns
+        // the inversion), this emit loop is dead-relative-to-
+        // production this cycle — no live deck admits a Spacecraft;
+        // therefore the `is_spacecraft` filter below matches zero
+        // permanents on every real-bench state, and the inner
+        // crew-loop never fires. The emit lights up the moment C3
+        // admits the Sawship.
+        if is_sorcery_timing {
+            // Pre-walk: collect own Spacecraft ids (cheap empty check
+            // saves the inner crew enumeration in the common no-
+            // Spacecraft-bench case).
+            let mut ship_ids: Vec<u32> = Vec::new();
+            for obj in self.players[idx].battlefield.iter() {
+                let Some(printing) = self.registry.lookup(obj.printing_id)
+                else {
+                    continue;
+                };
+                if printing.subtypes.iter().any(|s| s == "Spacecraft") {
+                    ship_ids.push(obj.id);
+                }
+            }
+            if !ship_ids.is_empty() {
+                // Collect eligible crew ids (printed creature, own,
+                // untapped, not summoning-sick).
+                let mut crew_ids: Vec<u32> = Vec::new();
+                for obj in self.players[idx].battlefield.iter() {
+                    if obj.tapped || obj.summoning_sick {
+                        continue;
+                    }
+                    let Some(printing) =
+                        self.registry.lookup(obj.printing_id)
+                    else {
+                        continue;
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        continue;
+                    }
+                    crew_ids.push(obj.id);
+                }
+                for &ship_id in ship_ids.iter() {
+                    for &crew_id in crew_ids.iter() {
+                        if crew_id == ship_id {
+                            continue;
+                        }
+                        actions.push(activate_station_dict(
+                            py, ship_id, crew_id,
+                        )?);
+                    }
+                }
+            }
+        }
+
+        // Final emission order: [PassPriority, (DeclareAttackers...),
+        // (DeclareBlockers...), CastSpell(instant/flash)...,
+        // PlayLand..., CastSpell(sorcery)..., ActivateAbility...,
+        // ActivateStation...].
+        // Matches Python's `legal.py` natural append order:
+        // instant-speed CastSpell block (lines 217-301), sorcery-
+        // timing gate (line 303), PlayLand (lines 319-329), sorcery-
+        // speed CastSpell block (lines 335-445), ActivateAbility
+        // (lines 612-829), ActivateStation (lines 831-852).
+        // DeclareAttackers / DeclareBlockers are Rust-only emissions
+        // outside Python's loop (see their module-docstring sections).
+        // CE19 closure shape; see I46. C2 adds the ActivateStation
+        // tail.
+
+        Ok(actions)
+    }
+}
+
+impl GameState {
+    /// Emit one `ActivateAbility` dict per activatable ability of a
+    /// permanent the priority player (`idx`) controls.
+    ///
+    /// **Timing (CR 117.1b / 602.5 / 606.3 / 605.3a).** An activated
+    /// ability is activatable whenever its controller has priority
+    /// unless the ability or a rule restricts it. Outside a sorcery
+    /// window (`is_sorcery_timing == false`) this skips:
+    ///   - `sorcery_speed` abilities ("Activate only as a sorcery",
+    ///     equip / reconfigure / saddle / level up);
+    ///   - every ability of a planeswalker (loyalty abilities,
+    ///     CR 606.3 — all Rust walker AAs are loyalty abilities by
+    ///     construction);
+    ///   - mana abilities (`is_mana_ability`): explicit mana
+    ///     abilities are offered in a sorcery window only, the
+    ///     engine-wide simplification Python shares (cube-lands #1
+    ///     in `docs/SEARCH_LIMITATIONS.md`).
+    /// Mirrors Python's `legal.activation_timing_permits`. Every
+    /// other gate below (tier, loyalty affordability, tap / summoning
+    /// sickness, mana headroom, target fan-out) runs in both windows.
+    fn push_battlefield_activations<'py>(
+        &self,
+        py: Python<'py>,
+        idx: usize,
+        is_sorcery_timing: bool,
+        actions: &mut Vec<Bound<'py, PyDict>>,
+    ) -> PyResult<()> {
+        // Python `legal.battlefield_ability_activations`: ActivateAbility
+        // emission for activated abilities on permanents the priority
+        // player controls. Called from BOTH priority windows of
+        // `legal_decisions` (the non-sorcery early return and the
+        // sorcery-timing tail); the per-ability timing gate at the top
+        // of the ability loop below is the only window-dependent
+        // filter. (Before `feature/roto-instant-activations` this block
+        // sat behind the sorcery-timing early return and Rust's
+        // `sorcery_speed` slot was data-carrying only.)
         //
         // **First-slice approximation**: Rust's `CardPrinting` has no
         // `activated_abilities` field yet (see `cards.rs:361-396` and
@@ -3455,6 +3591,20 @@ impl GameState {
             for (ability_index, ability) in
                 effective_abilities.iter().copied().enumerate()
             {
+                // Timing gate (CR 117.1b / 602.5d / 606.3 / 605.3a):
+                // outside a sorcery window only non-mana, non-
+                // sorcery-speed, non-loyalty abilities are
+                // activatable. Byte-mirrors Python's
+                // `legal.activation_timing_permits` (Rust models no
+                // Wandering Emperor-style instant-speed loyalty
+                // permission).
+                if !is_sorcery_timing
+                    && (ability.is_mana_ability
+                        || ability.sorcery_speed
+                        || is_walker)
+                {
+                    continue;
+                }
                 // CE20 follow-up Slice 3 (Spacecraft station-charge):
                 // tier_threshold gates usability. The source must
                 // carry at least `tier_threshold` charge counters
@@ -4256,90 +4406,6 @@ impl GameState {
                 }
             }
         }
-
-        // **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-
-        // only, 2026-05-25).** Sorcery-speed ActivateStation emit
-        // loop. For each Spacecraft this player controls, emit
-        // `(spacecraft_id, crew_id)` pairs for every untapped non-
-        // summoning-sick own creature (excluding the Spacecraft
-        // itself). Mirrors Python's `legal.py:831-852` shape exactly
-        // — same N×M product over (own Spacecraft × own eligible
-        // crew creatures) gated on sorcery timing.
-        //
-        // **Eligible crew = printed creature only.** Python keys on
-        // `crew.printing.is_creature` (the printed flag) — a stationed
-        // Spacecraft is NOT eligible to crew another Spacecraft (a
-        // Spacecraft can't crew another Spacecraft, per the bench-
-        // facing rule text). Rust mirrors that strict printed-creature
-        // gate.
-        //
-        // **Phase-1 admit-side guarantee.** With Galvanizing Sawship
-        // staying DECLINED at the admit gate post-C2 (Cycle 3 owns
-        // the inversion), this emit loop is dead-relative-to-
-        // production this cycle — no live deck admits a Spacecraft;
-        // therefore the `is_spacecraft` filter below matches zero
-        // permanents on every real-bench state, and the inner
-        // crew-loop never fires. The emit lights up the moment C3
-        // admits the Sawship.
-        if is_sorcery_timing {
-            // Pre-walk: collect own Spacecraft ids (cheap empty check
-            // saves the inner crew enumeration in the common no-
-            // Spacecraft-bench case).
-            let mut ship_ids: Vec<u32> = Vec::new();
-            for obj in self.players[idx].battlefield.iter() {
-                let Some(printing) = self.registry.lookup(obj.printing_id)
-                else {
-                    continue;
-                };
-                if printing.subtypes.iter().any(|s| s == "Spacecraft") {
-                    ship_ids.push(obj.id);
-                }
-            }
-            if !ship_ids.is_empty() {
-                // Collect eligible crew ids (printed creature, own,
-                // untapped, not summoning-sick).
-                let mut crew_ids: Vec<u32> = Vec::new();
-                for obj in self.players[idx].battlefield.iter() {
-                    if obj.tapped || obj.summoning_sick {
-                        continue;
-                    }
-                    let Some(printing) =
-                        self.registry.lookup(obj.printing_id)
-                    else {
-                        continue;
-                    };
-                    if !printing.card_types.iter().any(|t| t == "Creature") {
-                        continue;
-                    }
-                    crew_ids.push(obj.id);
-                }
-                for &ship_id in ship_ids.iter() {
-                    for &crew_id in crew_ids.iter() {
-                        if crew_id == ship_id {
-                            continue;
-                        }
-                        actions.push(activate_station_dict(
-                            py, ship_id, crew_id,
-                        )?);
-                    }
-                }
-            }
-        }
-
-        // Final emission order: [PassPriority, (DeclareAttackers...),
-        // (DeclareBlockers...), CastSpell(instant/flash)...,
-        // PlayLand..., CastSpell(sorcery)..., ActivateAbility...,
-        // ActivateStation...].
-        // Matches Python's `legal.py` natural append order:
-        // instant-speed CastSpell block (lines 217-301), sorcery-
-        // timing gate (line 303), PlayLand (lines 319-329), sorcery-
-        // speed CastSpell block (lines 335-445), ActivateAbility
-        // (lines 612-829), ActivateStation (lines 831-852).
-        // DeclareAttackers / DeclareBlockers are Rust-only emissions
-        // outside Python's loop (see their module-docstring sections).
-        // CE19 closure shape; see I46. C2 adds the ActivateStation
-        // tail.
-
-        Ok(actions)
+        Ok(())
     }
 }

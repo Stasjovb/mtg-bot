@@ -47,6 +47,12 @@ class AddManaToPool(Effect):
 
     produces: tuple[tuple[str, int], ...]
     spend_restriction: "str | None" = None
+    # "If any of that mana is spent on a creature spell, it gains haste
+    # until end of turn." — tags each minted coin
+    # (``ManaCoin.grants_haste_to_creature_spell``).
+    grants_haste_to_creature_spell: bool = False
+    # "... and that spell can't be countered" (Delighted Halfling).
+    makes_spell_uncounterable: bool = False
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -59,7 +65,16 @@ class AddManaToPool(Effect):
         for color, count in self.produces:
             for _ in range(count):
                 p.mana_pool.append(
-                    ManaCoin(color=color, spend_restriction=self.spend_restriction)
+                    ManaCoin(
+                        color=color,
+                        spend_restriction=self.spend_restriction,
+                        grants_haste_to_creature_spell=(
+                            self.grants_haste_to_creature_spell
+                        ),
+                        makes_spell_uncounterable=(
+                            self.makes_spell_uncounterable
+                        ),
+                    )
                 )
                 minted.append(color)
         restriction = (
@@ -79,6 +94,84 @@ class AddManaToPool(Effect):
             base += f" (spend only to {self.spend_restriction})"
         return base
 
+
+
+@dataclass(frozen=True)
+class AddOneOfManaCombinations(Effect):
+    """Add ONE of several fixed mana combinations, chosen by the
+    controller at resolution — the filter-land shape "{U/B}, {T}: Add
+    {U}{U}, {U}{B}, or {B}{B}." (Sunken Ruins).
+
+    ``options`` is a tuple of combinations, each a ``produces``-style
+    tuple of ``(color, count)`` pairs. The pick goes through
+    ``Agent.choose_mode`` over one description per combination
+    (``"{U}{U}"`` ...); an agent-less controller or an out-of-range
+    answer takes the first combination.
+    """
+
+    options: tuple[tuple[tuple[str, int], ...], ...]
+
+    @staticmethod
+    def _label(combo: tuple[tuple[str, int], ...]) -> str:
+        return "".join(f"{{{c}}}" * n for c, n in combo)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        p = state.player_by_id(controller_id)
+        idx = 0
+        if p.agent is not None and len(self.options) > 1:
+            picked = p.agent.choose_mode(
+                state, controller_id,
+                [self._label(c) for c in self.options],
+            )
+            if isinstance(picked, int) and 0 <= picked < len(self.options):
+                idx = picked
+        combo = self.options[idx]
+        for color, count in combo:
+            for _ in range(count):
+                p.mana_pool.append(ManaCoin(color=color))
+        state.log.append(
+            f"P{controller_id} adds {self._label(combo)} to mana pool"
+        )
+
+    def describe(self) -> str:
+        labels = [self._label(c) for c in self.options]
+        return "add " + ", ".join(labels[:-1]) + ", or " + labels[-1]
+
+
+@dataclass(frozen=True)
+class AddManaOfColorPerCount(Effect):
+    """Add ``amount.value(state, controller)`` mana of one fixed
+    ``color`` — "{T}: Add {G} for each creature you control." (Gaea's
+    Cradle) / "{T}: Add {U} for each artifact you control." (Tolarian
+    Academy). The count is read at resolution (the mana ability
+    resolves immediately, CR 605.3a), so zero matching permanents adds
+    no mana.
+    """
+
+    color: str
+    amount: "Formula"
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import ManaCoin
+
+        n = self.amount.value(state, controller_id)
+        p = state.player_by_id(controller_id)
+        for _ in range(n):
+            p.mana_pool.append(ManaCoin(color=self.color))
+        state.log.append(
+            f"P{controller_id} adds {self.color}x{n} to mana pool"
+        )
+
+    def describe(self) -> str:
+        return f"add {{{self.color}}} for each ({self.amount!r})"
 
 
 @dataclass(frozen=True)

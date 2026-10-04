@@ -1,8 +1,11 @@
 """Warm the card-image cache.
 
-Run once after cloning, or whenever ``data/edge_of_eternities.json`` changes.
-Small + normal sizes for all 266 cards total roughly 20 MB. The script sleeps
-between requests to respect Scryfall's ~10 req/s guideline.
+Run once after cloning, or whenever a card-pool dump under ``data/``
+changes. Defaults to every dump in the active card pool
+(``MTG_BOT_CARD_POOL``; see ``mtg_bot.cards.pools``); pass ``--data``
+to index specific files instead. Small + normal sizes run roughly 75 KB
+per card. The script sleeps between requests to respect Scryfall's
+~10 req/s guideline.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from pathlib import Path
 
 from mtg_bot.art import (
     DEFAULT_CACHE_ROOT,
-    DEFAULT_CARD_DATA,
     DEFAULT_SIZES,
     CardIndex,
     http_fetcher,
@@ -31,8 +33,9 @@ def throttled_fetcher(delay_s: float):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", default=str(DEFAULT_CARD_DATA),
-                        help="path to Scryfall EoE JSON dump")
+    parser.add_argument("--data", nargs="*", default=None,
+                        help=("Scryfall JSON dump(s) to index; default: "
+                              "every dump in the active card pool"))
     parser.add_argument("--root", default=str(DEFAULT_CACHE_ROOT),
                         help="cache directory root")
     parser.add_argument("--sizes", nargs="+", default=list(DEFAULT_SIZES),
@@ -41,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds to sleep between requests (>=0.05)")
     args = parser.parse_args(argv)
 
-    index = CardIndex.load(Path(args.data))
+    index = CardIndex.load(
+        [Path(p) for p in args.data] if args.data else None
+    )
     cards = list(index.by_id.values())
     total = len(cards) * len(args.sizes)
     counter = {"done": 0, "downloaded": 0}

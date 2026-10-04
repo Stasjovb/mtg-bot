@@ -50,12 +50,15 @@ import re
 
 from mtg_bot.cards.base import CostReduction, ExternalCostReduction
 from mtg_bot.effects.conditions import (
+    SpellCastFromGraveyard,
+    SpellCastFromOutsideHand,
     AnotherSpellCastThisTurn,
     Condition,
     DuringYourTurn,
     NthSpellThisTurn,
     OpponentsControlAtLeast,
     PerControlled,
+    PerBasicLandTypeAmongLandsYouControl,
     PerDifferentlyNamedLand,
     TargetMatches,
     VoidActiveCondition,
@@ -120,6 +123,34 @@ _COST_REDUCTION_LINE_X_PER_DIFFERENTLY_NAMED_LAND = (
 )
 
 
+_COST_REDUCTION_LINE_FOR_EACH = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?This spell costs \{(\d+)\} less to cast "
+    r"for each (?P<what>.+)\.$"
+)
+# Counted things for the ``for each <what>`` shape -> variable-amount
+# ``Condition`` (``multiplier`` = the count).
+_COST_REDUCTION_PER_EACH: dict[str, Condition] = {
+    "basic land type among lands you control": (
+        PerBasicLandTypeAmongLandsYouControl()
+    ),
+}
+
+
+def _per_each_condition(what: str):
+    """The counted thing's condition, or ``None``. Roto P4 adds "card
+    type among cards in your graveyard" (Emrakul, the Promised End)."""
+    condition = _COST_REDUCTION_PER_EACH.get(what)
+    if condition is not None:
+        return condition
+    if what == "card type among cards in your graveyard":
+        from mtg_bot.effects.generic.roto_walkers import (
+            PerCardTypeInYourGraveyard,
+        )
+
+        return PerCardTypeInYourGraveyard()
+    return None
+
+
 # Conditions recognized as cost-reduction triggers. The mapping is from
 # the verbatim oracle-text phrase (after the ``if`` and before the
 # trailing period) to a structural ``Condition`` object. Each
@@ -173,6 +204,13 @@ _EXTERNAL_COST_REDUCTION_LINES: dict[str, Condition] = {
     # second spell of the turn.
     "The second spell you cast each turn costs {N} less to cast.": (
         NthSpellThisTurn(2)
+    ),
+    # Bilbo, Thief in the Night.
+    "Spells you cast from anywhere other than your hand cost {N} less to "
+    "cast.": SpellCastFromOutsideHand(),
+    # Green Goblin.
+    "Spells you cast from your graveyard cost {N} less to cast.": (
+        SpellCastFromGraveyard()
     ),
 }
 
@@ -255,6 +293,31 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     convention used elsewhere in the parser.
     """
     stripped = line.strip()
+    # Vintage Roto P3 conditions ("Morbid — ... if a creature died this
+    # turn.").
+    from mtg_bot.cards.parser.roto_mana import parse_roto_cost_reduction_line
+
+    roto = parse_roto_cost_reduction_line(stripped)
+    if roto is not None:
+        return roto
+    # ``[<Ability word> — ]This spell costs {N} less to cast for each
+    # <counted thing>.`` (Leyline Binding's ``Domain —`` reduction). The
+    # ability word has no rules meaning (CR 207.2c); the counted thing
+    # resolves through ``_COST_REDUCTION_PER_EACH`` to a variable-amount
+    # condition whose ``multiplier`` scales the unit amount.
+    m = _COST_REDUCTION_LINE_FOR_EACH.match(stripped)
+    if m is not None:
+        condition = _per_each_condition(m.group("what"))
+        if condition is None:
+            # Roto P2 counted things ("card you've drawn this turn").
+            from mtg_bot.cards.parser.roto_zones import (
+                roto_zones_per_each_condition,
+            )
+
+            condition = roto_zones_per_each_condition(m.group("what"))
+        if condition is None:
+            return None
+        return CostReduction(amount=int(m.group(1)), condition=condition)
     # Per-differently-named-land variable-amount X-cost reduction
     # (Fungal Colossus). Tried first because the ``{X} less`` template
     # is a unique gate that can't be confused with the ``{N} less``
@@ -280,6 +343,13 @@ def _parse_cost_reduction_line(line: str) -> CostReduction | None:
     if m is not None:
         condition_phrase = m.group("condition").strip()
         condition = _COST_REDUCTION_CONDITIONS.get(condition_phrase)
+        if condition is None:
+            # Roto P1: "it targets a <spell np>" (Mystical Dispute).
+            from mtg_bot.cards.parser.roto_stack import (
+                roto_cost_reduction_condition,
+            )
+
+            condition = roto_cost_reduction_condition(condition_phrase)
         if condition is None:
             return None
         return CostReduction(
@@ -339,6 +409,11 @@ def _parse_affinity_line(line: str) -> CostReduction | None:
     m = _AFFINITY_FOR_LINE.match(line.strip())
     if m is None:
         return None
+    if m.group(1).strip() == "artifacts":
+        # A card type, not a subtype (Emry, Lurker of the Loch).
+        from mtg_bot.effects.object_predicates import IsArtifact
+
+        return CostReduction(amount=1, condition=PerControlled(IsArtifact()))
     subtype = m.group(1).strip().rstrip("s")  # normalize plural → singular
     # Scryfall prints the subtype in plural form: ``Affinity for Slivers``.
     # ``HasSubtype`` tests against the singular subtype name (``"Sliver"``),

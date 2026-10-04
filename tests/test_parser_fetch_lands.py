@@ -78,8 +78,13 @@ def test_fetch_skips_when_subtypes_present():
 
 
 def test_fetch_skips_unrecognized_body():
-    """A sac-self body outside the whitelist must not be claimed —
-    parity would fail because the parser would build the wrong effect."""
+    """A sac-self body outside the fetch whitelist must not be claimed
+    by the fetch recognizer (it would build the wrong effect). The
+    line-composed land grammar then claims it faithfully through the
+    unified activated-ability grammar: tap + sacrifice, draw three,
+    and no mana production."""
+    from mtg_bot.cards.base import DrawCards
+
     card = {
         "name": "Hypothetical Fetch",
         "type_line": "Land",
@@ -88,7 +93,14 @@ def test_fetch_skips_unrecognized_body():
         ),
         "set": "dsk",
     }
-    assert _build_land_printing(card) is None
+    assert _try_build_fetch_land(card, card["oracle_text"], (), ()) is None
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.produces == frozenset()
+    assert built.mana_only_from_produces is True
+    (ability,) = built.activated_abilities
+    assert ability.cost.tap_self and ability.cost.sacrifice_self
+    assert ability.effect == DrawCards(amount=3)
 
 
 def test_fetch_skips_extra_lines():

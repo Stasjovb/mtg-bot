@@ -88,9 +88,11 @@ from mtg_bot.cards.parser.effects import (
     _parse_effect_phrase,
 )
 from mtg_bot.effects.object_predicates import (
+    HasCardType,
     HasCounter,
     HasKeyword,
     HasPowerAtMost,
+    HasPowerToughness,
     HasSubtype,
     IsArtifact,
     IsCreature,
@@ -102,18 +104,29 @@ from mtg_bot.effects.object_predicates import (
 )
 from mtg_bot.effects.state_predicates import (
     AnyPlayerControlsNoCreatures,
+    CardsInGraveyardAtLeast,
+    CompletedADungeon,
     Delirium,
+    GainedLifeThisTurn,
+    HasCitysBlessing,
+    HasInitiative,
+    IsMonarch,
     LoneAttackerForYou,
     OpponentControlsMoreLandsThanYou,
+    NoncreatureSpellsCastThisTurn,
     SpellsCastThisTurn,
     VoidActive,
 )
+from mtg_bot.effects.state_predicates import LandsPlayedThisTurnAtLeast
 from mtg_bot.effects.predicates import (
     OPPONENT,
     YOU,
     Always,
     Controlled,
     Event,
+    FirstAttackThisTurn,
+    HostAttacksWithAnother,
+    IsFormerHost,
     IsHost,
     IsSelf,
     Predicate,
@@ -157,6 +170,9 @@ _TRIGGERED_ABILITY_LINE = re.compile(
 # looking — no EoE printing uses N>1 today, but the grammar shape is
 # uniform and trivially extends), and the per-other-creature-or-
 # artifact scaling form (Luxknight Breacher).
+_WHEN_AND_WHENEVER_LINE = re.compile(
+    r"^When (.+?) and whenever (.+?), (.+)\.$"
+)
 _ENTERS_WITH_REPLACEMENT_LINE = re.compile(
     r"^This creature enters with (.+)\.$"
 )
@@ -530,6 +546,11 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     # to ``Always()``, but no card today carries that form so only the
     # controller-gated entry is wired.
     "your upkeep": (Event.BEGINNING_OF_UPKEEP, Controlled(YOU)),
+    # White Plume Adventurer (cube W/G bucket): each opponent's upkeep.
+    # Abhorrent Oculus: fires in every opponent's upkeep.
+    "each opponent's upkeep": (
+        Event.BEGINNING_OF_UPKEEP, Controlled(OPPONENT),
+    ),
     # ``At the beginning of combat on your turn`` — Molecular Modifier's
     # pump-and-grant trigger and Ouroboroid's mass-counter trigger.
     # Surface form pairs the ``BEGINNING_OF_COMBAT`` event with the
@@ -555,6 +576,21 @@ _AT_BEGINNING_OF_PHRASES: dict[str, tuple[Event, Predicate]] = {
     "your second main phase": (
         Event.BEGINNING_OF_POSTCOMBAT_MAIN, Controlled(YOU),
     ),
+    # ``At the beginning of your first main phase`` (Coalition Relic) --
+    # the precombat main phase (CR 505.1a); dispatched by both turn
+    # loops before main-phase priority opens.
+    "your first main phase": (
+        Event.BEGINNING_OF_PRECOMBAT_MAIN, Controlled(YOU),
+    ),
+    # ``At the beginning of your draw step`` — Mana Vault's tapped-tax
+    # trigger. Dispatched by ``turn.run_draw_step`` after the draw.
+    "your draw step": (Event.BEGINNING_OF_DRAW_STEP, Controlled(YOU)),
+    # Cube enchantments: ``At the beginning of the end step`` (Underworld
+    # Breach) is every end step, the same event as ``each end step``;
+    # ``At the beginning of each player's upkeep`` (Oath of Druids)
+    # fires on every upkeep regardless of whose turn it is.
+    "the end step": (Event.BEGINNING_OF_END_STEP, Always()),
+    "each player's upkeep": (Event.BEGINNING_OF_UPKEEP, Always()),
 }
 
 
@@ -643,6 +679,19 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "an opponent plays a land": (
         Event.PLAYS_LAND, Controlled(by=OPPONENT, subject="controller"),
     ),
+    # ``Whenever you play a land`` — Fastbond. The acting player is the
+    # source's controller; the source itself is never a land here.
+    "you play a land": (
+        Event.PLAYS_LAND, Controlled(YOU, subject="controller"),
+    ),
+    # ``When you play another land`` — City of Traitors. Same
+    # ``Event.PLAYS_LAND`` dispatch, gated on the acting player being
+    # the source's controller and the played land NOT being the source
+    # itself ("another": the source's own land drop dispatches too).
+    "you play another land": (
+        Event.PLAYS_LAND,
+        Controlled(YOU, subject="controller") & ~IsSelf(subject="land"),
+    ),
     # ``When this creature dies`` — the source's own death (Gravpack
     # Monoist's create-Robot trigger and the synthetic ``draw 2 cards``
     # death triggers used in parser tests). Maps to the centralized
@@ -702,6 +751,12 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     # subject default. Phase 5 migrated every ``trigger="attacks"``
     # static card to this predicate shape.
     "this creature attacks": (Event.ATTACKS, IsSelf()),
+    # ``Whenever this creature attacks for the first time each turn``
+    # (Fear of Missing Out) -- an attack in an additional combat phase
+    # doesn't trigger it again.
+    "this creature attacks for the first time each turn": (
+        Event.ATTACKS, IsSelf() & FirstAttackThisTurn(),
+    ),
     # ``Whenever this creature becomes tapped`` — the source's own
     # tap (Starfighter Pilot, Nanoform Sentinel, Astrobiologist,
     # Sterling Hippogriff, etc.). ``Event.BECOMES_TAPPED`` carries a
@@ -734,6 +789,24 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         Event.IS_CAST,
         Subject("spell", IsArtifact()) & Controlled(YOU, subject="controller"),
     ),
+    # The prowess-condition family (Dragon's Rage Channeler "Whenever
+    # you cast a noncreature spell"; the instant-or-sorcery and
+    # creature-spell siblings).
+    "you cast a noncreature spell": (
+        Event.IS_CAST,
+        Subject("spell", ~HasCardType("Creature"))
+        & Controlled(YOU, subject="controller"),
+    ),
+    "you cast a creature spell": (
+        Event.IS_CAST,
+        Subject("spell", HasCardType("Creature"))
+        & Controlled(YOU, subject="controller"),
+    ),
+    "you cast an instant or sorcery spell": (
+        Event.IS_CAST,
+        Subject("spell", HasCardType("Instant") | HasCardType("Sorcery"))
+        & Controlled(YOU, subject="controller"),
+    ),
     # ``Whenever a nontoken artifact you control enters`` — Weapons
     # Manufacturing's trigger. ``Event.ENTERS`` carries ``("source",)``;
     # ``IsNontoken()`` excludes token artifacts (Landers, Drones, etc.)
@@ -760,6 +833,50 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         Event.IS_CAST,
         Controlled(YOU, subject="controller") & StateBound(SpellsCastThisTurn(n=2)),
     ),
+    # ``Whenever you cast a noncreature spell`` (The Fantasticar) — the
+    # spell subject must be noncreature, cast by the source's controller.
+    # Coveted Jewel — once per blocker declaration, when an opponent's
+    # attacking creatures attacking you are (partly) unblocked.
+    "one or more creatures an opponent controls attack you and aren't "
+    "blocked": (
+        Event.ATTACKERS_UNBLOCKED,
+        Controlled(OPPONENT, subject="player")
+        & Controlled(YOU, subject="defender"),
+    ),
+    # Kaldra Compleat's granted ability (the damaged creature is the
+    # event's fixed target).
+    "this creature deals combat damage to a creature": (
+        Event.DEALS_COMBAT_DAMAGE_TO_CREATURE, IsSelf(subject="source"),
+    ),
+    # Sword of the Meek — a creature you control with P/T exactly 1/1.
+    "a 1/1 creature you control enters": (
+        Event.ENTERS,
+        Subject(None, IsCreature() & HasPowerToughness(1, 1)) & Controlled(YOU),
+    ),
+    # Currency Converter — the discarded card is the fixed target.
+    "you discard a card": (
+        Event.CARD_DISCARDED, Controlled(YOU, subject="player"),
+    ),
+    # Staff of the Storyteller — batched per resolving stack item.
+    "you create one or more creature tokens": (
+        Event.CREATURE_TOKENS_CREATED, Controlled(YOU),
+    ),
+    "you cast a noncreature spell": (
+        Event.IS_CAST,
+        Subject("spell", ~IsCreature()) & Controlled(YOU, subject="controller"),
+    ),
+    # ``Whenever you cast your fourth noncreature spell each turn`` (The
+    # Fantasticar). Latches on the controller's running noncreature
+    # count, gated on the triggering spell itself being noncreature.
+    **{
+        f"you cast your {word} noncreature spell each turn": (
+            Event.IS_CAST,
+            Subject("spell", ~IsCreature())
+            & Controlled(YOU, subject="controller")
+            & StateBound(NoncreatureSpellsCastThisTurn(n=n)),
+        )
+        for word, n in (("second", 2), ("third", 3), ("fourth", 4))
+    },
     # ``Whenever you sacrifice another creature or artifact`` — phase
     # 8 migrated from ``trigger="sacrifice_creature_or_artifact"``.
     # ``Event.IS_SACRIFICED`` carries the sacrificed permanent as
@@ -927,6 +1044,16 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         & Subject("target", IsPlayer()),
         True,
     ),
+    # ``... deal combat damage to one or more players`` (Forth
+    # Eorlingas!'s this-turn trigger): the same aggregated observer —
+    # with one combat per turn, once per turn is once per combat.
+    "one or more creatures you control deal combat damage to one or more players": (
+        Event.DEALS_COMBAT_DAMAGE,
+        Subject("source", IsCreature())
+        & Controlled(YOU, subject="source")
+        & Subject("target", IsPlayer()),
+        True,
+    ),
     # ``Whenever a nontoken creature you control with a +1/+1
     # counter on it dies`` (Rayblade Trooper). Batch 9. Stricter
     # variant of the existing ``a creature you control with a
@@ -983,7 +1110,35 @@ _PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters": (Event.ENTERS, IsSelf()),
     "this enchantment enters": (Event.ENTERS, IsSelf()),
     "this Aura enters": (Event.ENTERS, IsSelf()),
+    # Cube enchantments' own leaves triggers (Parallax Wave, Animate
+    # Dead, Necromancy): the same type-blind ``IsSelf()`` as
+    # ``this creature leaves the battlefield``.
+    "this enchantment leaves the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    "this Aura leaves the battlefield": (
+        Event.LEAVES_BATTLEFIELD, IsSelf(),
+    ),
+    # Lands print "this land" as their self-reference (surveil lands'
+    # "When this land enters, surveil 1."); same type-blind ``IsSelf()``.
+    "this land enters": (Event.ENTERS, IsSelf()),
+    "this land attacks": (Event.ATTACKS, IsSelf()),
     "this Spacecraft attacks": (Event.ATTACKS, IsSelf()),
+    # Cube Equipment / Vehicles: same type-blind ``IsSelf()`` family.
+    "this Equipment enters": (Event.ENTERS, IsSelf()),
+    "this Vehicle enters": (Event.ENTERS, IsSelf()),
+    "this Vehicle attacks": (Event.ATTACKS, IsSelf()),
+    # Equipment relational triggers (the Equipment is the source, its
+    # host the subject). ``equipped creature dies`` reads the host
+    # recorded at the moment it left (``IsFormerHost`` — the Equipment
+    # is already unattached when DIES dispatches); Skullclamp.
+    "equipped creature attacks": (Event.ATTACKS, IsHost(subject="attacker")),
+    "equipped creature dies": (Event.DIES, IsFormerHost()),
+    # Glimmer Lens — once per attack declaration, when the host and at
+    # least one other creature you control attack.
+    "equipped creature and at least one other creature attack": (
+        Event.YOU_ATTACK, Controlled(YOU) & HostAttacksWithAnother(),
+    ),
     # Batch 12 — Aura relational trigger family. Three trigger conditions
     # that fire based on what happens to the Aura's enchanted host:
     #
@@ -1158,6 +1313,11 @@ _COMPOUND_PREDICATE_TRIGGER_PHRASES: dict[
     "this artifact enters or leaves the battlefield": (
         (Event.ENTERS, IsSelf()),
         (Event.LEAVES_BATTLEFIELD, IsSelf()),
+    ),
+    # Smuggler's Copter — "Whenever this Vehicle attacks or blocks".
+    "this Vehicle attacks or blocks": (
+        (Event.ATTACKS, IsSelf()),
+        (Event.BLOCKS, IsSelf(subject="blocker")),
     ),
     # Duskmourn "Eerie" ability-word trigger — fires both when an
     # enchantment under your control enters AND when you fully unlock
@@ -1354,6 +1514,32 @@ _INTERVENING_IF_PHRASES: dict[str, Predicate] = {
     # gate is in place if a future engine change ever loosened the
     # call-site ``was_creature`` check.
     "it was a creature": Subject(None, IsCreature()),
+    # Vaultborn Tyrant's dies trigger (cube W/G bucket): "if it's not a
+    # token" -- the dying object (the trigger's subject) isn't a token.
+    "it's not a token": Subject(None, IsNontoken()),
+    # Designation gates (``mtg_bot.designations``): Feywild Caretaker /
+    # Passageway Seer ``if you have the initiative``, the monarch
+    # family ``if you're the monarch``, White Plume Adventurer-style
+    # ``if you've completed a dungeon``.
+    "you have the initiative": StateBound(HasInitiative()),
+    "you're the monarch": StateBound(IsMonarch()),
+    "you've completed a dungeon": StateBound(CompletedADungeon()),
+    # Cube W/G bucket: Ocelot Pride's end-step gate / city's blessing.
+    "you gained life this turn": StateBound(GainedLifeThisTurn()),
+    "you have the city's blessing": StateBound(HasCitysBlessing()),
+    # Threshold (``Threshold —`` ability word strips upstream).
+    "there are seven or more cards in your graveyard": (
+        StateBound(CardsInGraveyardAtLeast(7))
+    ),
+    # Mana Vault: "At the beginning of your draw step, if this artifact
+    # is tapped, …" — the source-state gate (the event subject is the
+    # active player, so the check reads the source via ``Source``).
+    "this artifact is tapped": Source(IsTapped()),
+    # Fastbond: "if it wasn't the first land you played this turn" —
+    # checked after the triggering land play is counted.
+    "it wasn't the first land you played this turn": (
+        StateBound(LandsPlayedThisTurnAtLeast(2))
+    ),
 }
 
 
@@ -1378,7 +1564,35 @@ _TRAILING_IF_PHRASES: dict[str, Predicate] = {
 
 
 def _parse_intervening_if_phrase(phrase: str) -> Predicate | None:
-    return _INTERVENING_IF_PHRASES.get(phrase.strip())
+    pred = _INTERVENING_IF_PHRASES.get(phrase.strip())
+    if pred is not None:
+        return pred
+    # Cube creatures (R / multicolor / colorless) bucket gates.
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        parse_rmc_intervening_if,
+    )
+
+    pred = parse_rmc_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Cube W/G creature bucket gates ("When you cast this spell" riders).
+    from mtg_bot.cards.parser.creature_wg_effects import parse_wg_intervening_if
+
+    pred = parse_wg_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Cube layouts bucket gates ("if you control N or more lands").
+    from mtg_bot.cards.parser.layout_face_grammar import (
+        parse_face_intervening_if,
+    )
+
+    pred = parse_face_intervening_if(phrase.strip())
+    if pred is not None:
+        return pred
+    # Roto P6 gates ("if it has dealt N or more damage to that player").
+    from mtg_bot.cards.parser.roto_keywords import parse_p6_intervening_if
+
+    return parse_p6_intervening_if(phrase.strip())
 
 
 # Intervening-``while`` gate phrases. The DSK Delirium "while X"
@@ -1393,6 +1607,8 @@ _INTERVENING_WHILE_PHRASES: dict[str, Predicate] = {
     "there are four or more card types among cards in your graveyard": (
         StateBound(Delirium())
     ),
+    # Emberwilde Captain (roto P6).
+    "you're the monarch": StateBound(IsMonarch()),
 }
 
 
@@ -1490,9 +1706,11 @@ def _parse_trailing_if_phrase(phrase: str) -> Predicate | None:
 # all flow through the same path. The lookahead requires
 # ``When``/``Whenever`` after the dash so type-line strings (e.g.
 # ``Creature — Dragon``) and other em-dash uses don't accidentally
-# match.
+# match. Flavor words (CR 207.2d -- "Terror from the Deep —") share the
+# shape and are equally rules-free.
 _ABILITY_WORD_PREFIX = re.compile(
-    r"^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* — (?=When |Whenever )"
+    r"^[A-Z][A-Za-z']*(?: (?:[A-Z][A-Za-z']*|of|the|and|from))* — "
+    r"(?=When |Whenever )"
 )
 
 
@@ -1531,7 +1749,55 @@ def _parse_predicate_trigger_phrase(
     """
     raw = _PREDICATE_TRIGGER_PHRASES.get(phrase.strip())
     if raw is None:
-        return None
+        # Parameterized fallbacks ("you draw a card", "you cast a[n]
+        # <filter> spell") -- see ``effects_ext.parse_ext_trigger_phrase``.
+        from mtg_bot.cards.parser.effects_ext import parse_ext_trigger_phrase
+
+        ext = parse_ext_trigger_phrase(phrase.strip())
+        if ext is not None:
+            return ext
+        # Cube creatures (R / multicolor / colorless) bucket conditions.
+        from mtg_bot.cards.parser.creature_rmc_grammar import (
+            parse_rmc_trigger_phrase,
+        )
+
+        rmc = parse_rmc_trigger_phrase(phrase.strip())
+        if rmc is not None:
+            return rmc
+        # Draw-observer conditions (U/B creature bucket).
+        from mtg_bot.cards.parser.cube_creatures_ub import (
+            parse_ub_trigger_phrase,
+        )
+
+        ub = parse_ub_trigger_phrase(phrase.strip())
+        if ub is not None:
+            return ub
+        # Cube layouts bucket conditions ("transforms into", ...).
+        from mtg_bot.cards.parser.layout_grammar import (
+            parse_layout_trigger_phrase,
+        )
+
+        layout = parse_layout_trigger_phrase(phrase.strip())
+        if layout is not None:
+            return layout
+        # Vintage Roto P5 conditions ("becomes blocked", ...).
+        from mtg_bot.cards.parser.roto_board import (
+            parse_roto_trigger_phrase as parse_roto_board_trigger_phrase,
+        )
+
+        board = parse_roto_board_trigger_phrase(phrase.strip())
+        if board is not None:
+            return board
+        # Roto P4 conditions ("this creature becomes the target of ...").
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_trigger_phrase
+
+        walker = parse_roto_trigger_phrase(phrase.strip())
+        if walker is not None:
+            return walker
+        # Roto P6 conditions (becomes the target, ...).
+        from mtg_bot.cards.parser.roto_keywords import parse_p6_trigger_phrase
+
+        return parse_p6_trigger_phrase(phrase.strip())
     return raw[0], raw[1]
 
 
@@ -1578,13 +1844,37 @@ def _substitute_self_name(line: str, name: str) -> str:
     (rare; usually the short form is used) still picks up the more-
     specific replacement first.
     """
+    original = line
     full_pattern = r"\b" + re.escape(name) + r"\b"
     line = re.sub(full_pattern, "this creature", line)
     short = name.split(",", 1)[0]
     if short and short != name:
         short_pattern = r"\b" + re.escape(short) + r"\b"
         line = re.sub(short_pattern, "this creature", line)
-    return line
+    elif " of " in name:
+        # "Loran of the Third Path" is referred to as "Loran" (the
+        # epithet form of a legendary name without a comma). The
+        # negative lookahead keeps any remaining "<Name> of ..." text
+        # (another card's name) intact.
+        epithet = name.split(" of ", 1)[0]
+        line = re.sub(
+            r"\b" + re.escape(epithet) + r"\b(?! of )", "this creature", line,
+        )
+    # A plural-named creature ("Cloak and Dagger enter", "... leave the
+    # battlefield") takes plural verbs; after the rewrite to the
+    # singular "this creature" restore subject-verb agreement so the
+    # canonical phrase tables match. Only rewritten names are touched
+    # ("you may have this creature enter as a copy" is a bare infinitive,
+    # hence the ``have`` lookbehind).
+    if line == original:
+        return line
+    return _PLURAL_SELF_VERB_RE.sub(r"this creature \1s", line)
+
+
+_PLURAL_SELF_VERB_RE = re.compile(
+    r"(?<!have )\bthis creature (enter|leave|attack|block|die|deal|fight|"
+    r"become)\b"
+)
 
 
 def _parse_at_the_beginning_of_line(
@@ -1976,6 +2266,32 @@ def _parse_triggered_ability_line(
         if parsed is not None:
             return parsed
         return None
+    # ``When <condition> and whenever <condition>, <effect>.`` -- one
+    # ability printed with two trigger conditions (Orcish Bowmasters'
+    # "When this creature enters and whenever an opponent draws a card
+    # ..."). Each condition becomes its own ``TriggeredAbility`` arm
+    # sharing the effect, like the compound "enters or dies" table.
+    both = _WHEN_AND_WHENEVER_LINE.match(line)
+    if both is not None:
+        effect = _parse_effect_phrase(both.group(3))
+        if effect is None:
+            return None
+        arms = []
+        for condition in (both.group(1), both.group(2)):
+            pred_match = _parse_predicate_trigger_phrase(condition)
+            if pred_match is None:
+                return None
+            from mtg_bot.cards.parser.cube_creatures_ub import (
+                bind_event_player_anaphora,
+            )
+
+            arms.append(TriggeredAbility(
+                event=pred_match[0],
+                predicate=pred_match[1],
+                effect=bind_event_player_anaphora(pred_match[0], effect),
+                once_per_turn=once_per_turn,
+            ))
+        return tuple(arms)
     # Intervening-if shape (CR 603.4) tried first: a recognized gate
     # phrase between the trigger condition and the effect collapses to
     # a single ``TriggeredAbility`` with the gate predicate AND-ed onto
@@ -2238,10 +2554,14 @@ def _parse_triggered_ability_line(
     if pred_match is not None:
         event, predicate = pred_match
         phrase_once = _predicate_trigger_phrase_is_once_per_turn(condition)
+        from mtg_bot.cards.parser.cube_creatures_ub import (
+            bind_event_player_anaphora,
+        )
+
         return TriggeredAbility(
             event=event,
             predicate=predicate,
-            effect=effect,
+            effect=bind_event_player_anaphora(event, effect),
             once_per_turn=once_per_turn or phrase_once,
         )
     trigger = _parse_trigger_phrase(condition)

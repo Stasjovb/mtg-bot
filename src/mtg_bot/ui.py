@@ -21,7 +21,6 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 
 from mtg_bot.art import (
     DEFAULT_CACHE_ROOT,
-    DEFAULT_CARD_DATA,
     SIZES,
     CardIndex,
     Fetcher,
@@ -167,7 +166,7 @@ def create_app(
     components (``..``, absolute paths) — both endpoints reject them.
     """
     app = Flask(__name__)
-    index = card_index if card_index is not None else CardIndex.load(DEFAULT_CARD_DATA)
+    index = card_index if card_index is not None else CardIndex.load()
     fetcher = image_fetcher if image_fetcher is not None else http_fetcher
     cache = game_cache if game_cache is not None else GameCache()
     name_to_id = {name: card["id"] for name, card in index.by_name.items()}

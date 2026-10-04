@@ -138,6 +138,10 @@ class EachOpponentDiscardsOrLosesLife(Effect):
                     f"life (now {p.life})"
                 )
                 continue
+            from mtg_bot.player_protections import opponent_effect_blocked_for
+
+            if opponent_effect_blocked_for(state, p.id):
+                continue
             hand_ids = [c.id for c in p.hand]
             chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
             card = next(c for c in p.hand if c.id == chosen_id)
@@ -145,7 +149,7 @@ class EachOpponentDiscardsOrLosesLife(Effect):
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
 
     def describe(self) -> str:
         return (

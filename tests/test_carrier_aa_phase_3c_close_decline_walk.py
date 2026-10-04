@@ -276,7 +276,7 @@ def test_phase_3c_close_dispatcher_admits_each_carrier_aa_admit(card_name):
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     assert card_name in ps, (
         f"{card_name} must be parser-claimed by the active CardSource"
     )
@@ -327,7 +327,7 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     assert card_name in ps, (
         f"{card_name} must be parser-claimed by the active CardSource"
     )
@@ -515,7 +515,7 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -542,9 +542,15 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     # Land carrier FULL FLIP via the dual-target AA 2nd-target-slot
     # closure + the MovePlusOneCounterBetweenPermanentsYouControl
     # Effect-class widen.
+    # 2026-09-28 (feature/cube-fixes-1): Gemstone Caverns LEFT the admit
+    # set. Its Python parse now models the printed luck-counter gate
+    # (IfConditionElse(SourceHasCounter('luck'), Add{any}, Add{C}) +
+    # the CR 103.6 opening-hand action); the old AddManaToPool(any)
+    # shape dropped the "{C} unless it has a luck counter" clause and
+    # the opening-hand line. The frozen Rust bridge has no arm for the
+    # gated shape, so the card honestly declines at the builder.
     expected_post_grove = sorted(
         set(_PHASE_3_ADMIT_SET) | {
-            "Gemstone Caverns",
             "Mirrorpool",
             "Meteor Crater",
             "Reflecting Pool",
@@ -556,7 +562,7 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     assert admits == expected_post_grove, (
         f"Grove + Nesting-Grounds subsystem-attribution LOADER-SIDE "
         f"LAND pin violated. _carrier_aa_land_card_def must admit "
-        f"EXACTLY the post-Grove + Nesting-Grounds 14-card set "
+        f"EXACTLY the post-Grove + Nesting-Grounds 13-card set "
         f"{expected_post_grove}, got {admits}. A silent "
         f"auto-grow indicates a Phase-4+ widen landed without inverting "
         f"this assertion — investigate before merging."
@@ -582,7 +588,7 @@ def test_phase_3c_close_carrier_aa_artifact_admit_set_is_empty_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -631,7 +637,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     admits = sorted(
         name
         for name, p in ps.items()
@@ -661,7 +667,10 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
             "Eldrazi Temple",       # AA[1] spend_restriction="colorless_eldrazi" declines
-            "Gemstone Caverns",     # produces=("any", 1) declines on "any" teeth
+            # Gemstone Caverns removed 2026-09-28: its luck-counter-gated
+            # IfConditionElse mana effect (the faithful parse; the old
+            # AddManaToPool(any) dropped the "{C} without a luck counter"
+            # clause) no longer passes the per-AA Effect-class gate.
             "Sunken Citadel",       # AA[0] produces=("any", 1) + subtypes=("Cave",)
         }
     )
@@ -717,7 +726,7 @@ def test_phase_3c_close_phase_4_carrier_declines_on_both_sub_predicates_and_disp
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     if card_name not in ps:
         pytest.skip(
             f"{card_name} absent from active CardSource — "
@@ -768,7 +777,7 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
-    ps = OracleParserCardSource().get_printings()
+    ps = OracleParserCardSource(pool="eoe").get_printings()
     # LOADER-SIDE admit set: cards that produce a non-None CardDef
     # from EITHER the Land sibling OR the Artifact sibling.
     loader_admit_count = sum(
@@ -785,10 +794,18 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
     # Caverns + Mirrorpool + Meteor Crater + Reflecting Pool + Ancient
     # Tomb + Grove of the Burnwillows + Nesting Grounds; 3 Artifact
     # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
-    assert loader_admit_count == 17, (
+    # 2026-09-28 (feature/cube-fixes-1): Gemstone Caverns LEFT the admit
+    # set. Its Python parse now models the printed luck-counter gate
+    # (IfConditionElse(SourceHasCounter('luck'), Add{any}, Add{C}) +
+    # the CR 103.6 opening-hand action); the old AddManaToPool(any)
+    # shape dropped the "{C} unless it has a luck counter" clause and
+    # the opening-hand line. The frozen Rust bridge has no arm for the
+    # gated shape, so the card honestly declines at the builder.
+    # The LOADER-SIDE size drops 17 -> 16 (13 Land admits).
+    assert loader_admit_count == 16, (
         f"Grove + Nesting-Grounds close LOADER-SIDE admit-set size "
-        f"invariant violated: expected exactly 17 cards (14 Land = 7 "
-        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater + "
+        f"invariant violated: expected exactly 16 cards (13 Land = 7 "
+        f"Phase-3 + Mirrorpool + Meteor Crater + "
         f"Reflecting Pool + Ancient Tomb + Grove of the Burnwillows + "
         f"Nesting Grounds; 3 Artifact = Ghost "
         f"Vacuum + Keys to the House + All-Fates Scroll) post-Grove, "

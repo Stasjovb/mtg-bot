@@ -63,6 +63,10 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.activated import _is_sorcery_rider_line
 from mtg_bot.cards.parser.clause import _parse_clause
+from mtg_bot.cards.parser.creature_wg_lines import (
+    link_exile_abilities,
+    parse_wg_creature_line,
+)
 from mtg_bot.cards.parser.effects import _parse_effect
 from mtg_bot.cards.parser.cost_reduction import (
     _parse_cost_reduction_line,
@@ -99,10 +103,19 @@ from mtg_bot.cards.parser.printing_keywords import (
     _parse_unblockable_if_two_spells_cast_this_turn_line,
     _parse_ward_discard_line,
     _parse_ward_line,
+    _parse_ward_pay_life_line,
+    _parse_keyword_line_with_ward,
+    _parse_chooses_player_line,
+    _parse_self_has_keywords_line,
     _parse_warp_castable_from_graveyard_line,
     _parse_warp_line,
     _parse_warp_with_life_cost_line,
 )
+from mtg_bot.cards.parser.creature_rmc_grammar import (
+    parse_rmc_creature_line_post,
+    parse_rmc_creature_line_pre,
+)
+from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_creature_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import (
     _parse_predicate_trigger_phrase,
@@ -164,13 +177,19 @@ from mtg_bot.effects.predicates import (
 # lowercase first letter) because each mode is a full printed sentence
 # rather than the ``it deals …`` creature-trigger form.
 _MODAL_CHOOSE_ONE_SUFFIX = ", choose one —"
+# "choose up to one —" (Ertai Resurrected): the same block plus a
+# "choose no mode" option.
+_MODAL_CHOOSE_UP_TO_ONE_SUFFIX = ", choose up to one —"
+# "choose one that hasn't been chosen —" (Gollum, Riddle Master).
+_MODAL_CHOOSE_UNUSED_SUFFIX = ", choose one that hasn't been chosen —"
 _MODAL_MODE_PREFIX = "• "
 
 # Trigger-header shape for a modal triggered ability. The leading
 # ``When``/``Whenever`` and the trailing ``, choose one —`` are fixed;
 # the condition body (group 1) is captured non-greedily.
 _MODAL_TRIGGER_HEADER_RE = re.compile(
-    r"^(?:When|Whenever) (.+?), choose one —$"
+    r"^(?:When|Whenever) (.+?), choose (up to )?one"
+    r"( that hasn't been chosen)? —$"
 )
 
 
@@ -233,10 +252,28 @@ def _parse_modal_trigger_block(
         if not raw.startswith(_MODAL_MODE_PREFIX):
             return None
         body = raw[len(_MODAL_MODE_PREFIX):]
+        if name is not None:
+            body = _substitute_self_name(body, name)
         eff = _parse_modal_mode_phrase(body)
         if eff is None:
             return None
         parsed_modes.append(eff)
+    if m.group(2):
+        from mtg_bot.effects.generic.cube_creatures_ub import ChooseNoMode
+
+        parsed_modes.append(ChooseNoMode())
+    if m.group(3):
+        from mtg_bot.effects.generic.cube_creatures_ub import (
+            ModalChooseOneNotYetChosen,
+        )
+
+        if any(e.requires_target() for e in parsed_modes):
+            return None
+        return TriggeredAbility(
+            event=event,
+            predicate=predicate,
+            effect=ModalChooseOneNotYetChosen(modes=tuple(parsed_modes)),
+        )
     return TriggeredAbility(
         event=event,
         predicate=predicate,
@@ -325,6 +362,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     ward: str | None = None
     ward_discard_chosen = False
     ward_discard_random = False
+    ward_life_cost = 0
+    chooses_player_as_enters = False
     devour: int = 0
     impending: str | None = None
     impending_count: int = 0
@@ -349,6 +388,25 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     hand_ability_grants: "tuple[HandAbilityGrant, ...]" = ()
     grants_food_to_your_artifacts = False
     grants_food_ability_to_your_artifacts = False
+    # Cube creatures (R / multicolor / colorless) bucket contributions.
+    rmc_hand_abilities: list = []
+    rmc_graveyard_abilities: list = []
+    rmc_printing_fields: dict = {}
+
+    def _absorb_rmc_line(rmc) -> None:
+        keywords.update(rmc.keywords)
+        triggers.extend(rmc.triggers)
+        activated.extend(rmc.activated)
+        statics.extend(rmc.statics)
+        rmc_hand_abilities.extend(rmc.hand_abilities)
+        rmc_graveyard_abilities.extend(rmc.graveyard_abilities)
+        rmc_printing_fields.update(rmc.printing_fields)
+
+    # Cube W/G creature bucket (``creature_wg_lines``): printing fields
+    # contributed by lines the pre-existing grammar declines.
+    wg_fields: dict = {}
+    ub_fields: dict = {}
+    ub_hand_abilities: list[ActivatedAbility] = []
     text = card.get("oracle_text", "")
     # Pre-process oracle lines into groups. Most lines become a 1-element
     # group ``(stripped_line,)``. A modal trigger block (header ending
@@ -366,7 +424,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     _i = 0
     while _i < len(_raw_lines):
         _ln = _raw_lines[_i]
-        if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX):
+        if _ln.endswith(_MODAL_CHOOSE_ONE_SUFFIX) or _ln.endswith(
+            _MODAL_CHOOSE_UP_TO_ONE_SUFFIX
+        ) or _ln.endswith(_MODAL_CHOOSE_UNUSED_SUFFIX):
             # Modal trigger header — collect subsequent bullet mode lines.
             _modes: list[str] = []
             _j = _i + 1
@@ -449,6 +509,17 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             else:
                 ward_discard_chosen = True
             continue
+        ward_life = _parse_ward_pay_life_line(line)
+        if ward_life is not None:
+            ward_life_cost = ward_life
+            continue
+        kw_with_ward = _parse_keyword_line_with_ward(line)
+        if kw_with_ward is not None:
+            # ``Flying, ward {1}`` — keyword line whose last piece is a
+            # Ward {cost} (Raffine, Scheming Seer).
+            keywords.update(kw_with_ward[0])
+            ward = kw_with_ward[1]
+            continue
         devour_n = _parse_devour_line(line)
         if devour_n is not None:
             # A card should only have one Devour clause; if a malformed
@@ -468,6 +539,13 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             # somehow had two we keep the last — parity against the static
             # registry will catch drift.
             impending_count, impending = impending_result
+            continue
+        if _parse_chooses_player_line(line):
+            chooses_player_as_enters = True
+            continue
+        self_kws = _parse_self_has_keywords_line(line)
+        if self_kws is not None:
+            keywords.update(self_kws)
             continue
         if _parse_enters_tapped_line(line):
             # ``This creature enters tapped.`` — printing-level static
@@ -644,11 +722,16 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             enters_with_counters_from_x = "x"
             continue
         if _parse_additional_land_per_turn_line(line):
-            # ``You may play an additional land on each of your turns.``
-            # Increments the grant counter; a card with the line twice
-            # (no current EoE printing) would grant two additional land
-            # plays, matching the engine field's int semantics.
-            grants_additional_land_per_turn += 1
+            # ``You may play <N> additional land(s) on each of your
+            # turns.`` Adds N to the grant counter (Azusa: two), matching
+            # the engine field's int semantics.
+            from mtg_bot.cards.parser.printing_keywords import (
+                parse_additional_lands_per_turn,
+            )
+
+            grants_additional_land_per_turn += parse_additional_lands_per_turn(
+                line,
+            )
             continue
         if _parse_play_lands_from_graveyard_line(line):
             # ``You may play lands from your graveyard.`` — Icetill
@@ -789,6 +872,29 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 return None
             activated[-1] = replace(activated[-1], sorcery_speed=True)
             continue
+        # Cube creatures (R / multicolor / colorless) bucket: abilities
+        # that function from the hand / graveyard, Exhaust, Dash, ...
+        # must be routed before the generic clause dispatcher files them
+        # as battlefield abilities.
+        rmc = parse_rmc_creature_line_pre(line, card["name"])
+        if rmc is not None:
+            _absorb_rmc_line(rmc)
+            continue
+        # U/B cube-creature grammar (``parser.cube_creatures_ub``):
+        # draw replacements, Ninjutsu, ... Tried before the generic
+        # clause dispatch; contributes abilities and printing fields.
+        ub_line = parse_ub_creature_line(
+            _substitute_self_name(line, card["name"]), card["name"],
+        )
+        if ub_line is not None:
+            keywords.update(ub_line.keywords)
+            triggers.extend(ub_line.triggers)
+            activated.extend(ub_line.activated)
+            statics.extend(ub_line.statics)
+            ub_hand_abilities.extend(ub_line.hand_abilities)
+            cost_reductions.extend(ub_line.cost_reductions)
+            ub_fields.update(ub_line.fields)
+            continue
         # Pass the printing's own name to the clause dispatcher so the
         # triggered-ability layer can substitute name references
         # (``Haliya``, ``Syr Vondam``, etc.) with the canonical
@@ -796,7 +902,70 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         # Non-trigger clause types ignore the parameter today.
         parsed = _parse_clause(line, name=card["name"])
         if parsed is None:
-            return None
+            rmc = parse_rmc_creature_line_post(line, card["name"])
+            if rmc is not None:
+                _absorb_rmc_line(rmc)
+                continue
+            # Cube W/G creature bucket: consulted only for lines the
+            # grammar above declined, so it can't change a claim.
+            wg = parse_wg_creature_line(line, card)
+            if wg is None:
+                # Cube layouts bucket: lines of the bucket's faces.
+                from mtg_bot.cards.parser.layout_face_grammar import (
+                    parse_face_creature_line,
+                )
+
+                wg = parse_face_creature_line(line, card)
+            if wg is None:
+                # Roto P1 (stack & restrictions) lines.
+                from mtg_bot.cards.parser.roto_stack import (
+                    merge_fields, parse_roto_stack_line,
+                )
+
+                roto = parse_roto_stack_line(line, card)
+                if roto is not None:
+                    merge_fields(wg_fields, roto.fields)
+                    keywords.update(roto.keywords)
+                    triggers.extend(roto.triggers)
+                    activated.extend(roto.activated)
+                    statics.extend(roto.statics)
+                    continue
+                # Vintage Roto P3 (mana triggers, ...).
+                from mtg_bot.cards.parser.roto_mana import (
+                    parse_roto_creature_line,
+                )
+
+                wg = parse_roto_creature_line(line, card)
+            if wg is None:
+                # Vintage Roto P5 lines (board rules, ...).
+                from mtg_bot.cards.parser.roto_board import (
+                    parse_roto_board_line_into,
+                )
+
+                wg = parse_roto_board_line_into(line, card, wg_fields)
+            if wg is None:
+                # Roto P2 static lines (graveyard exile-instead, ...).
+                from mtg_bot.cards.parser.roto_zones import (
+                    parse_roto_zones_creature_line,
+                )
+
+                wg = parse_roto_zones_creature_line(line, card)
+            if wg is None:
+                return None
+            if "zone_abilities" in wg.fields:
+                # Roto P2 zone abilities accumulate across lines.
+                wg_fields["zone_abilities"] = tuple(
+                    wg_fields.get("zone_abilities", ())
+                ) + tuple(wg.fields["zone_abilities"])
+                wg = replace(wg, fields={
+                    k: v for k, v in wg.fields.items() if k != "zone_abilities"
+                })
+            wg_fields.update(wg.fields)
+            keywords.update(wg.keywords)
+            triggers.extend(wg.triggers)
+            activated.extend(wg.activated)
+            statics.extend(wg.statics)
+            continue
         keywords.update(parsed.keywords)
         # ``triggers`` is a tuple — one entry per condition arm. A
         # standard single-condition line yields a 1-tuple; a compound
@@ -811,7 +980,9 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         if parsed.statics:
             statics.extend(parsed.statics)
 
-    return make_creature(
+    # Cube W/G creature bucket: linked "exiled with" ability pairs.
+    link_exile_abilities(triggers, activated, statics)
+    printing = make_creature(
         name=card["name"],
         cost=card["mana_cost"],
         power=power,
@@ -832,6 +1003,8 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         ward=ward,
         ward_discard_chosen=ward_discard_chosen,
         ward_discard_random=ward_discard_random,
+        ward_life_cost=ward_life_cost,
+        chooses_player_as_enters=chooses_player_as_enters,
         devour_land_multiplier=devour,
         impending=impending,
         impending_count=impending_count,
@@ -870,3 +1043,49 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             grants_food_ability_to_your_artifacts
         ),
     )
+    if rmc_hand_abilities:
+        rmc_printing_fields["hand_activated_abilities"] = (
+            tuple(printing.hand_activated_abilities)
+            + tuple(rmc_hand_abilities)
+        )
+    if rmc_graveyard_abilities:
+        rmc_printing_fields["graveyard_activated_abilities"] = tuple(
+            rmc_graveyard_abilities
+        )
+    # "As this creature enters, choose a color." only means something
+    # together with the line that uses the chosen color (Painter's
+    # Servant): claim both or neither.
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        assemble_die_roll_trigger,
+    )
+
+    die_trigger = assemble_die_roll_trigger(rmc_printing_fields)
+    if die_trigger == "invalid":
+        return None
+    if die_trigger is not None:
+        rmc_printing_fields["triggered_abilities"] = (
+            tuple(printing.triggered_abilities) + (die_trigger,)
+        )
+    chooses_color = rmc_printing_fields.pop("_chooses_color", False)
+    if chooses_color != rmc_printing_fields.get(
+        "paints_all_objects_chosen_color_at_etb", False,
+    ):
+        return None
+    if rmc_printing_fields:
+        printing = replace(printing, **rmc_printing_fields)
+    if wg_fields:
+        if "graveyard_activated_abilities" in wg_fields:
+            wg_fields["graveyard_activated_abilities"] = (
+                tuple(printing.graveyard_activated_abilities)
+                + tuple(wg_fields["graveyard_activated_abilities"])
+            )
+        printing = replace(printing, **wg_fields)
+    if ub_hand_abilities:
+        ub_fields["hand_activated_abilities"] = (
+            tuple(printing.hand_activated_abilities) + tuple(ub_hand_abilities)
+        )
+    if ub_fields:
+        printing = replace(printing, **ub_fields)
+    from mtg_bot.cards.parser.cube_creatures_ub import link_exiled_with_recall
+
+    return link_exiled_with_recall(printing)

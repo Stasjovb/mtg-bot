@@ -98,7 +98,7 @@ def _describe_filter(target_filter) -> str:
     log lines / describe(). Coarse — exact wording is owned by the
     parser's phrasebook on the way in."""
     from mtg_bot.effects.object_predicates import (
-        ControlledByOpponent, ControlledByYou,
+        BlockedBySource, ControlledByOpponent, ControlledByYou,
         IsArtifact, IsAttacking, IsBasic, IsBlocking, IsCreature,
         IsEnchantment, IsLand, IsPlayer, IsTapped, ObjectAnd,
         ObjectNot, ObjectOr,
@@ -126,6 +126,8 @@ def _describe_filter(target_filter) -> str:
             return "target creature an opponent controls"
         if isinstance(l, IsCreature) and isinstance(r, ControlledByYou):
             return "target creature you control"
+        if isinstance(l, IsCreature) and isinstance(r, BlockedBySource):
+            return "target creature it's blocking"
         if isinstance(l, IsPlayer) and isinstance(r, ControlledByOpponent):
             return "target opponent"
         if isinstance(l, IsLand) and isinstance(r, ObjectNot) and isinstance(
@@ -152,7 +154,15 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     """
     from mtg_bot.game import Zone, reveal_to_all
 
+    if obj.exile_instead_of_leaving:
+        from mtg_bot.turn import move_off_battlefield
+
+        move_off_battlefield(state, obj, destination="exile")
+        return
     state.battlefield.remove(obj)
+    from mtg_bot.game import restore_mdfc_front
+
+    restore_mdfc_front(obj)
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
@@ -166,6 +176,7 @@ def _bounce_to_hand(state: "GameState", obj) -> None:
     obj.temp_toughness_bonus = 0
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    state.player_by_id(obj.controller_id).permanent_left_battlefield_this_turn = True
     if obj.printing.is_token:
         state.log.append(
             f"{obj.printing.name} token ceases to exist (bounced)"

@@ -125,6 +125,7 @@ class FamishedWorldsireETBEffect(Effect):
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
             land.controller_id = controller_id
+            land.entered_battlefield_turn = state.turn_number
             state.battlefield.append(land)
             state.log.append(
                 f"P{controller_id} puts {land.printing.name} onto the "
@@ -164,8 +165,11 @@ class TannukEnsignLandfallEffect(Effect):
     ) -> None:
         source = state.resolving_source
         # Damage each opponent 1 (log even without a source).
+        from mtg_bot.game import player_damage_prevented
         for p in state.players:
             if p.id == controller_id or p.has_lost:
+                continue
+            if player_damage_prevented(state, p.id):
                 continue
             p.life -= 1
             state.log.append(
@@ -402,6 +406,9 @@ class PainForAllETBEffect(Effect):
         if amount <= 0:
             return
         if kind == "player":
+            from mtg_bot.game import player_damage_prevented
+            if player_damage_prevented(state, target_id):
+                return
             victim = state.player_by_id(target_id)
             victim.life -= amount
             state.log.append(
@@ -447,8 +454,11 @@ class PainForAllDamageEchoEffect(Effect):
         amount = state.resolving_combat_damage_amount
         if amount <= 0:
             return
+        from mtg_bot.game import player_damage_prevented
         for p in state.players:
             if p.id == controller_id or p.has_lost:
+                continue
+            if player_damage_prevented(state, p.id):
                 continue
             p.life -= amount
             state.log.append(
@@ -832,6 +842,7 @@ class KavaronHarrierAttackEffect(Effect):
         token.tapped = True
         token.attacking = True
         token.summoning_sick = False
+        token.entered_battlefield_turn = state.turn_number
         state.battlefield.append(token)
         state.pending_end_of_combat_sacrifices.append(token.id)
         state.log.append(
@@ -956,6 +967,7 @@ class TerrapactIntimidatorETBEffect(Effect):
                 token = state.new_object(
                     lander_printing, controller_id, Zone.BATTLEFIELD,
                 )
+                token.entered_battlefield_turn = state.turn_number
                 state.battlefield.append(token)
             state.log.append(
                 f"P{opponent.id} elected — P{controller_id} creates "
@@ -1145,6 +1157,12 @@ class ConsultTheStarChartsEffect(Effect):
 
     Reads state.resolving_kicked to choose between 1 and 2 cards to
     keep. Agent picks the kept cards via ``choose_card_from_library``.
+
+    NOT emitted by the parser any more: the card composes from the
+    generic look-at-top grammar (``IfConditionElse(SpellWasKicked(),
+    LookAtTopCardsPutIntoHand(take=2, ...), LookAtTopCardsPutIntoHand(
+    take=1, ...))`` over ``CountControlledMatching(IsLand())``). The class
+    stays only because the Rust parity bridge still round-trips it.
     """
 
     def resolve(
@@ -2232,7 +2250,7 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
                 f"P{p.id} discards {card.printing.name} "
                 f"(Alpharael artifact dodge)"
             )
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
             return
 
         # Fallback: discard two cards (any). Mirrors DiscardSelf(amount=2).
@@ -2246,7 +2264,7 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
             card.zone = Zone.GRAVEYARD
             p.graveyard.append(card)
             state.log.append(f"P{p.id} discards {card.printing.name}")
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
 
     def describe(self) -> str:
         return "discard two cards unless you discard an artifact card"
@@ -2268,6 +2286,13 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
 class ExorciseEffect(Effect):
     """Exorcise ``{1}{W}`` (Duskmourn): "Exile target artifact,
     enchantment, or creature with power 4 or greater."
+
+    NOT emitted by the parser any more: Exorcise composes from the
+    generic removal grammar (``RemoveTargetPermanents(action="exile",
+    target_filter=IsArtifact() | IsEnchantment() | (IsCreature() &
+    HasPowerAtLeast(4)))``). The class stays only because the Rust
+    parity bridge (``parity/cross_engine.py`` / ``parity/trajectory.py``,
+    ``Effect::ExorciseEffect``) still round-trips it.
 
     Three-way disjunctive target filter — the chosen target must be
     an artifact OR an enchantment OR a creature whose effective power
@@ -2862,6 +2887,10 @@ class FanaticOfTheHarrowingETBEffect(Effect):
         for p in order:
             if p.has_lost or not p.hand:
                 continue
+            from mtg_bot.player_protections import opponent_effect_blocked_for
+
+            if opponent_effect_blocked_for(state, p.id):
+                continue
             hand_ids = [c.id for c in p.hand]
             chosen_id = p.agent.choose_discard(state, p.id, hand_ids)
             card = next(c for c in p.hand if c.id == chosen_id)
@@ -2872,7 +2901,7 @@ class FanaticOfTheHarrowingETBEffect(Effect):
                 f"P{p.id} discards {card.printing.name} "
                 f"(Fanatic of the Harrowing)"
             )
-            fire_opponent_discards_triggers(state, p.id)
+            fire_opponent_discards_triggers(state, p.id, card=card)
             if p.id == controller_id:
                 controller_discarded = True
         if controller_discarded:
@@ -3268,11 +3297,13 @@ class SurveyMechanActivationEffect(Effect):
                 # pool (legal_targets includes players there too).
                 try:
                     _p = state.player_by_id(_id)
-                    _p.life -= 3
-                    state.log.append(
-                        f"P{_id} takes 3 damage from Survey Mechan "
-                        f"(life: {_p.life})"
-                    )
+                    from mtg_bot.game import player_damage_prevented
+                    if not player_damage_prevented(state, _id):
+                        _p.life -= 3
+                        state.log.append(
+                            f"P{_id} takes 3 damage from Survey Mechan "
+                            f"(life: {_p.life})"
+                        )
                 except KeyError:
                     state.log.append(
                         f"Survey Mechan damage target P{_id} not found"

@@ -1117,10 +1117,11 @@ def _generate_one_game_data(
         ],
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
+        # Alternate the starting seat. Passed into setup (not patched
+        # afterwards) so opening-hand actions -- Gemstone Caverns is
+        # only for the non-starting player -- see the real starter.
+        starting_player_idx=game_idx % 2,
     )
-    if game_idx % 2 == 1:
-        engine.active_player_idx = 1
-        engine.priority_player_idx = 1
     # B3-S1: route through the single decision-source factory. Under
     # decision_source="python" (the default, carried on `heuristics`)
     # this returns the identical MtgGameStateAdapter built with the

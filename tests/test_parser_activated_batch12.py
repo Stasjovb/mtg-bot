@@ -247,13 +247,18 @@ def test_remove_two_counters_phrasing_returns_none():
     ) is None
 
 
-def test_remove_counter_from_self_phrasing_returns_none():
+def test_remove_counter_from_self_phrasing_is_a_composable_atom():
     """``Remove a +1/+1 counter from this creature`` (counter-removal
-    targeting the source) is a different cost shape with no engine
-    field today. Rejected."""
-    assert _parse_activation_cost(
-        "Remove a +1/+1 counter from this creature"
-    ) is None
+    from the source — Walking Ballista) is a composable
+    ``ActivationCost.extra_costs`` atom (cube creatures bucket), distinct
+    from the "from a creature you control" dedicated field."""
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        RemoveCountersFromSelfCost,
+    )
+
+    cost = _parse_activation_cost("Remove a +1/+1 counter from this creature")
+    assert cost.extra_costs == (RemoveCountersFromSelfCost(count=1),)
+    assert not cost.remove_plus_one_counter_from_your_creature
 
 
 def test_remove_minus_one_counter_phrasing_returns_none():
@@ -266,10 +271,10 @@ def test_remove_minus_one_counter_phrasing_returns_none():
 
 def test_remove_counter_paired_with_unknown_atom_returns_none():
     """Counter-removal paired with a piece that doesn't classify
-    (here the still-unsupported ``Discard a card``) bails out — the
+    (here the still-unsupported ``Mill a card``) bails out — the
     bag-merge fails fast on the first unrecognized piece."""
     assert _parse_activation_cost(
-        "Remove a +1/+1 counter from a creature you control, Discard a card"
+        "Remove a +1/+1 counter from a creature you control, Mill a card"
     ) is None
 
 

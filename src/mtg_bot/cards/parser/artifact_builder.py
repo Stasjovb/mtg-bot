@@ -158,6 +158,17 @@ table — both factories were deleted on 2026-05-01):
   The Clue subtype is extracted from the Scryfall type-line via the
   new ``artifact_subtype`` step in ``_build_artifact_printing``.
 
+PowerLSV cube additions (``feature/cube-artifacts``): printing-level
+statics (``This artifact enters tapped.`` / ``doesn't untap during your
+untap step`` / ``enters with N <kind> counters`` / ``You may play lands
+from your graveyard.`` / Mox Diamond's discard-a-land entry / Time
+Vault's turn skip / ``Sunburst`` / Bolas's Citadel's play-from-top and
+look-at-top), Vehicles (``Crew N`` plus printed P/T), ``∞ —``
+harness-gated triggers, and self-name substitution so legendary
+artifacts naming themselves ("The One Ring", "Esika's Chariot") parse
+through the same phrase tables. Effect bodies specific to this bucket
+live in ``parser/artifact_effects.py``.
+
 Pure artifacts share the unified clause grammar with creatures - no
 ``Equipped creature ...`` or ``Station`` lines appear here - so this
 builder is structurally simpler than the equipment and spacecraft
@@ -169,6 +180,8 @@ the bespoke effect class is preserved end-to-end.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
@@ -185,7 +198,18 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.clause import _parse_clause
 from mtg_bot.cards.parser.cost_reduction import _parse_affinity_line
 from mtg_bot.cards.parser.printing_keywords import (
+    _parse_deck_construction_statement_line,
+    _parse_crew_line,
+    _parse_discard_land_to_enter_line,
+    _parse_doesnt_untap_line,
+    _parse_enters_tapped_line,
+    _parse_enters_with_named_counters_line,
+    _parse_look_at_top_card_any_time_line,
     _parse_looks_at_opponents_face_down_line,
+    _parse_play_from_top_paying_life_line,
+    _parse_play_lands_from_graveyard_line,
+    _parse_skip_turn_to_untap_line,
+    _parse_sunburst_line,
 )
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
@@ -194,7 +218,12 @@ from mtg_bot.effects.combinators import Sequence
 from mtg_bot.effects.conditions import PerControlled
 from mtg_bot.effects.generic import CreateToken, Surveil
 from mtg_bot.effects.object_predicates import HasSubtype
-from mtg_bot.effects.predicates import Controlled, Event, YOU
+from mtg_bot.effects.object_predicates import IsHarnessed
+from mtg_bot.effects.predicates import Controlled, Event, Source, YOU
+
+
+# ``∞ — `` prefix of an Infinity Stone's harness-gated abilities.
+_INFINITY_PREFIX = "∞ — "
 
 
 # Printing-level flag dispatch is handled via the standard
@@ -267,6 +296,10 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     # rejecting any printing they would also accept.
     if "Creature" in card_types:
         return None
+    # An artifact land is a land (playable as a land drop); the land
+    # builders own it -- never claim it as a plain artifact.
+    if "Land" in card_types:
+        return None
     if "Equipment" in subtypes:
         return None
     if "Spacecraft" in subtypes:
@@ -276,7 +309,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     # (e.g. ``"Clue"`` from ``"Artifact — Clue"``). Creature, Equipment, and
     # Spacecraft subtypes are already gated out above; any remaining subtype
     # is a pure-artifact subtype like Clue or Food.
-    artifact_subtype: str | None = subtypes[0] if subtypes else None
+    artifact_subtype: str | None = " ".join(subtypes) if subtypes else None
 
     text = card.get("oracle_text", "")
     keywords: set[str] = set()
@@ -285,6 +318,24 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
     statics: list[StaticAbility] = []
     cost_reductions: list[CostReduction] = []
     looks_at_face_down: bool = False
+    enters_tapped: bool = False
+    doesnt_untap: bool = False
+    play_lands_from_graveyard: bool = False
+    discard_land_to_enter: bool = False
+    enters_with_counters: list[tuple[str, int]] = []
+    skip_turn_to_untap: bool = False
+    sunburst: bool = False
+    look_at_top: bool = False
+    play_from_top_paying_life: bool = False
+    # Vintage Roto P3 lines (modal "When ~ enters, choose one —" blocks,
+    # library-top cast grants, ...) are lifted out first.
+    from mtg_bot.cards.parser.roto_mana import extract_roto_artifact_lines
+
+    extracted = extract_roto_artifact_lines(text, card["name"])
+    if extracted is None:
+        return None
+    text, roto_triggers, roto_fields = extracted
+    triggers.extend(roto_triggers)
 
     for raw_line in text.split("\n"):
         line = _strip_reminder_text(raw_line)
@@ -299,6 +350,47 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         # printing-keyword fan-out.
         if _parse_looks_at_opponents_face_down_line(line):
             looks_at_face_down = True
+            continue
+        # ``This artifact enters tapped.`` / ``This artifact doesn't
+        # untap during your untap step.`` / ``You may play lands from
+        # your graveyard.`` — printing-level statics (Time Vault,
+        # Wizard's Rockets, Grim Monolith, Crucible of Worlds).
+        if _parse_enters_tapped_line(line):
+            enters_tapped = True
+            continue
+        if _parse_doesnt_untap_line(line):
+            doesnt_untap = True
+            continue
+        if _parse_play_lands_from_graveyard_line(line):
+            play_lands_from_graveyard = True
+            continue
+        if _parse_discard_land_to_enter_line(line):
+            discard_land_to_enter = True
+            continue
+        counters = _parse_enters_with_named_counters_line(line)
+        if counters is not None:
+            enters_with_counters.append(counters)
+            continue
+        if _parse_skip_turn_to_untap_line(line):
+            skip_turn_to_untap = True
+            continue
+        if _parse_sunburst_line(line):
+            sunburst = True
+            continue
+        if _parse_look_at_top_card_any_time_line(line):
+            look_at_top = True
+            continue
+        if _parse_play_from_top_paying_life_line(line):
+            play_from_top_paying_life = True
+            continue
+        if _parse_deck_construction_statement_line(line, card["name"]):
+            # "This card is banned." -- constrains deck building only.
+            continue
+        crew_n = _parse_crew_line(line)
+        if crew_n is not None:
+            if "Vehicle" not in subtypes:
+                return None
+            activated.append(_crew_ability(crew_n))
             continue
         # Affinity keyword line dispatch — ``Affinity for <subtype>``
         # (reminder text already stripped). Produces a
@@ -319,8 +411,51 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         # recognizers in ``effects.py`` keep the anaphoric bodies
         # intact while still mapping to ``Sequence`` of generic
         # primitives).
-        clause = _parse_clause(line)
+        # ``∞ — <triggered ability>`` (Infinity Stones): the ability
+        # functions only while the permanent is harnessed (CR 702.186).
+        # Parsed as a normal trigger with ``Source(IsHarnessed())`` AND-ed
+        # onto its predicate.
+        if line.startswith(_INFINITY_PREFIX):
+            inf_clause = _parse_clause(
+                line[len(_INFINITY_PREFIX):], name=card["name"],
+            )
+            if inf_clause is None or not inf_clause.triggers:
+                return None
+            triggers.extend(
+                replace(t, predicate=t.predicate & Source(IsHarnessed()))
+                for t in inf_clause.triggers
+            )
+            continue
+        clause = _parse_clause(line, name=card["name"])
         if clause is None:
+            # Roto P1 (stack & restrictions) lines -- consulted only for
+            # lines the grammar above declined.
+            from mtg_bot.cards.parser.roto_stack import (
+                merge_fields, parse_roto_stack_line,
+            )
+
+            roto = parse_roto_stack_line(line, card)
+            if roto is not None:
+                merge_fields(roto_fields, roto.fields)
+                keywords.update(roto.keywords)
+                triggers.extend(roto.triggers)
+                activated.extend(roto.activated)
+                statics.extend(roto.statics)
+                continue
+            # Vintage Roto P5 lines (printing-level statics, ...).
+            from mtg_bot.cards.parser.roto_board import (
+                merge_board_fields,
+                parse_roto_board_line,
+            )
+
+            board = parse_roto_board_line(line, card)
+            if board is not None:
+                keywords.update(board.keywords)
+                triggers.extend(board.triggers)
+                activated.extend(board.activated)
+                statics.extend(board.statics)
+                merge_board_fields(roto_fields, board.fields)
+                continue
             # Anything the unified parser doesn't recognize - composite
             # triggers, zone-change triggers, custom effects - falls
             # through and we skip the whole card rather than half-claim
@@ -351,7 +486,7 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         # silently dropping the line.
         return None
 
-    return make_artifact(
+    printing = make_artifact(
         name=card["name"],
         cost=card["mana_cost"],
         legendary=("Legendary" in supertypes),
@@ -362,4 +497,52 @@ def _build_artifact_printing(card: dict) -> CardPrinting | None:
         static_abilities=tuple(statics),
         cost_reductions=tuple(cost_reductions),
         looks_at_opponents_face_down_creatures=looks_at_face_down,
+        enters_tapped=enters_tapped,
+        doesnt_untap_during_untap_step=doesnt_untap,
+        grants_play_lands_from_graveyard=play_lands_from_graveyard,
+    )
+    if discard_land_to_enter:
+        printing = replace(printing, enters_only_by_discarding_land=True)
+    if enters_with_counters:
+        printing = replace(
+            printing, enters_with_named_counters=tuple(enters_with_counters),
+        )
+    if skip_turn_to_untap:
+        printing = replace(printing, may_skip_turn_to_untap=True)
+    if sunburst:
+        printing = replace(printing, sunburst=True)
+    if look_at_top:
+        printing = replace(printing, grants_look_at_top_of_library=True)
+    if play_from_top_paying_life:
+        printing = replace(printing, grants_play_from_top_paying_life=True)
+    if roto_fields:
+        # P5's accumulated fields (board rules, named counters) extend
+        # what the printing already carries; the rest are set.
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
+    if "Vehicle" in subtypes:
+        # Vehicles carry printed P/T that applies while they're
+        # creatures (crewed / animated).
+        try:
+            power = int(card.get("power", ""))
+            toughness = int(card.get("toughness", ""))
+        except ValueError:
+            return None
+        printing = replace(printing, power=power, toughness=toughness)
+    return printing
+
+
+def _crew_ability(n: int) -> ActivatedAbility:
+    """``Crew N``: tap untapped creatures with total power N or more:
+    this Vehicle becomes an artifact creature until end of turn."""
+    from mtg_bot.effects.combinators import ApplyEffect
+    from mtg_bot.effects.durations import EndOfTurn
+    from mtg_bot.effects.generic import BecomeType
+
+    return ActivatedAbility(
+        cost=ActivationCost(crew=n),
+        effect=ApplyEffect(
+            BecomeType(types_to_add=("creature",)), ends_at=EndOfTurn(),
+        ),
     )

@@ -1,0 +1,539 @@
+"""Cast-time optional additional costs for the U/B cube creatures:
+Squad (CR 702.157) and Offspring (CR 702.175).
+
+Both are offered while the spell is being cast (CR 601.2b/f), like
+splice (``alt_casting.offer_splices``): the caster answers an agent
+prompt and the chosen payments are added to the total cost, so no new
+``CastSpell`` variants are needed. The payment is recorded on the spell
+object (``GameObject.squad_paid_count`` / ``offspring_paid``) for the
+permanent's "if its squad / offspring cost was paid" ETB trigger.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from mtg_bot.cards.base import ManaCost
+
+if TYPE_CHECKING:
+    from mtg_bot.game import GameObject, GameState
+
+# Upper bound on squad payments offered (keeps the affordability scan
+# bounded; far above anything a real board can pay).
+SQUAD_PAYMENT_CAP = 10
+
+
+def offer_creature_additional_costs(
+    state: "GameState", player_id: int, card: "GameObject", cost: ManaCost,
+) -> ManaCost:
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.alt_casting import cost_plus
+
+    p = state.player_by_id(player_id)
+    kinds = frozenset({"spell"})
+    card.squad_paid_count = 0
+    card.offspring_paid = False
+    printing = card.printing
+    if printing.squad_cost is not None and p.agent is not None:
+        upper = 0
+        grown = cost
+        while upper < SQUAD_PAYMENT_CAP:
+            nxt = cost_plus(grown, printing.squad_cost)
+            if not can_pay_cost(state, player_id, nxt, kinds, sac_for_mana=True):
+                break
+            grown = nxt
+            upper += 1
+        n = 0
+        if upper:
+            n = p.agent.choose_x(
+                state, player_id, f"{printing.name} (squad payments)", upper,
+            )
+            n = max(0, min(upper, n))
+        for _ in range(n):
+            cost = cost_plus(cost, printing.squad_cost)
+        card.squad_paid_count = n
+        if n:
+            state.log.append(
+                f"P{player_id} pays squad {printing.squad_cost_str} x{n} "
+                f"for {printing.name}"
+            )
+    if printing.offspring_cost is not None and p.agent is not None:
+        grown = cost_plus(cost, printing.offspring_cost)
+        if can_pay_cost(
+            state, player_id, grown, kinds, sac_for_mana=True,
+        ) and p.agent.choose_yes_no(
+            state, player_id,
+            f"Pay offspring {printing.offspring_cost_str} for {printing.name}?",
+        ):
+            cost = grown
+            card.offspring_paid = True
+            state.log.append(
+                f"P{player_id} pays offspring {printing.offspring_cost_str} "
+                f"for {printing.name}"
+            )
+    return cost
+
+
+# ---------------------------------------------------------------------
+# Emerge (CR 702.119)
+# ---------------------------------------------------------------------
+
+
+def _emerge_candidates(state: "GameState", player_id: int, card: "GameObject"):
+    from mtg_bot.game import is_creature_now
+
+    kind = card.printing.emerge_sacrifice_type
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and (
+            is_creature_now(o) if kind == "Creature"
+            else kind in o.printing.card_types
+        )
+    ]
+
+
+def _emerge_cost_after(card: "GameObject", sac: "GameObject") -> ManaCost:
+    return card.printing.emerge_cost.reduced(sac.printing.mana_cost.total)
+
+
+def emerge_cast_actions(state: "GameState", player_id: int) -> list:
+    """``CastSpell(id, use_emerge=True)`` for hand cards with Emerge
+    whose reduced cost is payable with some sacrifice (sorcery timing
+    unless the card has flash)."""
+    from mtg_bot.actions import CastSpell, can_pay_cost
+    from mtg_bot.legal import (
+        _additional_costs_payable, _is_sorcery_timing, _targets_are_satisfiable,
+    )
+
+    p = state.player_by_id(player_id)
+    out: list = []
+    seen: set[str] = set()
+    for card in p.hand:
+        if card.printing.emerge_cost is None or card.printing.name in seen:
+            continue
+        if not ("flash" in card.printing.keywords or _is_sorcery_timing(
+            state, player_id,
+        )):
+            continue
+        if not (
+            _targets_are_satisfiable(state, player_id, card)
+            and _additional_costs_payable(state, player_id, card)
+        ):
+            continue
+        if any(
+            can_pay_cost(state, player_id, _emerge_cost_after(card, sac))
+            for sac in _emerge_candidates(state, player_id, card)
+        ):
+            seen.add(card.printing.name)
+            out.append(CastSpell(card.id, use_emerge=True))
+    return out
+
+
+def pay_emerge_sacrifice(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> ManaCost:
+    """Sacrifice the caster's pick among permanents that keep the
+    emerge cost payable, and return the emerge cost reduced by its mana
+    value."""
+    from mtg_bot.actions import can_pay_cost
+    from mtg_bot.turn import sacrifice
+
+    options = [
+        o for o in _emerge_candidates(state, player_id, card)
+        if can_pay_cost(state, player_id, _emerge_cost_after(card, o))
+    ]
+    if not options:  # pragma: no cover - legal_actions gates
+        raise ValueError(f"no emerge sacrifice for {card.printing.name}")
+    p = state.player_by_id(player_id)
+    chosen = options[0]
+    if p.agent is not None:
+        pick = p.agent.choose_sacrifice(state, player_id, [o.id for o in options])
+        chosen = next((o for o in options if o.id == pick), chosen)
+    cost = _emerge_cost_after(card, chosen)
+    state.log.append(
+        f"P{player_id} emerges {card.printing.name}, sacrificing "
+        f"{chosen.printing.name}"
+    )
+    sacrifice(state, chosen)
+    return cost
+
+
+# ---------------------------------------------------------------------
+# "As an additional cost ..., exile N cards from your graveyard."
+# ---------------------------------------------------------------------
+
+
+def pay_exile_from_graveyard_cost(
+    state: "GameState", player_id: int, card: "GameObject",
+) -> None:
+    """Exile ``additional_cost_exile_from_graveyard`` cards of the
+    caster's choice (``choose_sacrifice`` per card) from their graveyard
+    (Abhorrent Oculus)."""
+    from mtg_bot.game import Zone
+
+    p = state.player_by_id(player_id)
+    n = card.printing.additional_cost_exile_from_graveyard
+    for _ in range(n):
+        pool = [c for c in p.graveyard if c.id != card.id]
+        if not pool:  # pragma: no cover - legal_actions gates
+            break
+        chosen = pool[0]
+        if p.agent is not None:
+            pick = p.agent.choose_sacrifice(state, player_id, [c.id for c in pool])
+            chosen = next((c for c in pool if c.id == pick), chosen)
+        p.graveyard.remove(chosen)
+        chosen.zone = Zone.EXILE
+        p.exile.append(chosen)
+    state.log.append(
+        f"additional cost: P{player_id} exiles {n} cards from their graveyard"
+    )
+
+
+# ---------------------------------------------------------------------
+# Enter as a copy (Phyrexian Metamorph, Superior Spider-Man)
+# ---------------------------------------------------------------------
+
+
+def apply_copy_on_entry(
+    state: "GameState", clone: "GameObject", controller_id: int,
+) -> None:
+    """"You may have this creature enter as a copy of any <types> on the
+    battlefield / creature card in a graveyard, except ..." (CR 707.9).
+    The controller picks (or declines with ``None``) via
+    ``choose_target``; the copy's printing carries the "except"
+    modifications, the pre-copy printing is kept in
+    ``original_printing`` and a layer-1 ``is_copy`` entry lasts while the
+    clone is on the battlefield."""
+    import dataclasses
+
+    from mtg_bot.game import is_creature_now
+
+    pr = clone.printing
+    types = pr.enters_as_copy_types
+    if pr.enters_as_copy_zone == "graveyard":
+        candidates = [
+            ("graveyard_card", c.id) for p in state.players for c in p.graveyard
+            if any(t in c.printing.card_types for t in types)
+        ]
+        by_id = {c.id: c for p in state.players for c in p.graveyard}
+    else:
+        candidates = [
+            ("permanent", o.id) for o in state.battlefield
+            if o is not clone and (
+                any(t in o.printing.card_types for t in types)
+                or ("Creature" in types and is_creature_now(o))
+            )
+        ]
+        if pr.enters_as_copy_max_mv_mana_spent:
+            # "with mana value less than or equal to the amount of mana
+            # spent to cast this creature" (Mockingbird): the clone is
+            # resolving as the spell that was cast, so
+            # ``mana_spent_to_cast`` is that cast's payment (0 for a free
+            # cast or a copy, which isn't cast).
+            from mtg_bot.effects.value_predicates import mana_value_of
+
+            cap = 0 if clone.is_spell_copy else clone.mana_spent_to_cast
+            by_obj = {o.id: o for o in state.battlefield}
+            candidates = [
+                c for c in candidates if mana_value_of(by_obj[c[1]]) <= cap
+            ]
+        by_id = {o.id: o for o in state.battlefield}
+    if not candidates:
+        return
+    agent = state.player_by_id(controller_id).agent
+    chosen = agent.choose_target(state, controller_id, candidates) if agent else None
+    if chosen is None or chosen not in candidates:
+        return
+    target = by_id[chosen[1]]
+    base = target.printing
+    changes: dict = {}
+    if pr.enters_as_copy_add_type and pr.enters_as_copy_add_type not in base.card_types:
+        changes["card_types"] = base.card_types + (pr.enters_as_copy_add_type,)
+    if pr.enters_as_copy_keep_name:
+        changes["name"] = pr.name
+    if pr.enters_as_copy_base_pt is not None:
+        changes["power"], changes["toughness"] = pr.enters_as_copy_base_pt
+    extra = tuple(s for s in pr.enters_as_copy_add_subtypes if s not in base.subtypes)
+    if extra:
+        changes["subtypes"] = base.subtypes + extra
+    if pr.enters_as_copy_add_triggers:
+        changes["triggered_abilities"] = (
+            tuple(base.triggered_abilities) + tuple(pr.enters_as_copy_add_triggers)
+        )
+    if pr.enters_as_copy_add_keywords:
+        changes["keywords"] = frozenset(base.keywords) | pr.enters_as_copy_add_keywords
+    copied = dataclasses.replace(base, **changes) if changes else base
+    if clone.original_printing is None:
+        clone.original_printing = pr
+    clone.printing = copied
+    state.add_continuous_effect(
+        source_id=clone.id, layer=1, kind="is_copy", target_id=clone.id,
+        params=(copied,),
+        description=f"{pr.name} is a copy of {base.name}",
+    )
+    state.log.append(f"{pr.name} enters as a copy of {base.name}")
+    if pr.enters_as_copy_exiles_card and pr.enters_as_copy_zone == "graveyard":
+        clone.copied_card_to_exile = target.id
+
+
+def push_exile_copied_card(
+    state: "GameState", clone: "GameObject", card_id: int, controller_id: int,
+) -> None:
+    """The reflexive "When you do, exile that card." trigger, put on the
+    stack once the copy has entered."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_ub import ExileGraveyardCardById
+    from mtg_bot.effects.predicates import Event
+
+    push_triggered_ability(
+        state,
+        source=clone,
+        ability=TriggeredAbility(
+            event=Event.ENTERS, effect=ExileGraveyardCardById(),
+        ),
+        ability_index=_REFLEXIVE_EXILE_INDEX,
+        controller_id=controller_id,
+        label="when you do",
+        fixed_targets=(("graveyard_card", card_id),),
+    )
+
+
+_REFLEXIVE_EXILE_INDEX = 2102
+
+
+# ---------------------------------------------------------------------
+# Improvise (CR 702.126)
+# ---------------------------------------------------------------------
+
+
+def improvise_tap_order(candidates: list) -> list[int]:
+    """Ids of untapped artifacts in the order improvise taps them:
+    artifacts without mana abilities first (they have nothing better to
+    do), then the rest, each group in id order."""
+
+    def has_mana_ability(obj) -> bool:
+        return any(a.is_mana_ability for a in obj.printing.activated_abilities)
+
+    return [
+        o.id for o in sorted(candidates, key=lambda o: (has_mana_ability(o), o.id))
+    ]
+
+
+# ---------------------------------------------------------------------
+# Saddle (CR 702.171)
+# ---------------------------------------------------------------------
+
+
+def pay_saddle_cost(
+    state: "GameState", player_id: int, mount: "GameObject", needed: int,
+) -> list:
+    """Tap other untapped creatures (agent picks, one at a time) until
+    their total power reaches ``needed``. Returns the tapped creatures."""
+    from mtg_bot.game import crew_candidates, effective_power
+    from mtg_bot.turn import tap_permanent
+
+    p = state.player_by_id(player_id)
+    chosen: list = []
+    total = 0
+    while total < needed:
+        options = [o for o in crew_candidates(state, player_id, mount) if o not in chosen]
+        if not options:  # pragma: no cover - legal_actions gates
+            break
+        pick = options[0]
+        if p.agent is not None:
+            pick_id = p.agent.choose_permanent_to_tap(
+                state, player_id, [o.id for o in options],
+            )
+            pick = next((o for o in options if o.id == pick_id), pick)
+        chosen.append(pick)
+        total += max(0, effective_power(state, pick))
+    for o in chosen:
+        tap_permanent(state, o)
+    state.log.append(
+        f"P{player_id} saddles {mount.printing.name} with "
+        f"{', '.join(o.printing.name for o in chosen)}"
+    )
+    return chosen
+
+
+# ---------------------------------------------------------------------
+# Miracle (CR 702.94)
+# ---------------------------------------------------------------------
+
+_MIRACLE_ABILITY_INDEX = 2101
+
+
+def offer_miracle(state: "GameState", player, card: "GameObject") -> None:
+    """``card`` was just drawn as ``player``'s first card this turn: they
+    may reveal it (``choose_yes_no``); if they do, the miracle trigger
+    goes on the stack."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects import TriggeredAbility
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        MayCastSourceFromHandForMiracleCost,
+    )
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import reveal_to_all
+
+    if player.agent is not None and not player.agent.choose_yes_no(
+        state, player.id, f"Reveal {card.printing.name} for its miracle?",
+    ):
+        return
+    reveal_to_all(state, card)
+    state.log.append(f"P{player.id} reveals {card.printing.name} (miracle)")
+    push_triggered_ability(
+        state,
+        source=card,
+        ability=TriggeredAbility(
+            event=Event.DRAWS_CARD, effect=MayCastSourceFromHandForMiracleCost(),
+        ),
+        ability_index=_MIRACLE_ABILITY_INDEX,
+        controller_id=player.id,
+        label="miracle",
+    )
+
+
+def cast_from_hand_for(
+    state: "GameState", player_id: int, card: "GameObject", cost: ManaCost,
+) -> bool:
+    """Cast ``card`` from its owner's hand for the alternative mana cost
+    ``cost`` while an effect resolves (Miracle). Returns False when it
+    isn't in hand, can't be cast, or ``cost`` isn't payable."""
+    from mtg_bot.actions import _cast_spell, apply_cost_reductions, can_pay_cost
+    from mtg_bot.legal import _additional_costs_payable, _targets_are_satisfiable
+
+    p = state.player_by_id(player_id)
+    if card not in p.hand or card.printing.is_land:
+        return False
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        return False
+    if not can_pay_cost(
+        state, player_id,
+        apply_cost_reductions(card.printing, state, player_id, cost),
+        sac_for_mana=True,
+    ):
+        return False
+    _cast_spell(state, player_id, card.id, alt_mana_cost=cost)
+    return True
+
+
+# ---------------------------------------------------------------------
+# Spell origin for "spells you cast from anywhere other than your hand"
+# ---------------------------------------------------------------------
+
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+CASTING_FROM_OUTSIDE_HAND: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_outside_hand", default=False)
+)
+# Cube layouts bucket (Green Goblin: "Spells you cast from your graveyard
+# cost {2} less to cast."): the spell is being cast from a graveyard.
+CASTING_FROM_GRAVEYARD: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_graveyard", default=False)
+)
+# Roto P1 (Aven Interrupter: "Spells your opponents cast from graveyards
+# or from exile cost {2} more to cast."): the spell is cast from exile.
+CASTING_FROM_EXILE: "_contextvars.ContextVar[bool]" = (
+    _contextvars.ContextVar("casting_from_exile", default=False)
+)
+
+
+@_contextlib.contextmanager
+def casting_origin(
+    outside_hand: bool, from_graveyard: bool = False, from_exile: bool = False,
+):
+    """Mark the spell whose cost is being determined as cast from
+    outside its caster's hand (graveyard, exile, library) -- and whether
+    from a graveyard / from exile -- for the duration of the block (read
+    by ``SpellCastFromOutsideHand`` / ``SpellCastFromGraveyard`` and the
+    roto P1 taxes)."""
+    token = CASTING_FROM_OUTSIDE_HAND.set(outside_hand)
+    gy_token = CASTING_FROM_GRAVEYARD.set(from_graveyard)
+    ex_token = CASTING_FROM_EXILE.set(from_exile)
+    try:
+        yield
+    finally:
+        CASTING_FROM_EXILE.reset(ex_token)
+        CASTING_FROM_GRAVEYARD.reset(gy_token)
+        CASTING_FROM_OUTSIDE_HAND.reset(token)
+
+
+# ---------------------------------------------------------------------
+# Casting a spell while an effect resolves
+# ---------------------------------------------------------------------
+
+
+def can_cast_now(
+    state: "GameState", player_id: int, card: "GameObject", *, free: bool,
+) -> bool:
+    """Could ``player_id`` cast ``card`` right now (during an effect's
+    resolution): not a land, targets available, additional costs and --
+    unless free -- the mana cost payable."""
+    from mtg_bot.actions import apply_cost_reductions
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import (
+        _additional_costs_payable, _can_cast, _targets_are_satisfiable,
+    )
+
+    if card.printing.is_land:
+        return False
+    from mtg_bot.roto_restrictions import cast_prohibited
+
+    if cast_prohibited(state, player_id, card):
+        return False  # roto P1 can't-cast statics
+    if not (
+        _targets_are_satisfiable(state, player_id, card)
+        and _additional_costs_payable(state, player_id, card)
+    ):
+        return False
+    if free:
+        # A Trinisphere floor (roto P1) still costs mana.
+        from mtg_bot.cards.base import ManaCost
+        from mtg_bot.roto_restrictions import minimum_spell_cost
+
+        return not minimum_spell_cost(state) or _can_cast(
+            state, player_id, card, ManaCost(),
+        )
+    with casting_origin(
+        card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
+        from_exile=card.zone == Zone.EXILE,
+    ):
+        cost = apply_cost_reductions(
+            card.printing, state, player_id, card.printing.mana_cost,
+        )
+    return _can_cast(state, player_id, card, cost)
+
+
+def cast_now(
+    state: "GameState", player_id: int, card: "GameObject", *, free: bool,
+) -> bool:
+    """Cast ``card`` from its graveyard or exile while an effect
+    resolves ("you may cast the discarded card without paying its mana
+    cost", "you may cast a spell from among cards exiled this way").
+    The spell goes on the stack above the resolving ability (CR
+    608.2g); timing restrictions don't apply. The caller has already
+    obtained the player's "may" consent and checked ``can_cast_now``.
+    Returns False when the card isn't in a castable zone."""
+    from mtg_bot.actions import _cast_spell
+    from mtg_bot.game import Zone
+
+    if card.zone == Zone.GRAVEYARD and card in state.player_by_id(
+        player_id,
+    ).graveyard:
+        card.castable_from_graveyard_this_turn = True
+    elif card.zone == Zone.EXILE and card in state.player_by_id(
+        card.owner_id,
+    ).exile:
+        from mtg_bot.effects.generic.cube_creatures_rmc import grant_exile_play
+
+        grant_exile_play(state, card, player_id, free=free, cast_only=True)
+    else:
+        return False
+    _cast_spell(state, player_id, card.id, cast_for_free=free)
+    return True

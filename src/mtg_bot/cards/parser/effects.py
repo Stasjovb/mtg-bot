@@ -79,7 +79,6 @@ from mtg_bot.cards.base import (
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileOpponentsNonlandPermanentUntilLeaves,
     BoilerbilgesRipperETBEffect,
-    ExorciseEffect,
     FamishedWorldsireETBEffect,
     FanaticOfTheHarrowingETBEffect,
     FocusFireEffect,
@@ -174,9 +173,15 @@ from mtg_bot.cards.base import (
     CoordinatedClobberingEffect,
     ZeroPointBalladEffect,
     CreateXTokensOfTargetPermanentWithHasteEndStepSac,
-    ConsultTheStarChartsEffect,
 )
-from mtg_bot.cards.parser.keywords import _KEYWORD_LINES
+from mtg_bot.cards.parser.keywords import (
+    _KEYWORD_LINES,
+    _parse_granted_keyword_piece,
+)
+from mtg_bot.cards.parser.keyword_actions import (
+    _parse_keyword_action_effect,
+    _synthesize_creature_token_effect,
+)
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.bespoke import (
     ArabellaAttackEffect,
@@ -203,6 +208,9 @@ from mtg_bot.effects.formulas import (
     MVOfCostPaidObjectPlus,
 )
 from mtg_bot.effects.generic import (
+    SearchLibraryForLandCardToBattlefield,
+    AddManaOfColorPerCount,
+    AddOneOfManaCombinations,
     AddChargeCounterManaOfChosenColor,
     AddNManaOfChosenColor,
     BecomeType,
@@ -224,7 +232,13 @@ from mtg_bot.effects.generic import (
     TargetOpponentLookHandMayDiscard,
     TargetOpponentSacrificesCreatureOtherThanEnchanted,
 )
-from mtg_bot.effects.object_predicates import IsArtifact
+from mtg_bot.effects.object_predicates import (
+    IsArtifact,
+    IsCreature as _IsCreature,
+    IsEnchantment as _IsEnchantment,
+    IsLegendary as _IsLegendary,
+    IsPlaneswalker as _IsPlaneswalker,
+)
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -819,26 +833,6 @@ _EXILE_TARGET_CREATURE_OR_PLANESWALKER = re.compile(
 _EXILE_TARGET_CREATURE_WITH_POWER_OR_TOUGHNESS_AT_MOST = re.compile(
     r"^exile target creature with power or toughness (\d+) or less$"
 )
-# "Exile target artifact, enchantment, or creature with power 4 or
-# greater." — Exorcise `{1}{W}` Sorcery (Duskmourn): a single-sentence
-# three-way disjunctive exile (target an artifact OR an enchantment OR
-# a creature whose effective power is at least 4). Maps to the
-# parameterless ``ExorciseEffect`` engine class which evaluates the
-# disjunctive filter at both target-pick and resolve time using
-# ``effective_power`` for the creature arm.
-#
-# Currently only Exorcise in the EoE/DSK pool fits this shape, so the
-# recognizer is a parameterless literal — broader generalization (e.g.
-# ``exile target <type-list> with <p/t-threshold>``) is deferred until
-# a second card with a similar three-way disjunctive permanent-type
-# exile shape exists. Sibling to the bare ``exile target creature``
-# branch above; lives in the per-clause grammar (rather than the
-# whole-spell exact-text tier) per the parser's
-# generic-templates-over-literals guidance.
-_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE = re.compile(
-    r"^exile target artifact, enchantment, or creature with power "
-    r"4 or greater$"
-)
 # "Destroy all tapped creatures." / "Destroy all untapped creatures." —
 # Split Up's modal mode lines. Two separate regexes (rather than one
 # regex with a captured tap-state qualifier) because the matching engine
@@ -1138,6 +1132,24 @@ _SEARCH_LIBRARY_FOR_EQUIPMENT_CARD_ONTO_BATTLEFIELD = re.compile(
     r"^search your library for an Equipment card, "
     r"put it onto the battlefield, then shuffle$"
 )
+# "Search your library for a <T1> or <T2> card, put it onto the
+# battlefield, then shuffle." — the fetch-land body (Arid Mesa,
+# Flooded Strand, ... : two basic land types) and Prismatic Vista's
+# "a basic land card" variant; optional "tapped" tail. Captures the
+# land-kind phrase so every type pairing (and any single type) claims
+# through one recognizer, mapping to
+# ``SearchLibraryForLandCardToBattlefield(land_types=..., basic_only=...,
+# tapped=...)``. The "basic land card ... tapped" surface is matched
+# FIRST by the older ``_SEARCH_LIBRARY_FOR_BASIC_LAND_CARD_TAPPED_ONTO_
+# BATTLEFIELD`` recognizer (Moldering Gym / Lander parity), so this one
+# only ever sees it untapped.
+_BASIC_LAND_TYPE_ALT = r"(?:Plains|Island|Swamp|Mountain|Forest)"
+_SEARCH_LIBRARY_FOR_LAND_KIND_ONTO_BATTLEFIELD = re.compile(
+    r"^search your library for an? "
+    r"(?P<kind>basic land|" + _BASIC_LAND_TYPE_ALT
+    + r"(?: or " + _BASIC_LAND_TYPE_ALT + r")*) card, "
+    r"put it onto the battlefield(?P<tapped> tapped)?, then shuffle$"
+)
 # "Gain control of target <subtype>." — permanent-theft activated ability
 # whose legal-target pool is restricted to permanents with a named subtype.
 # Sliver Overlord's second ability "{3}: Gain control of target Sliver.
@@ -1424,7 +1436,26 @@ _DESTROY_TARGET_ARTIFACT = re.compile(r"^destroy target artifact$")
 _DESTROY_TARGET_ARTIFACT_ENCHANTMENT_OR_FLYING_CREATURE = re.compile(
     r"^destroy target artifact, enchantment, or creature with flying$"
 )
-_DESTROY_TARGET_LAND = re.compile(r"^destroy target land$")
+# "destroy target land" (Strip Mine) / "destroy target nonbasic land"
+# (Wasteland, Dust Bowl) — the optional ``nonbasic`` qualifier maps to
+# ``DestroyTargetLand(nonbasic_only=True)``.
+# "Sacrifice this <permanent-type>." as an effect body (not a cost) —
+# City of Traitors' "When you play another land, sacrifice this land."
+# Maps to ``SacrificeSelf()`` (reads ``state.resolving_source``; no-op
+# if the source already left the battlefield).
+# "this land becomes a copy of target permanent card in your graveyard
+# until end of turn" — Shifting Woodland's delirium ability. Only card in
+# the pool with a self-copy-of-graveyard-card shape; broader grammar
+# (other self nouns / durations) deferred until a second example exists.
+# Maps to ``SourceBecomesCopyOfTargetGraveyardCardUEOT()``.
+_SELF_BECOMES_COPY_OF_GRAVEYARD_PERMANENT_UEOT = re.compile(
+    r"^this land becomes a copy of target permanent card in your "
+    r"graveyard until end of turn$"
+)
+_SACRIFICE_THIS_PERMANENT = re.compile(
+    r"^sacrifice this (?:land|creature|artifact|enchantment|permanent)$"
+)
+_DESTROY_TARGET_LAND = re.compile(r"^destroy target (?P<nonbasic>nonbasic )?land$")
 _DESTROY_TARGET_NONCREATURE_PERMANENT = re.compile(
     r"^destroy target noncreature permanent$"
 )
@@ -1595,10 +1626,40 @@ _ADD_THREE_COLOR_CHOICE_MANA = re.compile(
 # bare regex's ``$`` anchor wouldn't match the multi-sentence shape
 # anyway, but ordering more-specific before more-general is the
 # convention here.
+# "Add {U}{U}, {U}{B}, or {B}{B}." — choose ONE of several fixed mana
+# combinations (filter lands: Sunken Ruins). Captured as a comma/or
+# list of brace runs; only claimed when at least one option mints two
+# or more mana (single-symbol "add {W} or {U}" lists keep their
+# ``AddNManaOfChosenColor`` recognizers). Maps to
+# ``AddOneOfManaCombinations``.
+_MANA_RUN = r"(?:\{[WUBRGC]\})+"
+_ADD_ONE_OF_MANA_COMBINATIONS = re.compile(
+    r"^add (?P<list>" + _MANA_RUN + r"(?:, " + _MANA_RUN + r")*,? or "
+    + _MANA_RUN + r")$"
+)
+# "Add {<C>} for each <noun> you control." — scaling mana ability
+# (Gaea's Cradle: creature; Tolarian Academy: artifact). Maps to
+# ``AddManaOfColorPerCount(color, CountControlledMatching(<pred>))``;
+# the noun is looked up in ``_ADD_MANA_PER_CONTROLLED_NOUNS`` (unknown
+# noun -> ``None``).
+_ADD_MANA_FOR_EACH_CONTROLLED = re.compile(
+    r"^add \{(?P<color>[WUBRGC])\} for each (?P<noun>.+) you control$"
+)
+_ADD_MANA_PER_CONTROLLED_NOUNS: dict[str, object] = {
+    "creature": _IsCreature(),
+    "artifact": IsArtifact(),
+}
+# "Add {R}{R}. If any of that mana is spent on a creature spell, it gains
+# haste until end of turn." — mana tagged with a haste rider (Arena of
+# Glory). Parameterized over the brace run; maps to ``AddManaToPool(...,
+# grants_haste_to_creature_spell=True)``.
+_ADD_MANA_WITH_CREATURE_HASTE_RIDER = re.compile(
+    r"^add ((?:\{[WUBRGC]\})+)\. If any of that mana is spent on a "
+    r"creature spell, it gains haste until end of turn$"
+)
 _ADD_MANA_WITH_SPEND_RESTRICTION = re.compile(
-    r"^add (\{[WUBRG]\}(?:\{[WUBRG]\})?)\. "
-    r"Spend this mana only to "
-    r"(cast an artifact spell|activate abilities of artifact sources)$"
+    r"^add ((?:\{[WUBRGC]\})+)\. "
+    r"Spend this mana only to (.+)$"
 )
 # "Add one mana of any color. Spend this mana only to <restriction>."
 # — restricted any-color mana ability (Plaza of Heroes' second ability:
@@ -1635,6 +1696,9 @@ _ADD_MANA_AMONG_RESTRICTION: dict[str, str] = {
 # expected by ``_coin_satisfies_context`` (``actions.py``).
 _SPEND_RESTRICTION_BY_PHRASE: dict[str, str] = {
     "cast an artifact spell": "artifact_spell",
+    # Mishra's Workshop: "{T}: Add {C}{C}{C}. Spend this mana only to
+    # cast artifact spells." — plural surface of the same restriction.
+    "cast artifact spells": "artifact_spell",
     "activate abilities of artifact sources": "artifact_activation",
     # Plaza of Heroes line 2: "Spend this mana only to cast a legendary
     # spell." Maps to the same engine tag honoured by
@@ -1688,6 +1752,37 @@ _THAT_PLAYER_GETS_N_POISON_COUNTERS = re.compile(
 _LOCK_OR_UNLOCK_DOOR_TARGET_ROOM_YOU_CONTROL = re.compile(
     r"^lock or unlock a door of target Room you control$"
 )
+# "Destroy target <noun> an opponent controls. That player may search
+# their library for a land card with a basic land type, put it onto the
+# battlefield, then shuffle." — Boseiju, Who Endures' channel body. The
+# only printing in the pool with the destroy + "that player" land-search
+# compensation shape (broader grammar deferred until a second example
+# exists); the destroyable noun is captured and looked up in
+# ``_DESTROY_OPPONENT_NOUNS``. Maps to
+# ``ThenTargetControllerResolves(Destroy(<noun> & ControlledByOpponent),
+# SearchLibraryForLandCardToBattlefield(<five basic types>))`` — the
+# search's own ``choose_card_from_library`` decline models "may".
+_DESTROY_THEN_CONTROLLER_SEARCHES_BASIC_TYPED_LAND = re.compile(
+    r"^destroy target (?P<noun>.+) an opponent controls\. That player "
+    r"may search their library for a land card with a basic land type, "
+    r"put it onto the battlefield, then shuffle$"
+)
+# "Return target <noun> to its owner's hand." — mandatory single-target
+# bounce whose legal-target pool is named by the printed noun phrase.
+# The captured noun is looked up in ``_BOUNCE_TARGET_NOUNS`` and maps to
+# the unified ``Bounce`` primitive with one ``TargetSpec``; an unknown
+# noun returns ``None`` (card stays unclaimed rather than bouncing the
+# wrong pool). Karakas: "legendary creature"; Otawara, Soaring City's
+# channel body: "artifact, creature, enchantment, or planeswalker".
+_RETURN_TARGET_NOUN_TO_OWNERS_HAND = re.compile(
+    r"^return target (?P<noun>.+) to its owner's hand$"
+)
+_BOUNCE_TARGET_NOUNS: dict[str, object] = {
+    "legendary creature": _IsCreature() & _IsLegendary(),
+    "artifact, creature, enchantment, or planeswalker": (
+        IsArtifact() | _IsCreature() | _IsEnchantment() | _IsPlaneswalker()
+    ),
+}
 # "Return up to one other target permanent you control to its owner's
 # hand" — Exosuit Savior's ETB. Maps to
 # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
@@ -1720,8 +1815,13 @@ _RETURN_UP_TO_ONE_OTHER_PERMANENT_YOU_CONTROL_TO_OWNERS_HAND = re.compile(
 # the existing ``ReturnTargetCreatureToOwnersHand`` paths in
 # ``spell_builder``) is deferred until a second example with a
 # varying piece exists.
+#
+# Parameterized over the ``up to one`` optionality: the bare
+# ``return target creature to its owner's hand`` (Aether Spellbomb's
+# activation) claims through the same recognizer with ``optional``
+# left False.
 _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND = re.compile(
-    r"^return up to one target creature to its owner's hand$"
+    r"^return (up to one )?target creature to its owner's hand$"
 )
 # "Return up to one target nonland permanent to its owner's hand." —
 # Unnerving Grasp ``{2}{U}`` Sorcery (Duskmourn). Optional-target bounce
@@ -2564,6 +2664,35 @@ _TARGET_ARTIFACT_BECOMES_CREATURE_UEOT = re.compile(
 # turn instead.") is handled by ``_SET_BASE_PT_CONDITIONAL_UEOT``
 # below, which must be tried FIRST because the base regex would match
 # the first sentence of the conditional body if the splitter carved it.
+# "up to one other target creature has base power and toughness N/N
+# until end of turn" — optional + other variant of the bare set-base-PT
+# UEOT (Restless Vinestalk's attack trigger). Maps to
+# ``SetBasePTUntilEOT(N, N, optional=True, exclude_self=True)``.
+_SET_BASE_PT_UP_TO_ONE_OTHER_UEOT = re.compile(
+    r"^up to one other target creature has base power and toughness "
+    r"(\d+)/(\d+) until end of turn$"
+)
+# "until end of turn, this land becomes a P/T <c1> [and <c2>] <Subtype>
+# creature [with <keywords>]. It's still a land" — creature-land
+# animation (Restless Vinestalk: "a 5/5 green and blue Plant creature
+# with trample"). Parameterized over P/T, color words, one creature
+# subtype and a keyword tail; maps to ``BecomeLandCreatureUEOT(power,
+# toughness, granted_keywords, granted_subtype, set_colors)``. Keywords
+# outside ``_ANIMATED_LAND_KEYWORDS`` reject the phrase.
+_THIS_LAND_BECOMES_CREATURE_UEOT = re.compile(
+    r"^until end of turn, this land becomes an? (?P<p>\d+)/(?P<t>\d+) "
+    r"(?P<colors>(?:white|blue|black|red|green)"
+    r"(?:(?:,| and|, and) (?:white|blue|black|red|green))*) "
+    r"(?P<subtype>[A-Z][a-z]+) creature(?: with (?P<kws>[^.]+))?\. "
+    r"It's still a land$"
+)
+_COLOR_WORD_LETTERS: dict[str, str] = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+_ANIMATED_LAND_KEYWORDS = frozenset({
+    "flying", "vigilance", "deathtouch", "hexproof", "double strike",
+    "lifelink", "reach", "trample", "first strike", "menace", "haste",
+})
 _SET_BASE_PT_UEOT = re.compile(
     r"^target creature has base power and toughness (\d+)/(\d+) "
     r"until end of turn$"
@@ -3122,10 +3251,17 @@ def _parse_keyword_grant_body(body: str) -> frozenset[str] | None:
     whitelist in ``parser.keywords`` (``_KEYWORD_LINES``) — adding a new
     evergreen keyword there automatically makes it grantable here.
     """
-    pieces = [p.strip() for p in body.split(" and ")]
-    if not all(p in _KEYWORD_LINES.values() for p in pieces):
-        return None
-    return frozenset(pieces)
+    # ``protection from X and from Y`` joins its qualities with
+    # `` and from `` — re-glue those before splitting on `` and ``.
+    glued = body.replace(" and from ", "\x00")
+    pieces = [p.strip().replace("\x00", " and from ") for p in glued.split(" and ")]
+    out: set[str] = set()
+    for p in pieces:
+        parsed = _parse_granted_keyword_piece(p)
+        if parsed is None:
+            return None
+        out.update(parsed)
+    return frozenset(out)
 
 
 def _parse_amount(token: str) -> int:
@@ -3182,14 +3318,24 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
         # parser parity bug caught downstream.
         subtype = m.group(6)
         if subtype not in TOKEN_PRINTINGS:
-            return None
+            return _synthesize_creature_token_effect(phrase)
+        # The registry is keyed by subtype only; a printed token whose
+        # stats differ from the registered one (a 3/1 Spirit vs. the
+        # registered 1/1 Spirit) is a different token — build it from
+        # its printed characteristics instead.
+        registered = TOKEN_PRINTINGS[subtype]
+        if (registered.power, registered.toughness) != (
+            int(m.group(3)), int(m.group(4)),
+        ):
+            return _synthesize_creature_token_effect(phrase)
+        token_printing = registered
         # ``that's tapped and attacking`` qualifier — token enters declared
         # as an attacker in the current combat. Only meaningful during an
         # attack trigger; the ``attacking`` flag on ``CreateToken`` sets
         # obj.attacking=True and clears summoning sickness in ``resolve``.
         attacking = "that's tapped and attacking" in phrase
         return CreateToken(
-            token_printing=TOKEN_PRINTINGS[subtype],
+            token_printing=token_printing,
             count=count,
             tapped=tapped or attacking,  # attacking tokens are always tapped
             attacking=attacking,
@@ -3243,7 +3389,7 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
             tapped=tapped,
             each_player=True,
         )
-    return None
+    return _synthesize_creature_token_effect(phrase)
 
 
 # Sentence-boundary split for compound effect phrases — period
@@ -3256,6 +3402,9 @@ def _parse_create_token_effect(phrase: str) -> Effect | None:
 # Dauntless Scrapbot's ``exile each opponent's graveyard. Create a
 # Lander token.`` — split at the right boundary).
 _EFFECT_SENTENCE_BOUNDARY = re.compile(r"(?<=\.) (?=[A-Z](?!f you do,)(?!hen you do,))")
+# An "if <condition>, <effect>" clause still open at the end of a piece
+# (no sentence break after the condition's comma).
+_OPEN_CONDITIONAL = re.compile(r"(?:^|\. )(?:[Tt]hen )?[Ii]f [^,.]+, [^.]*$")
 
 
 def _split_effect_sentences(phrase: str) -> list[str]:
@@ -3346,8 +3495,21 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     pipeline is single-choice). A multi-target spell needs a
     different combinator and isn't claimed by this slice.
     """
-    if " and " in phrase:
-        pieces = phrase.split(" and ")
+    # ``you may X and Y`` -- the optional scopes over the whole
+    # conjunction, so it must not be carved into ``you may X`` + ``Y``
+    # (which would make ``Y`` mandatory). The whole phrase falls through
+    # to the ``you may <effect>`` recognizer instead.
+    if phrase.startswith("you may ") and " and " in phrase:
+        return None
+    and_pieces = phrase.split(" and ") if " and " in phrase else []
+    if any(_OPEN_CONDITIONAL.search(p) for p in and_pieces[:-1]):
+        # "if <condition>, A and B" -- the condition scopes over both
+        # halves; carving at " and " would make B unconditional (Cecil,
+        # Dark Knight's "... Then if <condition>, untap Cecil and
+        # transform it."). Try the other joiners instead.
+        and_pieces = []
+    if and_pieces:
+        pieces = and_pieces
     elif ", then " in phrase:
         pieces = phrase.split(", then ")
     elif _EFFECT_SENTENCE_BOUNDARY.search(phrase):
@@ -3356,6 +3518,12 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
             return None
     else:
         return None
+    return _parse_effect_pieces(pieces)
+
+
+def _parse_effect_pieces(pieces: list[str]) -> Effect | None:
+    """Parse every piece of a split compound phrase; ``Sequence`` of the
+    results, or ``None`` if any piece fails or more than one targets."""
     parsed: list[Effect] = []
     for piece in pieces:
         eff = _parse_effect(piece)
@@ -3367,7 +3535,98 @@ def _parse_compound_effect(phrase: str) -> Effect | None:
     return Sequence(effects=tuple(parsed))
 
 
+# "<body>. If there are no <kind> counters on this land, sacrifice it" —
+# a trailing self-sacrifice rider keyed on a ``named_counters`` kind
+# (Gemstone Mine's mana ability). The body parses through the unified
+# grammar; the rider maps to ``SacrificeSelfIfNoNamedCounters(kind)``
+# and the pair to a ``Sequence``.
+_IF_NO_NAMED_COUNTERS_SACRIFICE_RIDER = re.compile(
+    r"^(?P<body>.+)\. If there are no (?P<kind>[a-z]+) counters on this "
+    r"(?:land|artifact|creature|enchantment|permanent), sacrifice it$"
+)
+
+
 def _parse_effect(phrase: str) -> Effect | None:
+    """Parse a *normalized* effect phrase into an ``Effect``.
+
+    Layers the compositional grammar in
+    :mod:`mtg_bot.cards.parser.precise_grammar` around the legacy
+    per-shape grammar (``_parse_effect_legacy``): a faithful override
+    for the few surfaces the legacy grammar accepts lossily, then the
+    legacy grammar, then the compositional fallback for phrases the
+    legacy grammar rejects.
+    """
+    from mtg_bot.cards.parser.precise_grammar import (
+        parse_precise_fallback,
+        parse_precise_override,
+    )
+
+    eff = parse_precise_override(phrase)
+    if eff is not None:
+        return eff
+    eff = _parse_effect_legacy(phrase)
+    if eff is not None:
+        return eff
+    eff = parse_precise_fallback(phrase)
+    if eff is not None:
+        return eff
+    # Cube W/G creature bucket shapes -- the very last fallback, after
+    # the compositional grammar, so the base's shapes win.
+    from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
+
+    eff = parse_wg_effect(phrase)
+    if eff is not None:
+        return eff
+    # Cube layouts bucket (transform / Saga / Class / leveler shapes) --
+    # after every other grammar, so it only claims unparsed phrases.
+    from mtg_bot.cards.parser.layout_grammar import parse_layout_effect
+
+    eff = parse_layout_effect(phrase)
+    if eff is not None:
+        return eff
+    # Cube glue bucket shapes -- after every other bucket.
+    from mtg_bot.cards.parser.cube_glue_grammar import parse_glue_effect
+
+    eff = parse_glue_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P1 (stack & restrictions) shapes -- after every cube bucket.
+    from mtg_bot.cards.parser.roto_stack import parse_roto_stack_effect
+
+    eff = parse_roto_stack_effect(phrase)
+    if eff is not None:
+        return eff
+    # Vintage Roto P3 (mana, costs, cast permissions).
+    from mtg_bot.cards.parser.roto_mana import parse_roto_mana_effect
+
+    eff = parse_roto_mana_effect(phrase)
+    if eff is not None:
+        return eff
+    # Vintage Roto P5 (board-state prison & layers).
+    from mtg_bot.cards.parser.roto_board import parse_roto_board_effect
+
+    eff = parse_roto_board_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P2 (library, graveyard & hand) shapes.
+    from mtg_bot.cards.parser.roto_zones import parse_roto_zones_effect
+
+    eff = parse_roto_zones_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P4 shapes (walkers, copies, control, turns).
+    from mtg_bot.cards.parser.roto_walkers import parse_roto_effect
+
+    eff = parse_roto_effect(phrase)
+    if eff is not None:
+        return eff
+    # Roto P6 (keyword mechanics, face-changing & pregame).
+    from mtg_bot.cards.parser.roto_keywords import parse_p6_effect
+
+    return parse_p6_effect(phrase)
+
+
+def _parse_effect_legacy(phrase: str) -> Effect | None:
     """Parse a *normalized* effect phrase into an ``Effect``.
 
     Normalized form has no source-subject prefix, no trailing period,
@@ -3410,6 +3669,16 @@ def _parse_effect(phrase: str) -> Effect | None:
     # to recognize ``shuffle your <zone-list> into your library`` as
     # an atomic primitive whose internal `` and `` is bracketed)
     # deferred until a second example exists.
+    m = _IF_NO_NAMED_COUNTERS_SACRIFICE_RIDER.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic import SacrificeSelfIfNoNamedCounters
+
+        body = _parse_effect(m.group("body"))
+        if body is None:
+            return None
+        return Sequence(effects=(
+            body, SacrificeSelfIfNoNamedCounters(kind=m.group("kind")),
+        ))
     if phrase == (
         "shuffle your hand and graveyard into your library, "
         "then draw seven cards"
@@ -4164,27 +4433,6 @@ def _parse_effect(phrase: str) -> Effect | None:
         "Sacrifice them at the beginning of the next end step"
     ):
         return CreateXTokensOfTargetPermanentWithHasteEndStepSac()
-    # Consult the Star Charts' four-sentence body (after the Kicker preamble
-    # is stripped by the per-clause grammar's preamble-drop pass) — look at
-    # the top X cards where X = lands you control, put one into hand; if
-    # kicked, put two into hand instead; put the rest on the bottom in
-    # random order. The "where X is the number of lands you control"
-    # qualifier links sentence 1 to sentence 2's "one of those cards", and
-    # the kicked-branch conditional in sentence 3 references both. None of
-    # the four sentences parse as standalone effects; the "put the rest on
-    # the bottom in a random order" rider has no per-clause primitive. The
-    # engine class reads the land count and kicked state at resolve time.
-    # Only Consult the Star Charts (EoE) has this exact kicked-library-look
-    # surface; deferred until a second kicked-library-look card ships.
-    if phrase == (
-        "look at the top X cards of your library, where X is the "
-        "number of lands you control. "
-        "Put one of those cards into your hand. "
-        "If this spell was kicked, put two of those cards "
-        "into your hand instead. "
-        "Put the rest on the bottom of your library in a random order"
-    ):
-        return ConsultTheStarChartsEffect()
     # Terminal Velocity's two-sentence body — "You may put an artifact or
     # creature card from your hand onto the battlefield. That permanent
     # gains haste, [LTB-damage-trigger], and [end-step-sac-trigger]."
@@ -4612,6 +4860,16 @@ def _parse_effect(phrase: str) -> Effect | None:
         # dispatchers so this phrase can try other parse paths (belt-
         # and-suspenders; in practice the inner always either parses or
         # the card is unclaimed).
+    # Artifact-bucket recognizers (cube mana rocks / utility artifacts /
+    # Equipment / Vehicles) live in their own module; tried before the
+    # compound splitter so their multi-sentence shapes (``flip a coin.
+    # If you lose the flip, …``) stay welded together.
+    from mtg_bot.cards.parser.artifact_effects import (
+        _parse_artifact_effect_phrase,
+    )
+    artifact_effect = _parse_artifact_effect_phrase(phrase)
+    if artifact_effect is not None:
+        return artifact_effect
     compound = _parse_compound_effect(phrase)
     if compound is not None:
         return compound
@@ -5116,21 +5374,6 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ExileTargetCreatureWithPowerOrToughnessAtMost(
             max_value=int(m.group(1)),
         )
-    # ``exile target artifact, enchantment, or creature with power 4 or
-    # greater`` — Exorcise's full single-sentence body. Maps to the
-    # parameterless ``ExorciseEffect`` engine class which evaluates the
-    # three-way disjunctive filter at both target-pick and resolve time.
-    # Tried BEFORE the bare ``exile target creature`` branch below
-    # because the bare regex's ``$`` anchor on ``creature`` wouldn't
-    # match this longer tail anyway, but ordering more-specific before
-    # more-general is the convention here. Sole card with this shape
-    # today; broader generalization deferred — see
-    # ``_EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE`` regex
-    # comment.
-    if _EXILE_TARGET_ARTIFACT_ENCHANTMENT_OR_BIG_CREATURE.match(
-        phrase
-    ) is not None:
-        return ExorciseEffect()
     if _EXILE_TARGET_CREATURE.match(phrase) is not None:
         return ExileTargetCreature()
     if _EXILE_ALL_CREATURES_AND_SPACECRAFT.match(phrase) is not None:
@@ -5244,6 +5487,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         # ``Equipment``-keyed payload class with a ``tapped=True``
         # construction (no DSK printing today carries that shape).
         return SearchLibraryForEquipmentToBattlefield()
+    m = _SEARCH_LIBRARY_FOR_LAND_KIND_ONTO_BATTLEFIELD.match(phrase)
+    if m is not None:
+        # Fetch-land body — see the regex comment.
+        kind = m.group("kind")
+        return SearchLibraryForLandCardToBattlefield(
+            land_types=(
+                () if kind == "basic land" else tuple(kind.split(" or "))
+            ),
+            basic_only=kind == "basic land",
+            tapped=m.group("tapped") is not None,
+        )
     # ``gain control of target <subtype>`` — permanent-theft activated
     # ability restricted to a named subtype (Sliver Overlord's second
     # ability: "Gain control of target Sliver. (This effect lasts
@@ -5358,6 +5612,39 @@ def _parse_effect(phrase: str) -> Effect | None:
         )
     # ``target creature has base power and toughness N/N until end of
     # turn`` — bare single-sentence form (layer 7b UEOT set).
+    m = _SET_BASE_PT_UP_TO_ONE_OTHER_UEOT.match(phrase)
+    if m is not None:
+        return SetBasePTUntilEOT(
+            power=int(m.group(1)),
+            toughness=int(m.group(2)),
+            optional=True,
+            exclude_self=True,
+        )
+    m = _THIS_LAND_BECOMES_CREATURE_UEOT.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.generic import BecomeLandCreatureUEOT
+
+        kws: frozenset[str] = frozenset()
+        if m.group("kws"):
+            parts = [
+                k.strip()
+                for k in re.split(r",\s+|\s+and\s+", m.group("kws"))
+                if k.strip()
+            ]
+            if not parts or any(k not in _ANIMATED_LAND_KEYWORDS for k in parts):
+                return None
+            kws = frozenset(parts)
+        colors = frozenset(
+            _COLOR_WORD_LETTERS[w]
+            for w in re.findall(r"white|blue|black|red|green", m.group("colors"))
+        )
+        return BecomeLandCreatureUEOT(
+            power=int(m.group("p")),
+            toughness=int(m.group("t")),
+            granted_keywords=kws,
+            granted_subtype=m.group("subtype"),
+            set_colors=colors,
+        )
     m = _SET_BASE_PT_UEOT.match(phrase)
     if m is not None:
         return SetBasePTUntilEOT(
@@ -5430,6 +5717,9 @@ def _parse_effect(phrase: str) -> Effect | None:
     m = _SURVEIL_N.match(phrase)
     if m is not None:
         return Surveil(amount=int(m.group(1)))
+    keyword_action = _parse_keyword_action_effect(phrase)
+    if keyword_action is not None:
+        return keyword_action
     m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD_GAIN_M_LIFE.match(phrase)
     if m is not None:
         # ``look at the top N cards of your library. Put one of them
@@ -5511,8 +5801,19 @@ def _parse_effect(phrase: str) -> Effect | None:
         # more-specific shape only claims phrases that carry the
         # ``, enchantment, or creature with flying`` tail.
         return DestroyTargetArtifactEnchantmentOrFlyingCreature()
-    if _DESTROY_TARGET_LAND.match(phrase) is not None:
-        return DestroyTargetLand()
+    if _SELF_BECOMES_COPY_OF_GRAVEYARD_PERMANENT_UEOT.match(phrase):
+        from mtg_bot.effects.generic import (
+            SourceBecomesCopyOfTargetGraveyardCardUEOT,
+        )
+
+        return SourceBecomesCopyOfTargetGraveyardCardUEOT()
+    if _SACRIFICE_THIS_PERMANENT.match(phrase) is not None:
+        return SacrificeSelf()
+    m = _DESTROY_TARGET_LAND.match(phrase)
+    if m is not None:
+        return DestroyTargetLand(
+            nonbasic_only=m.group("nonbasic") is not None,
+        )
     if _DESTROY_TARGET_NONCREATURE_PERMANENT.match(phrase) is not None:
         return DestroyTargetNoncreaturePermanent()
     if (
@@ -5656,6 +5957,35 @@ def _parse_effect(phrase: str) -> Effect | None:
     # captured brace expression — the regex enforces that it's exactly
     # one or two same-color brace pairs but doesn't decompose them
     # into engine coins, so we extract the colors directly.
+    m = _ADD_ONE_OF_MANA_COMBINATIONS.match(phrase)
+    if m is not None:
+        runs = re.findall(_MANA_RUN, m.group("list"))
+        combos = []
+        for run in runs:
+            counts: dict[str, int] = {}
+            for c in re.findall(r"\{([WUBRGC])\}", run):
+                counts[c] = counts.get(c, 0) + 1
+            combos.append(tuple(counts.items()))
+        if any(sum(n for _, n in combo) > 1 for combo in combos):
+            return AddOneOfManaCombinations(options=tuple(combos))
+    m = _ADD_MANA_FOR_EACH_CONTROLLED.match(phrase)
+    if m is not None:
+        pred = _ADD_MANA_PER_CONTROLLED_NOUNS.get(m.group("noun"))
+        if pred is None:
+            return None
+        return AddManaOfColorPerCount(
+            color=m.group("color"),
+            amount=CountControlledMatching(pred),
+        )
+    m = _ADD_MANA_WITH_CREATURE_HASTE_RIDER.match(phrase)
+    if m is not None:
+        counts: dict[str, int] = {}
+        for c in re.findall(r"\{([WUBRGC])\}", m.group(1)):
+            counts[c] = counts.get(c, 0) + 1
+        return AddManaToPool(
+            produces=tuple(counts.items()),
+            grants_haste_to_creature_spell=True,
+        )
     m = _ADD_MANA_WITH_SPEND_RESTRICTION.match(phrase)
     if m is not None:
         mana_str = m.group(1)
@@ -5667,7 +5997,7 @@ def _parse_effect(phrase: str) -> Effect | None:
         # abilities the engine wants a tuple of single-coin entries
         # (one ``(color, 1)`` per coin minted), so we walk the brace
         # pairs directly.
-        colors = re.findall(r"\{([WUBRG])\}", mana_str)
+        colors = re.findall(r"\{([WUBRGC])\}", mana_str)
         return AddManaToPool(
             produces=tuple((c, 1) for c in colors),
             spend_restriction=restriction,
@@ -5682,7 +6012,11 @@ def _parse_effect(phrase: str) -> Effect | None:
         tail = m.group(1)
         restriction = _SPEND_RESTRICTION_BY_PHRASE.get(tail)
         if restriction is None:
-            return None
+            # "..., and that spell can't be countered" (Delighted
+            # Halfling) -- the cube W/G bucket's restricted-mana shape.
+            from mtg_bot.cards.parser.creature_wg_effects import parse_wg_effect
+
+            return parse_wg_effect(phrase)
         return AddManaToPool(
             produces=(("any", 1),),
             spend_restriction=restriction,
@@ -5794,6 +6128,38 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
         )
+    m = _DESTROY_THEN_CONTROLLER_SEARCHES_BASIC_TYPED_LAND.match(phrase)
+    if m is not None:
+        from mtg_bot.effects.combinators import ThenTargetControllerResolves
+        from mtg_bot.effects.generic import Destroy
+        from mtg_bot.effects.object_predicates import (
+            ControlledByOpponent,
+            IsBasic,
+            IsLand,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        if m.group("noun") != "artifact, enchantment, or nonbasic land":
+            return None
+        pool = (
+            IsArtifact() | _IsEnchantment() | (IsLand() & ~IsBasic())
+        ) & ControlledByOpponent()
+        return ThenTargetControllerResolves(
+            first=Destroy(targets=(TargetSpec(pool),)),
+            then=SearchLibraryForLandCardToBattlefield(
+                land_types=("Plains", "Island", "Swamp", "Mountain", "Forest"),
+            ),
+        )
+    m = _RETURN_TARGET_NOUN_TO_OWNERS_HAND.match(phrase)
+    if m is not None and m.group("noun") in _BOUNCE_TARGET_NOUNS:
+        # ``return target <noun> to its owner's hand`` — see the regex
+        # comment; ``Bounce`` re-verifies the filter at resolution.
+        from mtg_bot.effects.generic import Bounce
+        from mtg_bot.effects.targets import TargetSpec
+
+        return Bounce(
+            targets=(TargetSpec(_BOUNCE_TARGET_NOUNS[m.group("noun")]),),
+        )
     if _RETURN_UP_TO_ONE_TARGET_NONLAND_PERMANENT_TO_OWNERS_HAND.match(
         phrase
     ) is not None:
@@ -5807,15 +6173,17 @@ def _parse_effect(phrase: str) -> Effect | None:
         return ReturnTargetCreatureToOwnersHand(
             allow_nonland_permanent=True, optional=True
         )
-    if _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(
-        phrase
-    ) is not None:
+    m = _RETURN_UP_TO_ONE_TARGET_CREATURE_TO_OWNERS_HAND.match(phrase)
+    if m is not None:
         # ``return up to one target creature to its owner's hand`` —
         # Bottomless Pool's door trigger. ``up to one`` →
         # ``optional=True`` (resolves as a no-op fizzle if no target
         # chosen); no controller restriction (any creature, friend or
-        # foe, is a legal target).
-        return ReturnTargetCreatureToOwnersHand(optional=True)
+        # foe, is a legal target). The bare ``target creature`` form
+        # (Aether Spellbomb) is the mandatory single-target bounce.
+        return ReturnTargetCreatureToOwnersHand(
+            optional=m.group(1) is not None,
+        )
     m = _RETURN_UP_TO_N_NON_SPACECRAFT_CREATURES_TO_OWNERS_HANDS.match(
         phrase
     )
@@ -6620,6 +6988,49 @@ def _parse_effect(phrase: str) -> Effect | None:
         # activated-ability layer (``sorcery_speed=True``), not in the
         # effect body.
         return LockOrUnlockDoorOfTargetRoomYouControl()
+    # Planeswalker-bucket extension recognizers, then the card-flow
+    # grammar (targeted draw, tutors, hand disruption, look-at-top
+    # selection, wheels, mass zone moves) — both tried after every
+    # recognizer above, so no phrase an older recognizer claims changes
+    # meaning. Where the two overlap (Brainstorm's put-back, "untap up to
+    # N lands", tuck-into-library, look-at-top-may-reveal) the extension
+    # recognizer, which landed first, keeps the phrase.
+    from mtg_bot.cards.parser.effects_ext import parse_ext_effect
+
+    ext = parse_ext_effect(phrase)
+    if ext is not None:
+        return ext
+    from mtg_bot.cards.parser.card_flow_grammar import parse_card_flow_effect
+
+    card_flow = parse_card_flow_effect(phrase)
+    if card_flow is not None:
+        return card_flow
+    # Artifact-bucket last-resort shapes ("you may X. If you do, Y").
+    from mtg_bot.cards.parser.artifact_effects import (
+        _parse_artifact_effect_fallback,
+    )
+    artifact = _parse_artifact_effect_fallback(phrase)
+    if artifact is not None:
+        return artifact
+    # Cube creatures (R / multicolor / colorless) bucket shapes -- last.
+    from mtg_bot.cards.parser.creature_rmc_grammar import parse_rmc_effect
+
+    rmc = parse_rmc_effect(phrase)
+    if rmc is not None:
+        return rmc
+    # U/B-creature bucket grammar (amass, ...).
+    from mtg_bot.cards.parser.cube_creatures_ub import parse_ub_effect
+
+    ub = parse_ub_effect(phrase)
+    if ub is not None:
+        return ub
+    # The source as the printed subject of its own damage clause
+    # ("this creature deals 1 damage to any target"): retry through the
+    # subject-less ``deals ...`` grammar spells use once their name is
+    # stripped. Last resort, so every literal that spells out the
+    # subject keeps its match.
+    if phrase.startswith("this creature deals "):
+        return _parse_effect(phrase[len("this creature "):])
     return None
 
 
@@ -6683,6 +7094,12 @@ def _normalize_spell_effect_phrase(phrase: str, name: str) -> str:
         phrase = phrase.replace(marker, replacement)
     if phrase and phrase[0].isupper():
         phrase = phrase[0].lower() + phrase[1:]
+    # ``Exile <Name>.`` — the spell exiling itself as part of its own
+    # resolution (Time Spiral). The name is the object, not the
+    # subject, so the prefix strip above doesn't apply; rewrite it to
+    # the name-agnostic ``exile this spell`` surface.
+    if phrase == "exile " + name:
+        phrase = "exile this spell"
     return phrase
 
 
@@ -6701,5 +7118,11 @@ def _parse_spell_effect_phrase(phrase: str, name: str) -> Effect | None:
     Delegates to the unified ``_parse_effect`` after normalization, so
     every effect available to creature triggered abilities is also
     available to spells (and vice versa).
+
+    The compositional grammar is disabled for the Rust-parity-pinned
+    legacy spells (see ``precise_grammar.legacy_parity_pinned``).
     """
-    return _parse_effect(_normalize_spell_effect_phrase(phrase, name))
+    from mtg_bot.cards.parser.precise_grammar import legacy_parity_pinned
+
+    with legacy_parity_pinned(name):
+        return _parse_effect(_normalize_spell_effect_phrase(phrase, name))

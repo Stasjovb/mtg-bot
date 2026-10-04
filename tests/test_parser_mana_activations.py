@@ -189,8 +189,10 @@ def test_sacrifice_another_with_other_filter():
     ``Sacrifice another artifact`` and ``Sacrifice another artifact or
     land`` (each maps to its own ``ActivationCost`` boolean field).
     ``Sacrifice another creature`` and ``Sacrifice another permanent``
-    have no engine field today and remain unrecognized."""
-    assert _parse_activation_cost("Sacrifice another creature") is None
+    have no dedicated field: ``Sacrifice another creature`` is a
+    composable ``extra_costs`` atom (cube creatures bucket);
+    ``Sacrifice another permanent`` stays unrecognized."""
+    assert _parse_activation_cost("Sacrifice another creature").extra_costs
     assert _parse_activation_cost("Sacrifice another permanent") is None
     assert _parse_activation_cost("Sacrifice another artifact") == (
         ActivationCost(sacrifice_another_artifact=True)

@@ -95,7 +95,15 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
 
         # Strip the permanent off the battlefield with the same
         # housekeeping as other bounce-style effects.
+        if obj.exile_instead_of_leaving:
+            from mtg_bot.turn import move_off_battlefield
+
+            move_off_battlefield(state, obj, destination="exile")
+            return
         state.battlefield.remove(obj)
+        from mtg_bot.game import restore_mdfc_front
+
+        restore_mdfc_front(obj)
         obj.damage = 0
         obj.marked_lethal = False
         obj.damaged_this_turn = False
@@ -110,6 +118,9 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         obj.attached_to = None
         if not obj.printing.is_land:
             state.permanent_left_battlefield_this_turn = True
+        state.player_by_id(
+            obj.controller_id
+        ).permanent_left_battlefield_this_turn = True
         if obj.printing.is_token:
             state.log.append(
                 f"{obj.printing.name} token ceases to exist (bounced)"
@@ -126,6 +137,9 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
             f"{obj.printing.name} put on the {destination} of "
             f"P{owner.id}'s library"
         )
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
 
     def describe(self) -> str:
         scope = (
@@ -207,6 +221,9 @@ class OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(Effect):
             f"{obj.printing.name} put on the bottom of P{owner.id}'s "
             f"library (was warped in exile)"
         )
+        from mtg_bot.turn import note_cards_put_into_library
+
+        note_cards_put_into_library(state, owner.id)
 
     def describe(self) -> str:
         return (
@@ -384,6 +401,7 @@ class PutBasicLandFromHandOntoBattlefieldTapped(Effect):
         basic.zone = Zone.BATTLEFIELD
         basic.controller_id = controller_id
         basic.tapped = True
+        basic.entered_battlefield_turn = state.turn_number
         state.battlefield.append(basic)
         state.log.append(
             f"P{controller_id} puts {basic.printing.name} onto the "
@@ -441,6 +459,10 @@ class ShuffleZonesIntoLibrary(Effect):
                 moved += 1
             p.graveyard.clear()
         shuffle_library(state, controller_id)
+        if moved:
+            from mtg_bot.turn import note_cards_put_into_library
+
+            note_cards_put_into_library(state, controller_id)
         zone_phrase = " and ".join(self.zones) if self.zones else "(none)"
         state.log.append(
             f"P{controller_id} shuffles {moved} cards from "

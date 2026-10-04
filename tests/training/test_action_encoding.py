@@ -63,6 +63,15 @@ def _build_adapter(seed: int) -> MtgGameStateAdapter:
     )
 
 
+def _is_hand_ability_activation(adapter, d) -> bool:
+    from mtg_bot.actions import ActivateAbility
+
+    if not isinstance(d, ActivateAbility):
+        return False
+    eng = adapter.engine_state
+    return not any(o.id == d.source_id for o in eng.battlefield)
+
+
 def test_vocab_size_constant_is_fixed() -> None:
     """Pinned. If a cap edit changes this value, update the test and
     every downstream consumer that hardcoded the old size."""
@@ -141,6 +150,15 @@ def test_encode_decode_roundtrip_on_real_game(seed: int) -> None:
             continue
         legal = adapter.legal_decisions()
         for d in legal:
+            if _is_hand_ability_activation(adapter, d):
+                # Known codec gap (docs/SEARCH_LIMITATIONS.md "Hand-
+                # activated abilities (cycling family)"): no slot range
+                # for an ActivateAbility sourced from hand yet; encode
+                # raises EncodingOverflowError, which search/data_gen
+                # tolerate. Pinned separately below.
+                with pytest.raises(EncodingOverflowError):
+                    encode(d, adapter, active)
+                continue
             slot = encode(d, adapter, active)
             assert 0 <= slot < ACTION_VOCAB_SIZE, (
                 f"slot {slot} out of vocab for {d!r}"

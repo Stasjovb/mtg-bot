@@ -162,19 +162,41 @@ def test_parse_effect_returns_none_for_malformed_mill():
     assert _parse_effect("mill one card") is None
     # Out-of-range word.
     assert _parse_effect("mill twelve cards") is None
-    # Wrong subject.
-    assert _parse_effect("each opponent mills three cards") is None
+    # Wrong subject (each opponent mills N is modeled; each player is not).
+    assert _parse_effect("each player mills three cards") is None
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_artifact():
     assert _parse_effect("destroy target artifacts") is None
-    assert _parse_effect("destroy target artifact you control") is None
-    assert _parse_effect("destroy target artifact or creature") is None
+    # "destroy target artifact you control" / "... artifact or creature"
+    # are well-formed and claim through the generic destroy recognizer.
+    assert _parse_effect("destroy target artifact spell") is None
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_land():
     assert _parse_effect("destroy target lands") is None
-    assert _parse_effect("destroy target nonbasic land") is None
+    assert _parse_effect("destroy target nonbasic lands") is None
+
+
+def test_parse_effect_destroy_target_basic_land_composes():
+    # No legacy recognizer; the compositional target grammar
+    # (precise_grammar fallback) claims the printed "basic land" noun
+    # phrase faithfully.
+    from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
+    from mtg_bot.effects.object_predicates import IsBasic, IsLand
+
+    assert _parse_effect("destroy target basic land") == RemoveTargetPermanents(
+        action="destroy", target_filter=IsLand() & IsBasic(),
+    )
+
+
+def test_parse_effect_destroy_target_nonbasic_land():
+    """``nonbasic`` qualifier (Wasteland, Dust Bowl) narrows the filter."""
+    from mtg_bot.cards.base import DestroyTargetLand
+
+    assert _parse_effect("destroy target nonbasic land") == DestroyTargetLand(
+        nonbasic_only=True,
+    )
 
 
 def test_parse_effect_returns_none_for_malformed_destroy_noncreature():
@@ -182,7 +204,7 @@ def test_parse_effect_returns_none_for_malformed_destroy_noncreature():
     # ``destroy target nonland permanent`` is now a recognized
     # primitive (Thaumaton Torpedo), so it parses; only the malformed
     # surface forms below should return None.
-    assert _parse_effect("destroy target noncreature permanent you control") \
+    assert _parse_effect("destroy target noncreature spell you control") \
         is None
 
 
@@ -193,6 +215,8 @@ def test_parse_spell_effect_phrase_returns_none_for_malformed_phrase():
     assert _parse_spell_effect_phrase(
         "Mill the top three cards of your library.", "Bogus"
     ) is None
+    # A capitalized subtype is a target noun since the cube W/G bucket
+    # ("target Wolf you control"); an unknown lower-case noun isn't.
     assert _parse_spell_effect_phrase(
-        "Destroy target Dragon.", "Bogus"
+        "Destroy target dragon.", "Bogus"
     ) is None

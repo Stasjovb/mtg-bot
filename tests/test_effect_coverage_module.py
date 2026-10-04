@@ -541,7 +541,7 @@ def test_collect_python_effect_vocab_swallows_unintrospectable_printing(
     import mtg_bot.cards.parser.source as src_mod
 
     monkeypatch.setattr(
-        src_mod, "OracleParserCardSource", lambda: _FakeSource()
+        src_mod, "OracleParserCardSource", lambda *a, **k: _FakeSource()
     )
 
     classes, examples, n = ec.collect_python_effect_vocab()

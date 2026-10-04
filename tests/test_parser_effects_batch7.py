@@ -99,14 +99,16 @@ def test_parse_spell_effect_phrase_recognizes_each_opponent_loses_n_life():
 
 def test_parse_effect_returns_none_for_malformed_counter_phrase():
     assert _parse_effect("counter target") is None
-    assert _parse_effect("counter target creature spell") is None
+    assert _parse_effect("counter target creature") is None
     assert _parse_effect("counter spell") is None
 
 
 def test_parse_effect_returns_none_for_malformed_exile_phrase():
     assert _parse_effect("exile target") is None
-    assert _parse_effect("exile target artifact") is None
-    assert _parse_effect("exile target creature you control") is None
+    # ``exile target artifact`` / ``exile target creature you control``
+    # now claim through the generic ``exile target <noun>`` recognizer
+    # (effects_ext); a noun outside its vocabulary still rejects.
+    assert _parse_effect("exile target spell you control") is None
 
 
 def test_parse_effect_returns_none_for_malformed_each_opponent_loses():

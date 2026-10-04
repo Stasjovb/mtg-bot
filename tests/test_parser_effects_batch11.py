@@ -122,14 +122,20 @@ def test_parse_spell_effect_phrase_recognizes_pump_and_gains():
 
 
 def test_parse_effect_returns_none_for_unknown_granted_keyword():
-    # ``protection from black`` is not on the evergreen-keyword
-    # whitelist — the keyword-grant body validation rejects, the whole
-    # pump-and-gain phrase rejects, and the wrapping card stays
-    # unclaimed rather than silently dropping the granted ability.
+    # ``banding`` is not a modeled keyword — the keyword-grant body
+    # validation rejects, the whole pump-and-gain phrase rejects, and
+    # the wrapping card stays unclaimed rather than silently dropping
+    # the granted ability. (``protection from black`` used to be the
+    # example here; protection is modeled now — see
+    # ``mtg_bot.keyword_rules`` — so it parses.)
+    assert _parse_effect(
+        "target creature gets +1/+1 and gains banding "
+        "until end of turn"
+    ) is None
     assert _parse_effect(
         "target creature gets +1/+1 and gains protection from black "
         "until end of turn"
-    ) is None
+    ) is not None
 
 
 def test_parse_effect_returns_none_for_pump_and_gains_without_duration():
@@ -202,10 +208,14 @@ def test_parse_effect_returns_none_for_malformed_optional_discard():
     assert _parse_effect(
         "you may discard a card. If you do, gain 1 life"
     ) is None
-    # Missing the ``If you do`` gate.
-    assert _parse_effect(
-        "you may discard a card and draw two cards"
-    ) is None
+    # Missing the ``If you do`` gate: not the optional-discard-then-
+    # draw primitive. The generic ``you may <effect>`` recognizer scopes
+    # the optional over the whole conjunction (both halves optional
+    # together), never over the discard alone.
+    from mtg_bot.effects.combinators import MayDo, Sequence
+    eff = _parse_effect("you may discard a card and draw two cards")
+    assert isinstance(eff, MayDo)
+    assert isinstance(eff.inner, Sequence)
 
 
 # ---------- you may sac another for self-pump UEOT ----------

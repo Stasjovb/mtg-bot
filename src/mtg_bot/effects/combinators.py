@@ -19,6 +19,78 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class ThenTargetControllerResolves(Effect):
+    """Resolve ``first`` against the chosen target, then resolve
+    ``then`` with THAT TARGET'S CONTROLLER (captured before ``first``
+    changes anything) as the resolving controller.
+
+    Models the anaphoric "That player ..." follow-up sentence: Boseiju,
+    Who Endures' "Destroy target artifact, enchantment, or nonbasic land
+    an opponent controls. That player may search their library for a
+    land card with a basic land type, put it onto the battlefield, then
+    shuffle." Targeting (legality, count, kinds) delegates to
+    ``first``. If the target is no longer legal on resolution the whole
+    ability fizzles (CR 608.2b) and ``then`` doesn't happen.
+    """
+
+    first: Effect
+    then: Effect
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", self.first.targets)
+
+    def requires_target(self) -> bool:
+        return self.first.requires_target()
+
+    def legal_targets(self, state, controller_id):
+        return self.first.legal_targets(state, controller_id)
+
+    def target_count_range(self):
+        return self.first.target_count_range()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.effects.generic.targets_helpers import (
+            _slot_target_still_legal,
+        )
+        from mtg_bot.effects.targets import TargetSpec
+
+        if not targets:
+            return
+        slot = next(
+            (t for t in self.first.targets if isinstance(t, TargetSpec)),
+            None,
+        )
+        _, target_id = targets[0]
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None,
+        )
+        prior = getattr(state, "resolving_controller_id", None)
+        state.resolving_controller_id = controller_id
+        try:
+            legal = (
+                obj is not None
+                and slot is not None
+                and _slot_target_still_legal(state, slot, targets[0])
+            )
+        finally:
+            state.resolving_controller_id = prior
+        if not legal:
+            state.log.append("ability fizzles (target no longer legal)")
+            return
+        that_player = obj.controller_id
+        self.first.resolve(state, controller_id, targets)
+        self.then.resolve(state, that_player)
+
+    def describe(self) -> str:
+        return (
+            f"{self.first.describe()}; that player: {self.then.describe()}"
+        )
+
+
+@dataclass(frozen=True)
 class ApplyEffect(Effect):
     """Wrap ``inner`` and rewrite the lifetime of every ``ContinuousEffect``
     record it appends to ``state.continuous_effects``.
@@ -280,6 +352,7 @@ class OptionalPutLandFromHandOntoBattlefield(Effect):
         card.zone = Zone.BATTLEFIELD
         card.controller_id = controller_id
         card.tapped = bool(card.printing.enters_tapped)
+        card.entered_battlefield_turn = state.turn_number
         state.battlefield.append(card)
         state.log.append(
             f"P{controller_id} puts {card.printing.name} from hand "
@@ -1563,3 +1636,86 @@ class ConditionalIfCastFromHand(Effect):
 
 
 
+
+
+@dataclass(frozen=True)
+class IfConditionElse(Effect):
+    """Resolve ``then_effect`` if ``condition`` holds for the controller
+    at resolve time, else ``else_effect`` (which may be ``None``).
+
+    The generic "<effect> instead if <condition>" replacement rider
+    (Cabal Ritual's ``Threshold — Add {B}{B}{B}{B}{B} instead if there
+    are seven or more cards in your graveyard``): ``then_effect`` is the
+    rider's effect, ``else_effect`` the base clause. Targeting delegates
+    to whichever branch requires a target (the branches of an
+    "instead" rider share the base clause's targets).
+    """
+
+    # A ``Condition`` (``matches(state, viewer_id)``) or a
+    # ``StatePredicate`` (``test(state, viewer_id)`` — Threshold's
+    # ``CardsInGraveyardAtLeast``), evaluated for the controller.
+    condition: "object"
+    then_effect: Effect
+    else_effect: "Effect | None" = None
+
+    def _targeting_branch(self) -> "Effect | None":
+        for eff in (self.then_effect, self.else_effect):
+            if eff is not None and eff.requires_target():
+                return eff
+        return None
+
+    def requires_target(self) -> bool:
+        return self._targeting_branch() is not None
+
+    def cast_time_shape(
+        self, *, kicked: bool = False, alt_cost_paid: bool = False,
+        x_value: "int | None" = None,
+    ) -> Effect:
+        """For conditions fixed at cast time — "If this spell was
+        kicked" (Tear Asunder), an alternative cost / Overload — the
+        branch, and so the target shape, is known when targets are
+        chosen (CR 601.2b-c; ``actions.cast_time_effect``)."""
+        from mtg_bot.effects.generic.cast_conditionals import (
+            AlternativeCostWasPaid, SpellWasKicked,
+        )
+
+        if isinstance(self.condition, SpellWasKicked):
+            fired = kicked
+        elif isinstance(self.condition, AlternativeCostWasPaid):
+            fired = alt_cost_paid
+        else:
+            return self
+        if fired:
+            return self.then_effect
+        return self.else_effect if self.else_effect is not None else self
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        branch = self._targeting_branch()
+        return branch.legal_targets(state, controller_id) if branch else []
+
+    def target_count_range(self) -> tuple[int, int]:
+        branch = self._targeting_branch()
+        return branch.target_count_range() if branch else (0, 0)
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ):
+        cond = self.condition
+        holds = (
+            cond.test(state, controller_id) if hasattr(cond, "test")
+            else cond.matches(state, controller_id)
+        )
+        if holds:
+            return self.then_effect.resolve(state, controller_id, targets)
+        if self.else_effect is not None:
+            return self.else_effect.resolve(state, controller_id, targets)
+        return None
+
+    def describe(self) -> str:
+        text = f"if {self.condition!r}: {self.then_effect.describe()}"
+        if self.else_effect is not None:
+            text += f"; otherwise {self.else_effect.describe()}"
+        return text

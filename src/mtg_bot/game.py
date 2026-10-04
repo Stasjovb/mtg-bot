@@ -545,6 +545,10 @@ class GameObject:
     # Stun counters: a permanent with stun counters doesn't untap during
     # its controller's untap step — instead one stun counter is removed.
     stun_counters: int = 0
+    # Silver counters (Karn, Scion of Urza exiles a card "with a silver
+    # counter on it"; his -1 returns such a card). Carried on the card
+    # object while it sits in exile.
+    silver_counters: int = 0
     # Until-end-of-turn bonuses applied by pump effects (e.g. "+3/+0 until
     # end of turn"). Cleared on the cleanup step. Stacked additively when
     # multiple pumps hit the same object.
@@ -592,6 +596,24 @@ class GameObject:
     # when a planeswalker enters the battlefield. State-based actions
     # send planeswalkers with 0 loyalty to the graveyard.
     loyalty_counters: int = 0
+    # ``state.turn_number`` at the moment this object last entered the
+    # battlefield (stamped by ``actions.put_into_battlefield``). 0 for
+    # objects that never entered. Read by "as long as ~ entered this
+    # turn" gates (The Wandering Emperor's instant-speed loyalty
+    # abilities) -- distinct from ``summoning_sick``, which persists
+    # until the controller's NEXT untap step rather than ending with
+    # the turn the object entered.
+    entered_battlefield_turn: int = 0
+    # Last-known information for "loses all abilities" (layer 6): set by
+    # ``turn.move_off_battlefield`` from the registry just before the
+    # object's continuous effects are dropped, so its own leaves / dies
+    # triggers don't fire for an object that had no abilities as it
+    # left (``actions.dispatch_event``). Recomputed on every departure.
+    left_without_abilities: bool = False
+    # "You may activate <this>'s loyalty abilities N more times this
+    # turn" (Comet, Stellar Pup): ``(turn_number, remaining)``; see
+    # ``legal.loyalty_activation_available``.
+    extra_loyalty_activations: tuple = ()
     # Saga lore counters. Sagas would get a lore counter at the
     # start of each precombat main phase as a turn-based action;
     # the state-based action (CR 704.5r in audit numbering)
@@ -613,6 +635,31 @@ class GameObject:
     # consumed by state_based_actions when destruction is averted;
     # cleared at cleanup if unconsumed (regeneration is UEOT).
     regeneration_shield: bool = False
+    # "If that creature would die this turn, exile it instead." (Suplex,
+    # CR 614.1a replacement): while True, this object going from the
+    # battlefield to a graveyard as a creature is exiled instead.
+    # Set by ``DealDamageExileIfDiesThisTurn``; cleared at cleanup and
+    # whenever the object leaves the battlefield.
+    exile_if_dies_this_turn: bool = False
+    # Command-zone holder of a "whenever <event> this turn" delayed
+    # triggered ability (CR 603.7c; ``CreateThisTurnTriggeredAbility``,
+    # Forth Eorlingas!): removed from ``state.emblems`` at cleanup.
+    expires_at_cleanup: bool = False
+    # Command-zone holder of an "until your next turn, whenever <event>"
+    # delayed triggered ability (``CreateTriggersUntilYourNextTurn``):
+    # the player whose next untap step removes it (-1 = never).
+    expires_at_untap_of: int = -1
+    # ``state.turn_number`` when this card was last discarded (-1 =
+    # never): mayhem's "if you discarded it this turn".
+    discarded_turn: int = -1
+    # Prepare (``layouts``): on a prepared creature, the id of the copy
+    # of its prepare spell in exile (-1 = not prepared); on that copy,
+    # the id of the creature it belongs to (-1 = not a prepare copy).
+    prepared_copy_id: int = -1
+    prepare_copy_of: int = -1
+    # The spell was cast with its optional additional cost paid
+    # (Teamwork — "if this spell was cast using teamwork").
+    optional_additional_cost_paid: bool = False
     # Phasing — "treat it and anything attached to it as though they
     # don't exist until its controller's next turn." While True, this
     # object is skipped in combat damage assignment. Set by
@@ -652,6 +699,8 @@ class GameObject:
     # Consumed by ``effective_colors`` when synthesizing layer-5
     # ``"add_colors"`` entries from this Painter source.
     painter_chosen_color: Optional[str] = None
+    # Player chosen "as this enters" (``chooses_player_as_enters``).
+    chosen_player_id: Optional[int] = None
     # Face-down marker. CR 701.34 / 707.2: a face-down permanent has
     # no name, no subtypes, and no abilities; it's a 2/2 creature.
     # We keep ``printing`` intact (so ``TurnFaceUp`` can read the
@@ -663,6 +712,24 @@ class GameObject:
     # at the moment a card becomes a face-down permanent; cleared by
     # the ``TurnFaceUp`` action.
     face_down: bool = False
+    # Basic land type chosen as this permanent entered ("As this land
+    # enters, choose a basic land type." — Multiversal Passage). Set by
+    # ``actions.apply_land_etb_replacements`` on every entry; read by
+    # ``effective_subtypes`` for printings with
+    # ``is_chosen_basic_land_type`` while the object is on the
+    # battlefield.
+    chosen_basic_land_type: Optional[str] = None
+    # Exerted (CR 701.39): this permanent won't untap during its
+    # controller's next untap step. Set by the ``exert_self`` activation
+    # cost; ``run_untap_step`` consumes it.
+    exerted: bool = False
+    # Counters of kinds without a dedicated field ("mining" — Gemstone
+    # Mine), as an immutable ``((kind, count), ...)`` tuple so the fast
+    # slot-cloner can share it safely. Read / written through
+    # ``named_counter_count`` / ``set_named_counters``. Kinds that DO
+    # have a dedicated field (+1/+1, charge, time, stun, loyalty, lore)
+    # never live here.
+    named_counters: tuple = ()
     # DSK Rooms: set of half-names currently unlocked on this Room
     # permanent. When a Room is cast for half A's mana cost, the
     # entering permanent has ``unlocked_halves = frozenset({A})``;
@@ -700,6 +767,37 @@ class GameObject:
     # automatically — same write-through-cache shape the +1/+1 counter
     # pump path uses for layer-7d P/T contributions.
     flying_counters: int = 0
+    # Goad (CR 701.38): id of the player who goaded this creature, or
+    # ``None``. A goaded creature attacks each combat if able until the
+    # goader's next turn (cleared at the goader's untap step). See
+    # ``mtg_bot.designations``.
+    goaded_by: Optional[int] = None
+    # (``named_counters`` — defined above — also backs the cube
+    # artifacts' wish / story / burden / influence counters, read and
+    # written through ``counter_count`` / ``add_counters`` /
+    # ``remove_counters``, which route dedicated kinds to their own
+    # fields. ``put_into_battlefield`` resets it on entry: a new object,
+    # CR 400.7.)
+    # Imprint link (Chrome Mox): set on a card exiled by an imprint
+    # ability to ``(source_id, source_etb_timestamp)``. Pairing the id
+    # with the source's ``etb_timestamp`` makes the link die when the
+    # source leaves and re-enters (it becomes a new object), without a
+    # cleanup hook on every leave-the-battlefield path.
+    imprinted_on: Optional[tuple[int, int]] = None
+    # Transient: the id of the permanent this Equipment/Aura was attached
+    # to when that permanent left the battlefield. Set by
+    # ``move_off_battlefield`` only for the duration of the leave-event
+    # dispatch (``IsFormerHost`` — Skullclamp's "Whenever equipped
+    # creature dies"), then cleared.
+    last_attached_to: Optional[int] = None
+    # Harnessed designation (CR 701.64, The Mind Stone): turns on the
+    # permanent's ∞ abilities. Cleared when it enters the battlefield
+    # anew (``put_into_battlefield``).
+    harnessed: bool = False
+    # Colors of mana spent to cast this card (Sunburst CR 702.44,
+    # Converge CR 207.2c), recorded by ``actions._cast_spell`` for every
+    # cast; a Sunburst permanent consumes (resets) it as it enters.
+    sunburst_colors_spent: int = 0
     # DSK Haunted Screen "Activate only once" tracking. The printed
     # rider on Haunted Screen's ``{7}: …`` activation reads "Activate
     # only once." which the engine simulates by latching this flag to
@@ -721,6 +819,217 @@ class GameObject:
     # its registry entry expires. Indefinite-lifetime entries persist
     # across cleanup so a permanent type-change survives.
     permanent_is_creature: bool = False
+    # CR 702.34a: set while a spell cast with flashback is on the stack;
+    # the card is exiled instead of going anywhere else when it leaves
+    # the stack (``actions.move_spell_off_stack``).
+    cast_via_flashback: bool = False
+    # The Flashback card: "Target instant or sorcery card in your
+    # graveyard gains flashback until end of turn. The flashback cost is
+    # equal to its mana cost." Set on the graveyard card; cleared at
+    # cleanup and when the card is cast.
+    flashback_granted_until_eot: bool = False
+    # A copy of a spell on the stack (storm, Chain of Smog). Not a card:
+    # it isn't in any zone list and ceases to exist when it leaves the
+    # stack (CR 707.10a).
+    is_spell_copy: bool = False
+    # A modal DFC played as its back face: the front-face printing to
+    # restore when the permanent leaves the battlefield (CR 712.8).
+    mdfc_front_printing: Optional["CardPrinting"] = None
+    # Plot: the turn number the card was plotted (exiled face up) on;
+    # -1 when not plotted. Castable for free from exile on a later turn.
+    plotted_turn: int = -1
+    # "If that creature would leave the battlefield, exile it instead of
+    # putting it anywhere else." (From the Catacombs) — honored by every
+    # leave-battlefield path while the object stays on the battlefield.
+    exile_instead_of_leaving: bool = False
+    # Reanimation Auras (cube enchantments). ``aura_enchant_override``
+    # is the enchant restriction this permanent has NOW when it differs
+    # from the printed one: Animate Dead "loses 'enchant creature card
+    # in a graveyard' and gains 'enchant creature put onto the
+    # battlefield with this Aura'", Necromancy "becomes an Aura with
+    # ..." (a non-Aura printing that is an Aura while this is set).
+    # Cleared when the permanent leaves the battlefield.
+    aura_enchant_override: Optional[str] = None
+    # ``(id, etb_timestamp)`` of the creature this permanent returned
+    # to the battlefield ("that creature" of "When this Aura leaves the
+    # battlefield, that creature's controller sacrifices it"). The
+    # timestamp makes the link die if that creature changes zones.
+    linked_creature: Optional[tuple[int, int]] = None
+    # Necromancy: this spell was cast when a sorcery couldn't have been
+    # (set at cast for printings with
+    # ``sacrifice_at_cleanup_if_cast_without_sorcery_timing``; consumed
+    # when the permanent enters).
+    cast_without_sorcery_timing: bool = False
+    # ── Cube creatures (R / multicolor / colorless bucket) ──
+    # "You may play / cast that card <duration>" on a card in exile
+    # (``cube_creatures_rmc.ExilePlayPermission`` or None). Honored for
+    # cards in ANY player's exile (Ragavan casts the opponent's card);
+    # expired by ``run_cleanup_step``; cleared when the card is played.
+    exile_play_permission: Optional[object] = None
+    # Exhaust (CR 702.177): indexes of this permanent's exhaust
+    # abilities already activated. Reset when it leaves the battlefield.
+    exhausted_abilities: frozenset = frozenset()
+    # CR 702.138c: this permanent "escaped" (it resolved from a spell
+    # cast with escape). Read by "sacrifice it unless it escaped".
+    escaped: bool = False
+    # Dash (CR 702.109): this permanent resolved from a dashed spell;
+    # stamped at ETB (it gains haste and returns to hand at the next
+    # end step). Cleared when it leaves the battlefield.
+    dashed: bool = False
+    # Boast (CR 702.142): ``state.turn_number`` of the last activation of
+    # this permanent's boast ability (0 = never).
+    boasted_turn: int = 0
+    # Monstrosity (CR 701.37): this permanent is monstrous.
+    monstrous: bool = False
+    # Lurrus-style "Once during each of your turns, you may cast ... from
+    # your graveyard": ``state.turn_number`` of the last use (0 = never).
+    graveyard_cast_used_turn: int = 0
+    # This permanent resolved from a (non-copy) spell — "if you cast it"
+    # on its ETB trigger (Lutri). Reset when it leaves the battlefield.
+    entered_via_cast: bool = False
+    # The zone this permanent came from as it last entered the
+    # battlefield (``Zone.value``: "stack", "graveyard", "exile", ...).
+    entered_from_zone: str = ""
+    # Number of times the spell this permanent resolved from was kicked
+    # (multikicker; Batroc the Leaper).
+    kick_count: int = 0
+    # Roto P2: this spell was cast with its bargain cost paid ("If this
+    # spell was bargained", Beseech the Mirror). Set on every cast of a
+    # card with a ``Bargain`` zone ability (``roto_zones.pay_zone_cast_costs``).
+    cast_bargained: bool = False
+    # ── Cube W/G creature bucket ─────────────────────────────────────
+    # Evoke (CR 702.74): set when this object was cast for its evoke
+    # cost; read by the evoke sacrifice trigger's intervening-if at
+    # trigger and resolution time. Cleared whenever the object leaves
+    # the battlefield (a flickered evoked creature is a new object).
+    evoked: bool = False
+    # "Exile ... until an opponent becomes the monarch" (Palace Jailer):
+    # id of the player whose opponent's becoming the monarch returns
+    # this card from exile. ``None`` otherwise.
+    exiled_until_opponent_monarch_of: Optional[int] = None
+    # ``(turn number, count)`` of this permanent's "this ability has
+    # resolved N times this turn" ability (Scythecat Cub); ``()`` until
+    # it first resolves.
+    resolutions_this_turn: tuple = ()
+    # "... and that spell can't be countered" -- set when this spell was
+    # paid for with mana that makes it uncounterable (Delighted
+    # Halfling); honored by ``CounterTargetSpell._is_uncounterable``.
+    cast_uncounterable: bool = False
+    # Total mana spent to cast this object as a spell (one per unit paid
+    # by ``actions._cast_spell``'s automatic payment, so convoke /
+    # improvise / delve and Phyrexian life don't count; 0 for a free
+    # cast) -- "if no mana was spent to cast it" (Vexing Bauble, roto P1),
+    # "if five or more mana was spent" (Exhibition Tidecaller, roto P3).
+    mana_spent_to_cast: int = 0
+    # Turn number in which this creature "attacks that player this
+    # combat if able" (Ursine Monstrosity); -1 otherwise. Read by
+    # ``designations.forced_attackers``.
+    must_attack_turn: int = -1
+    # Extra generic surcharge (beyond Lightstall's {1}) on casting this
+    # card from exile under the "its owner may play it for as long as it
+    # remains exiled" permission (Elite Spellbinder: {2} total).
+    exile_cast_extra_surcharge: int = 0
+    # Serra Paragon: turn number its once-per-turn graveyard permission
+    # was last used (-1 = never); and the life a card played with it
+    # gains when it's put into a graveyard from the battlefield ("exile
+    # it and you gain 2 life"), 0 when it has no such rider.
+    graveyard_permission_used_turn: int = -1
+    leaves_to_graveyard_exile_gain_life: int = 0
+    # The card name chosen as this permanent entered (Anointed
+    # Peacekeeper); ``None`` when none was chosen.
+    chosen_card_name: Optional[str] = None
+    # Bestow (CR 702.103): cast for its bestow cost; while attached to a
+    # creature it's an Aura, not a creature. Cleared when it leaves the
+    # battlefield or resolves unattached.
+    bestowed: bool = False
+    # Earthbend (Badgermole Cub): "When it dies or is exiled, return it
+    # to the battlefield tapped." -- set on the earthbent land; fired and
+    # cleared by ``move_off_battlefield``.
+    earthbent: bool = False
+    # Optional additional costs paid while casting this object (U/B
+    # cube creatures): how many times its Squad cost was paid (CR
+    # 702.157) and whether its Offspring cost was paid (CR 702.175).
+    # Set by ``_cast_spell``; ``put_into_battlefield`` keeps them only
+    # when the object enters by resolving as that spell (any other entry
+    # is a new object whose costs weren't paid).
+    squad_paid_count: int = 0
+    offspring_paid: bool = False
+    # "You may cast that card this turn." (Emry, Lurker of the Loch):
+    # this graveyard card may be cast for its mana cost until cleanup.
+    castable_from_graveyard_this_turn: bool = False
+    # "If an instant or sorcery spell cast this way would be put into
+    # your graveyard, exile it instead." (Bilbo, Thief in the Night) --
+    # honored when the spell leaves the stack.
+    exile_if_put_into_graveyard_from_stack: bool = False
+    # Superior Spider-Man: the graveyard card this object copied as it
+    # entered ("When you do, exile that card." fires after it enters).
+    copied_card_to_exile: Optional[int] = None
+    # Saddle (CR 702.171b): "This Mount becomes saddled until end of
+    # turn." Cleared at cleanup.
+    saddled: bool = False
+    # "choose odd or even" answer ("odd" / "even"), set as it enters.
+    chosen_parity: Optional[str] = None
+    # "exiled with this creature" linkage that does NOT return the card
+    # when the source leaves (Emperor of Bones) -- unlike
+    # ``exiled_by_source`` (the "until it leaves the battlefield" link).
+    exiled_with: Optional[int] = None
+    # With ``exiled_by_source``: the card was exiled from a hand, so it
+    # returns to its owner's HAND (not the battlefield) when the source
+    # leaves (Deep-Cavern Bat).
+    exiled_until_leaves_from_hand: bool = False
+    # The X its spell was cast with (Thieving Skydiver's kicker {X}:
+    # "mana value X or less"). Kept only when the object entered by
+    # resolving as that spell.
+    entered_x_value: int = 0
+    # Indices of the modes already chosen for a "choose one that hasn't
+    # been chosen" modal ability (Gollum, Riddle Master).
+    modes_chosen: tuple = ()
+    # Vintage Roto P3: the creature type chosen as this permanent
+    # entered (Cavern of Souls); ``None`` when none was chosen.
+    chosen_creature_type: Optional[str] = None
+    # This permanent entered by resolving as a spell cast from its owner's
+    # hand ("if you cast it from your hand" on an enters trigger: Amped
+    # Raptor); set by ``put_into_battlefield`` from ``cast_via_hand``.
+    entered_from_hand_cast: bool = False
+    # The turn this permanent last added mana with its "if you haven't
+    # added mana with this ability this turn" trigger (Carpet of
+    # Flowers); -1 if never.
+    ability_mana_added_turn: int = -1
+    # ``(turn_number, ability key)`` pairs of "Activate only once each
+    # turn." abilities used (``roto_mana.OnceEachTurnCost``).
+    once_each_turn_used: tuple = ()
+    # The color chosen as this permanent entered
+    # (``CardPrinting.enters_choosing_color``; Utopia Sprawl).
+    chosen_color: Optional[str] = None
+    # Per-unit possible colors of the mana spent to cast this object
+    # (``actions._cast_spell``) and the "if {C}{C} was spent" conditions
+    # the controller settled them to satisfy (``roto_mana``).
+    mana_spent_color_sources: tuple = ()
+    spent_color_choice: Optional[frozenset] = None
+    # "if this is the first / second / third time this ability has
+    # resolved this turn" (Omnath, Locus of Creation): ``(turn_number,
+    # etb_timestamp, count)`` of the last counted resolution -- a new
+    # object (fresh timestamp) or a new turn starts over (Vintage Roto P5).
+    ability_resolutions: tuple = (-1, -1, 0)
+    # How many targets each chosen mode of a multi-mode spell took when
+    # it was cast (a mode may take "up to X" targets -- Kozilek's
+    # Command); set by ``ChooseModes.select_targets`` (Vintage Roto P5).
+    mode_target_counts: tuple = ()
+    # Roto P4: Phyrexian mana symbols paid with life when this card was
+    # last cast (set by the cast pipeline, consumed as it enters --
+    # Compleated, CR 702.150a).
+    phyrexian_life_pips: int = 0
+
+
+def restore_mdfc_front(obj: "GameObject") -> None:
+    """Turn a double-faced card that was played, cast or transformed to
+    its back face front-face up again (every zone but the battlefield /
+    stack shows the front, CR 712.8a). The same snapshot restores a
+    split card cast as one half and a Class that gained levels
+    (``mtg_bot.layouts``)."""
+    if obj.mdfc_front_printing is not None:
+        obj.printing = obj.mdfc_front_printing
+        obj.mdfc_front_printing = None
 
 
 # Fast shallow cloner generated once at module load. ``blocked_by`` is the
@@ -788,6 +1097,28 @@ def reset_public_knowledge(obj: GameObject) -> None:
     than misinformed about what other players still know.
     """
     obj.publicly_known_to = frozenset()
+
+
+def hide_hand_moved_into_library(
+    state: GameState, player_id: int, moved,
+) -> None:
+    """Cards in ``moved`` just went face down from ``player_id``'s hand
+    into their library (Brainstorm's put-back, Scroll Rack). The other
+    players see how many cards moved but not which, so a card they had
+    seen in that hand (Meddling Wizard's reveal, a Thoughtseize look)
+    may now be in either place: every moved card and every card still
+    in that hand is forgotten by everyone but its owner. Under-informed,
+    never misinformed (``docs/HIDDEN_INFO_MODEL.md``); the owner's own
+    entry, if any, is kept.
+
+    Call it at every site that moves hand cards into a library without
+    revealing them; a shuffle already forgets (``shuffle_library``)."""
+    owner_only = frozenset({player_id})
+    p = state.player_by_id(player_id)
+    if isinstance(p.library, _CowList):
+        p.library.fork()
+    for card in (*moved, *p.hand):
+        card.publicly_known_to = card.publicly_known_to & owner_only
 
 
 def reset_library_public_knowledge(state: GameState, player_id: int) -> None:
@@ -860,6 +1191,15 @@ def is_creature_now(obj: GameObject) -> bool:
     # new object once it changes zones; clearing happens at the next
     # zone change implicitly via a fresh GameObject instance).
     if obj.enduring_returned_as_enchantment:
+        return False
+    # Reconfigure (CR 702.151b): an Equipment creature attached to a
+    # creature isn't a creature.
+    # Bestow (CR 702.103b): an attached bestowed permanent is an Aura.
+    # (``getattr``: lightweight test doubles carry neither slot.)
+    if getattr(obj, "attached_to", None) is not None and (
+        obj.printing.reconfigure_cost is not None
+        or getattr(obj, "bestowed", False)
+    ):
         return False
     return (
         obj.printing.is_creature
@@ -993,21 +1333,61 @@ def _static_bonuses(
     power_bonus = 0
     toughness_bonus = 0
     granted: set[str] = set()
-    for source in state.battlefield:
+    # Command-zone emblems are static sources too ("Ninjas you control
+    # get +1/+1."); almost every state has none, so the concat is rare.
+    static_sources = state.battlefield
+    if state.emblems:
+        static_sources = static_sources + state.emblems
+    for source in static_sources:
         wiped = _source_layer6_wiped(state, source)
         for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
                 continue
             granted |= ability.granted_keywords
             if not wiped:
-                power_bonus += ability.power_bonus
-                toughness_bonus += ability.toughness_bonus
+                if ability.bonus_per_condition_count:
+                    per = ability.condition.multiplier(
+                        state, source.controller_id,
+                    )
+                    power_bonus += ability.power_bonus * per
+                    toughness_bonus += ability.toughness_bonus * per
+                else:
+                    power_bonus += ability.power_bonus
+                    toughness_bonus += ability.toughness_bonus
     # Equipment attached to obj contributes its equipment_bonuses.
     # The keyword grants and P/T bonuses on the equipment riders
     # follow the same layer split as static abilities above.
     for source in state.battlefield:
         if source.attached_to != obj.id:
             continue
+        scaling = source.printing.equipment_bonus_per_controlled
+        if scaling is not None and not _source_layer6_wiped(state, source):
+            types, per_p, per_t = scaling
+            # Explicit loops (no genexp): this hot read must stay
+            # closure-free (tests/test_layered_read_closure_free.py).
+            n = 0
+            for o in state.battlefield:
+                if o.controller_id != source.controller_id:
+                    continue
+                for t in types:
+                    if t in o.printing.card_types:
+                        n += 1
+                        break
+            power_bonus += n * per_p
+            toughness_bonus += n * per_t
+        bestow_bonus = source.printing.bestow_enchanted_bonus
+        if bestow_bonus and source.bestowed:
+            # "Enchanted creature gets +P/+T." (Bestow; cube W/G bucket.)
+            power_bonus += bestow_bonus[0]
+            toughness_bonus += bestow_bonus[1]
+        per_counter = source.printing.equipment_bonus_per_own_counter
+        if per_counter and not _source_layer6_wiped(state, source):
+            # "gets +1/+1 for each +1/+1 counter on this Equipment"
+            # (Lion Sash; cube W/G bucket).
+            kind, per_p, per_t = per_counter
+            n = counter_count(source, kind)
+            power_bonus += n * per_p
+            toughness_bonus += n * per_t
         eb = source.printing.equipment_bonuses
         if eb is None:
             continue
@@ -1109,8 +1489,12 @@ def _layer6_entries_for(
         ce for ce in state.continuous_effects
         if ce.layer == 6 and ce.target_id == obj.id
     ]
-    # Static-anthem keyword grants from sources on the battlefield.
-    for source in state.battlefield:
+    # Static-anthem keyword grants from sources on the battlefield (and
+    # command-zone emblems: "Lands you control have indestructible.").
+    static_sources = state.battlefield
+    if state.emblems:
+        static_sources = static_sources + state.emblems
+    for source in static_sources:
         for ability in _active_static_abilities(source):
             if not ability.applies_to(source, obj, state):
                 continue
@@ -1235,6 +1619,10 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
             kws.clear()
         elif ce.kind == "grant_keyword" and ce.params:
             kws.add(ce.params[0])
+        elif ce.kind == "lose_keyword" and ce.params:
+            # "Target creature loses flying until end of turn." (Emerald
+            # Charm; Vintage Roto P5).
+            kws.discard(ce.params[0])
     # ContinuousModifier contributions from StaticAbility declarations.
     # Walked after the registry-based layer-6 pass so the existing
     # grant_keyword / lose_all_abilities ordering is preserved. Only
@@ -1263,7 +1651,21 @@ def effective_keywords(state: GameState, obj: GameObject) -> frozenset[str]:
     # / ``time_counters`` / ``charge_counters``).
     if obj.flying_counters > 0:
         kws.add("flying")
+    # Keyword counters (CR 122.1b) kept as named counters -- Arwen's
+    # indestructible / lifelink counters, Leatherhead's hexproof counter
+    # (cube W/G bucket); Metamorphosis Fanatic's lifelink counter.
+    for kind, n in obj.named_counters:
+        if n > 0 and kind in KEYWORD_COUNTER_KINDS:
+            kws.add(kind)
     return frozenset(kws)
+
+
+# CR 122.1b keyword counters (``flying`` has its own field).
+KEYWORD_COUNTER_KINDS: frozenset[str] = frozenset({
+    "first strike", "double strike", "deathtouch", "haste", "hexproof",
+    "indestructible", "lifelink", "menace", "reach", "shadow", "trample",
+    "vigilance",
+})
 
 
 def is_cant_be_blocked(state: GameState, obj: GameObject) -> bool:
@@ -1363,6 +1765,11 @@ def _dynamic_base_pt(
     formula = obj.printing.dynamic_pt_formula
     if formula is None:
         return None
+    # Structured formulas (cube W/G bucket: Adeline's "power is equal to
+    # the number of creatures you control") compute themselves.
+    compute = getattr(formula, "base_pt", None)
+    if compute is not None:
+        return compute(state, obj)
     if formula == "cosmogoyf":
         # Cards owned in exile (by the creature's controller).
         controller = state.player_by_id(obj.controller_id)
@@ -1375,6 +1782,13 @@ def _dynamic_base_pt(
             if o.controller_id == obj.controller_id and o.printing.is_land
         )
         return n, n
+    if formula == "card_types_in_all_graveyards":
+        types: set[str] = set()
+        for pl in state.players:
+            for c in pl.graveyard:
+                types.update(c.printing.card_types)
+        n = len(types)
+        return n, n + 1
     if formula == "emissary_escort":
         # "Gets +X/+0 where X is the greatest mana value among other
         # artifacts you control." We encode that as a dynamic base
@@ -1390,7 +1804,11 @@ def _dynamic_base_pt(
         printed_p = obj.printing.power or 0
         printed_t = obj.printing.toughness or 0
         return printed_p + x, printed_t
-    return None  # pragma: no cover - defensive fallback
+    # Parameterized formulas of the cube creatures bucket (lhurgoyf
+    # card-type counts, domain).
+    from mtg_bot.effects.generic.cube_creatures_rmc import rmc_dynamic_base_pt
+
+    return rmc_dynamic_base_pt(state, obj, formula)
 
 
 def gain_life(state: "GameState", player_id: int, amount: int) -> int:
@@ -1405,8 +1823,20 @@ def gain_life(state: "GameState", player_id: int, amount: int) -> int:
     if amount <= 0:
         return 0
     p = state.player_by_id(player_id)
+    if p.cant_gain_life:
+        state.log.append(f"P{player_id} can't gain life")
+        return 0
     p.life += amount
     p.life_gained_this_turn += amount
+    # Roto P4: "Whenever you gain life" observers (the amount is the
+    # trigger's ``counter_amount`` -- "that much").
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    dispatch_event(
+        state, Event.GAINS_LIFE, label="gains-life", counter_amount=amount,
+        player=p,
+    )
     return amount
 
 
@@ -1417,6 +1847,49 @@ _BASIC_LAND_TYPE_TO_COLOR: dict[str, str] = {
     "Mountain": "R",
     "Forest": "G",
 }
+
+
+def void_exile_replacement_active(state: "GameState", owner_id: int) -> bool:
+    """Does an opponent of ``owner_id`` control a permanent whose
+    "if a card would be put into an opponent's graveyard from anywhere,
+    instead exile it with a void counter on it" applies (Dauthi
+    Voidwalker)? A source that lost all abilities doesn't apply."""
+    for o in state.battlefield:
+        if (
+            o.printing.void_exile_replacement
+            and o.controller_id != owner_id
+            and not _source_layer6_wiped(state, o)
+        ):
+            return True
+    return False
+
+
+def exile_with_void_counter(state: "GameState", card: "GameObject") -> None:
+    """Put ``card`` (already removed from its previous zone) into its
+    owner's exile with a void counter on it."""
+    card.zone = Zone.EXILE
+    state.player_by_id(card.owner_id).exile.append(card)
+    set_named_counters(card, "void", named_counter_count(card, "void") + 1)
+    state.log.append(
+        f"{card.printing.name} is exiled with a void counter instead of "
+        f"going to P{card.owner_id}'s graveyard"
+    )
+
+
+def named_counter_count(obj: "GameObject", kind: str) -> int:
+    """How many ``kind`` counters (a ``named_counters`` kind) are on
+    ``obj``."""
+    for k, n in obj.named_counters:
+        if k == kind:
+            return n
+    return 0
+
+
+def set_named_counters(obj: "GameObject", kind: str, count: int) -> None:
+    """Set the number of ``kind`` counters on ``obj`` (0 removes the
+    entry). Rebuilds the immutable tuple."""
+    rest = tuple((k, n) for k, n in obj.named_counters if k != kind)
+    obj.named_counters = rest + (((kind, count),) if count > 0 else ())
 
 
 def effective_subtypes(
@@ -1458,6 +1931,17 @@ def effective_subtypes(
     if obj.face_down:
         return ()
     subtypes = list(obj.printing.subtypes)
+    # "This land is the chosen type." (Multiversal Passage) — the
+    # entry-time choice, applied as a characteristic of the permanent
+    # before the layer-3/4 walk (so Blood Moon's later set-type still
+    # overrides it).
+    if (
+        getattr(obj.printing, "is_chosen_basic_land_type", False)
+        and obj.chosen_basic_land_type is not None
+        and obj.zone == Zone.BATTLEFIELD
+        and obj.chosen_basic_land_type not in subtypes
+    ):
+        subtypes.append(obj.chosen_basic_land_type)
     if obj.printing.is_artifact:
         for o in state.battlefield:
             if o.id == obj.id:
@@ -1490,7 +1974,9 @@ def effective_subtypes(
     layer4: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
         if ce.layer == 4
-        and ce.kind in ("add_subtype", "set_basic_land_subtype")
+        and ce.kind in (
+            "add_subtype", "set_basic_land_subtype", "set_creature_subtypes",
+        )
         and ce.target_id == obj.id
     ]
     # Synthesize Magus-of-the-Moon / Blood Moon entries: nonbasic
@@ -1587,6 +2073,10 @@ def effective_subtypes(
             sub = ce.params[0] if ce.params else None
             if sub and sub not in subtypes:
                 subtypes.append(sub)
+        elif ce.kind == "set_creature_subtypes":
+            # "<This> becomes a Kithkin Scout ..." (Figure of Fable; cube
+            # W/G bucket): the new creature types replace the old ones.
+            subtypes = list(ce.params)
     return tuple(subtypes)
 
 
@@ -1605,7 +2095,18 @@ def effective_colors(
         color set. Matches Painter's Servant-style "is the chosen
         color in addition to its other colors" clauses.
     """
-    colors: set[str] = set(obj.printing.mana_cost.colors)
+    # Devoid (CR 702.114a): the object is colorless regardless of cost.
+    base_cost_colors = (
+        () if "devoid" in obj.printing.keywords
+        else obj.printing.mana_cost.colors
+        if obj.printing.face_colors is None
+        # A DFC back face (CR 204 color indicator): its mana cost is the
+        # front face's, borrowed for mana value only.
+        else obj.printing.face_colors
+    )
+    colors: set[str] = set(base_cost_colors) | set(
+        obj.printing.color_indicator
+    )
     # Real registry layer-5 entries on this object.
     layer5: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
@@ -1786,7 +2287,8 @@ def effective_land_produces(
 
     Falls back to printed ``produces`` for lands whose effective
     subtypes contain no basic land type (e.g., colorless utility
-    lands like Strip Mine without any layer-4 effect on them).
+    lands like Strip Mine without any layer-4 effect on them) -- or to
+    ``produces_with_counter``'s colors while the land has that counter.
     """
     eff_subtypes = effective_subtypes(state, land_obj)
     produced = {
@@ -1794,9 +2296,54 @@ def effective_land_produces(
         for s in eff_subtypes
         if s in _BASIC_LAND_TYPE_TO_COLOR
     }
+    base = land_obj.printing.produces
+    gated = land_obj.printing.produces_with_counter
+    if gated is not None and counter_count(land_obj, gated[0]) > 0:
+        # "If <this> has a <kind> counter on it, instead add ..."
+        # (Gemstone Caverns' luck counter).
+        base = gated[1]
     if produced:
-        return frozenset(produced)
-    return land_obj.printing.produces
+        # Rules-text mana (anything a NONBASIC land's printed basic land
+        # types don't explain) survives a type ADDED "in addition to its
+        # other types" (Urborg / Yavimaya / Dryad: Wasteland keeps {C}
+        # and gains {B}); a type SET by Blood Moon / Magus removes it
+        # (CR 305.7). A basic land has no rules text: all its mana comes
+        # from its types (CR 305.6), so it never contributes here.
+        rules_text = frozenset() if land_obj.printing.is_basic_land else (
+            base - {
+                _BASIC_LAND_TYPE_TO_COLOR[s]
+                for s in land_obj.printing.subtypes
+                if s in _BASIC_LAND_TYPE_TO_COLOR
+            }
+        )
+        if rules_text and not _has_basic_land_type_set_effect(state, land_obj):
+            produced |= rules_text
+        return frozenset(produced) | _granted_tap_mana(state, land_obj)
+    return base | _granted_tap_mana(state, land_obj)
+
+
+def _granted_tap_mana(state: "GameState", obj: "GameObject") -> frozenset[str]:
+    """Mana a land taps for through a granted "{T}: Add {C}." ability
+    (Urza's Saga's chapter I; layer-6 ``grant_activated_ability``
+    entries whose ability is a bare ``{T}`` mana ability adding one
+    mana). Empty for every land without such a grant."""
+    colors: set[str] = set()
+    for ce in state.continuous_effects:
+        if (
+            ce.layer != 6 or ce.target_id != obj.id
+            or ce.kind != "grant_activated_ability" or not ce.params
+        ):
+            continue
+        ability = ce.params[0]
+        cost = ability.cost
+        produces = getattr(ability.effect, "produces", None)
+        if (
+            ability.is_mana_ability and cost.tap_self and cost.mana is None
+            and not cost.sacrifice_self and produces
+            and len(produces) == 1 and produces[0][1] == 1
+        ):
+            colors.add(produces[0][0])
+    return frozenset(colors)
 
 
 def effective_activated_abilities(
@@ -1811,9 +2358,11 @@ def effective_activated_abilities(
     - The Dominion Bracelet: the equipped creature gains the
       control-opponent-next-turn activated ability.
 
-    Magus of the Moon: nonbasic lands lose their activated abilities
-    entirely (their {T}: Add {R} tap is handled via
-    ``effective_land_produces``, not as an activated ability).
+    Magus of the Moon: nonbasic lands lose their printed activated
+    abilities (their {T}: Add {R} tap is handled via
+    ``effective_land_produces``, not as an activated ability); abilities
+    granted by other effects still apply (CR 305.7 removes only
+    rules-text abilities).
 
     Lignify-style "lose all abilities" (layer 6) is processed in
     CR-613 timestamp order alongside ``grant_activated_ability``
@@ -1832,17 +2381,20 @@ def effective_activated_abilities(
     # loses its abilities derived from rules text and old land
     # types. Routes through the same registry/synthesis path as
     # ``effective_subtypes`` so the two stay consistent.
-    if (
+    # Abilities other effects grant it (an Aura's "Enchanted land has
+    # ..." -- Tarmogoyf Nest) are not rules text and still apply.
+    moon_land = (
         obj.printing.is_land
         and _has_basic_land_type_set_effect(state, obj)
-    ):
-        return ()
+    )
 
     # DSK Rooms: filter out activated abilities whose ``room_half``
     # is not in ``obj.unlocked_halves`` — those halves are locked,
     # so their abilities are inert. Non-Room abilities (room_half ==
     # None) are never filtered.
-    if obj.printing.is_room:
+    if moon_land:
+        base = []
+    elif obj.printing.is_room:
         base = [
             a for a in obj.printing.activated_abilities
             if getattr(a, "room_half", None) is None
@@ -1931,6 +2483,11 @@ def effective_triggered_abilities(
     re-adds the granted trigger; a newer lose-all-abilities wipes
     everything that came before within layer 6.
     """
+    # CR 305.7: a land whose basic land type is SET (Blood Moon / Magus)
+    # loses its rules-text triggered abilities too (the activated ones
+    # are dropped in ``effective_activated_abilities``).
+    if obj.printing.is_land and _has_basic_land_type_set_effect(state, obj):
+        return ()
     # DSK Rooms: filter out triggered abilities whose ``room_half``
     # is not in ``obj.unlocked_halves`` — those halves are locked,
     # so their abilities are inert. Non-Room abilities (room_half ==
@@ -2096,10 +2653,14 @@ def add_minus_one_counters(
     not here.
 
     No doubling applied (no in-pool doublers target -1/-1
-    counters). Safe when amount <= 0.
+    counters). "That many minus one" replacements (Vizier of Remedies,
+    roto P6) apply here. Safe when amount <= 0.
     """
     if amount <= 0:
         return 0
+    from mtg_bot.effects.generic.roto_keywords import adjust_minus_one_counters
+
+    amount = adjust_minus_one_counters(state, obj, amount)
     obj.minus_one_counters += amount
     return amount
 
@@ -2117,6 +2678,120 @@ def add_charge_counters(
     effective = amount * _counter_doubling_factor(state, obj)
     obj.charge_counters += effective
     return effective
+
+
+# Counter kinds stored in a dedicated ``GameObject`` scalar field.
+_DEDICATED_COUNTER_FIELDS: dict[str, str] = {
+    "+1/+1": "plus_one_counters",
+    "-1/-1": "minus_one_counters",
+    "charge": "charge_counters",
+    "stun": "stun_counters",
+    "loyalty": "loyalty_counters",
+    "flying": "flying_counters",
+    "time": "time_counters",
+    "lore": "lore_counters",
+}
+
+
+def player_damage_prevented(state: GameState, player_id: int) -> bool:
+    """True when damage to ``player_id`` is prevented (protection from
+    everything — The One Ring). Logs the prevention."""
+    p = state.player_by_id(player_id)
+    if p.protected_from_everything:
+        from mtg_bot.effects.generic.roto_damage import damage_cant_be_prevented
+
+        if damage_cant_be_prevented(state):  # Impractical Joke (roto P6)
+            return False
+        state.log.append(
+            f"damage to P{player_id} is prevented (protection from everything)"
+        )
+        return True
+    return False
+
+
+def drop_protected_players(state: GameState, targets: list) -> list:
+    """Remove players with protection from everything from a list of
+    candidate ``(kind, id)`` targets (CR 702.16b: they can't be
+    targeted)."""
+    return [
+        t for t in targets
+        if not (
+            t[0] == "player"
+            and state.player_by_id(t[1]).protected_from_everything
+        )
+    ]
+
+
+def crew_candidates(state: GameState, player_id: int, vehicle: GameObject):
+    """Untapped creatures ``player_id`` controls that can be tapped to
+    pay ``vehicle``'s Crew cost (the Vehicle itself excluded)."""
+    return [
+        o for o in state.battlefield
+        if o.controller_id == player_id
+        and o.id != vehicle.id
+        and not o.tapped
+        and is_creature_now(o)
+    ]
+
+
+def crew_power(state: GameState, obj: GameObject) -> int:
+    """Power ``obj`` contributes to a Crew cost (never negative)."""
+    return max(0, effective_power(state, obj) + obj.printing.crew_power_bonus)
+
+
+def counter_count(obj: GameObject, kind: str) -> int:
+    """Number of ``kind`` counters on ``obj`` (any counter kind)."""
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        return getattr(obj, attr)
+    return named_counter_count(obj, kind)
+
+
+def _set_named_counter(obj: GameObject, kind: str, n: int) -> None:
+    set_named_counters(obj, kind, n)
+
+
+def add_counters(
+    state: GameState, obj: GameObject, kind: str, amount: int,
+) -> int:
+    """Put ``amount`` ``kind`` counters on ``obj``; returns the number
+    actually added. ``+1/+1`` and ``charge`` route through their
+    existing helpers (Loading-Zone doubling applies); other kinds are
+    added verbatim."""
+    if amount <= 0:
+        return 0
+    if kind == "+1/+1":
+        return add_plus_one_counters(state, obj, amount)
+    if kind == "charge":
+        return add_charge_counters(state, obj, amount)
+    if kind == "-1/-1":
+        return add_minus_one_counters(state, obj, amount)
+    if kind == "lore" and obj.printing.is_saga:
+        # Lore counters on a Saga trigger its chapters (CR 714.2b).
+        from mtg_bot.layouts import add_lore_counters
+
+        return add_lore_counters(state, obj, amount)
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        setattr(obj, attr, getattr(obj, attr) + amount)
+        return amount
+    _set_named_counter(obj, kind, counter_count(obj, kind) + amount)
+    return amount
+
+
+def remove_counters(obj: GameObject, kind: str, amount: int) -> int:
+    """Remove up to ``amount`` ``kind`` counters from ``obj``; returns
+    the number actually removed."""
+    have = counter_count(obj, kind)
+    removed = min(have, max(amount, 0))
+    if removed == 0:
+        return 0
+    attr = _DEDICATED_COUNTER_FIELDS.get(kind)
+    if attr is not None:
+        setattr(obj, attr, have - removed)
+    else:
+        _set_named_counter(obj, kind, have - removed)
+    return removed
 
 
 def add_stun_counters(
@@ -2343,6 +3018,12 @@ class StackItem:
     # to its owner's graveyard (for instants/sorceries) or vanishing
     # (for permanents) without firing any effects/ETBs.
     countered: bool = False
+    # Where a countered spell's card goes when the item is popped:
+    # "graveyard" (CR 701.6a default) or the zone a counterspell's
+    # "If that spell is countered this way, ... instead" rider names —
+    # "exile" (Force of Negation), "library_top" (Memory Lapse),
+    # "hand" (Remand). Set by ``CounterSpell.resolve``.
+    countered_destination: str = "graveyard"
     # The value chosen for {X} in this spell's cost (0 for non-X spells).
     # Set by _cast_spell via agent.choose_x; exposed to the resolving
     # effect via state.resolving_x_value.
@@ -2350,6 +3031,10 @@ class StackItem:
     # True when the spell was cast with its kicker cost paid. Exposed
     # to the resolving effect via state.resolving_kicked.
     kicked: bool = False
+    # True when the spell was cast for one of its printed alternative
+    # costs (``CardPrinting.alternative_costs``). Exposed to the
+    # resolving effect via state.resolving_alt_cost_paid.
+    alt_cost_paid: bool = False
     # Id of the creature the caster designated as a
     # choose-your-creature additional cost. None for spells that
     # don't have such a cost. Mirrored to
@@ -2401,6 +3086,26 @@ class StackItem:
     # activations with no discrete-object cost atom (pure mana / tap)
     # and for spells.
     cost_paid_objects: tuple["GameObject", ...] = ()
+    # Buyback (CR 702.27) was paid: the spell returns to its owner's
+    # hand as it resolves instead of going to the graveyard.
+    buyback_paid: bool = False
+    # Divided damage (CR 601.2d): the per-target split announced while
+    # casting, aligned with ``targets``.
+    division: tuple[int, ...] = ()
+    # Splice (CR 702.47): ``(printing, targets)`` for each card spliced
+    # onto this spell; their effects resolve after the spell's own.
+    spliced: tuple = ()
+    # Which alternative cost of this bucket the spell was cast for
+    # (``"dash"`` / ``"escape"``; ``""`` otherwise). A permanent spell
+    # stamps ``GameObject.dashed`` / ``escaped`` from it as it resolves.
+    alt_cost: str = ""
+    # Id of the object an event-bound trigger refers back to ("that
+    # spell", "that creature"): set when the ability's effect exposes
+    # ``event_subject_id(subjects)``; mirrored to
+    # ``state.resolving_event_subject_id`` during resolution. -1 = none.
+    event_subject_id: int = -1
+    # Multikicker: how many times the kicker cost was paid.
+    kick_count: int = 0
 
 
 # Fast shallow cloner. ``source`` and ``cost_paid_objects`` carry GameObject
@@ -2436,6 +3141,41 @@ class Player:
     # Number of spells this player has cast in the current turn. Reset at
     # cleanup. Used by "whenever you cast your Nth spell each turn" triggers.
     spells_cast_this_turn: int = 0
+    # Spells this player has cast this game (Once Upon a Time's "If this
+    # spell is the first spell you've cast this game").
+    spells_cast_this_game: int = 0
+    # Yawgmoth's Will: "Until end of turn, you may play lands and cast
+    # spells from your graveyard." Cleared at cleanup.
+    may_play_from_graveyard_this_turn: bool = False
+    # Yawgmoth's Will: "If a card would be put into your graveyard from
+    # anywhere this turn, exile that card instead." Active while True;
+    # cleared at cleanup (see ``turn.apply_graveyard_exile_replacement``).
+    graveyard_exile_replacement_this_turn: bool = False
+    # Ids of cards already in the graveyard when that replacement began
+    # (they stay; anything newer is exiled by the catch-all sweep).
+    graveyard_exile_snapshot: frozenset = frozenset()
+    # Dauthi Voidwalker's replacement (``void_exile_replacement``): ids
+    # of cards already in this player's graveyard when an opponent's
+    # void source last started applying. The SBA catch-all exiles only
+    # cards that arrived later (see ``turn.apply_void_exile_replacement``).
+    void_graveyard_snapshot: frozenset = frozenset()
+    # Roto P2 exile-instead replacements (``CardPrinting.zone_abilities``,
+    # Rest in Peace / Leyline of the Void): ids of cards
+    # already in this player's graveyard when such a source last started
+    # applying to it; the SBA catch-all leaves them (see
+    # ``roto_zones.apply_graveyard_exile_instead``).
+    graveyard_exile_instead_snapshot: frozenset = frozenset()
+    # Roto P2: ``GameState.turn_number`` of this player's latest library
+    # search (``roto_search.run_library_search``; "if an opponent
+    # searched their library this turn", Archive Trap). 0 = never.
+    library_searched_turn: int = 0
+    # Roto P2 graveyard zone watch (``roto_zones.sweep_graveyard_zone_
+    # watch``): (library ids, graveyard ids) at the previous sweep; the
+    # turn a card last left this player's graveyard; ids that left the
+    # library by a draw or a search since the last sweep.
+    zone_watch: tuple = ()
+    card_left_graveyard_turn: int = 0
+    left_library_ids: frozenset = frozenset()
     # Number of noncreature spells this player has cast this turn. Reset
     # at cleanup. Used by the Deafening Silence restriction ("each player
     # can't cast more than one noncreature spell each turn") — legal_actions
@@ -2460,6 +3200,23 @@ class Player:
     # which gates Mechan Shieldmate's defender-removing
     # ``ContinuousModifier`` via ``effective_keywords``.
     artifacts_entered_under_your_control_this_turn: int = 0
+    # Number of cards this player has drawn this turn (every draw via
+    # ``turn.draw_card``, draw step included). Reset at cleanup. Read
+    # by the "each opponent can't draw more than one card each turn"
+    # restriction (Narset, Parter of Veils).
+    cards_drawn_this_turn: int = 0
+    # Revolt: a permanent left the battlefield under this player's
+    # control this turn (any permanent, lands and tokens included).
+    # Reset at cleanup.
+    permanent_left_battlefield_this_turn: bool = False
+    # CR 504.1 draw-step bookkeeping for "except the first one they draw
+    # in each of their draw steps" (Orcish Bowmasters, Hullbreacher).
+    # ``draw_step_first_draw_pending`` is raised by ``run_draw_step`` for
+    # the active player and consumed by the first ``draw_card`` of that
+    # step; ``drawing_first_in_draw_step`` is True only while that first
+    # draw's replacement / trigger dispatch runs.
+    draw_step_first_draw_pending: bool = False
+    drawing_first_in_draw_step: bool = False
     has_lost: bool = False
     lost_reason: str = ""
     agent: Optional["Agent"] = None
@@ -2471,14 +3228,101 @@ class Player:
     # effects that key on "if you gained life this turn" (Ragost,
     # Deft Gastronaut's end-step untap). Incremented by gain_life().
     life_gained_this_turn: int = 0
+    # Designations (``mtg_bot.designations``): the monarch (CR 724),
+    # the initiative (CR 725) and the player's Undercity venture marker
+    # (CR 309; ``None`` = not in a dungeon) + completed-dungeon count
+    # ("if you've completed a dungeon").
+    # Energy counters (CR 122.1, ``{E}``): gained by "you get {E}",
+    # spent by "Pay {E}" costs.
+    energy: int = 0
+    # "an opponent who lost life this turn" (Kaito, Bane of Nightmares):
+    # ``lost_life_this_turn`` is latched by ``turn.note_life_losses``
+    # (run at every state-based-action check and before a reader looks)
+    # whenever ``life`` dropped below ``life_checkpoint``; both reset as
+    # every turn begins (``run_untap_step``).
+    lost_life_this_turn: bool = False
+    life_checkpoint: int = 20
+    is_monarch: bool = False
+    has_initiative: bool = False
+    dungeon_room: Optional[str] = None
+    dungeons_completed: int = 0
+    # Experience counters (CR 122.1; Otharri, Suns' Glory's "you get an
+    # experience counter").
+    experience_counters: int = 0
+    # "<player> can't gain life for the rest of the game" (Screaming
+    # Nemesis); ``gain_life`` gains nothing while set.
+    cant_gain_life: bool = False
+    # Ids of this player's graveyard cards with a "put into a graveyard
+    # from anywhere" trigger as of the last graveyard-watch sweep; a new
+    # id is a fresh arrival (``cube_creatures_rmc.sweep_graveyard_watch``).
+    graveyard_arrival_watch: tuple = ()
+    # Ids of this player's library + graveyard cards at the last
+    # library/graveyard-exile watch sweep (only kept while a watcher such
+    # as Laelia is on the battlefield).
+    library_graveyard_watch: frozenset = frozenset()
+    # Ascend (CR 702.131): the city's blessing, kept for the rest of the
+    # game once gained (``creature_statics_wg.apply_ascend``).
+    has_citys_blessing: bool = False
     # Pending agent swap scheduled by The Dominion Bracelet's
     # "You control target opponent during their next turn". When set,
     # run_untap_step installs the override at the start of this
     # player's next turn (saving the original agent in
     # ``agent_override_saved`` so cleanup can revert).
+    # "You gain protection from everything until your next turn." (The
+    # One Ring). While set: damage that would be dealt to this player is
+    # prevented (``player_damage_prevented``) and the player can't be
+    # the target of spells or abilities (``drop_protected_players`` at
+    # every target-selection site). Cleared at the start of this
+    # player's next untap step.
+    protected_from_everything: bool = False
+    # Latched by ``put_into_battlefield`` when a creature token enters
+    # under this player's control; flushed (and the
+    # CREATURE_TOKENS_CREATED event dispatched once) at the end of the
+    # resolving stack item — Staff of the Storyteller's "Whenever you
+    # create one or more creature tokens".
+    pending_creature_tokens_created: bool = False
     scheduled_agent_override: Optional["Agent"] = None
     scheduled_agent_override_by: Optional[int] = None
     agent_override_saved: Optional["Agent"] = None
+    # How many turns this player has begun (incremented at the start of
+    # each of their untap steps, extra turns included). Read by
+    # ``YourTurnOfGameAtMost`` — Starting Town's "unless it's your
+    # first, second, or third turn of the game".
+    turns_started: int = 0
+    # Vintage Roto P5 "this turn" facts, each stamped with the turn it
+    # belongs to (a stale stamp reads as empty -- no cleanup reset):
+    # ``(turn, colors)`` of the spells this player cast ("an opponent has
+    # cast a blue or black spell this turn" -- Veil of Summer); the turn
+    # in which "spells you control can't be countered this turn"
+    # applies; ``(turn, qualities)`` this player has hexproof from.
+    spell_colors_cast_this_turn: tuple = (-1, frozenset())
+    spells_uncounterable_turn: int = -1
+    # "The next spell you cast this turn can't be countered." (Mistrise
+    # Village): the turn it was granted in; consumed by the next cast.
+    next_spell_uncounterable_turn: int = -1
+    hexproof_from_this_turn: tuple = (-1, frozenset())
+    # Roto P4: the cards this player owns outside the game (CR 400.11 --
+    # a sideboard; in a roto draft, the drafter's unused picks), as
+    # printings: they aren't game objects until an effect brings one in
+    # ("a card you own from outside the game" -- Burning Wish, Karn, the
+    # Great Creator; ``mtg_bot.roto_turns.take_from_outside_the_game``).
+    # Set once by ``simulate.setup_game(sideboards=...)``; empty by default.
+    sideboard: tuple = ()
+    # Roto P4: "After that turn, that player takes an extra turn."
+    # (Emrakul, the Promised End) -- set with ``scheduled_agent_override``;
+    # the cleanup that reverts the override queues the extra turn.
+    extra_turn_after_controlled_turn: bool = False
+    # Conspiracy cards (CR 313) this player started the game with, face
+    # up in the command zone (``mtg_bot.conspiracies``). They never
+    # leave it (CR 313.2) and never change, so the immutable tuple is
+    # safely shared by every clone.
+    conspiracies: tuple = ()
+    # Speed (CR 702.179; "Start your engines!", roto P6): 0 = no speed,
+    # else 1-4 for the rest of the game; ``speed_increased_turn`` is the
+    # turn it last increased (once each turn). Updated by
+    # ``effects.generic.roto_keywords.update_speed``.
+    speed: int = 0
+    speed_increased_turn: int = 0
 
 
 # Fast shallow cloner. The 6 mutable list/zone fields (library, hand,
@@ -2526,6 +3370,17 @@ class ManaCoin:
 
     color: str
     spend_restriction: Optional[str] = None
+    # "If any of that mana is spent on a creature spell, it gains haste
+    # until end of turn." (Arena of Glory) — ``_cast_spell`` grants the
+    # creature spell haste UEOT when a coin with this flag pays for it.
+    grants_haste_to_creature_spell: bool = False
+    # "Spend this mana only to cast a legendary spell, and that spell
+    # can't be countered." (Delighted Halfling) -- the spell it pays for
+    # becomes uncounterable.
+    makes_spell_uncounterable: bool = False
+    # Snow mana (CR 107.4h): produced by a snow source; only such coins
+    # pay an {S} pip (Vintage Roto P3: Arcum's Astrolabe).
+    snow: bool = False
 
 
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)
@@ -2630,6 +3485,9 @@ class GameState:
     active_player_idx: int = 0
     priority_player_idx: int = 0
     turn_number: int = 1
+    # Roto P2: does any card in this game watch graveyard zone changes
+    # (``roto_zones.zone_watch_active``)? None until the first sweep.
+    p2_zone_watch: object = None
     step: Optional["Step"] = None
     next_object_id: int = 0
     # Layered-effects registry (CR 613). Phase 1 introduces it as
@@ -2661,6 +3519,12 @@ class GameState:
     # True when either flag is set, which is the Void trigger condition.
     permanent_left_battlefield_this_turn: bool = False
     spell_warped_this_turn: bool = False
+    # Day / night (CR 726): "" (neither), "day" or "night"; and how many
+    # spells the previous turn's active player cast during that turn
+    # (-1 before any turn ended), read by the untap-step day/night check
+    # (``layouts.run_day_night_check``).
+    day_night: str = ""
+    previous_turn_active_spells: int = -1
     # Tracks (source_id, ability_index) pairs for triggered abilities that
     # have already fired this turn under the ``once_per_turn`` restriction.
     # Reset by run_cleanup_step.
@@ -2703,6 +3567,13 @@ class GameState:
     # "put a +1/+1 counter on this creature" can reach the source without
     # having to thread it through every resolve() signature.
     resolving_source: Optional[GameObject] = None
+    # The instant / sorcery / Aura spell currently resolving (the card
+    # object), or ``None``. Distinct from ``resolving_source`` (which
+    # is only set for abilities, and which many effects read as "this
+    # permanent"). Consumed by the protection damage-prevention check
+    # (``keyword_rules.current_damage_source``) so a red burn spell's
+    # damage to a creature with protection from red is prevented.
+    resolving_spell: Optional[GameObject] = None
     # Controller id pinned for the current legal-targets enumeration.
     # Set transiently by ``Effect._enumerate_for_filter`` (and by
     # any peer call that consults a ``TargetFilter``) so controller-
@@ -2717,10 +3588,25 @@ class GameState:
     # threading it through every resolve() signature. 0 when no X spell
     # is resolving.
     resolving_x_value: int = 0
+    # Controller of the spell / ability currently resolving (set by
+    # ``actions.resolve_top_of_stack``), ``None`` outside a resolution.
+    # Read by ``mtg_bot.player_protections`` (Tamiyo, Collector of
+    # Tales: "Spells and abilities your opponents control can't cause
+    # you to discard cards or sacrifice permanents.").
+    resolving_item_controller_id: Optional[int] = None
+    # "After this phase, there is an additional combat phase." (Fear of
+    # Missing Out): pending extra combat phases of the current turn,
+    # consumed by ``turn.next_step`` as a combat phase ends (both turn
+    # loops); reset at cleanup.
+    extra_combat_phases: int = 0
     # Mirrors StackItem.kicked during resolution so effects can branch
     # on whether the spell was kicked without threading it through
     # every resolve() signature. False outside resolution.
     resolving_kicked: bool = False
+    # Mirrors StackItem.alt_cost_paid during spell resolution ("If the
+    # {1}{B} cost was paid, ..." — Baleful Mastery). False outside
+    # resolution.
+    resolving_alt_cost_paid: bool = False
     # Mirrors StackItem.chosen_modes during resolution so a modal
     # spell's resolve() reads the cast-time pick (CR 601.2e) rather
     # than prompting the agent again at resolve time. Empty tuple
@@ -2744,6 +3630,10 @@ class GameState:
     # counters-added observer trigger (Terrasymbiosis: "draw that many
     # cards"). 0 outside such resolution.
     resolving_counter_amount: int = 0
+    # ``StackItem.event_subject_id`` of the resolving triggered ability
+    # (-1 outside such resolution): "that spell's mana value" (Thor),
+    # "that creature deals damage equal to its power" (Pyrogoyf).
+    resolving_event_subject_id: int = -1
     # GameObjects that were paid as part of the cost when the
     # currently-resolving activated ability was activated. Mirrors
     # ``StackItem.cost_paid_objects`` during resolution so effects /
@@ -2758,6 +3648,11 @@ class GameState:
     # built). Used by ``MVOfCostPaidObjectPlus`` and any future formula
     # that reads a per-object property of a cost-paid object.
     resolving_cost_paid_objects: tuple[GameObject, ...] = ()
+    # (``resolving_spell`` above is also read by effects that refer to
+    # "this spell" as an object, e.g. Time Spiral's "Exile Time Spiral."
+    # — ``ExileThisSpell``.)
+    # The resolving spell's announced damage division (``StackItem.division``).
+    resolving_division: tuple[int, ...] = ()
     # Number of cards moved by the most recent
     # ``MoveEachExiledWithSourceToOwnersGraveyard`` resolve in the
     # current resolving ability. Lets a follow-up
@@ -2816,6 +3711,11 @@ class GameState:
     # COUNTS deaths from any player — the printed clause doesn't
     # specify "you control", so a dies on either side suffices.
     creatures_died_this_turn: int = 0
+    # Roto P4 turn structure (``mtg_bot.roto_turns``). ``turn_ending``
+    # is raised by "End the turn." (CR 723.1: the stack was exiled and
+    # no player gets priority); while set only passing is legal, and
+    # ``turn.next_step`` skips straight to the cleanup step, lowering it.
+    turn_ending: bool = False
     # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
     # whenever ``continuous_effects`` mutates. Cache entries store
     # ``(version_at_compute, result)``; on lookup, an entry whose
@@ -3407,6 +4307,8 @@ class GameState:
             self.permanent_left_battlefield_this_turn
         )
         new_state.spell_warped_this_turn = self.spell_warped_this_turn
+        new_state.day_night = self.day_night
+        new_state.previous_turn_active_spells = self.previous_turn_active_spells
         new_state.once_per_turn_fired = (
             set(self.once_per_turn_fired) if self.once_per_turn_fired else set()
         )
@@ -3428,9 +4330,18 @@ class GameState:
             if self.delayed_triggers else []
         )
         new_state.resolving_source = new_resolving_source
+        new_state.resolving_spell = (
+            clone_obj(self.resolving_spell)
+            if self.resolving_spell is not None else None
+        )
         new_state.resolving_controller_id = self.resolving_controller_id
+        new_state.resolving_item_controller_id = (
+            self.resolving_item_controller_id
+        )
+        new_state.extra_combat_phases = self.extra_combat_phases
         new_state.resolving_x_value = self.resolving_x_value
         new_state.resolving_kicked = self.resolving_kicked
+        new_state.resolving_alt_cost_paid = self.resolving_alt_cost_paid
         new_state.resolving_modes = self.resolving_modes
         new_state.resolving_additional_cost_choice_id = (
             self.resolving_additional_cost_choice_id
@@ -3442,7 +4353,9 @@ class GameState:
             self.resolving_combat_damage_source_controller_id
         )
         new_state.resolving_counter_amount = self.resolving_counter_amount
+        new_state.resolving_event_subject_id = self.resolving_event_subject_id
         new_state.resolving_cost_paid_objects = new_resolving_cost_paid_objects
+        new_state.resolving_division = self.resolving_division
         new_state.last_exile_recall_count = self.last_exile_recall_count
         new_state.suppress_exiled_by_source_on_leave_for = (
             self.suppress_exiled_by_source_on_leave_for
@@ -3466,6 +4379,8 @@ class GameState:
             list(self.extra_turn_queue) if self.extra_turn_queue else []
         )
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
+        new_state.p2_zone_watch = self.p2_zone_watch
+        new_state.turn_ending = self.turn_ending
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

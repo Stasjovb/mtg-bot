@@ -3303,9 +3303,16 @@ the forked branch.
   CastSpell(instant/flash)..., PlayLand..., CastSpell(sorcery)...,
   ActivateAbility...]`. At non-sorcery-timing: `[PassPriority,
   (DeclareAttackers...), (DeclareBlockers...),
-  CastSpell(instant/flash)...]` only — the function returns at
-  step 2. Matches Python's natural append order in `legal.py:178
-  → 217-301 → 303 (gate) → 319-329 → 335-445 → 612-829`.
+  CastSpell(instant/flash)..., ActivateAbility(instant-speed)...]`
+  — the function returns at step 2 after
+  `push_battlefield_activations(.., is_sorcery_timing=false)`
+  (`feature/roto-instant-activations`, 2026-10-03: activated
+  abilities are activatable whenever their controller has priority,
+  CR 117.1b; sorcery-speed, loyalty and mana abilities stay in the
+  sorcery-timing pass). Matches Python's append order in
+  `legal._legal_actions_core` (instant-speed casts, the non-sorcery
+  `battlefield_ability_activations` call, return; or PlayLand,
+  sorcery-speed casts, the sorcery-window activations).
 
 - **CR backing**:
   - **CR 117.1 + 307.1** — instants may be cast any time the player

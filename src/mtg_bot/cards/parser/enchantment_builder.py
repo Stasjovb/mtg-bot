@@ -612,7 +612,16 @@ def _build_enchantment_printing(card: dict) -> CardPrinting | None:
         aura = _build_aura_via_oracle_text(card)
         if aura is not None:
             return aura
-    return _build_enchantment_via_oracle_text(card)
+    built = _build_enchantment_via_oracle_text(card)
+    if built is not None:
+        return built
+    # PowerLSV cube enchantments: line-composed grammar, explicit
+    # per-name opt-in (``cube_enchantments.CUBE_ENCHANTMENT_NAMES``).
+    from mtg_bot.cards.parser.cube_enchantments import (
+        build_cube_enchantment,
+    )
+
+    return build_cube_enchantment(card)
 
 
 # Allowlist of names that may claim through the generic oracle-text

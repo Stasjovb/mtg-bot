@@ -1125,6 +1125,9 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     )
     if skip_opp_pcm_fn is not None and skip_opp_pcm_fn():
         return [PassPriority()]
+    skip_opp_quiet_fn = getattr(state, "_should_skip_opp_quiet_window", None)
+    if skip_opp_quiet_fn is not None and skip_opp_quiet_fn():
+        return [PassPriority()]
     skip_dead_main1_fn = getattr(state, "_should_skip_dead_main1", None)
     if skip_dead_main1_fn is not None and skip_dead_main1_fn():
         return [PassPriority()]

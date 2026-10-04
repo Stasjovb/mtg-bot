@@ -136,6 +136,53 @@ def _parse_ward_discard_line(line: str) -> str | None:
     return "random" if m.group("random") else "chosen"
 
 
+_WARD_PAY_LIFE_LINE = re.compile(r"^Ward—Pay (\d+) life\.$")
+
+
+def _parse_chooses_player_line(line: str) -> bool:
+    """``As this creature enters, choose a player.``"""
+    return line.strip() == "As this creature enters, choose a player."
+
+
+_SELF_HAS_KEYWORDS = re.compile(r"^This creature has (?P<body>.+)\.$")
+
+
+def _parse_self_has_keywords_line(line: str) -> frozenset[str] | None:
+    """``This creature has <keywords>.`` — a static that just states a
+    keyword the card always has (``This creature has protection from
+    the chosen player.``)."""
+    from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
+
+    m = _SELF_HAS_KEYWORDS.match(line.strip())
+    if m is None:
+        return None
+    return _parse_keyword_grant_body(m.group("body"))
+_KEYWORDS_THEN_WARD = re.compile(
+    r"^(?P<kws>.+), ward (?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_keyword_line_with_ward(line: str) -> tuple[tuple[str, ...], str] | None:
+    """``<keyword line>, ward {cost}`` -> ``(keywords, ward_cost)``."""
+    from mtg_bot.cards.parser.keywords import _parse_keyword_line
+
+    m = _KEYWORDS_THEN_WARD.match(line.strip())
+    if m is None:
+        return None
+    kws = _parse_keyword_line(m.group("kws"))
+    if kws is None:
+        return None
+    return kws, m.group("cost")
+
+
+def _parse_ward_pay_life_line(line: str) -> int | None:
+    """``Ward—Pay N life.`` (CR 702.21a with a life-payment cost) ->
+    ``N``; consumed by ``actions._apply_ward_check`` via
+    ``CardPrinting.ward_life_cost``."""
+    m = _WARD_PAY_LIFE_LINE.match(line.strip())
+    return int(m.group(1)) if m is not None else None
+
+
 _IMPENDING_LINE = re.compile(
     # Impending N—{cost}. Scryfall uses an em-dash (U+2014). The
     # reminder text is stripped per-line by ``_strip_reminder_text``
@@ -194,18 +241,41 @@ def _parse_devour_line(line: str) -> int | None:
 # would land its own entry rather than parameterizing this one,
 # matching the ``Ward—Discard`` precedent above where each surface
 # gets its own 1:1 recognizer.
-_ENTERS_TAPPED_LINE = "This creature enters tapped."
+#
+# Parameterized over the self-reference noun so the artifact builder's
+# ``This artifact enters tapped.`` (Time Vault, Wizard's Rockets) claims
+# through the same recognizer.
+_ENTERS_TAPPED_LINE = re.compile(
+    r"^This (?:creature|artifact|Vehicle|Equipment) "
+    r"enters tapped\.$"
+)
 
 
 def _parse_enters_tapped_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the printing-level ``This creature
+    """Return ``True`` if ``line`` is the printing-level ``This <noun>
     enters tapped.`` clause, else ``False``. Used by
-    ``creature_builder._build_creature_printing`` to flip the
-    ``enters_tapped`` kwarg on ``make_creature`` directly — distinct
+    ``creature_builder._build_creature_printing`` and the artifact
+    builder to flip the ``enters_tapped`` kwarg directly — distinct
     from the triggered-ability path because the ETB-tapped behavior is
     a static replacement effect, not an event-firing trigger.
     """
-    return line.strip() == _ENTERS_TAPPED_LINE
+    return _ENTERS_TAPPED_LINE.match(line.strip()) is not None
+
+
+# ``This artifact doesn't untap during your untap step.`` — printing-
+# level static (Grim Monolith, Basalt Monolith, Mana Vault, Time Vault).
+# Flips ``CardPrinting.doesnt_untap_during_untap_step``, honored by
+# ``turn.run_untap_step``. Parameterized over the self-reference noun.
+_DOESNT_UNTAP_LINE = re.compile(
+    r"^This (?:artifact|creature|land|permanent) doesn't untap during "
+    r"your untap step\.$"
+)
+
+
+def _parse_doesnt_untap_line(line: str) -> bool:
+    """Return ``True`` if ``line`` is the ``This <noun> doesn't untap
+    during your untap step.`` static, else ``False``."""
+    return _DOESNT_UNTAP_LINE.match(line.strip()) is not None
 
 
 # ``This creature must be blocked if able.`` — printing-level static
@@ -498,6 +568,12 @@ _DYNAMIC_PT_FORMULA_LINES: dict[str, str] = {
     # second land-count P/T formula lands.
     "Harmonious Grovestrider's power and toughness are each equal to "
     "the number of lands you control.": "harmonious_grovestrider",
+    # Barrowgoyf {2}{B} */(1+*) Lhurgoyf -- card types among cards in
+    # ALL graveyards (the classic Tarmogoyf formula).
+    "Barrowgoyf's power is equal to the number of card types among cards "
+    "in all graveyards and its toughness is equal to that number plus 1.": (
+        "card_types_in_all_graveyards"
+    ),
 }
 
 
@@ -508,9 +584,31 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
     reads it in ``game._dynamic_pt`` and computes the actual P/T at
     query time.
 
-    Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``.
+    Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``;
+    parameterized shapes (any name) fall back to
+    ``creature_rmc_grammar.parse_rmc_dynamic_pt_line`` and then
+    ``creature_wg_lines.parse_wg_dynamic_pt_line`` (cube W/G bucket).
     """
-    return _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
+    key = _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
+    if key is not None:
+        return key
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        parse_rmc_dynamic_pt_line,
+    )
+
+    rmc = parse_rmc_dynamic_pt_line(line.strip())
+    if rmc is not None:
+        return rmc
+    from mtg_bot.cards.parser.creature_wg_lines import parse_wg_dynamic_pt_line
+
+    wg = parse_wg_dynamic_pt_line(line.strip())
+    if wg is not None:
+        return wg
+    # Vintage Roto P5 (Nethergoyf: "card types among cards in your
+    # graveyard").
+    from mtg_bot.cards.parser.roto_board import parse_roto_dynamic_pt_line
+
+    return parse_roto_dynamic_pt_line(line.strip())
 
 
 def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
@@ -663,26 +761,31 @@ def _parse_landcycling_line(line: str) -> tuple[str, str] | None:
     return m.group("subtype"), m.group("cost")
 
 
-# ``You may play an additional land on each of your turns.`` — Icetill
-# Explorer's printed static land-drop grant. The engine field
+# ``You may play <N> additional land(s) on each of your turns.`` — the
+# printed static land-drop grant, parameterized over the count: Icetill
+# Explorer / Exploration ("an additional land"), Azusa, Lost but Seeking
+# ("two additional lands"). The engine field
 # ``grants_additional_land_per_turn: int`` is consumed by the turn
 # engine when counting legal land plays; the printing increments the
-# controller's per-turn quota by this value. Matched as a literal
-# string — Icetill Explorer is the only card in the pool with this
-# exact surface today; broader grammar deferred until a second example
-# with a different count (``two additional lands``) exists.
-_ADDITIONAL_LAND_PER_TURN_LINE = (
-    "You may play an additional land on each of your turns."
+# controller's per-turn quota by this value.
+_ADDITIONAL_LANDS_PER_TURN_RE = re.compile(
+    r"^You may play (?P<n>an|two|three|four) additional lands? on each of "
+    r"your turns\.$"
 )
+_ADDITIONAL_LAND_COUNTS = {"an": 1, "two": 2, "three": 3, "four": 4}
+
+
+def parse_additional_lands_per_turn(line: str) -> "int | None":
+    """The extra land plays a ``You may play <N> additional land(s) on
+    each of your turns.`` static grants, or ``None``."""
+    m = _ADDITIONAL_LANDS_PER_TURN_RE.match(line.strip())
+    return None if m is None else _ADDITIONAL_LAND_COUNTS[m.group("n")]
 
 
 def _parse_additional_land_per_turn_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the ``You may play an additional
-    land on each of your turns.`` static, else ``False``. Increments
-    the ``grants_additional_land_per_turn`` kwarg on ``make_creature``
-    by 1.
-    """
-    return line.strip() == _ADDITIONAL_LAND_PER_TURN_LINE
+    """Return ``True`` if ``line`` is an additional-land-plays static
+    (``parse_additional_lands_per_turn`` gives the count)."""
+    return parse_additional_lands_per_turn(line) is not None
 
 
 # ``You may play lands from your graveyard.`` — Icetill Explorer's
@@ -888,31 +991,40 @@ def _parse_look_at_top_card_any_time_line(line: str) -> bool:
     return line.strip() == _LOOK_AT_TOP_CARD_ANY_TIME_LINE
 
 
-# ── Mm'menon "you may cast artifact spells from the top of your library" ─────
+# ── "You may cast <kind> spells [and <kind> spells] from the top of your
+# library." ────────────────────────────────────────────────────────────────
 #
-# ``You may cast artifact spells from the top of your library.`` —
-# Mm'menon, the Right Hand's printed library-top artifact-cast grant.
-# The engine field ``grants_cast_artifact_from_top_of_library: bool`` is
-# consumed by ``legal_actions``: when any permanent the controller controls
-# has this flag, a CastSpell action is offered for the top-of-library card
-# if it is an artifact. Matched as a literal string — Mm'menon is the
-# only card in the pool with this exact surface today; deferred until a
-# second example exists (a future printing might generalize to non-artifact
-# card types, which would need a parameterized form).
-_CAST_ARTIFACT_FROM_TOP_LINE = (
-    "You may cast artifact spells from the top of your library."
+# The library-top cast grant, parameterized over the spell kinds:
+# Mm'menon, the Right Hand ("artifact spells") and Mystic Forge
+# ("artifact spells and colorless spells"). ``parse_cast_from_top_kinds``
+# returns the kinds in printed order. The artifact-only grant keeps its
+# ``grants_cast_artifact_from_top_of_library: bool`` field (consumed by
+# ``legal_actions`` / ``actions._cast_spell``); other kind lists are the
+# Vintage Roto P3 bucket's ``CardPrinting.cast_from_top_of_library_kinds``.
+_CAST_FROM_TOP_RE = re.compile(
+    r"^You may cast (?P<kinds>(?:artifact|colorless) spells(?: and "
+    r"(?:artifact|colorless) spells)?) from the top of your library\.$"
 )
 
 
+def parse_cast_from_top_kinds(line: str) -> "tuple[str, ...] | None":
+    """The spell kinds of a library-top cast grant line, or ``None``."""
+    m = _CAST_FROM_TOP_RE.match(line.strip())
+    if m is None:
+        return None
+    return tuple(re.findall(r"(artifact|colorless) spells", m.group("kinds")))
+
+
 def _parse_cast_artifact_from_top_line(line: str) -> bool:
-    """Return ``True`` if ``line`` is the ``You may cast artifact spells
-    from the top of your library.`` clause, else ``False``. Flips the
+    """Return ``True`` if ``line`` is the artifact-only library-top cast
+    grant (``You may cast artifact spells from the top of your
+    library.``), else ``False``. Flips the
     ``grants_cast_artifact_from_top_of_library`` kwarg on
     ``make_creature``; ``legal_actions`` reads the flag to offer
     top-of-library artifact casts when this permanent is on the
     battlefield.
     """
-    return line.strip() == _CAST_ARTIFACT_FROM_TOP_LINE
+    return parse_cast_from_top_kinds(line) == ("artifact",)
 
 
 # ── Mm'menon "artifacts you control have {T}: Add {U}" ───────────────────────
@@ -1071,3 +1183,182 @@ def _parse_hand_warp_grant_line(line: str):
         granted_warp_cost=parse_mana_cost(cost_str),
         granted_warp_cost_str=cost_str,
     )
+
+
+# ── Cycling family (CR 702.29) ────────────────────────────────────────
+#
+# ``Cycling {cost}``                 → discard this card: draw a card.
+# ``<Subtype>cycling {cost}``        → discard this card: search your
+#                                      library for a <Subtype> card,
+#                                      reveal it, put it into your
+#                                      hand, then shuffle (landcycling
+#                                      ``Plainscycling`` / typecycling
+#                                      ``Wizardcycling``).
+# ``Basic landcycling {cost}``       → ... for a basic land card.
+#
+# All three are hand-activated abilities with the cost "{cost},
+# Discard this card", instant speed. They land on
+# ``CardPrinting.hand_activated_abilities`` (see ``parser.source`` — the hand-
+# ability lines are peeled off once for every card type before the
+# per-type builder runs).
+_CYCLING_LINE = re.compile(
+    r"^(?:(?P<basic>Basic land)|(?P<sub>[A-Z][a-z]+))?cycling "
+    r"(?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+_CYCLING_BARE_LINE = re.compile(
+    r"^Cycling (?P<cost>\{[^}]+\}(?:\{[^}]+\})*)$"
+)
+
+
+def _parse_cycling_line(line: str) -> "ActivatedAbility | None":
+    """Return the hand-activated ``ActivatedAbility`` for a cycling-
+    family keyword line, else ``None``."""
+    from mtg_bot.cards.base import (
+        ActivatedAbility, ActivationCost, DrawCards, parse_mana_cost,
+    )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+
+    stripped = line.strip()
+    bare = _CYCLING_BARE_LINE.match(stripped)
+    if bare is not None:
+        cost_str = bare.group("cost")
+        effect = DrawCards(amount=1)
+    else:
+        m = _CYCLING_LINE.match(stripped)
+        if m is None or not (m.group("basic") or m.group("sub")):
+            return None
+        cost_str = m.group("cost")
+        if m.group("basic"):
+            effect = SearchLibraryForCard(filter_name="basic_land")
+        else:
+            effect = SearchLibraryForCard(
+                filter_name="subtype", subtypes=(m.group("sub"),),
+            )
+    return ActivatedAbility(
+        cost=ActivationCost(
+            mana=parse_mana_cost(cost_str),
+            mana_str=cost_str,
+            discard_self=True,
+        ),
+        effect=effect,
+    )
+# Mox Diamond's entry replacement: ``If this artifact would enter, you
+# may discard a land card instead. If you do, put this artifact onto
+# the battlefield. If you don't, put it into its owner's graveyard.``
+# Flips ``CardPrinting.enters_only_by_discarding_land``, honored at the
+# top of ``actions.put_into_battlefield``. Literal: Mox Diamond is the
+# only card in the pool with this replacement; a second "discard a
+# <type> card instead" printing would parameterize the card type.
+_DISCARD_LAND_TO_ENTER_LINE = (
+    "If this artifact would enter, you may discard a land card instead. "
+    "If you do, put this artifact onto the battlefield. If you don't, "
+    "put it into its owner's graveyard."
+)
+
+
+def _parse_discard_land_to_enter_line(line: str) -> bool:
+    """Return ``True`` for Mox Diamond's discard-a-land entry
+    replacement line."""
+    return line.strip() == _DISCARD_LAND_TO_ENTER_LINE
+
+
+# ``This artifact enters with three wish counters on it.`` (Wishclaw
+# Talisman) / ``This Vehicle enters with three charge counters on it.``
+# (Reckoner Bankbuster) — an entry replacement placing named counters.
+# Returns ``(kind, amount)`` for ``CardPrinting.enters_with_named_counters``.
+# ``+1/+1`` counters on creatures keep their dedicated recognizers in
+# ``triggers.py``; this one is consulted by the artifact builder only.
+_ENTERS_WITH_NAMED_COUNTERS_LINE = re.compile(
+    r"^This (?:artifact|Vehicle|Equipment) enters with "
+    r"(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+) "
+    r"([a-z]+) counters? on it\.$"
+)
+_ENTERS_WITH_CARDINALS: dict[str, int] = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _parse_enters_with_named_counters_line(
+    line: str,
+) -> tuple[str, int] | None:
+    m = _ENTERS_WITH_NAMED_COUNTERS_LINE.match(line.strip())
+    if m is None:
+        return None
+    token = m.group(1)
+    amount = int(token) if token.isdigit() else _ENTERS_WITH_CARDINALS[token]
+    return (m.group(2), amount)
+
+
+# Time Vault's turn-skip replacement. Literal: Time Vault is the only
+# card in the pool with an "if you would begin your turn" replacement;
+# broader grammar deferred until a second example exists.
+_SKIP_TURN_TO_UNTAP_LINE = (
+    "If you would begin your turn while this artifact is tapped, you may "
+    "skip that turn instead. If you do, untap this artifact."
+)
+
+
+def _parse_skip_turn_to_untap_line(line: str) -> bool:
+    """Return ``True`` for Time Vault's turn-skip replacement line."""
+    return line.strip() == _SKIP_TURN_TO_UNTAP_LINE
+
+
+# ``Crew N`` (CR 702.122) — the Vehicle keyword ability. Reminder text
+# is stripped before this sees the line. Returns N; the artifact
+# builder turns it into the crew ``ActivatedAbility``.
+_CREW_LINE = re.compile(r"^Crew (\d+)$")
+
+
+def _parse_crew_line(line: str) -> int | None:
+    m = _CREW_LINE.match(line.strip())
+    return int(m.group(1)) if m is not None else None
+
+
+# ``Sunburst`` (CR 702.44) — keyword line (reminder text stripped).
+# Flips ``CardPrinting.sunburst``; the counters are placed by
+# ``actions.put_into_battlefield`` from the colors recorded at cast.
+def _parse_sunburst_line(line: str) -> bool:
+    return line.strip() == "Sunburst"
+
+
+# Bolas's Citadel's play-from-top grant with its life-payment
+# alternative cost. Literal (only card in the pool with this grant);
+# flips ``CardPrinting.grants_play_from_top_paying_life``.
+_PLAY_FROM_TOP_PAYING_LIFE_LINE = (
+    "You may play lands and cast spells from the top of your library. If "
+    "you cast a spell this way, pay life equal to its mana value rather "
+    "than pay its mana cost."
+)
+
+
+def _parse_play_from_top_paying_life_line(line: str) -> bool:
+    return line.strip() == _PLAY_FROM_TOP_PAYING_LIFE_LINE
+
+
+# ── Deck-construction statements (CR 100.2a / 100.4) ───────────────────────
+#
+# Rules text that only constrains how a DECK is built -- never anything a
+# game in progress can observe: "This card is banned." (Gleemox, whose
+# printed text makes it illegal in every sanctioned format) and the
+# "A deck can have any number of / up to N cards named <this card>." family
+# (the deck-size exceptions of CR 100.2a). The engine plays already-built
+# decks, so there is no in-game behavior to model: the recognizer is the
+# exact class of deckbuilding statements (see the "glue" section of
+# docs/SEARCH_LIMITATIONS.md), not a generic unrecognized-line escape. A
+# "cards named X" statement must name the card itself.
+_DECK_CONSTRUCTION_STATEMENT_LINE = re.compile(
+    r"^(?:This card is banned|A deck can have (?:any number of|up to "
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)) cards named "
+    r"(?P<name>.+))\.$"
+)
+
+
+def _parse_deck_construction_statement_line(line: str, name: str) -> bool:
+    """``True`` if ``line`` is a deck-construction statement about the
+    card ``name`` (see ``_DECK_CONSTRUCTION_STATEMENT_LINE``)."""
+    m = _DECK_CONSTRUCTION_STATEMENT_LINE.match(line.strip())
+    if m is None:
+        return False
+    named = m.group("name")
+    return named is None or named == name

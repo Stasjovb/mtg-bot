@@ -607,7 +607,10 @@ def _parse_static_ability_line(
                     grants_no_max_hand_size=True,
                 ),
             )
-        return ()
+        # Roto P4 statics ("Skip your draw step.") -- last fallback.
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_static_line
+
+        return parse_roto_static_line(stripped)
     condition = m.group("condition").strip()
     cond_kwargs = _STATIC_CONDITION_KWARGS.get(condition)
     if cond_kwargs is None:

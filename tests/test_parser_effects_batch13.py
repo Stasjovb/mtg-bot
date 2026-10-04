@@ -119,14 +119,18 @@ def test_parse_effect_lenient_singular_discard_amount():
     ) == EachOpponentDiscards(count=1)
 
 
-def test_parse_effect_returns_none_for_target_opponent_discards():
+def test_parse_effect_target_opponent_discards_is_the_targeted_primitive():
     # ``target opponent discards a card`` is a different primitive
-    # (single-target discard) and isn't claimed by this regex. No
-    # EoE card prints this exact form but rejecting it explicitly
-    # documents the wide-vs-targeted boundary.
+    # (single-target discard) and isn't claimed by the each-opponent
+    # regex; it maps to the targeted action-list effect (U/B cube
+    # creatures), documenting the wide-vs-targeted boundary.
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        TargetPlayerPerformsActions,
+    )
+
     assert _parse_effect(
         "target opponent discards a card"
-    ) is None
+    ) == TargetPlayerPerformsActions(actions=(("discard", 1),))
 
 
 # ---------- exile target creature or Spacecraft ----------
@@ -206,13 +210,13 @@ def test_parse_spell_effect_phrase_recognizes_destroy_artifact_or_tapped():
     ) == DestroyTargetArtifactOrTappedCreature()
 
 
-def test_parse_effect_returns_none_for_destroy_target_creature_alone():
+def test_parse_effect_destroy_target_tapped_creature_is_generic_destroy():
     # ``destroy target tapped creature`` (without the ``artifact or``
-    # prefix) is a different shape and isn't claimed by this regex.
-    # No EoE card prints it but rejecting it keeps the grammar narrow.
-    assert _parse_effect(
-        "destroy target tapped creature"
-    ) is None
+    # prefix) is a different shape and isn't claimed by this regex; the
+    # generic ``destroy target <noun>`` recognizer (effects_ext) claims
+    # it with the composed tapped-creature filter.
+    eff = _parse_effect("destroy target tapped creature")
+    assert type(eff).__name__ == "Destroy"
 
 
 def test_parse_effect_bare_destroy_target_artifact_still_parses():
@@ -255,12 +259,18 @@ def test_parse_spell_effect_phrase_recognizes_tap_artifact_or_creature():
     ) == TapTargetArtifactOrCreature()
 
 
-def test_parse_effect_returns_none_for_tap_only_creature_phrase():
-    # ``tap target creature`` without the ``artifact or`` prefix is a
-    # different (currently unsupported) primitive; no EoE card prints
-    # it as a standalone clause but the grammar stays narrow by
-    # rejecting it explicitly.
-    assert _parse_effect("tap target creature") is None
+def test_parse_effect_tap_only_creature_phrase_is_the_generic_tap():
+    # ``tap target creature`` without the ``artifact or`` prefix is the
+    # generic ``Tap`` over the composed noun phrase (Vintage Roto P5's
+    # "[un]tap target <np>" fallback; switched off for EoE-only
+    # printings, so no EoE parse changes).
+    from mtg_bot.effects.generic.tap import Tap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+
+    assert _parse_effect("tap target creature") == Tap(
+        targets=(TargetSpec(IsCreature()),),
+    )
 
 
 # ---------- discard a card ----------

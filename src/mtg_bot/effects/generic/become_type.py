@@ -169,6 +169,11 @@ class BecomeLandCreatureUEOT(Effect):
     # Fumarole, Raging Ravine).
     granted_activated_abilities: tuple = ()
     granted_triggered_abilities: tuple = ()
+    # Colors the animated land BECOMES until end of turn ("a 5/5 green
+    # and blue Plant creature" — Restless Vinestalk): a layer-5
+    # ``set_colors`` registry entry expiring at cleanup. Empty = the
+    # land keeps its own (colorless) color set.
+    set_colors: frozenset[str] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -180,6 +185,19 @@ class BecomeLandCreatureUEOT(Effect):
         source = state.resolving_source
         if source is None:
             return
+        if self.set_colors:
+            state.add_continuous_effect(
+                source_id=source.id,
+                layer=5,
+                kind="set_colors",
+                target_id=source.id,
+                params=(frozenset(self.set_colors),),
+                expires_at="cleanup",
+                description=(
+                    f"{source.printing.name} becomes "
+                    f"{'/'.join(sorted(self.set_colors))} until end of turn"
+                ),
+            )
         subtypes = (
             (self.granted_subtype,) if self.granted_subtype else ()
         )

@@ -23,8 +23,16 @@ from mtg_bot.combat import (
     eligible_blockers,
     resolve_combat_damage,
 )
+from mtg_bot.conspiracies import (
+    begin_game_with_conspiracies,
+    reveal_hands_after_mulligans,
+)
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
+from mtg_bot.opening_hand import (
+    apply_mulligan_window_actions,
+    apply_opening_hand_actions,
+)
 from mtg_bot.turn import (
     STEP_ORDER,
     STEPS_WITH_PRIORITY,
@@ -33,11 +41,13 @@ from mtg_bot.turn import (
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_beginning_of_postcombat_main_triggers,
+    run_beginning_of_precombat_main_triggers,
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
     run_impending_decrement_turn_based_action,
     run_draw_step,
+    next_step,
     run_untap_step,
     state_based_actions,
 )
@@ -80,6 +90,9 @@ def setup_game(
     seed: Optional[int] = None,
     enable_mulligans: bool = True,
     max_mulligans: int = 7,
+    starting_player_idx: int = 0,
+    sideboards: Optional[list[list[str]]] = None,
+    minimum_deck_size: Optional[int] = None,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -118,10 +131,61 @@ def setup_game(
     last allowed offer the agent is forced to keep regardless of
     its choice. Set higher for stress tests; lower for shorter
     decision space.
+
+    Opening-hand actions
+    --------------------
+    ``starting_player_idx`` is the player who takes the first turn
+    (``state.active_player_idx``). After the final keep -- with or
+    without mulligans -- players take their opening-hand actions (CR
+    103.6) in turn order from the starting player
+    (``mtg_bot.opening_hand.apply_opening_hand_actions``): Gemstone
+    Caverns in a non-starting player's hand may begin the game on the
+    battlefield with a luck counter (the player decides through
+    ``Agent.choose_yes_no`` and exiles a card via ``choose_discard``).
+    Callers that alternate the starting seat must pass it here rather
+    than patch ``active_player_idx`` afterwards, or those actions would
+    be offered to the wrong player.
+
+    Sideboards
+    ----------
+    ``sideboards`` (optional, one list of card names per agent) are the
+    cards each player owns outside the game (CR 400.11), the pool that
+    "a card you own from outside the game" effects fetch from (Burning
+    Wish, Karn, the Great Creator). In a roto draft that is the
+    drafter's unused picks. ``None`` (the default) gives every player an
+    empty sideboard, so games built without one are unchanged.
+
+    Conspiracies
+    ------------
+    A conspiracy card in a decklist starts the game face up in the
+    command zone instead of in the library (CR 313.2,
+    ``mtg_bot.conspiracies``). Its rules apply before anything else:
+    "You are the starting player" (Power Play) overrides
+    ``starting_player_idx``, and "Your minimum deck size is reduced by
+    five" (Advantageous Proclamation) moves the player's minimum when
+    ``minimum_deck_size`` (the format's minimum, e.g.
+    ``conspiracies.LIMITED_MINIMUM_DECK_SIZE``) is given -- a deck below
+    its adjusted minimum raises ``ValueError``. ``None`` (the default)
+    checks no deck size. "At the beginning of each game, after
+    mulligans, your opponent reveals their hand to you" (Meddling
+    Wizard) is applied once, after the final keep and bottoming (also
+    with ``enable_mulligans=False``) and before the opening-hand actions:
+    the opponent's hand becomes known to the Wizard's controller
+    (``conspiracies.reveal_hands_after_mulligans``).
     """
     if len(decks) != len(agents):
         raise ValueError(
             f"decks length {len(decks)} != agents length {len(agents)}"
+        )
+    if sideboards is not None and len(sideboards) != len(agents):
+        raise ValueError(
+            f"sideboards length {len(sideboards)} != agents length "
+            f"{len(agents)}"
+        )
+    if not 0 <= starting_player_idx < len(agents):
+        raise ValueError(
+            f"starting_player_idx {starting_player_idx} out of range for "
+            f"{len(agents)} players"
         )
 
     state = GameState()
@@ -136,6 +200,15 @@ def setup_game(
     for i, (agent, deck) in enumerate(zip(agents, decks)):
         p = _build_player_from_names(state, i, list(deck), agent)
         state.players.append(p)
+    if sideboards is not None:
+        from mtg_bot.roto_turns import sideboard_printings
+
+        for p, names in zip(state.players, sideboards):
+            p.sideboard = sideboard_printings(p.id, list(names))
+
+    starting_player_idx = begin_game_with_conspiracies(
+        state, starting_player_idx, rng, minimum_deck_size,
+    )
 
     for p in state.players:
         rng.shuffle(p.library)
@@ -157,6 +230,9 @@ def setup_game(
                     # before bottoming so we don't run the agent for
                     # a no-op decision when there's nothing to choose.
                     break
+                # "Any time you could mulligan" (Serum Powder).
+                apply_mulligan_window_actions(state, p)
+                hand = list(p.hand)
                 if not agent.choose_mulligan(
                     state, p.id, hand, mulls_taken,
                 ):
@@ -212,8 +288,12 @@ def setup_game(
                     # which pops index 0).
                     p.library.append(card)
 
-    state.active_player_idx = 0
-    state.priority_player_idx = 0
+    # Mulligans are over (every player kept and bottomed): Meddling
+    # Wizard's reveal, then the opening-hand actions (CR 103.6).
+    reveal_hands_after_mulligans(state, starting_player_idx)
+    state.active_player_idx = starting_player_idx
+    state.priority_player_idx = starting_player_idx
+    apply_opening_hand_actions(state, starting_player_idx)
     state.step = Step.UNTAP
     state.turn_number = 1
     return state
@@ -354,6 +434,17 @@ def run_step(
         if state.is_over():
             return
 
+    elif step == Step.PRECOMBAT_MAIN:
+        # "At the beginning of your first main phase" (Coalition Relic)
+        # and delayed "your next main phase" triggers (Mana Drain);
+        # mirrored in the search adapter's ``_enter_step``.
+        # SBAs only when the hook did something (the pre-hook engine ran
+        # none here; the Rust engine's cadence is pinned against that).
+        if run_beginning_of_precombat_main_triggers(state):
+            state_based_actions(state)
+            if state.is_over():
+                return
+
     elif step == Step.POSTCOMBAT_MAIN:
         # Fire "At the beginning of your second main phase" triggers
         # (DSK Survival ability-word family). Mirrors the
@@ -412,7 +503,44 @@ def _advance_to_next_active_player(state: GameState) -> None:
     next. Otherwise fall back to the natural next-alive rotation.
     Exposed as a top-level helper so the extra-turn branches are
     directly unit-testable.
+
+    Turn-skip replacements (Time Vault: "If you would begin your turn
+    while this artifact is tapped, you may skip that turn instead")
+    are applied here: a skipped turn never begins, so the pick repeats
+    for the following turn.
     """
+    _pick_next_active_player(state)
+    while _maybe_skip_turn(state):
+        _pick_next_active_player(state)
+
+
+def _maybe_skip_turn(state: GameState) -> bool:
+    """Offer the incoming active player each tapped
+    ``may_skip_turn_to_untap`` permanent they control; on the first
+    acceptance, untap it and report the turn skipped."""
+    ap = state.active_player()
+    if ap.agent is None:
+        return False
+    for obj in state.battlefield:
+        if (
+            obj.controller_id != ap.id
+            or not obj.tapped
+            or not obj.printing.may_skip_turn_to_untap
+        ):
+            continue
+        if ap.agent.choose_yes_no(
+            state, ap.id,
+            f"Skip your turn to untap {obj.printing.name}?",
+        ):
+            obj.tapped = False
+            state.log.append(
+                f"P{ap.id} skips their turn; {obj.printing.name} untaps"
+            )
+            return True
+    return False
+
+
+def _pick_next_active_player(state: GameState) -> None:
     queued_next_player = None
     while state.extra_turn_queue:
         candidate_id = state.extra_turn_queue.pop(0)
@@ -445,12 +573,16 @@ def run_turn(
     state.log.append(
         f"--- Turn {state.turn_number}: P{state.active_player_idx} ---"
     )
-    for step in STEP_ORDER:
+    step: "Step | None" = STEP_ORDER[0]
+    while step is not None:
         run_step(state, step, priority_on_snapshot=priority_on_snapshot)
         if on_snapshot is not None:
             on_snapshot(state)
         if state.is_over():
             return
+        # ``turn.next_step`` follows STEP_ORDER, plus additional combat
+        # phases (Fear of Missing Out); mirrored by the search adapter.
+        step = next_step(state, step)
 
 
 _COLOR_TO_BASIC: dict[str, str] = {

@@ -191,7 +191,12 @@ def test_parse_effect_returns_none_for_malformed_add_mana():
     # via ``_ADD_N_COLORLESS_MANA`` (The Eternity Elevator's
     # ``{T}: Add {C}{C}{C}``), but three-or-more colored coins remain
     # unsupported.
-    assert _parse_effect("add {U}{U}{U}") is None
+    # Three-or-more pips now claim through the card-flow grammar's
+    # multi-pip recognizer (Dark Ritual's ``Add {B}{B}{B}``).
+    assert _parse_effect("add {U}{U}{U}") == AddManaToPool(
+        produces=(("U", 3),),
+    )
+    assert _parse_effect("add {U}{U}{Q}") is None
     # ``add one mana of any color`` IS recognized (All-Fates Scroll).
     # See ``test_parser_artifact_all_fates_scroll`` for the positive
     # case. Plural / amount-N shapes are not recognized:
@@ -205,9 +210,18 @@ def test_parse_effect_returns_none_for_malformed_target_opponent_loses_life():
     assert _parse_effect("target opponent loses life") is None
     assert _parse_effect("target opponent loses two life") is None
     assert _parse_effect("target opponent loses 3") is None
-    # Wrong subject — "target player" widens to allies, which the
-    # opponent-only effect can't support.
-    assert _parse_effect("target player loses 2 life") is None
+    # "target player" widens to the caster too: the opponent-only
+    # effect can't express it, so it maps to the any-player targeted
+    # action-list effect (U/B cube creatures) instead.
+    from mtg_bot.effects.generic.cube_creatures_ub import (
+        TargetPlayerPerformsActions,
+    )
+
+    assert _parse_effect("target player loses 2 life") == (
+        TargetPlayerPerformsActions(
+            actions=(("lose_life", 2),), opponent_only=False,
+        )
+    )
 
 
 def test_parse_effect_returns_none_for_malformed_return_creature_to_hand():

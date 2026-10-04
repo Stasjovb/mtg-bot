@@ -297,12 +297,12 @@ def test_five_piece_cost_returns_none():
 # --- Negative: unknown / duplicate / malformed pieces -----------------------
 
 def test_three_piece_with_unknown_atom_returns_none():
-    """One unrecognized piece (here ``Discard a card``, not yet a
+    """One unrecognized piece (here ``Mill a card``, not yet a
     classified atom) makes the whole cost return None — partial
     parses would silently drop a real cost requirement and let the
     ability fire for free."""
     assert _parse_activation_cost(
-        "{2}, {T}, Discard a card"
+        "{2}, {T}, Mill a card"
     ) is None
 
 

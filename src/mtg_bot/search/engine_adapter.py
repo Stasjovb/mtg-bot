@@ -93,12 +93,13 @@ from mtg_bot.search.resolution_decisions import (
 from mtg_bot.search.tactical import DefaultTacticalAgent
 from mtg_bot.simulate import _advance_to_next_active_player, _next_alive
 from mtg_bot.turn import (
-    STEP_ORDER,
     STEPS_WITH_PRIORITY,
     Step,
     run_beginning_of_combat_triggers,
     run_beginning_of_end_step_triggers,
     run_beginning_of_postcombat_main_triggers,
+    run_beginning_of_precombat_main_triggers,
+    next_step,
     run_beginning_of_upkeep_triggers,
     run_cleanup_step,
     run_delayed_end_step_triggers,
@@ -120,16 +121,33 @@ _COMBAT_BLOCKERS = "blockers"
 # for the active player: their own upkeep / draw / beginning-of-combat /
 # end step. See ``docs/SEARCH_LIMITATIONS.md`` entry #6 for the
 # acceptable-failure cases (pump-before-upkeep-trigger, mana-sink-end-
-# step, end-step-flash-creature, BoC combat tricks). Note: opponent's
-# priority during these same steps is NOT pruned — opp-side instants
-# during your upkeep/end-step (responding to triggers, casting flash
-# creatures) are real plays. The opp-capability auto-pass handles those
-# moments separately.
+# step, end-step-flash-creature, BoC combat tricks). Note: this prune is
+# active-player only. The non-active player's empty-stack upkeep / draw
+# windows are skipped by a separate heuristic (``_OPP_QUIET_WINDOW_STEPS``,
+# entry #17); their beginning of combat and end step stay open (flash
+# creatures, end-of-turn plays), and responses to triggers (non-empty
+# stack) always do.
 _PHASE_PRUNE_STEPS: frozenset[Step] = frozenset({
     Step.UPKEEP,
     Step.DRAW,
     Step.BEGINNING_OF_COMBAT,
     Step.END,
+})
+
+
+# Steps at which the NON-active player's empty-stack priority is pruned
+# to ``[PassPriority()]`` when ``skip_opp_quiet_windows_enabled`` is
+# True: the opponent's upkeep, draw step and precombat main. With
+# ``skip_opp_postcombat_main_enabled`` (POSTCOMBAT_MAIN, entry #10) this
+# covers the opponent's whole turn except combat and the end step. Kept:
+# any non-empty stack, BEGINNING_OF_COMBAT, the combat steps (entry #9
+# aside), END. It hides EVERY action of the non-active player in those
+# windows (instants, flash creatures, activated abilities). See
+# ``docs/SEARCH_LIMITATIONS.md`` entry #17.
+_OPP_QUIET_WINDOW_STEPS: frozenset[Step] = frozenset({
+    Step.UPKEEP,
+    Step.DRAW,
+    Step.PRECOMBAT_MAIN,
 })
 
 
@@ -188,13 +206,13 @@ class MtgGameStateAdapter:
         self._state = engine_state
         self._tactical = tactical_agent or DefaultTacticalAgent()
         self._expose_resolution = expose_resolution_decisions
-        # All five priority short-circuit / filter heuristics live on
+        # All six priority short-circuit / filter heuristics live on
         # one frozen ``HeuristicsConfig``. Default = production self-
         # play (every flag True). Eval / correctness-sensitive callers
         # pass ``HeuristicsConfig.disabled()``. Per-flag rationale and
         # acceptable-failure cases are documented at the per-helper
         # docstrings (``_should_phase_prune_priority`` etc.) and at
-        # SEARCH_LIMITATIONS entries #6, #7, #9, #10, #11.
+        # SEARCH_LIMITATIONS entries #6, #7, #9, #10, #11, #17.
         self._heuristics = heuristics if heuristics is not None else (
             HeuristicsConfig()
         )
@@ -538,6 +556,52 @@ class MtgGameStateAdapter:
         """
         if not self._heuristics.skip_opp_postcombat_main_enabled:
             return False
+        if self._state.step != Step.POSTCOMBAT_MAIN:
+            return False
+        return self._is_opp_empty_stack_priority_window()
+
+    def _should_skip_opp_quiet_window(self) -> bool:
+        """Skip our priority window during the opponent's UPKEEP, DRAW
+        step and PRECOMBAT_MAIN when the stack is empty -- #10's
+        companion for the rest of the opponent's turn before combat.
+
+        Since activated abilities of permanents became instant-speed
+        (CR 117.1b), a player holding any untapped permanent with a
+        non-mana ability defeats the capability auto-pass (#3) in every
+        window of the opponent's turn. These three empty-stack windows
+        are the least time-sensitive ones for the non-active player:
+        what they'd do there can usually be done at the opponent's
+        beginning of combat, in response to the opponent's spell, or at
+        their end step, all of which stay open.
+
+        The skip hides EVERY action of the non-active player in those
+        windows -- instants, flash creatures and activated abilities
+        alike -- not just activations.
+
+        Conditions to fire:
+        * ``skip_opp_quiet_windows_enabled`` is True.
+        * Step is in ``_OPP_QUIET_WINDOW_STEPS`` (UPKEEP, DRAW,
+          PRECOMBAT_MAIN).
+        * The shared #10 / #17 preconditions
+          (``_is_opp_empty_stack_priority_window``): not terminal, not
+          resolution-paused, not a factored combat sub-decision, stack
+          empty, NON-active player holds priority.
+
+        Documented divergence from optimal play (with the plays it
+        gives up), see ``docs/SEARCH_LIMITATIONS.md`` entry #17.
+        """
+        if not self._heuristics.skip_opp_quiet_windows_enabled:
+            return False
+        if self._state.step not in _OPP_QUIET_WINDOW_STEPS:
+            return False
+        return self._is_opp_empty_stack_priority_window()
+
+    def _is_opp_empty_stack_priority_window(self) -> bool:
+        """Shared precondition of the opponent-turn skips (#10, #17): a
+        plain priority window -- not terminal, not a resolution pause,
+        not a factored combat sub-decision -- with an empty stack, held
+        by the NON-active player (we're being asked to act on the
+        opponent's turn)."""
         if self._state.is_over():
             return False
         if self._resolution_paused:
@@ -546,10 +610,6 @@ class MtgGameStateAdapter:
             return False
         if len(self._state.stack) > 0:
             return False
-        if self._state.step != Step.POSTCOMBAT_MAIN:
-            return False
-        # Active-only's complement: the priority holder must be the
-        # NON-active player (we're being asked to act on opp's turn).
         return (
             self._state.priority_player_idx
             != self._state.active_player_idx
@@ -806,6 +866,12 @@ class MtgGameStateAdapter:
         # Skip our priority during opp's POSTCOMBAT_MAIN with empty
         # stack. See ``docs/SEARCH_LIMITATIONS.md`` entry #10.
         if self._should_skip_opp_postcombat_main():
+            return [PassPriority()]
+        # Skip our priority during opp's UPKEEP / DRAW / PRECOMBAT_MAIN
+        # with empty stack (#10's companion before combat; hides every
+        # action of ours there, instants and activations alike). See
+        # ``docs/SEARCH_LIMITATIONS.md`` entry #17.
+        if self._should_skip_opp_quiet_window():
             return [PassPriority()]
         # Skip-dead-main1: at active PRECOMBAT_MAIN with no creatures
         # in play, no haste-creature in hand, and no animator
@@ -1238,8 +1304,9 @@ class MtgGameStateAdapter:
             _advance_to_next_active_player(self._state)
             self._state.step = Step.UNTAP
         else:
-            idx = STEP_ORDER.index(current)
-            self._state.step = STEP_ORDER[idx + 1]
+            # ``turn.next_step``: STEP_ORDER plus additional combat
+            # phases -- the same path ``simulate.run_turn`` takes.
+            self._state.step = next_step(self._state, current)
         self._step_entered = False
 
     def _enter_step(self, step: Step) -> None:
@@ -1275,6 +1342,12 @@ class MtgGameStateAdapter:
         elif step == Step.BEGINNING_OF_COMBAT:
             run_beginning_of_combat_triggers(self._state)
             state_based_actions(self._state)
+
+        elif step == Step.PRECOMBAT_MAIN:
+            # Mirror simulate.run_step: first-main-phase triggers and
+            # delayed "your next main phase" triggers (cube glue bucket).
+            if run_beginning_of_precombat_main_triggers(self._state):
+                state_based_actions(self._state)
 
         elif step == Step.POSTCOMBAT_MAIN:
             # Mirror the simulate.run_step wiring for the DSK Survival

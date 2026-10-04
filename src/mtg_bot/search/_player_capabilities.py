@@ -19,9 +19,10 @@ Two priority window flavors
 **Non-active priority** (we call this "opp" historically):
 priority is on the player who is NOT the active player. By
 definition this is non-sorcery timing — only instant-speed
-capabilities matter (instants in hand with payable cost, instant-
-speed activated abilities, instant-speed warp / impulse / Lightstall
-casts from graveyard / exile). Sorcery-speed spells, land plays, and
+capabilities matter (instants in hand with payable cost, activated
+abilities of permanents that aren't sorcery-speed / loyalty / mana
+abilities, instant-speed warp / impulse / Lightstall casts from
+graveyard / exile). Sorcery-speed spells, land plays, and
 attack-step pre-combat declarations are NOT possible at this window.
 
 **Active priority — instant-speed window**: active player has
@@ -332,27 +333,27 @@ def _sorcery_speed_castable_from_exile(
 def _has_instant_speed_activatable(
     state: GameState, player_id: int, p, *, is_active_player: bool,
 ) -> bool:
-    """Engine contract: ``legal_actions`` returns early at non-sorcery
-    timing BEFORE walking the activated-ability block (see
-    ``legal.py`` — ``if not _is_sorcery_timing: return actions`` after
-    the hand-cast loop). Both opp at non-active priority AND active
-    player during combat / upkeep / draw / end / cleanup priority
-    windows therefore never receive ``ActivateAbility`` actions from
-    the engine, regardless of which abilities their permanents have.
+    """Whether the player can activate an ability of a permanent they
+    control outside a sorcery window -- the exact legal answer, from the
+    same enumerator ``legal_actions`` uses
+    (``legal.battlefield_ability_activations``, short-circuiting at the
+    first activation). Activated abilities are activatable whenever
+    their controller has priority (CR 117.1b) unless the ability or a
+    rule restricts them; sorcery-speed, loyalty and mana abilities wait
+    for a sorcery window (``legal.activation_timing_permits``), so a
+    player whose permanents only have those auto-passes as before.
 
-    Returning False unconditionally matches what the engine actually
-    offers at non-sorcery priority moments. Treating "the player has
-    activated abilities" as a capability would silently sabotage
-    every auto-pass attempt (every player has lands; every utility
-    land has a mana ability with ``is_mana_ability=True`` that the
-    engine doesn't surface as ``ActivateAbility`` either).
+    Exact rather than conservative: the capability cache lives for one
+    decision moment (``apply()`` invalidates it), so no staleness can
+    turn an exact answer into a false negative. The legal-action
+    post-filters (activation locks, split second, roto prohibitions)
+    are not re-applied here -- a permanent they silence still counts as
+    a capability, a safe false positive."""
+    from mtg_bot.legal import battlefield_ability_activations
 
-    If a future engine change DOES start surfacing ``ActivateAbility``
-    at non-sorcery timing, this is the place to scan permanents — and
-    the structural hash already captures permanent shape so the
-    cache stays correct.
-    """
-    return False
+    return bool(battlefield_ability_activations(
+        state, player_id, sorcery_timing=False, first_only=True,
+    ))
 
 
 def _has_sorcery_speed_activatable(

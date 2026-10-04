@@ -133,11 +133,69 @@ class Event(str, Enum):
     # tapped" gate is encoded via ``Source(IsTapped())`` AND-ed onto
     # the source-self ``IsSelf()`` arm.
     BEGINNING_OF_POSTCOMBAT_MAIN = "beginning_of_postcombat_main"
+    # Beginning of the active player's FIRST (precombat) main phase
+    # (Coalition Relic: "At the beginning of your first main phase,
+    # ..."). Subject is the active Player. Dispatched by
+    # ``turn.run_beginning_of_precombat_main_triggers`` from both turn
+    # loops (``simulate.run_step`` and the search adapter).
+    BEGINNING_OF_PRECOMBAT_MAIN = "beginning_of_precombat_main"
+    # Beginning of the active player's draw step (Mana Vault's "At the
+    # beginning of your draw step, if this artifact is tapped, it deals
+    # 1 damage to you."). Dispatched by ``turn.run_draw_step`` right
+    # after the draw turn-based action (CR 504.1-504.2). Subject is the
+    # active Player, like the other turn-structure events.
+    BEGINNING_OF_DRAW_STEP = "beginning_of_draw_step"
+    # Blockers have been declared and at least one attacking creature is
+    # unblocked. Subjects: the attacking Player (``"player"``) and the
+    # defending Player (``"defender"``). Fired once per blocker
+    # declaration by ``combat.declare_blockers`` (Coveted Jewel: "Whenever
+    # one or more creatures an opponent controls attack you and aren't
+    # blocked"). The attacking player is also passed as the fixed target
+    # ``("player", id)`` so "that player …" effects can address them.
+    ATTACKERS_UNBLOCKED = "attackers_unblocked"
+    # A player created one or more creature tokens during the stack item
+    # that just resolved (batched per resolution by
+    # ``actions._flush_creature_token_creations``). Subject: that Player.
+    CREATURE_TOKENS_CREATED = "creature_tokens_created"
+    # A player discarded a specific card (dispatched alongside
+    # DISCARDS_CARD by ``turn.fire_opponent_discards_triggers`` when the
+    # card is known). Subjects: the discarding Player (``"player"``) and
+    # the discarded card (``"card"``); the card is also the fixed target
+    # ``("card_in_graveyard", id)``.
+    CARD_DISCARDED = "card_discarded"
+    # Combat damage dealt by ``source`` to the creature ``target``
+    # (dispatched per pair by ``combat._fire_combat_damage_to_creature_
+    # triggers``; the damaged creature is the fixed target). Separate
+    # from DEALS_COMBAT_DAMAGE, whose observers assume a player target.
+    DEALS_COMBAT_DAMAGE_TO_CREATURE = "deals_combat_damage_to_creature"
+    # A creature has dealt combat damage in one combat damage step, to
+    # any players and / or permanents -- one event per source per step
+    # (CR 510.2; "Whenever equipped creature deals combat damage",
+    # Umezawa's Jitte). Subject is the source (``"source"``); the total
+    # rides ``combat_damage_amount``. Fired by
+    # ``roto_board_statics.fire_combat_damage_dealt``.
+    DEALS_COMBAT_DAMAGE_ANY = "deals_combat_damage_any"
+    # An attacking creature has become blocked (CR 509.1h; once per
+    # declaration however many creatures block it -- "Whenever this
+    # creature becomes blocked", Ichorclaw Myr). Subject is the attacker
+    # (``"attacker"``). Fired by ``roto_board_statics.fire_becomes_blocked``.
+    BECOMES_BLOCKED = "becomes_blocked"
     # A Room has just had its second / final door unlocked, transitioning
     # ``unlocked_halves`` from a single-half set to the full set
     # (``len(unlocked_halves) == len(printing.room_halves)``). Subject is
     # the Room ``GameObject`` (``"room"``).
     ROOM_FULLY_UNLOCKED = "room_fully_unlocked"
+    # A permanent has just become monstrous (CR 701.37b). Subject is the
+    # permanent (``"obj"``). Alpha Deathclaw's "When this creature enters
+    # or becomes monstrous".
+    BECOMES_MONSTROUS = "becomes_monstrous"
+    # A player or permanent has just become the target of a spell or
+    # ability (CR 603.2). Subjects: ``"target"`` (the Player or the
+    # permanent) and ``"controller"`` (the Player controlling the spell /
+    # ability). Dispatched once per distinct target when a spell is cast,
+    # an ability is activated or a triggered ability is put on the stack
+    # with targets (Leovold, Emissary of Trest; Nadu, Winged Wisdom).
+    BECOMES_TARGET = "becomes_target"
     # The active player has just declared one or more attackers in this
     # combat phase. Subject is the attacking Player (the active player —
     # ``"player"``). Distinct from ``ATTACKS`` (per-attacker, fires once
@@ -197,6 +255,56 @@ class Event(str, Enum):
     # for entry counters / clones / etc.) is a separate deferred
     # pillar — see project notes.
     WOULD_GO_TO_GRAVEYARD = "would_go_to_graveyard"
+    # Subject ``(player,)``; payload starts empty. Fired by
+    # ``turn.draw_card`` when a player would draw a card while their
+    # library has no cards in it. Models Jace, Wielder of Mysteries'
+    # "If you would draw a card while your library has no cards in it,
+    # you win the game instead." -- a ``WinTheGameInstead`` transform
+    # sets ``payload["win_game"]`` and the draw site declares the win
+    # instead of recording the empty-library loss.
+    WOULD_DRAW_FROM_EMPTY_LIBRARY = "would_draw_from_empty_library"
+    # Subject ``(player,)``. Fired by ``turn.draw_card`` once per card
+    # actually drawn (post-replacement). "Whenever you draw a card" --
+    # Teferi, Hero of Dominaria's emblem.
+    DRAWS_CARD = "draws_card"
+    # Subject ``(player,)``; the amount rides ``counter_amount``. Fired by
+    # ``game.gain_life`` once per life-gain event (roto P4: Professor
+    # Dellian Fel's "Whenever you gain life, target opponent loses that
+    # much life." emblem).
+    GAINS_LIFE = "gains_life"
+    # Subject ``(player,)``; payload starts empty. Fired by
+    # ``turn.draw_card`` once per card about to be drawn (CR 121.6 --
+    # a replacement can apply to each card individually). Models
+    # Hullbreacher's "If an opponent would draw a card except the first
+    # one they draw in each of their draw steps, instead you create a
+    # Treasure token." -- an ``InsteadForSourceController`` transform
+    # prevents the draw and queues the substitute action.
+    WOULD_DRAW_A_CARD = "would_draw_a_card"
+    # One or more cards were just put into a library from another zone
+    # (CR 400.2; Wan Shi Tong's "Whenever one or more cards are put into
+    # a library from anywhere"). Subject ``"player"`` is the library's
+    # owner. Library-internal moves (look / reorder / bottom) don't fire.
+    CARDS_PUT_INTO_LIBRARY = "cards_put_into_library"
+    # A double-faced permanent has just transformed (CR 701.28; fired by
+    # ``layouts.transform_permanent``). Subject is the permanent
+    # (``"obj"``), already showing its new face -- "When this creature
+    # transforms into <face>" lives on that face.
+    TRANSFORMS = "transforms"
+    # A permanent has just dealt damage (combat or noncombat; CR 120.1).
+    # Subject is the source (``"source"``); the amount (all the damage it
+    # dealt in that one event, summed over its targets) rides
+    # ``combat_damage_amount``. "Whenever <this creature> deals damage"
+    # (Cecil, Dark Knight). Fired by ``layouts.fire_deals_damage``.
+    DEALS_DAMAGE = "deals_damage"
+    # A player activated a (non-mana) ability of a permanent on the
+    # battlefield (roto P1: Harsh Mentor). Subjects: the permanent
+    # (``"source"``) and the activating Player (``"controller"``).
+    # Dispatched by ``actions._activate_ability`` once the ability is on
+    # the stack.
+    ACTIVATES_ABILITY = "activates_ability"
+    # "Whenever <source> deals damage to a player" (combat or not; roto
+    # P6, ``effects.generic.roto_keywords.after_damage_to_player``).
+    DEALS_DAMAGE_TO_PLAYER = "deals_damage_to_player"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -220,7 +328,20 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.BEGINNING_OF_COMBAT: ("player",),
     Event.BEGINNING_OF_END_STEP: ("player",),
     Event.BEGINNING_OF_POSTCOMBAT_MAIN: ("player",),
+    Event.BEGINNING_OF_PRECOMBAT_MAIN: ("player",),
+    Event.BEGINNING_OF_DRAW_STEP: ("player",),
+    Event.ATTACKERS_UNBLOCKED: ("player", "defender"),
+    Event.CREATURE_TOKENS_CREATED: ("player",),
+    Event.CARD_DISCARDED: ("player", "card"),
+    Event.DEALS_COMBAT_DAMAGE_TO_CREATURE: ("source", "target"),
+    Event.DEALS_COMBAT_DAMAGE_ANY: ("source",),
+    Event.BECOMES_BLOCKED: ("attacker",),
     Event.ROOM_FULLY_UNLOCKED: ("room",),
+    Event.BECOMES_MONSTROUS: ("obj",),
+    # ``target_spell`` replaces ``target`` when a spell on the stack is
+    # targeted (``cube_creatures_rmc.fire_becomes_target``); ``targeting``
+    # is the targeting StackItem (spell or ability).
+    Event.BECOMES_TARGET: ("target", "controller", "target_spell", "targeting"),
     Event.YOU_ATTACK: ("player",),
     # WOULD_X (CR 614 replacement) events — see Event enum docs above.
     Event.WOULD_DRAW_CARDS: ("player",),
@@ -228,6 +349,15 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.TRIGGERED_ABILITY_TRIGGERS: ("triggering_obj", "ability_source"),
     Event.WOULD_PLACE_COUNTER: ("obj", "kind"),
     Event.WOULD_GO_TO_GRAVEYARD: ("card",),
+    Event.WOULD_DRAW_FROM_EMPTY_LIBRARY: ("player",),
+    Event.DRAWS_CARD: ("player",),
+    Event.GAINS_LIFE: ("player",),
+    Event.WOULD_DRAW_A_CARD: ("player",),
+    Event.CARDS_PUT_INTO_LIBRARY: ("player",),
+    Event.TRANSFORMS: ("obj",),
+    Event.DEALS_DAMAGE: ("source",),
+    Event.ACTIVATES_ABILITY: ("source", "controller"),
+    Event.DEALS_DAMAGE_TO_PLAYER: ("source", "player"),
 }
 
 
@@ -410,6 +540,23 @@ class StateBound(TriggerPredicate):
 
 
 @dataclass(frozen=True)
+class FirstAttackThisTurn(TriggerPredicate):
+    """"attacks for the first time each turn" (Fear of Missing Out): the
+    source appears exactly once in its controller's
+    ``Player.attacked_this_turn`` latch, which the attack declaration
+    appends to before dispatching ``Event.ATTACKS`` -- so an attack in an
+    additional combat phase doesn't trigger again."""
+
+    def matches(self, state, subjects, source):
+        player = state.player_by_id(source.controller_id)
+        n = 0
+        for obj in player.attacked_this_turn:
+            if obj.id == source.id:
+                n += 1
+        return n == 1
+
+
+@dataclass(frozen=True)
 class IsSelf(TriggerPredicate):
     """The named subject IS the firing source object (object identity).
 
@@ -465,6 +612,50 @@ class IsHost(TriggerPredicate):
         if host_id is None:
             return False
         return getattr(obj, "id", None) == host_id
+
+
+@dataclass(frozen=True)
+class IsFormerHost(TriggerPredicate):
+    """The named subject is the permanent this Equipment/Aura was
+    attached to when that permanent left the battlefield — "Whenever
+    equipped creature dies" (Skullclamp).
+
+    ``move_off_battlefield`` unattaches Equipment from a leaving host
+    BEFORE dispatching DIES; it records the host id on the Equipment's
+    transient ``last_attached_to`` for the duration of that dispatch,
+    which this predicate reads.
+    """
+
+    subject: str | None = None
+
+    def matches(self, state, subjects, source):
+        obj = _resolve_subject(subjects, self.subject)
+        if obj is None:
+            return False
+        host_id = getattr(source, "last_attached_to", None)
+        if host_id is None:
+            return False
+        return getattr(obj, "id", None) == host_id
+
+
+@dataclass(frozen=True)
+class HostAttacksWithAnother(TriggerPredicate):
+    """"Whenever equipped creature and at least one other creature
+    attack" (Glimmer Lens): on the once-per-declaration YOU_ATTACK
+    event, the source's host is attacking and at least one other
+    creature its controller controls is attacking too."""
+
+    def matches(self, state, subjects, source):
+        host_id = getattr(source, "attached_to", None)
+        if host_id is None:
+            return False
+        attackers = [
+            o for o in state.battlefield
+            if o.attacking and o.controller_id == source.controller_id
+        ]
+        return (
+            any(o.id == host_id for o in attackers) and len(attackers) >= 2
+        )
 
 
 @dataclass(frozen=True)

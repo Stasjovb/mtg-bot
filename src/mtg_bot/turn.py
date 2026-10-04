@@ -7,6 +7,7 @@ from enum import Enum
 from mtg_bot.game import (
     GameState, Zone, effective_keywords, effective_toughness, is_creature_now,
 )
+from mtg_bot.keyword_rules import attachment_illegal_by_protection
 
 
 class Step(Enum):
@@ -42,9 +43,82 @@ COMBAT_STEPS: frozenset[Step] = frozenset({
 STEPS_WITH_PRIORITY: frozenset[Step] = frozenset(set(STEP_ORDER) - {Step.UNTAP, Step.CLEANUP})
 
 
+def note_life_losses(state: GameState) -> None:
+    """Latch ``Player.lost_life_this_turn`` for every player whose life
+    total dropped since the last check (damage, life loss and paid life
+    all lower it). A loss fully regained between two checks inside one
+    resolution is missed."""
+    for p in state.players:
+        if p.life < p.life_checkpoint:
+            p.lost_life_this_turn = True
+        p.life_checkpoint = p.life
+    # Speed (CR 702.179; roto P6) reads the life-loss latch.
+    from mtg_bot.effects.generic.roto_keywords import update_speed
+
+    update_speed(state)
+
+
+def next_step(state: GameState, current: Step) -> "Step | None":
+    """The step after ``current`` in this turn (``None`` after cleanup).
+
+    Follows ``STEP_ORDER`` except that a combat phase ending while
+    ``state.extra_combat_phases`` is pending starts another combat phase
+    ("After this phase, there is an additional combat phase." -- Fear of
+    Missing Out; CR 500.8). Shared by ``simulate.run_turn`` and the
+    search adapter so both turn loops take the same path."""
+    if current == Step.CLEANUP:
+        return None
+    # Roto P4 turn structure: "Skip your draw step." and "End the turn."
+    # First, so an ended turn goes straight to cleanup (CR 723.1).
+    from mtg_bot.roto_turns import turn_structure_next_step
+
+    replaced = turn_structure_next_step(state, current)
+    if replaced is not None:
+        return replaced
+    # Vintage Roto P3: an additional combat phase after the postcombat
+    # main phase (Grim Reaper's Sprint).
+    from mtg_bot.effects.generic.roto_mana import roto_next_step
+
+    override = roto_next_step(state, current)
+    if override is not None:
+        return override
+    if current == Step.END_OF_COMBAT and state.extra_combat_phases > 0:
+        state.extra_combat_phases -= 1
+        state.log.append("an additional combat phase begins")
+        return Step.BEGINNING_OF_COMBAT
+    return STEP_ORDER[STEP_ORDER.index(current) + 1]
+
+
 def run_untap_step(state: GameState) -> None:
     ap = state.active_player()
     ap.lands_played_this_turn = 0
+    ap.turns_started += 1
+    if state.day_night:
+        # CR 726.3a: day may become night (or night day) as the turn
+        # begins, transforming daybound / nightbound permanents.
+        from mtg_bot.layouts import run_day_night_check
+
+        run_day_night_check(state)
+    # A new turn: "lost life this turn" starts over for every player.
+    for _p in state.players:
+        _p.lost_life_this_turn = False
+        _p.life_checkpoint = _p.life
+    # "During your turn, <this> is a P/T creature" (Kaito).
+    from mtg_bot.cube_glue_statics import apply_creature_during_your_turn
+
+    apply_creature_during_your_turn(state)
+    # "… protection from everything until your next turn" (The One Ring)
+    # ends as this player's turn begins.
+    if ap.protected_from_everything:
+        ap.protected_from_everything = False
+        state.log.append(f"P{ap.id}'s protection from everything ends")
+    # "Until your next turn, whenever ..." delayed triggers end.
+    if state.emblems and any(
+        e.expires_at_untap_of == ap.id for e in state.emblems
+    ):
+        state.emblems = [
+            e for e in state.emblems if e.expires_at_untap_of != ap.id
+        ]
     # "Until your next turn" expiry: drop every continuous-effect
     # registry entry tagged ``expires_at="controller_untap"`` whose
     # ``expires_at_player_id`` is this active player. Matches Mouth of
@@ -57,6 +131,10 @@ def run_untap_step(state: GameState) -> None:
     # ``extended_temp_*`` mirror fields they previously fed have been
     # retired.
     state.expire_continuous_effects("controller_untap", player_id=ap.id)
+    # Goad (CR 701.38a) lasts until the goading player's next turn.
+    from mtg_bot.designations import clear_goad_for
+
+    clear_goad_for(state, ap.id)
     # Phasing: "until its controller's next turn." At the start of the
     # phased creature's controller's untap step, phase it (and anything
     # attached to it) back in. Matches Robe of Stars' Astral Projection.
@@ -84,8 +162,19 @@ def run_untap_step(state: GameState) -> None:
         if att.attached_to is not None
         and att.printing.attached_prevents_untap
     }
+    # Board-rule untap limits (Back to Basics, Winter Orb; Vintage Roto
+    # P5): permanents the rules hold tapped this untap step.
+    from mtg_bot.roto_board_statics import untap_step_held
+
+    held_ids = untap_step_held(state, ap.id, no_untap_ids)
     for obj in state.battlefield:
         if obj.controller_id == ap.id:
+            if obj.id in held_ids:
+                obj.summoning_sick = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (untap-step limit)"
+                )
+                continue
             # Stun counters: instead of untapping, remove one counter.
             if obj.stun_counters > 0:
                 obj.stun_counters -= 1
@@ -100,19 +189,176 @@ def run_untap_step(state: GameState) -> None:
                     f"prevents-untap effect)"
                 )
                 continue
+            if obj.exerted:
+                # Exert (CR 701.39): skip this one untap step.
+                obj.exerted = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (exerted)"
+                )
+                continue
+            if obj.printing.doesnt_untap_during_untap_step and obj.tapped:
+                # "This artifact doesn't untap during your untap step."
+                # (Grim Monolith, Mana Vault, Time Vault). Summoning
+                # sickness still clears — the rider only suppresses the
+                # untap turn-based action for this permanent.
+                obj.summoning_sick = False
+                state.log.append(
+                    f"{obj.printing.name} stays tapped (doesn't untap "
+                    f"during its controller's untap step)"
+                )
+                continue
             obj.tapped = False
             obj.summoning_sick = False
 
 
+DREW_FROM_EMPTY_LIBRARY = "drew from empty library"
+
+
+def _draw_limited_to_one_per_turn(state: GameState, player_id: int) -> bool:
+    """True iff an opponent of ``player_id`` controls a permanent with
+    the "each opponent can't draw more than one card each turn"
+    restriction (Narset, Parter of Veils)."""
+    for o in state.battlefield:
+        if (
+            o.controller_id != player_id
+            and o.printing.opponents_cant_draw_more_than_one_card_each_turn
+        ):
+            return True
+    return False
+
+
+def _draw_from_empty_library_wins(state: GameState, player_id: int) -> bool:
+    """CR 614 replacement: "If you would draw a card while your library
+    has no cards in it, you win the game instead." (Jace, Wielder of
+    Mysteries). Routed through ``dispatch_replacement`` on
+    ``WOULD_DRAW_FROM_EMPTY_LIBRARY``; a ``WinTheGameInstead``
+    transform sets ``payload["win_game"]``."""
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    out = dispatch_replacement(
+        state, Event.WOULD_DRAW_FROM_EMPTY_LIBRARY,
+        affected_player_id=player_id,
+        subjects={"player": state.player_by_id(player_id)},
+        payload={},
+    )
+    return bool(out.get("win_game"))
+
+
+def win_the_game(state: GameState, player_id: int, reason: str) -> None:
+    """``player_id`` wins the game (CR 104.2a): every opponent loses.
+
+    A player whose only "loss" so far is an attempted draw from an
+    empty library during the CURRENT resolution hasn't actually lost
+    yet -- that loss is a state-based action (CR 704.5b) and no SBA
+    check happens mid-resolution. The engine records the empty-library
+    loss eagerly in ``draw_card``, so a win produced later in the same
+    resolution (Jace, Wielder of Mysteries' "Draw seven cards. Then if
+    your library has no cards in it, you win the game.") clears that
+    pending flag before declaring the winner. A game that is already
+    over is left untouched.
+    """
+    if state.is_over():
+        return
+    from mtg_bot.effects.generic.roto_keywords import player_cant_win
+
+    if player_cant_win(state, player_id):  # Angel's Grace (roto P6)
+        state.log.append(f"P{player_id} can't win the game this turn")
+        return
+    p = state.player_by_id(player_id)
+    if p.has_lost:
+        if p.lost_reason != DREW_FROM_EMPTY_LIBRARY:
+            return
+        p.has_lost = False
+        p.lost_reason = ""
+    for opp in state.players:
+        if opp.id != player_id and not opp.has_lost:
+            opp.has_lost = True
+            opp.lost_reason = f"P{player_id} won the game ({reason})"
+    state.winner_id = player_id
+    state.log.append(f"P{player_id} wins the game ({reason})")
+
+
 def draw_card(state: GameState, player_id: int) -> None:
     p = state.player_by_id(player_id)
-    if not p.library:
-        p.has_lost = True
-        p.lost_reason = "drew from empty library"
+    # "Each opponent can't draw more than one card each turn." A draw
+    # the player can't perform simply doesn't happen (CR 101.2 -- the
+    # "can't" wins), so it can't be a draw from an empty library either.
+    if p.cards_drawn_this_turn >= 1 and _draw_limited_to_one_per_turn(
+        state, player_id,
+    ):
+        state.log.append(
+            f"P{player_id} can't draw more than one card this turn"
+        )
         return
-    top = p.library.pop(0)
-    top.zone = Zone.HAND
-    p.hand.append(top)
+    # Roto P2 draw replacements (dredge, Chains of Mephistopheles): they
+    # apply to the draw even from an empty library.
+    from mtg_bot.effects.generic.roto_zones import replace_draw
+
+    if replace_draw(state, p):
+        return
+    if not p.library:
+        if _draw_from_empty_library_wins(state, player_id):
+            win_the_game(
+                state, player_id,
+                reason="would draw from an empty library",
+            )
+            return
+        from mtg_bot.effects.generic.roto_keywords import player_cant_lose
+
+        if not player_cant_lose(state, player_id):  # Angel's Grace (roto P6)
+            p.has_lost = True
+            p.lost_reason = DREW_FROM_EMPTY_LIBRARY
+        return
+    # The first card a player draws in their own draw step (CR 504.1's
+    # turn-based draw) is exempt from "except the first one they draw
+    # in each of their draw steps" riders.
+    first_in_draw_step = p.draw_step_first_draw_pending
+    p.draw_step_first_draw_pending = False
+    p.drawing_first_in_draw_step = first_in_draw_step
+    try:
+        if _draw_replaced(state, p):
+            return
+        top = p.library.pop(0)
+        top.zone = Zone.HAND
+        p.hand.append(top)
+        p.cards_drawn_this_turn += 1
+        # "Whenever you draw a card" / "whenever an opponent draws a
+        # card" observers (CR 121.2: one event per card).
+        from mtg_bot.actions import dispatch_event
+        from mtg_bot.effects.predicates import Event
+
+        dispatch_event(state, Event.DRAWS_CARD, player=p)
+        if (
+            top.printing.miracle_cost is not None
+            and p.cards_drawn_this_turn == 1
+        ):
+            from mtg_bot.creature_casting_ub import offer_miracle
+
+            offer_miracle(state, p, top)
+    finally:
+        p.drawing_first_in_draw_step = False
+
+
+def _draw_replaced(state: GameState, p) -> bool:
+    """Per-card draw replacement (CR 614.1a / 121.6): walk
+    ``WOULD_DRAW_A_CARD`` replacements for ``p``. When one replaces the
+    draw (Hullbreacher's "instead you create a Treasure token"), run the
+    substituted actions and report True so the draw doesn't happen."""
+    from mtg_bot.effects.modifiers import dispatch_replacement
+    from mtg_bot.effects.predicates import Event
+
+    out = dispatch_replacement(
+        state, Event.WOULD_DRAW_A_CARD,
+        affected_player_id=p.id,
+        subjects={"player": p},
+        payload={},
+    )
+    if not out.get("prevented"):
+        return False
+    for controller_id, effect in out.get("instead", ()):
+        effect.resolve(state, controller_id, ())
+    return True
 
 
 def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
@@ -135,17 +381,94 @@ def draw_n_cards(state: GameState, player_id: int, n: int) -> int:
 
 
 def run_draw_step(state: GameState) -> None:
-    draw_n_cards(state, state.active_player().id, 1)
+    """The draw turn-based action (CR 504.1), then the "at the
+    beginning of your draw step" triggers (CR 504.2) — Mana Vault.
+
+    Both turn loops (``simulate.run_step`` and the search adapter)
+    call this only when the active player actually draws, so the
+    starting player's skipped first draw step fires no draw-step
+    triggers (documented in docs/SEARCH_LIMITATIONS.md).
+
+    The turn-based draw is marked as the first card drawn in this draw
+    step ("except the first one they draw in each of their draw
+    steps", Orcish Bowmasters / Hullbreacher).
+    """
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+
+    ap = state.active_player()
+    ap.draw_step_first_draw_pending = True
+    try:
+        draw_n_cards(state, ap.id, 1)
+    finally:
+        ap.draw_step_first_draw_pending = False
+    dispatch_event(
+        state, Event.BEGINNING_OF_DRAW_STEP,
+        label="beginning-of-draw-step", player=ap,
+    )
+
+
+def note_cards_put_into_library(state: GameState, player_id: int | None = None) -> None:
+    """Fire "whenever one or more cards are put into a library from
+    anywhere" observers once for a batch of zone changes into a library
+    (``player_id`` = the library's owner, when known). A cheap no-op
+    unless some permanent observes the event."""
+    from mtg_bot.effects.predicates import Event
+
+    if not any(
+        t.event is Event.CARDS_PUT_INTO_LIBRARY
+        for o in state.battlefield for t in o.printing.triggered_abilities
+    ):
+        return
+    from mtg_bot.actions import dispatch_event
+
+    player = (
+        state.player_by_id(player_id) if player_id is not None
+        else state.active_player()
+    )
+    dispatch_event(
+        state, Event.CARDS_PUT_INTO_LIBRARY, label="put-into-library",
+        player=player,
+    )
+
+
+def _reset_left_battlefield_object(obj: "GameObject") -> None:
+    """Clear per-permanent state on an object that left the battlefield
+    for a hidden zone (hand / library): counters, temporary P/T bonuses,
+    regeneration shield. CR 400.7 — it is a new object there."""
+    obj.plus_one_counters = 0
+    obj.minus_one_counters = 0
+    obj.charge_counters = 0
+    obj.stun_counters = 0
+    obj.time_counters = 0
+    obj.loyalty_counters = 0
+    obj.lore_counters = 0
+    obj.flying_counters = 0
+    obj.named_counters = ()
+    obj.temp_power_bonus = 0
+    obj.temp_toughness_bonus = 0
+    obj.regeneration_shield = False
+    obj.impending_active = False
+    obj.face_down = False
 
 
 def move_off_battlefield(
-    state: GameState, obj: "GameObject", destination: str = "graveyard"
+    state: GameState, obj: "GameObject", destination: str = "graveyard",
+    library_index: int = 0,
 ) -> None:
     """Remove ``obj`` from the battlefield and place it in ``destination``.
 
-    ``destination`` is ``"graveyard"`` or ``"exile"``. Tokens cease to exist
-    per rule 704.5d regardless of destination. Combat state (damage, tapped,
-    attacking, blocking) is cleared.
+    ``destination`` is ``"graveyard"``, ``"exile"``, ``"hand"`` or
+    ``"library"``. Tokens cease to exist per rule 704.5d regardless of
+    destination. Combat state (damage, tapped, attacking, blocking) is
+    cleared.
+
+    ``"hand"`` (bounce — Upheaval) reveals the card to every player.
+    ``"library"`` inserts the card at ``library_index`` of its owner's
+    library (0 = top; Oust's "second from the top" = 1; Unexpectedly
+    Absent's "just beneath the top X cards" = X; clamped to the library
+    size). Both hidden-zone destinations drop counters and temporary
+    bonuses — the card becomes a new object (CR 400.7).
 
     If the object was a creature (or a stationed Spacecraft) and
     ``destination`` is ``"graveyard"``, its "when this creature dies"
@@ -157,11 +480,90 @@ def move_off_battlefield(
     """
     if obj not in state.battlefield:
         return
+    if obj.exile_instead_of_leaving and destination != "exile":
+        # From the Catacombs: "If that creature would leave the
+        # battlefield, exile it instead of putting it anywhere else."
+        destination = "exile"
+    if (
+        destination == "graveyard"
+        and not obj.printing.is_token
+        and state.player_by_id(obj.owner_id).graveyard_exile_replacement_this_turn
+    ):
+        # Yawgmoth's Will: exiled instead (it never dies).
+        destination = "exile"
+    if destination == "graveyard" and obj.printing.watched_in_graveyard:
+        # "If <Name> would be put into a graveyard from anywhere, ...
+        # shuffle it into its owner's library instead." (Blightsteel).
+        from mtg_bot.effects.generic.cube_creatures_rmc import (
+            graveyard_self_replacement_destination,
+        )
+
+        if graveyard_self_replacement_destination(state, obj) == "library":
+            state.log.append(
+                f"{obj.printing.name} is shuffled into its owner's library "
+                f"instead"
+            )
+            move_off_battlefield(state, obj, destination="library")
+            from mtg_bot.game import shuffle_library
+
+            shuffle_library(state, obj.owner_id)
+            return
+    if destination == "graveyard":
+        from mtg_bot.game import named_counter_count
+
+        if named_counter_count(obj, "finality") > 0:
+            # A permanent with a finality counter that would be put into
+            # a graveyard from the battlefield is exiled instead.
+            destination = "exile"
+    if destination == "graveyard":
+        # Roto P2 exile-instead replacements (Rest in Peace, Leyline of
+        # the Void): exiled instead, so it never dies.
+        from mtg_bot.effects.generic.roto_zones import (
+            graveyard_exile_instead_applies,
+        )
+
+        if graveyard_exile_instead_applies(state, obj):
+            destination = "exile"
+    void_redirect = False
+    if destination == "graveyard" and not obj.printing.is_token:
+        from mtg_bot.game import void_exile_replacement_active
+
+        if void_exile_replacement_active(state, obj.owner_id):
+            # Dauthi Voidwalker: exiled with a void counter (never dies).
+            destination = "exile"
+            void_redirect = True
     was_creature = is_creature_now(obj)
+    if obj.exile_if_dies_this_turn:
+        obj.exile_if_dies_this_turn = False
+        if destination == "graveyard" and was_creature:
+            # Replacement: "If that creature would die this turn,
+            # exile it instead." (Suplex).
+            state.log.append(
+                f"{obj.printing.name} would die — exiled instead"
+            )
+            destination = "exile"
+    # Persist LKI (CR 702.79a): read before the object leaves.
+    persists = (
+        destination == "graveyard"
+        and was_creature
+        and not obj.printing.is_token
+        and obj.minus_one_counters == 0
+        and "persist" in effective_keywords(state, obj)
+    )
     # Mark Void state: any non-land permanent leaving the battlefield this
     # turn (including tokens ceasing to exist) enables Void triggers.
     if not obj.printing.is_land:
         state.permanent_left_battlefield_this_turn = True
+    # Revolt: any permanent (lands and tokens included) leaving under
+    # its controller's control.
+    state.player_by_id(obj.controller_id).permanent_left_battlefield_this_turn = True
+    # LKI for "loses all abilities" (Oko's +1): recorded before the
+    # object's self-sourced registry entries are dropped below.
+    from mtg_bot.game import _source_layer6_wiped
+
+    obj.left_without_abilities = bool(
+        state.continuous_effects and _source_layer6_wiped(state, obj)
+    )
     # Layer-2 control-grant reversion: drop every continuous-effect
     # entry sourced by THIS leaving object, then refresh the
     # ``controller_id`` cache on each affected target via
@@ -214,13 +616,16 @@ def move_off_battlefield(
     # battlefield, attached_to cleared); Auras are sent to their
     # owners' graveyards.
     auras_to_bury: list = []
+    detached_equipment: list = []
     for att in state.battlefield:
         if att.attached_to != obj.id:
             continue
-        if att.printing.is_aura:
+        if att.printing.is_aura or att.aura_enchant_override is not None:
             auras_to_bury.append(att)
         else:
             att.attached_to = None
+            att.last_attached_to = obj.id
+            detached_equipment.append(att)
     for aura in auras_to_bury:
         state.log.append(
             f"{aura.printing.name} is put into the graveyard "
@@ -228,6 +633,25 @@ def move_off_battlefield(
         )
         move_off_battlefield(state, aura, destination="graveyard")
     state.battlefield.remove(obj)
+    if obj.prepared_copy_id >= 0:
+        # The copy of its prepare spell in exile ceases to exist.
+        from mtg_bot.layouts import stop_being_prepared
+
+        stop_being_prepared(state, obj)
+    from mtg_bot.game import restore_mdfc_front
+
+    restore_mdfc_front(obj)
+    obj.exile_instead_of_leaving = False
+    # Per-permanent state of the cube creatures bucket (CR 400.7: the
+    # card is a new object in its next zone).
+    obj.exhausted_abilities = frozenset()
+    obj.escaped = False
+    obj.dashed = False
+    obj.monstrous = False
+    obj.entered_via_cast = False
+    obj.kick_count = 0
+    obj.evoked = False
+    obj.bestowed = False
     obj.damage = 0
     obj.marked_lethal = False
     obj.damaged_this_turn = False
@@ -238,14 +662,33 @@ def move_off_battlefield(
     # If the departing permanent itself was Equipment, clear its
     # attachment state.
     obj.attached_to = None
+    obj.aura_enchant_override = None
     if obj.printing.is_token:
         state.log.append(f"{obj.printing.name} token ceases to exist")
     elif destination == "graveyard":
         obj.zone = Zone.GRAVEYARD
         state.player_by_id(obj.owner_id).graveyard.append(obj)
+    elif destination == "exile" and void_redirect:
+        from mtg_bot.game import exile_with_void_counter
+
+        exile_with_void_counter(state, obj)
     elif destination == "exile":
         obj.zone = Zone.EXILE
         state.player_by_id(obj.owner_id).exile.append(obj)
+    elif destination in ("hand", "library"):
+        _reset_left_battlefield_object(obj)
+        owner = state.player_by_id(obj.owner_id)
+        if destination == "hand":
+            from mtg_bot.game import reveal_to_all
+
+            obj.zone = Zone.HAND
+            owner.hand.append(obj)
+            reveal_to_all(state, obj)
+        else:
+            obj.zone = Zone.LIBRARY
+            idx = max(0, min(library_index, len(owner.library)))
+            owner.library.insert(idx, obj)
+            note_cards_put_into_library(state, owner.id)
     else:
         raise ValueError(f"unknown destination: {destination!r}")
 
@@ -261,6 +704,10 @@ def move_off_battlefield(
         # unqualified "if a creature died this turn" surface.
         state.creatures_died_this_turn += 1
         _fire_dies_triggers(state, obj)
+        if persists:
+            from mtg_bot.actions import push_persist_trigger
+
+            push_persist_trigger(state, obj)
 
     # Predicate-style ``Event.DIES`` dispatch. Phase-4 widens the
     # legacy creature-only DIES fire path to also cover artifacts so
@@ -270,7 +717,12 @@ def move_off_battlefield(
     # used to. Predicates handle type-filtering downstream — a
     # ``IsCreature() & ...`` predicate won't match an artifact-only
     # death.
-    if destination == "graveyard" and (was_creature or obj.printing.is_artifact):
+    # Lands too (cube W/G bucket: Titania's "Whenever a land you control
+    # is put into a graveyard from the battlefield"); every DIES
+    # observer's predicate is typed or self-referential.
+    if destination == "graveyard" and (
+        was_creature or obj.printing.is_artifact or obj.printing.is_land
+    ):
         from mtg_bot.actions import dispatch_event as _dispatch_event_dies
         from mtg_bot.effects.predicates import Event as _Event_dies
 
@@ -282,11 +734,45 @@ def move_off_battlefield(
             obj=obj,
         )
 
+    # Earthbend's return rider (Badgermole Cub).
+    if obj.earthbent:
+        obj.earthbent = False
+        if destination in ("graveyard", "exile") and not obj.printing.is_token:
+            from mtg_bot.actions import push_triggered_ability
+            from mtg_bot.effects.base import TriggeredAbility
+            from mtg_bot.effects.generic.cube_creatures_wg import (
+                ReturnEarthbentLandTapped,
+            )
+            from mtg_bot.effects.predicates import Always, Event
+
+            push_triggered_ability(
+                state, source=obj,
+                ability=TriggeredAbility(
+                    event=Event.DIES, predicate=Always(),
+                    effect=ReturnEarthbentLandTapped(),
+                ),
+                ability_index=-1, controller_id=obj.controller_id,
+                label="earthbend return",
+            )
+
+    # Serra Paragon's granted rider ("When this permanent is put into a
+    # graveyard from the battlefield, exile it and you gain 2 life.").
+    if obj.leaves_to_graveyard_exile_gain_life:
+        if destination == "graveyard" and not obj.printing.is_token:
+            from mtg_bot.graveyard_casting_wg import (
+                fire_leaves_to_graveyard_rider,
+            )
+
+            fire_leaves_to_graveyard_rider(state, obj)
+        obj.leaves_to_graveyard_exile_gain_life = 0
+
     # Generic "when this leaves the battlefield" triggers — fires for
     # artifacts, enchantments, and anything else with a matching
     # triggered ability. Used by Cryogen Relic ("enters or leaves →
     # draw a card").
     _fire_leaves_battlefield_triggers(state, obj)
+    for att in detached_equipment:
+        att.last_attached_to = None
 
     # Return any cards this object exiled with "until this leaves" to
     # their owner's battlefield. Applies whether the source is destroyed
@@ -399,6 +885,16 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
         for c in released:
             p.exile.remove(c)
             c.exiled_by_source = None
+            if c.exiled_until_leaves_from_hand:
+                # Deep-Cavern Bat: a card exiled from a hand goes back
+                # to its owner's hand.
+                c.exiled_until_leaves_from_hand = False
+                c.zone = Zone.HAND
+                p.hand.append(c)
+                state.log.append(
+                    f"{c.printing.name} returns from exile to P{p.id}'s hand"
+                )
+                continue
             state.log.append(
                 f"{c.printing.name} returns from exile to "
                 f"P{p.id}'s battlefield"
@@ -407,7 +903,7 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
 
 
 def fire_opponent_discards_triggers(
-    state: GameState, discarding_player_id: int
+    state: GameState, discarding_player_id: int, card=None,
 ) -> None:
     """Dispatch the phase-8 predicate-style ``Event.DISCARDS_CARD``
     event so opponent-discards observer triggers (Entropic
@@ -425,12 +921,26 @@ def fire_opponent_discards_triggers(
     from mtg_bot.actions import dispatch_event
     from mtg_bot.effects.predicates import Event as _Event
 
+    if card is not None:
+        # Mayhem ("if you discarded it this turn").
+        card.discarded_turn = state.turn_number
     discarding_player = state.player_by_id(discarding_player_id)
     dispatch_event(
         state, _Event.DISCARDS_CARD, label="discards-card",
         fixed_targets=(("player", discarding_player_id),),
         player=discarding_player,
     )
+    # Card-aware twin (Currency Converter's "Whenever you discard a
+    # card, you may exile that card from your graveyard"): the discarded
+    # card rides along as the fixed target so "that card" can address
+    # it. A separate event keeps DISCARDS_CARD's player-target contract
+    # (Entropic Battlecruiser) untouched.
+    if card is not None:
+        dispatch_event(
+            state, _Event.CARD_DISCARDED, label="card-discarded",
+            fixed_targets=(("card_in_graveyard", card.id),),
+            player=discarding_player, card=card,
+        )
 
 
 def should_fire_trigger(
@@ -491,11 +1001,22 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
 
     Sacrifice bypasses indestructible (MTG rule 701.16a — sacrifice is
     not a "destroy" effect).
+
+    A sacrifice an opponent's resolving spell / ability would cause is
+    skipped under Tamiyo, Collector of Tales
+    (``mtg_bot.player_protections``).
     """
+    from mtg_bot.player_protections import opponent_effect_blocked_for
+
+    if opponent_effect_blocked_for(state, obj.controller_id):
+        return
     was_creature = obj.printing.is_creature
     was_artifact = obj.printing.is_artifact
+    # Lands too: "Whenever you sacrifice a land" (Baloth Prime; cube W/G
+    # bucket). Every IS_SACRIFICED observer's predicate is typed.
+    was_land = obj.printing.is_land
     move_off_battlefield(state, obj, destination="graveyard")
-    if not (was_creature or was_artifact):
+    if not (was_creature or was_artifact or was_land):
         return
     # Phase-8 predicate-style dispatch: fire IS_SACRIFICED with the
     # sacrificed permanent as subject. The legacy per-key walks for
@@ -569,6 +1090,12 @@ def tap_permanent(state: GameState, obj: "GameObject") -> None:
         state, Event.BECOMES_TAPPED,
         label="becomes-tapped", obj=obj,
     )
+    # Granted "whenever this creature becomes tapped" (roto P6).
+    from mtg_bot.effects.generic.roto_keywords import (
+        fire_granted_becomes_tapped_triggers,
+    )
+
+    fire_granted_becomes_tapped_triggers(state, obj)
 
 
 def fire_landfall_triggers(state: GameState, new_land: "GameObject") -> None:
@@ -731,6 +1258,14 @@ def run_beginning_of_upkeep_triggers(state: GameState) -> None:
         state, Event.BEGINNING_OF_UPKEEP,
         label="beginning-of-upkeep", player=state.active_player(),
     )
+    from mtg_bot.designations import on_beginning_of_upkeep
+
+    on_beginning_of_upkeep(state)
+    # Vintage Roto P3: suspend's "remove a time counter" upkeep trigger.
+    from mtg_bot.effects.generic.roto_mana import push_suspend_upkeep_triggers
+
+    push_suspend_upkeep_triggers(state)
+    run_delayed_upkeep_triggers(state)
 
 
 def run_beginning_of_combat_triggers(state: GameState) -> None:
@@ -811,23 +1346,84 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
     refactor. Any leftover string-action entry is a bug; we raise
     ``ValueError`` rather than silently bypass the stack.
     """
-    from mtg_bot.actions import push_triggered_ability
-    from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import Always, Event
+    from mtg_bot.effects.predicates import Event
 
     ap_id = state.active_player().id
     remaining: list[dict] = []
     to_push: list[dict] = []
     for entry in state.delayed_triggers:
+        # Upkeep-scheduled entries ("at the beginning of the next turn's
+        # upkeep") are fired by ``run_delayed_upkeep_triggers``.
+        if entry.get("step", "end") != "end":
+            remaining.append(entry)
+            continue
+        # ``any_player_end_step`` entries ("at the beginning of the
+        # next end step") fire on whichever player's end step comes
+        # first; the rest fire on their controller's end step.
+        # ``own_next_end_step`` entries ("at the beginning of your next
+        # end step", ``roto_turns.schedule_at_your_next_end_step``) fire
+        # at their controller's first end step from ``fire_at_turn`` on,
+        # however many extra turns intervene.
         fires_now = (
-            entry["fire_at_turn"] == state.turn_number
-            and entry["controller_id"] == ap_id
+            (
+                entry["fire_at_turn"] == state.turn_number
+                or (
+                    entry.get("own_next_end_step", False)
+                    and entry["fire_at_turn"] <= state.turn_number
+                )
+            )
+            and (
+                entry.get("any_player_end_step", False)
+                or entry["controller_id"] == ap_id
+            )
         )
         if fires_now:
             to_push.append(entry)
         else:
             remaining.append(entry)
     state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, Event.BEGINNING_OF_END_STEP)
+
+
+def run_delayed_upkeep_triggers(state: GameState) -> None:
+    """Push delayed triggers scheduled for "the beginning of the next
+    turn's upkeep" (Mishra's Bauble, Urza's Bauble). An entry carries
+    ``"step": "upkeep"`` and ``fire_at_turn`` = the turn after the one
+    it was scheduled in; it fires at that turn's upkeep whoever the
+    active player is. Called from ``run_beginning_of_upkeep_triggers``.
+    """
+    from mtg_bot.effects.predicates import Event
+
+    remaining: list[dict] = []
+    to_push: list[dict] = []
+    ap_id = state.active_player().id
+    for entry in state.delayed_triggers:
+        if (
+            entry.get("step") == "upkeep"
+            and entry["fire_at_turn"] <= state.turn_number
+            # ``own_upkeep`` ("your next upkeep" -- Rebound) waits for
+            # its controller's upkeep.
+            and (
+                not entry.get("own_upkeep", False)
+                or entry["controller_id"] == ap_id
+            )
+        ):
+            to_push.append(entry)
+        else:
+            remaining.append(entry)
+    if not to_push:
+        return
+    state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, Event.BEGINNING_OF_UPKEEP)
+
+
+def _push_delayed_entries(state: GameState, to_push: list[dict], event) -> None:
+    """Convert fired ``state.delayed_triggers`` entries into synthetic
+    triggered abilities on the stack (shared by the end-step and upkeep
+    runners)."""
+    from mtg_bot.actions import push_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Always
 
     for entry in to_push:
         if "effect" not in entry:
@@ -848,7 +1444,7 @@ def run_delayed_end_step_triggers(state: GameState) -> None:
             # silent-no-op behavior. Skip the push.
             continue
         ability = TriggeredAbility(
-            event=Event.BEGINNING_OF_END_STEP,
+            event=event,
             predicate=Always(),
             effect=effect,
         )
@@ -889,6 +1485,60 @@ def run_beginning_of_postcombat_main_triggers(state: GameState) -> None:
         label="beginning-of-postcombat-main",
         player=state.active_player(),
     )
+    run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_POSTCOMBAT_MAIN)
+
+
+def run_beginning_of_precombat_main_triggers(state: GameState) -> bool:
+    """Push "At the beginning of your first main phase" triggered
+    abilities (Coalition Relic) and any delayed "at the beginning of
+    your next main phase" triggers of the active player (Mana Drain).
+    Called by ``simulate.run_step`` and the search adapter's
+    ``_enter_step`` as the precombat main phase begins, before priority
+    opens -- the ``run_beginning_of_postcombat_main_triggers`` pattern.
+
+    First the Saga turn-based action (CR 714.3b: "as your precombat main
+    phase begins", the active player puts a lore counter on each Saga
+    they control), so chapter triggers and first-main-phase triggers are
+    put on the stack together."""
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.layouts import run_saga_lore_counters
+
+    stack_before = len(state.stack)
+    lore_before = sum(o.lore_counters for o in state.battlefield)
+    run_saga_lore_counters(state)
+    dispatch_event(
+        state, Event.BEGINNING_OF_PRECOMBAT_MAIN,
+        label="beginning-of-precombat-main",
+        player=state.active_player(),
+    )
+    run_delayed_main_phase_triggers(state, Event.BEGINNING_OF_PRECOMBAT_MAIN)
+    # Report whether anything happened, so both turn loops run the
+    # follow-up state-based-action check only then.
+    return (
+        len(state.stack) != stack_before
+        or sum(o.lore_counters for o in state.battlefield) != lore_before
+    )
+
+
+def run_delayed_main_phase_triggers(state: GameState, event) -> None:
+    """Fire ``state.delayed_triggers`` entries scheduled for "the
+    beginning of your next main phase" (``"step": "main"``) whose
+    controller is the active player: the next main phase of that
+    player that begins after the entry was created -- the same turn's
+    second main phase, or their next turn's first one."""
+    ap_id = state.active_player().id
+    remaining: list[dict] = []
+    to_push: list[dict] = []
+    for entry in state.delayed_triggers:
+        if entry.get("step") == "main" and entry["controller_id"] == ap_id:
+            to_push.append(entry)
+        else:
+            remaining.append(entry)
+    if not to_push:
+        return
+    state.delayed_triggers = remaining
+    _push_delayed_entries(state, to_push, event)
 
 
 def run_impending_decrement_turn_based_action(state: GameState) -> None:
@@ -964,6 +1614,9 @@ def run_beginning_of_end_step_triggers(state: GameState) -> None:
         state, Event.BEGINNING_OF_END_STEP,
         label="end-step", player=state.active_player(),
     )
+    from mtg_bot.designations import on_beginning_of_end_step
+
+    on_beginning_of_end_step(state)
 
 
 def run_cleanup_step(state: GameState) -> None:
@@ -979,7 +1632,8 @@ def run_cleanup_step(state: GameState) -> None:
     from mtg_bot.game import _active_static_abilities
     no_max_hand_size = any(
         getattr(static, "grants_no_max_hand_size", False)
-        for obj in state.battlefield
+        # Emblems too ("You have no maximum hand size." emblems).
+        for obj in (*state.battlefield, *state.emblems)
         if obj.controller_id == ap.id
         for static in _active_static_abilities(obj)
     )
@@ -1005,6 +1659,7 @@ def run_cleanup_step(state: GameState) -> None:
     )
     for obj in state.battlefield:
         revert_printing_if_no_layer1_copies(state, obj)
+        obj.saddled = False
     # UEOT layer-2 control_change effects (Mutinous Massacre,
     # Systems Override): when the layer-2 entry expired above,
     # the cached ``obj.controller_id`` is stale. Recompute via
@@ -1050,6 +1705,8 @@ def run_cleanup_step(state: GameState) -> None:
         obj.temp_toughness_bonus = 0
         # Regenerate shield: unconsumed shields wear off at cleanup.
         obj.regeneration_shield = False
+        # "If it would die this turn, exile it instead" ends too.
+        obj.exile_if_dies_this_turn = False
         # UEOT "gain control" reverts are handled above by the layer-2
         # ``control_change`` registry path (``expire_continuous_effects
         # ("cleanup")`` + the controller-refresh loop). The legacy
@@ -1078,6 +1735,13 @@ def run_cleanup_step(state: GameState) -> None:
             p.exile.fork()
         for c in p.exile:
             c.playable_from_exile_this_turn = False
+    # Exile play permissions (``GameObject.exile_play_permission``) whose
+    # duration ends with this turn (cube creatures bucket).
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        expire_exile_play_permissions,
+    )
+
+    expire_exile_play_permissions(state)
     # Empty each player's mana pool. MTG's real rule empties at end of
     # each step/phase; our simplified engine holds mana across phases
     # within a turn and clears at cleanup.
@@ -1090,8 +1754,16 @@ def run_cleanup_step(state: GameState) -> None:
             p.mana_pool.clear()
     # Reset first-time-tokens-created gate (Moonlit Meditation).
     state.players_who_created_tokens_this_turn.clear()
+    # Unused extra combat phases don't carry into the next turn.
+    state.extra_combat_phases = 0
+    # "Whenever <event> this turn, ..." delayed triggers end with the
+    # turn (CreateThisTurnTriggeredAbility, Forth Eorlingas!).
+    if state.emblems and any(e.expires_at_cleanup for e in state.emblems):
+        state.emblems = [e for e in state.emblems if not e.expires_at_cleanup]
     # Reset turn-scoped Void tracking so next turn starts fresh.
     state.permanent_left_battlefield_this_turn = False
+    for _p in state.players:
+        _p.permanent_left_battlefield_this_turn = False
     state.spell_warped_this_turn = False
     # Reset the per-turn creature-death tracker (Cackling Slasher's
     # "if a creature died this turn" rider). The tracker is incremented
@@ -1100,10 +1772,29 @@ def run_cleanup_step(state: GameState) -> None:
     state.creatures_died_this_turn = 0
     # Darkness-style combat-damage prevention expires at end of turn.
     state.prevent_combat_damage_this_turn = False
+    # Day / night (CR 726.3a) reads the ending turn's active player's
+    # spell count at the next untap step.
+    state.previous_turn_active_spells = ap.spells_cast_this_turn
     # Reset per-player spell counters for "your Nth spell" triggers.
     for p in state.players:
         p.spells_cast_this_turn = 0
         p.noncreature_spells_cast_this_turn = 0
+        p.cards_drawn_this_turn = 0
+        p.may_play_from_graveyard_this_turn = False
+        p.graveyard_exile_replacement_this_turn = False
+        if any(
+            c.flashback_granted_until_eot or c.castable_from_graveyard_this_turn
+            for c in p.graveyard
+        ):
+            from mtg_bot.game import _CowList
+
+            if isinstance(p.graveyard, _CowList):
+                p.graveyard.fork()
+            for c in p.graveyard:
+                c.flashback_granted_until_eot = False
+                c.castable_from_graveyard_this_turn = False
+                # Jace, Telepath Unbound's rider ends with the permission.
+                c.exile_if_put_into_graveyard_from_stack = False
         p.attacked_this_turn = []
         p.life_gained_this_turn = 0
         p.lands_entered_this_turn = 0
@@ -1116,12 +1807,26 @@ def run_cleanup_step(state: GameState) -> None:
             p.agent = p.agent_override_saved
             p.agent_override_saved = None
             p.scheduled_agent_override_by = None
+            # Roto P4: "After that turn, that player takes an extra
+            # turn." (Emrakul, the Promised End).
+            from mtg_bot.effects.generic.roto_walkers import (
+                extra_turn_after_controlled_turn,
+            )
+
+            extra_turn_after_controlled_turn(state, p)
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
     # Reset per-turn loyalty-ability activation tracking (CR 606.3).
     state.loyalty_activated_this_turn.clear()
     # Reset per-turn ability-resolution counters.
     state.ability_resolutions_this_turn.clear()
+    # "At the beginning of the next cleanup step" delayed triggers
+    # (Necromancy's instant-speed rider).
+    if state.delayed_triggers:
+        from mtg_bot.effects.generic.enchantment_mechanics import (
+            run_delayed_cleanup_triggers,
+        )
+        run_delayed_cleanup_triggers(state)
 
 
 def state_based_actions(state: GameState) -> bool:
@@ -1135,11 +1840,97 @@ def state_based_actions(state: GameState) -> bool:
     cap converts a runaway into an early bailout instead of a hang.
     """
     any_changed = False
+    note_life_losses(state)
     for _ in range(_SBA_MAX_PASSES):
         if not _state_based_actions_pass(state):
             break
         any_changed = True
+    if apply_graveyard_exile_replacement(state):
+        any_changed = True
+    # "... would be put into a graveyard from anywhere" permanents that
+    # reached a graveyard by discard / mill (cube creatures bucket).
+    from mtg_bot.effects.generic.cube_creatures_rmc import (
+        sweep_graveyard_watch,
+        sweep_library_graveyard_exile_watch,
+    )
+
+    # Roto P2 exile-instead catch-all: before any graveyard watcher, so
+    # an exiled-instead card never looks like a graveyard arrival.
+    from mtg_bot.effects.generic.roto_zones import run_zone_sweeps
+
+    if run_zone_sweeps(state):
+        any_changed = True
+    if sweep_graveyard_watch(state):
+        any_changed = True
+    if sweep_library_graveyard_exile_watch(state):
+        any_changed = True
+    if apply_void_exile_replacement(state):
+        any_changed = True
+    # Ascend (CR 702.131; ``mtg_bot.creature_statics_wg``).
+    from mtg_bot.creature_statics_wg import apply_ascend
+
+    apply_ascend(state)
+    # Role uniqueness (CR 704.5y) and state triggers (CR 603.8) --
+    # Vintage Roto P5 (``mtg_bot.roto_board_statics``).
+    from mtg_bot.roto_board_statics import apply_board_state_checks
+
+    if apply_board_state_checks(state):
+        any_changed = True
     return any_changed
+
+
+def apply_void_exile_replacement(state: GameState) -> bool:
+    """Catch-all for Dauthi Voidwalker's replacement: cards that reached
+    an affected player's graveyard through a path that doesn't consult
+    it directly (discard / mill / ...) are exiled with a void counter.
+    Permanents leaving the battlefield and spells leaving the stack are
+    redirected before they land (so they never "die"). Cards already in
+    the graveyard when the replacement began applying
+    (``Player.void_graveyard_snapshot``, refreshed when a void source
+    enters) stay put."""
+    if not any(o.printing.void_exile_replacement for o in state.battlefield):
+        return False
+    from mtg_bot.game import exile_with_void_counter, void_exile_replacement_active
+
+    changed = False
+    for p in state.players:
+        if not void_exile_replacement_active(state, p.id):
+            continue
+        movers = [c for c in p.graveyard if c.id not in p.void_graveyard_snapshot]
+        for c in movers:
+            p.graveyard.remove(c)
+            exile_with_void_counter(state, c)
+            changed = True
+    return changed
+
+
+def apply_graveyard_exile_replacement(state: GameState) -> bool:
+    """Catch-all for the Yawgmoth's Will replacement: every card that
+    reached an affected player's graveyard through a path that doesn't
+    consult the replacement directly (discard / mill / ...) is moved to
+    exile. The main paths — permanents leaving the battlefield
+    (``move_off_battlefield``) and spells leaving the stack
+    (``actions._send_to_graveyard_or_library``) — redirect before the
+    card ever lands, so "dies" triggers don't fire for them. Cards that
+    were already in the graveyard when the replacement started were
+    recorded in ``Player.graveyard_exile_snapshot`` and stay put.
+    """
+    changed = False
+    for p in state.players:
+        if not p.graveyard_exile_replacement_this_turn:
+            continue
+        keep = p.graveyard_exile_snapshot
+        movers = [c for c in p.graveyard if c.id not in keep]
+        for c in movers:
+            p.graveyard.remove(c)
+            c.zone = Zone.EXILE
+            p.exile.append(c)
+            state.log.append(
+                f"{c.printing.name} is exiled instead of staying in "
+                f"P{p.id}'s graveyard"
+            )
+            changed = True
+    return changed
 
 
 _SBA_MAX_PASSES = 50
@@ -1171,9 +1962,10 @@ def _state_based_actions_pass(state: GameState) -> bool:
     - 701.15: regeneration shield (handled in the destroyed
       pass — not strictly an SBA).
 
+    - 704.5k (audit) / 704.5o (current CR): world rule
+      (``roto_restrictions.apply_world_rule``).
+
     KNOWN GAPS:
-    - 704.5k (audit) / 704.5o (current CR): world rule.
-      Not implemented. No World cards are in the EoE pool.
     - 704.5s (audit) / 704.5u (current CR): battle with 0
       defense → graveyard. Not implemented. No Battles in EoE.
     - 21+ commander damage from one source: not implemented.
@@ -1185,12 +1977,17 @@ def _state_based_actions_pass(state: GameState) -> bool:
     """
     changed = False
 
+    from mtg_bot.effects.generic.roto_keywords import player_cant_lose
+
     for p in state.players:
-        if not p.has_lost and p.life <= 0:
+        if not p.has_lost and p.life <= 0 and not player_cant_lose(state, p.id):
             p.has_lost = True
             p.lost_reason = "life total <= 0"
             changed = True
-        if not p.has_lost and p.poison_counters >= 10:
+        if (
+            not p.has_lost and p.poison_counters >= 10
+            and not player_cant_lose(state, p.id)
+        ):
             p.has_lost = True
             p.lost_reason = "10+ poison counters"
             changed = True
@@ -1239,6 +2036,11 @@ def _state_based_actions_pass(state: GameState) -> bool:
             )
             move_off_battlefield(state, obj, destination="graveyard")
             changed = True
+    # World rule (CR 704.5k; roto P1 -- Nether Void).
+    from mtg_bot.roto_restrictions import apply_world_rule
+
+    if apply_world_rule(state):
+        changed = True
 
     destroyed = []
     for obj in state.battlefield:
@@ -1287,9 +2089,17 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # Saga age (CR 704.5r in audit numbering): if a saga has lore
     # counters greater than or equal to its final chapter number,
     # its controller sacrifices it (goes to owner's graveyard).
+    # CR 714.4: not while one of its chapter abilities has triggered and
+    # hasn't left the stack yet.
+    from mtg_bot.layouts import chapter_ability_on_stack
+
     sagas_to_bury: list = []
     for obj in state.battlefield:
-        if obj.printing.is_saga and obj.lore_counters >= obj.printing.chapter_count:
+        if (
+            obj.printing.is_saga
+            and obj.lore_counters >= obj.printing.chapter_count
+            and not chapter_ability_on_stack(state, obj)
+        ):
             sagas_to_bury.append(obj)
     for saga in sagas_to_bury:
         state.log.append(
@@ -1328,10 +2138,22 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # by a Lignified manland's animation expiring).
     auras_to_bury: list = []
     for obj in state.battlefield:
-        if not obj.printing.is_aura:
-            continue
+        kind = obj.aura_enchant_override
+        if kind is None:
+            if not obj.printing.is_aura:
+                continue
+            kind = obj.printing.aura_enchant_type
         if obj.attached_to is None:
             auras_to_bury.append(obj)
+            continue
+        if kind == "creature_card_in_graveyard":
+            # Animate Dead before its enters trigger resolves: it
+            # enchants a creature card in a graveyard.
+            from mtg_bot.effects.generic.enchantment_mechanics import (
+                enchanted_graveyard_card,
+            )
+            if enchanted_graveyard_card(state, obj) is None:
+                auras_to_bury.append(obj)
             continue
         target = next(
             (o for o in state.battlefield if o.id == obj.attached_to),
@@ -1340,7 +2162,6 @@ def _state_based_actions_pass(state: GameState) -> bool:
         if target is None:
             auras_to_bury.append(obj)
             continue
-        kind = obj.printing.aura_enchant_type
         if kind == "creature":
             if not is_creature_now(target):
                 auras_to_bury.append(obj)
@@ -1348,9 +2169,17 @@ def _state_based_actions_pass(state: GameState) -> bool:
             if not target.printing.is_artifact:
                 auras_to_bury.append(obj)
         elif kind == "land":
-            if not target.printing.is_land:
+            from mtg_bot.effects.generic.roto_mana import enchantable_land
+
+            if not enchantable_land(state, obj.printing, target):
                 auras_to_bury.append(obj)
         # Other kinds (e.g., player-enchant) aren't in scope.
+        # Protection (CR 702.16c): a permanent with protection from a
+        # quality the Aura has can't be enchanted by it.
+        if obj not in auras_to_bury and attachment_illegal_by_protection(
+            state, obj, target,
+        ):
+            auras_to_bury.append(obj)
     for aura in auras_to_bury:
         state.log.append(
             f"{aura.printing.name} put into graveyard "
@@ -1364,7 +2193,7 @@ def _state_based_actions_pass(state: GameState) -> bool:
     # unattached but stays on the battlefield. Default scope:
     # Equipment must be attached to a creature.
     for obj in state.battlefield:
-        if obj.printing.is_aura:
+        if obj.printing.is_aura or obj.aura_enchant_override is not None:
             continue
         if "Equipment" not in obj.printing.subtypes:
             continue
@@ -1379,6 +2208,14 @@ def _state_based_actions_pass(state: GameState) -> bool:
             state.log.append(
                 f"{obj.printing.name} unattaches "
                 f"(no longer attached to a creature)"
+            )
+            changed = True
+        elif attachment_illegal_by_protection(state, obj, target):
+            # CR 702.16d: protection from a quality the Equipment has.
+            obj.attached_to = None
+            state.log.append(
+                f"{obj.printing.name} unattaches "
+                f"({target.printing.name} has protection from it)"
             )
             changed = True
 

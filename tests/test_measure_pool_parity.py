@@ -783,7 +783,7 @@ def test_synthetic_precedence_genuinely_missing_beats_probe(
     import mtg_bot.cards.parser.source as src_mod
 
     monkeypatch.setattr(
-        src_mod, "OracleParserCardSource", lambda: _Src()
+        src_mod, "OracleParserCardSource", lambda *a, **k: _Src()
     )
     # Both synthetic effect-bearing cards' effect class is "_Eff" —
     # mark it covered. Probe both effect-bearing cards. Mark the
@@ -1021,6 +1021,13 @@ def test_known_card_subsystem_attribution(scout, attr):
     assert unclass == {"Leyline of Mutation"}
     for u in unclass:
         assert cards[u]["gates"] == [scout.SUB_UNCLASSIFIED]
+    # Leyline of the Void (EoE-claimed since 2026-10-03) emits no Effect:
+    # its two abilities are a zone-move replacement spec and a pregame
+    # action, the two Rust gaps that block it -- named, not unclassified.
+    assert cards["Leyline of the Void"]["gates"] == [
+        scout.SUB_ZONE_REPLACEMENT, scout.SUB_PREGAME,
+    ]
+    assert cards["Leyline of the Void"]["multi_gated"]
 
 
 def test_multi_gated_card_recorded_under_every_gate(scout, attr):

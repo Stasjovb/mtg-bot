@@ -28,8 +28,18 @@ slots.
 
 from __future__ import annotations
 
+from mtg_bot.cards.pools import pool_card_names
 from mtg_bot.cards.source import get_active_source
 from mtg_bot.decks import Deck
+
+# The canonical fixture is pinned to the Edge of Eternities-era pool.
+# The default active source is the union of that pool and the PowerLSV
+# cube (2026-09-27 retarget); drawing the alphabetically-first
+# candidates from the union would silently change every fixture game
+# (e.g. "Abrade" / "Ancient Tomb" displacing EoE cards) and perturb
+# seed-sensitive search tests. Synthetic test sources that share no
+# names with the EoE pool fall through to their own cards.
+_EOE_NAMES: frozenset[str] = pool_card_names("eoe")
 
 
 # Same color → basic-land mapping the legacy mono-color path used.
@@ -62,6 +72,9 @@ def simple_test_decklist(color: str = "G") -> list[str]:
         if "Land" not in p.card_types
         and (color in p.mana_cost.colors or not p.mana_cost.colors)
     )
+    eoe_only = [n for n in candidates if n in _EOE_NAMES]
+    if eoe_only:
+        candidates = eoe_only
     if not candidates:
         raise ValueError(f"no nonland cards in color {color}")
     deck = [candidates[i % len(candidates)] for i in range(36)]

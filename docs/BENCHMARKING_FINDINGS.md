@@ -813,3 +813,164 @@ PYTHONPATH=src python scripts/bench_block_shuffle_io.py \
     --rows 262144 --batch-size 256 --block-rows 65536 --workers 2
 # add --cold for purged-cache epochs (win32 only)
 ```
+
+## 8D. Instant-speed activations — search work per game (2026-10-03)
+
+**Change measured:** `feature/roto-instant-activations` (activated
+abilities of permanents offered whenever their controller has priority,
+CR 117.1b; capability auto-pass taught the same rule) vs its base
+`feature/roto-integration` @ `65a8ce1c` (battlefield activations in an
+empty-stack own main phase only).
+
+**Method.** `scripts/scout_instant_activation_branching.py`: the
+production game driver (`self_play._play_one_match_game` — search
+adapter, default search heuristics, decision cap 3000), heuristic-
+evaluator PIMC in both seats (`samples=1`), PowerLSV cube deck pool
+(`data/cube/power_lsv_decks.json.gz`), same seeds per arm, arms run back
+to back in one window on the shared master (Win11, other agents' jobs
+running — compare ratios, not absolutes). Units per §2A: search nodes
+(`search.eval_counters`), `legal_decisions` calls at priority windows,
+how many the capability check short-circuited, and the legal-set size
+at the windows that weren't. Trajectories differ between arms (new legal
+actions change play), so per-game numbers are paired by seed only.
+
+| arm | games | decisions/game | non-trivial priority windows/game | auto-pass rate | mean legal set (non-trivial) | windows offering an ActivateAbility | search nodes/game | ms / search node | wall s/game |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| base, 40 nodes | 30 | 530 | 1,039 | 44.7% | 3.55 | 41.0% | 3,897 | 0.64 | 2.49 (median 1.92) |
+| **instant activations, 40 nodes** | 30 | 618 (**+17%**) | 2,109 (**x2.03**) | 38.9% | 3.13 | 69.5% | 5,597 (**+44%**) | 0.73 (+14%) | 4.09 (**x1.64**; median 3.44, x1.79) |
+| base, 200 nodes (11 of 12 games; 1 hit the decision cap) | 11 | 518 | 3,290 | 49.9% | 3.74 | 64.6% | 18,055 | 0.82 | 14.8 (median 11.4) |
+| **instant activations, 200 nodes** (games 0-4; 1 hit the cap) | 4 | 590 | 7,660 (x2.3) | 45.9% | 2.97 | 85.2% | 27,200 (+51%) | 1.03 (+25%) | 27.9 (x1.9) |
+| base, random agents | 29 of 30 | 748 | 96 | 39.9% | 4.04 | 69.6% | — | — | 0.08 |
+| instant activations, random agents | 28 of 30 | 771 | 116 | 38.7% | 3.42 | 72.9% | — | — | 0.11 |
+
+**Reading it.** At a fixed per-decision budget the search does ~1.4-1.5x
+the nodes per game, because a game has about twice as many priority
+windows that need a real decision: a player holding an activatable
+ability is no longer auto-passed outside their main phase (auto-pass
+rate 44.7% -> 38.9% of priority calls at 40 nodes), and the new windows
+are small (mean legal set 3.55 -> 3.13; ~44% of the non-trivial
+instant windows offer only activations plus pass). Per-node cost also
+rises (+14% at 40 nodes, +25% at 200) -- legal enumeration walks more
+abilities at more nodes and the capability check now runs the exact
+enumerator. Net: ~1.6-1.9x wall per game for heuristic-evaluator
+search at these budgets; with an NN evaluator expect NN evals per game
+to scale with the node ratio (~+45-50%) since `ms / NN-eval` is
+unchanged. Random agents are barely affected (+3% decisions).
+
+**Which cards drive it** (10 games, 40 nodes, new arm): Manifold Key
+14%, Currency Converter 13%, Grindstone 10%, Ghost Vacuum 9%, Dauthi
+Voidwalker 7%, Retrofitter Foundry 4%, Incubator tokens 4% of the
+non-trivial instant windows offer that card's ability -- `{T}` artifact
+abilities whose timing rarely matters.
+
+**Decision-cap games are pre-existing loops, not this change.** Both
+capped heuristic games inspected loop in a sorcery window: Lightning
+Greaves' `{0}` equip ping-ponging between two creatures (new arm game
+3) and Basalt Monolith tap-for-{C}{C}{C} / `{3}: untap` (new arm game
+5); the heuristic prior explores activations before passing
+(`mtg_priors._PRIORITY_ACTION_RANK`). The base arm's capped game is the
+same class. Both were reachable before this change; they're excluded
+from the 200-node rows (and the 200-node new arm stopped after game 5
+for that reason -- a small sample; the 40-node rows are the
+load-bearing comparison).
+
+**Reproduce:**
+
+```bash
+# from each worktree (base, then this branch), same seeds:
+PYTHONPATH=src .venv-py313/Scripts/python.exe \
+    scripts/scout_instant_activation_branching.py --games 30 --nodes 40 --out a.json
+```
+
+---
+
+## 8E. Opponent quiet-window skip (SEARCH_LIMITATIONS #17) — search work per game (2026-10-04)
+
+**Change measured:** `feature/roto-quiet-window-skip` @ `525c0d41` (the
+non-active player's empty-stack upkeep / draw / precombat-main priority
+windows auto-pass in the search adapter; #17 ON, as in self-play) vs
+its base `feature/roto-instant-activations` @ `aafcc5dc` (the §8D "instant
+activations" arm).
+
+**Method.** The §8D protocol unchanged: `scripts/scout_instant_activation_branching.py`
+(production game driver, default heuristics, decision cap 3000),
+heuristic-evaluator PIMC in both seats (`samples=1`), PowerLSV cube deck
+pool, seed 7000, same game indices per arm, arms back to back on the
+shared master (other agents' jobs running). The script now also counts
+the windows #17 passed (`quiet_skipped`; 0 on the base); the branch's
+copy of the script was run from each worktree with `PYTHONPATH=src`, so
+each arm ran its own engine. Because trajectories diverge between arms
+(only 5 of 30 games had the same decision count) and per-game variance
+is large, 200 more games per arm (games 60-259) were run as 8 parallel
+shards per arm: their counts (windows, nodes) are load-independent,
+their wall is not. Games that hit the decision cap in either arm are
+dropped from the paired rows; all were pre-existing loops (§8D): the
+Lightning Greaves `{0}` equip ping-pong in an active player's main 2
+(games 57, 144, 245) and a Chain of Smog copy loop (game 203, both
+players copying with empty hands).
+
+| arm | games | decisions/game | non-trivial priority windows/game | capability auto-pass rate | #17 skip rate | mean legal set | windows offering an ActivateAbility | search nodes/game | ms / search node | wall s/game |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| base, 40 nodes, games 0-29 (§8D protocol; counts identical to §8D's new arm) | 30 | 618 | 2,109 | 38.9% | — | 3.13 | 69.5% | 5,597 | 0.81 | 4.52 (median 3.84) |
+| **#17, 40 nodes, games 0-29** | 30 | 602 | 1,916 (**-9.2%**) | 34.9% | 5.5% | 3.21 | 73.2% | 5,167 (**-7.7%**) | 0.78 (-3%) | 4.05 (**-10%**; median 3.63) |
+| base, 40 nodes, games 30-59 | 29 | 531 | 1,483 | 40.3% | — | 3.40 | 61.6% | 4,425 | 0.73 | 3.23 (median 2.40) |
+| #17, 40 nodes, games 30-59 | 29 | 536 | 1,817 (+23%) | 31.9% | 5.4% | 3.20 | 70.0% | 4,459 (+1%) | 0.86 (+18%) | 3.83 (+18%; median 2.29) |
+| base, 40 nodes, games 60-259 (parallel shards) | 197 | 482 | 1,426 | 41.7% | — | 3.17 | 67.9% | 4,265 | (1.85, loaded) | (7.90, loaded) |
+| #17, 40 nodes, games 60-259 (parallel shards) | 197 | 478 | 1,282 (**-10.1%**) | 36.6% | 6.0% | 3.25 | 68.5% | 3,830 (**-10.2%**) | (1.75, -6%) | (6.70, -15%) |
+| base, 200 nodes, games 0-11 (game 5 capped in both) | 11 | 655 | 6,407 | 48.1% | — | 3.21 | 70.1% | 28,600 | 1.11 | 31.6 (median 29.1) |
+| **#17, 200 nodes, games 0-11** | 11 | 616 | 5,588 (**-12.8%**) | 40.0% | 8.3% | 3.10 | 71.9% | 25,455 (**-11.0%**) | 1.05 (-5%) | 26.8 (**-15%**; median 28.5) |
+| base, random agents (2 capped games included) | 30 | 920 | 111.6 | 50.9% | — | 3.42 | 72.6% | — | — | 0.15 |
+| #17, random agents (1 capped game included) | 30 | 791 | 103.1 (-7.6%) | 38.2% | 9.2% | 3.49 | 71.3% | — | — | 0.10 |
+
+Paired per-game ratios (#17 / base) over all 256 non-capped 40-node games:
+windows needing a decision geo-mean **0.924** (95% CI 0.883-0.968, fewer in
+183/256 games), search nodes **0.925** (0.896-0.955, 168/256), wall 0.877
+(0.823-0.935, 157/256; mixed sequential and parallel load). Aggregate
+over the 256 games: windows -6.3%, nodes -8.6%, ms/node -5%. The 200-node
+sample is small (11 games; per-game CIs cross 1). The capability auto-pass
+rate falls because #17 runs first and takes windows the capability check
+would also have passed; the two together pass about 39-42% of priority
+calls in both arms at 40 nodes.
+
+**Where the windows go** (games 60-259, 197 non-capped games per arm,
+windows needing a decision per game, both players, inside search
+included):
+
+| window class | base | #17 | change |
+|---|---:|---:|---:|
+| non-active player, empty stack, upkeep / draw / main 1 (the skip's target) | 106.2 | 0 | -106.2 |
+| stack windows in upkeep / draw (mostly responses to those activations) | 114.1 | 25.3 | -88.8 |
+| stack windows in main 1 | 129.0 | 113.2 | -15.8 |
+| non-active player, beginning of combat + end step | 60.9 | 77.8 | +16.8 |
+| combat steps (declare attackers / blockers, damage, end of combat) | 281.5 | 344.3 | +62.9 |
+| active player's beginning of combat / end step with a stack item | 25.4 | 42.5 | +17.1 |
+| main 2 stack windows | 170.3 | 178.5 | +8.2 |
+| active player's main phases, empty stack (sorcery windows) | 538.3 | 500.5 | -37.8 |
+| **total** | **1,425.8** | **1,282.1** | **-143.7 (-10.1%)** |
+
+**Reading it.** The skip removes what it targets plus the stack windows
+those activations spawned (~210 windows/game, ~15% of the base's), but
+about half of that comes back in the windows it keeps: the same untapped
+`{T}` activators (Manifold Key, Currency Converter, Grindstone, Ghost
+Vacuum ...) are still activatable at the opponent's beginning of combat,
+in every combat step and at the end step, so the capability check
+(#3) can't pass those either. Net: ~10% fewer windows needing a
+decision and ~8-10% fewer search nodes per game at 40 nodes (~11-13% at
+200 nodes, small sample), a few percent cheaper per node, ~10-15% less
+wall. Against §8D's cost of instant activations (x2.03 windows, +44%
+nodes, x1.64 wall at 40 nodes), on the §8D protocol games it wins back
+about a fifth of the window increase ((2,109-1,916)/(2,109-1,039)) and a
+quarter of the node increase ((5,597-5,167)/(5,597-3,897)). The remaining
+cost is dominated by the active player's own main-phase windows and the
+combat steps, which this skip deliberately leaves alone. Random agents
+make 14% fewer decisions (they no longer activate in those windows).
+
+**Reproduce:**
+
+```bash
+# from each worktree (base aafcc5dc, then this branch), same seeds; the
+# branch's copy of the script counts quiet_skipped (0 on the base):
+PYTHONPATH=src .venv-py313/Scripts/python.exe \
+    <branch>/scripts/scout_instant_activation_branching.py --games 30 --nodes 40 --out a.json
+# more games: --games 25 --start-game 60 (+25 per shard), --nodes 200, --agent random
+```

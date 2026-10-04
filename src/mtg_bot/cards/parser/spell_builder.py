@@ -37,9 +37,11 @@ matching machinery.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 from mtg_bot.cards.base import (
+    parse_mana_cost,
     CardPrinting,
     CommuneWithEvilEffect,
     ConditionalIfVoid,
@@ -69,10 +71,22 @@ from mtg_bot.cards.base import (
 )
 from mtg_bot.cards.parser.cost_reduction import _parse_cost_reduction_line
 from mtg_bot.cards.parser.effects import _parse_spell_effect_phrase
+from mtg_bot.cards.parser.conditional_phrases import combine_instead_rider
+from mtg_bot.cards.parser.modal_spells import parse_multi_modal
+from mtg_bot.cards.parser.spell_cost_lines import (
+    apply_overload,
+    detect_spell_line_fields,
+    is_spell_cost_line,
+)
+from mtg_bot.cards.parser.precise_grammar import (
+    legacy_parity_pinned,
+    precise_grammar_active,
+)
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.type_line import _parse_type_line
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.base import StaticAbility, StaticScope
+from mtg_bot.effects.conditions import FirstSpellYouCastThisGame
 from mtg_bot.effects.modifiers import (
     EventPattern,
     Replace,
@@ -603,6 +617,218 @@ _ADDITIONAL_COST_BODY_FLAGS: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------
+# Casting-substrate keyword lines + additional costs (cube spells-B)
+# ---------------------------------------------------------------------
+#
+# Keyword lines that change HOW a spell is cast rather than what it does.
+# Each is recognized after reminder-text stripping, removed from the
+# effect-clause stream, and threaded onto the ``CardPrinting`` fields the
+# cast pipeline (``actions._cast_spell`` / ``legal.py`` via
+# ``mtg_bot.alt_casting``) consumes:
+#
+#   ``Flashback {cost}`` -> ``flashback_cost``   (CR 702.34)
+#   ``Delve``            -> ``has_delve``         (CR 702.66)
+#   ``Buyback {cost}``   -> ``buyback_cost``      (CR 702.27)
+#   ``Storm``            -> ``has_storm``         (CR 702.40)
+_SPELL_CASTING_KEYWORD_LINE_RE = re.compile(
+    r"^(?:(?P<fb>Flashback) (?P<fb_cost>(?:\{[^}]+\})+)|(?P<delve>Delve)|"
+    r"(?P<storm>Storm)|"
+    r"(?P<bb>Buyback) (?P<bb_cost>(?:\{[^}]+\})+))$"
+)
+
+
+# "If <condition>, you may cast it without paying its mana cost." — a
+# conditional alternative (free) cast (Once Upon a Time) ->
+# ``free_cast_condition``.
+_FREE_CAST_IF_LINE_RE = re.compile(
+    r"^If (?P<cond>.+), you may cast it without paying its mana cost\.$"
+)
+
+
+_FREE_CAST_CONDITIONS = {
+    "this spell is the first spell you've cast this game": (
+        FirstSpellYouCastThisGame()
+    ),
+}
+
+
+# "You may exile a <filter> card from your hand rather than pay this
+# spell's mana cost." — pitch alternative cost (Pyrokinesis) ->
+# ``alt_cost_exile_from_hand``.
+_PITCH_ALT_COST_LINE_RE = re.compile(
+    r"^You may exile (?P<desc>an? .+? card) from your hand rather than "
+    r"pay this spell's mana cost\.$"
+)
+
+
+# "Escape—{cost}, Exile N other cards from your graveyard." (CR
+# 702.138) -> ``escape_cost`` / ``escape_exile_count``.
+_ESCAPE_LINE_RE = re.compile(
+    r"^Escape—(?P<cost>(?:\{[^}]+\})+), [Ee]xile (?P<n>\w+) other cards "
+    r"from your graveyard\.$"
+)
+
+
+# "Plot {cost}" (CR 702.170) -> ``plot_cost``.
+_PLOT_LINE_RE = re.compile(r"^Plot (?P<cost>(?:\{[^}]+\})+)$")
+
+
+# "Splice onto <subtype> {cost}" (CR 702.47) -> ``splice_onto`` /
+# ``splice_cost``.
+_SPLICE_LINE_RE = re.compile(
+    r"^Splice onto (?P<sub>[A-Z][a-z]+) (?P<cost>(?:\{[^}]+\})+)$"
+)
+
+
+def _casting_keyword_fields(clause: str) -> dict | None:
+    """``CardPrinting`` fields for a casting-keyword line, or ``None``
+    when ``clause`` (reminder text already stripped) isn't one."""
+    from mtg_bot.cards.base import parse_mana_cost
+
+    m = _ESCAPE_LINE_RE.match(clause.strip())
+    if m is not None:
+        from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
+
+        tok = m.group("n")
+        n = int(tok) if tok.isdigit() else _SMALL_CARDINAL_WORDS.get(tok)
+        if n is None:
+            return None
+        cost = m.group("cost")
+        return {
+            "escape_cost": parse_mana_cost(cost), "escape_cost_str": cost,
+            "escape_exile_count": n,
+        }
+    m = _PLOT_LINE_RE.match(clause.strip())
+    if m is not None:
+        cost = m.group("cost")
+        return {"plot_cost": parse_mana_cost(cost), "plot_cost_str": cost}
+    m = _SPLICE_LINE_RE.match(clause.strip())
+    if m is not None:
+        cost = m.group("cost")
+        return {
+            "splice_onto": m.group("sub"),
+            "splice_cost": parse_mana_cost(cost),
+            "splice_cost_str": cost,
+        }
+    m = _PITCH_ALT_COST_LINE_RE.match(clause.strip())
+    if m is not None:
+        from mtg_bot.cards.parser.card_flow_grammar import parse_card_descriptor
+
+        f = parse_card_descriptor(m.group("desc"))
+        if f is None:
+            return None
+        return {"alt_cost_exile_from_hand": f}
+
+    m = _FREE_CAST_IF_LINE_RE.match(clause.strip())
+    if m is not None:
+        cond = _FREE_CAST_CONDITIONS.get(m.group("cond"))
+        if cond is None:
+            return None
+        return {"free_cast_condition": cond}
+    m = _SPELL_CASTING_KEYWORD_LINE_RE.match(clause.strip())
+    if m is None:
+        # Roto P2: flashback paid by sacrifice (Cabal Therapy).
+        from mtg_bot.cards.parser.roto_zones import (
+            roto_zones_casting_keyword_fields,
+        )
+
+        fields = roto_zones_casting_keyword_fields(clause.strip())
+        if fields is not None:
+            return fields
+        # Roto P4 casting keywords (Rebound).
+        from mtg_bot.cards.parser.roto_walkers import parse_roto_casting_keyword
+
+        return parse_roto_casting_keyword(clause.strip())
+    if m.group("fb"):
+        cost = m.group("fb_cost")
+        return {
+            "flashback_cost": parse_mana_cost(cost),
+            "flashback_cost_str": cost,
+        }
+    if m.group("delve"):
+        return {"has_delve": True}
+    if m.group("storm"):
+        return {"has_storm": True}
+    cost = m.group("bb_cost")
+    return {"buyback_cost": parse_mana_cost(cost), "buyback_cost_str": cost}
+
+
+# Additional-cost bodies modeled by the casting substrate (beyond the
+# flag whitelist above): ``sacrifice <permanent descriptor>`` (Tinker's
+# "an artifact", Natural Order's "a green creature", Crop Rotation's "a
+# land") and ``pay X life`` (Toxic Deluge).
+_ADDITIONAL_COST_SACRIFICE_BODY_RE = re.compile(r"^sacrifice (?P<desc>an? .+)$")
+
+
+def _substrate_additional_cost_fields(body: str) -> dict | None:
+    from mtg_bot.cards.parser.card_flow_grammar import (
+        parse_permanent_descriptor,
+    )
+
+    if body == "pay X life":
+        return {"additional_cost_pay_x_life": True}
+    m = _ADDITIONAL_COST_SACRIFICE_BODY_RE.match(body)
+    if m is not None:
+        f = parse_permanent_descriptor(m.group("desc"))
+        if f is not None:
+            return {"additional_cost_sacrifice_filter": f}
+    # Vintage Roto P3 bodies ("discard X cards").
+    from mtg_bot.cards.parser.roto_mana import roto_additional_cost_fields
+
+    return roto_additional_cost_fields(body)
+
+
+# "<effect> instead if <condition>." replacement rider, optionally
+# labelled with an ability word ("Threshold — "). Pairs with the
+# preceding base clause into ``IfConditionElse(condition, then=<rider
+# effect>, else=<base>)``. The condition grammar lives in
+# ``_parse_instead_if_condition``.
+_INSTEAD_IF_RIDER_RE = re.compile(
+    r"^(?:[A-Z][a-z]+ — )?(?P<effect>.+?) instead if (?P<cond>.+)\.$"
+)
+_CARDS_IN_YOUR_GRAVEYARD_COND_RE = re.compile(
+    r"^there are (?P<n>\w+) or more cards in your graveyard$"
+)
+
+
+def _parse_instead_if_condition(cond: str):
+    from mtg_bot.cards.parser.effects import _SMALL_CARDINAL_WORDS
+    from mtg_bot.effects.state_predicates import CardsInGraveyardAtLeast
+
+    m = _CARDS_IN_YOUR_GRAVEYARD_COND_RE.match(cond)
+    if m is not None:
+        tok = m.group("n")
+        n = int(tok) if tok.isdigit() else _SMALL_CARDINAL_WORDS.get(tok)
+        if n is not None:
+            return CardsInGraveyardAtLeast(n=n)
+    return None
+
+
+def _parse_instead_if_rider(
+    clause: str, base: Effect, name: str,
+) -> Effect | None:
+    """``Threshold — Add {B}{B}{B}{B}{B} instead if there are seven or
+    more cards in your graveyard.`` paired with base ``Add {B}{B}{B}.``
+    -> ``IfConditionElse(CardsInGraveyardAtLeast(7), then=Add 5,
+    else=Add 3)``. ``None`` if the rider or its condition doesn't
+    parse."""
+    from mtg_bot.effects.combinators import IfConditionElse
+
+    m = _INSTEAD_IF_RIDER_RE.match(clause.strip())
+    if m is None:
+        return None
+    condition = _parse_instead_if_condition(m.group("cond"))
+    if condition is None:
+        return None
+    then_effect = _parse_spell_effect_phrase(m.group("effect"), name)
+    if then_effect is None:
+        return None
+    return IfConditionElse(
+        condition=condition, then_effect=then_effect, else_effect=base,
+    )
+
+
 def _is_additional_cost_preamble(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a recognized additional-cost
     preamble (``As an additional cost to cast this spell, <cost>.``
@@ -614,7 +840,21 @@ def _is_additional_cost_preamble(clause: str) -> bool:
     m = _ADDITIONAL_COST_PREAMBLE_RE.match(clause.strip())
     if m is None:
         return False
-    return m.group(1) in _ADDITIONAL_COST_BODY_FLAGS
+    return (
+        m.group(1) in _ADDITIONAL_COST_BODY_FLAGS
+        or _substrate_additional_cost_fields(m.group(1)) is not None
+    )
+
+
+def _is_substrate_cost_line(line: str) -> bool:
+    """Whether a printing line is owned by the casting substrate
+    (additional-cost preambles in the flag table / substrate fields,
+    casting keywords incl. the plain pitch alternative cost), so the
+    spells-A ``spell_cost_lines`` detector must not also model it."""
+    if _is_additional_cost_preamble(line):
+        return True
+    clause = _strip_reminder_text(line.strip())
+    return bool(clause) and _casting_keyword_fields(clause) is not None
 
 
 def _additional_cost_flags(clause: str) -> dict:
@@ -777,6 +1017,27 @@ def _parse_void_pump_replacement(
     )
 
 
+# Grandfathered users of the exactly-one-parseable-mode fallback below.
+# The fallback drops the unparsed modes, which the parser's
+# no-silent-no-op rule forbids for new cards; these printings claimed
+# through it before that rule was enforced and are pinned by existing
+# tests. Any other modal spell whose modes don't ALL parse stays
+# unclaimed (e.g. Suplex, whose "exile target artifact" mode parses
+# but whose damage + exile-if-it-would-die mode does not).
+#
+# These printings are ALSO parsed with the pre-extension grammar
+# (``effects_ext.legacy_grammar``): their claimed shape is pinned by the
+# EoE cross-engine parity probes, so the cube-era extension recognizers
+# must not change it (Break Down the Door would otherwise become a full
+# three-mode ModalChooseOne the Rust bridge doesn't seat).
+_LEGACY_PARTIAL_MODAL_CLAIMS: frozenset[str] = frozenset({
+    "Break Down the Door",
+    "Get Out",
+    "Sheoldred's Edict",
+    "Untimely Malfunction",
+})
+
+
 def _parse_modal_choose_one(
     clauses: list[str], name: str
 ) -> Effect | None:
@@ -856,7 +1117,13 @@ def _parse_modal_choose_one(
             # may indicate a multi-line mode, which we don't support).
             malformed = True
             break
-        eff = _parse_spell_effect_phrase(m.group(1), name)
+        if name in _LEGACY_PARTIAL_MODAL_CLAIMS:
+            from mtg_bot.cards.parser.effects_ext import legacy_grammar
+
+            with legacy_grammar():
+                eff = _parse_spell_effect_phrase(m.group(1), name)
+        else:
+            eff = _parse_spell_effect_phrase(m.group(1), name)
         if eff is not None:
             parsed_modes.append(eff)
         # else: append None placeholder? No — we only collect parseable modes.
@@ -865,7 +1132,11 @@ def _parse_modal_choose_one(
     if len(parsed_modes) == len(mode_lines):
         # All modes parse → full ModalChooseOne.
         return ModalChooseOne(modes=tuple(parsed_modes), or_both=or_both)
-    if len(parsed_modes) == 1 and not or_both:
+    if (
+        len(parsed_modes) == 1
+        and not or_both
+        and name in _LEGACY_PARTIAL_MODAL_CLAIMS
+    ):
         # Exactly one mode parseable (and this is a "Choose one —" spell,
         # not "Choose one or both —") → parser-is-right: return that mode's
         # effect directly. Same simplification as Get Out (mode 1 = counter
@@ -919,7 +1190,18 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     a printing that put each sentence on its own ``\\n``-separated
     line. Returns ``None`` if any surviving clause fails to parse.
     """
+    with legacy_parity_pinned(name):
+        return _parse_spell_oracle_text_body(text, name)
+
+
+def _parse_spell_oracle_text_body(text: str, name: str) -> Effect | None:
+    """Body of :func:`_parse_spell_oracle_text`, run under the
+    Rust-parity pin for the legacy spells it applies to."""
     clauses = [c.strip() for c in text.split("\n") if c.strip()]
+    # Vintage Roto P3 header shapes (Jeska's Will's commander clause).
+    from mtg_bot.cards.parser.roto_mana import rewrite_spell_clauses
+
+    clauses = rewrite_spell_clauses(clauses)
     # Drop leading spell-keyword preambles BEFORE per-clause reminder
     # stripping. The preamble shape (``"Convoke (...)"``) is recognized
     # via the trailing parenthesized reminder, so we have to detect
@@ -935,6 +1217,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # stay unclaimed rather than silently dropping the cost.
     while clauses and _is_additional_cost_preamble(clauses[0]):
         clauses = clauses[1:]
+    # Drop alternative-cost (incl. Overload) / one-of additional-cost /
+    # "This spell can't be countered." lines (``spell_cost_lines``);
+    # ``_build_spell_printing`` threads them onto the printing via
+    # ``detect_spell_line_fields``.
+    clauses = [c for c in clauses if not is_spell_cost_line(c)]
     # Drop a leading Kicker preamble. The kicker cost is threaded onto
     # the ``CardPrinting`` separately via ``_detect_kicker_cost``
     # (called from ``_build_spell_printing``); the preamble line
@@ -948,6 +1235,10 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
         for stripped in (_strip_reminder_text(c) for c in clauses)
         if stripped
     ]
+    # Drop casting-keyword lines (Flashback / Delve / Buyback) — they
+    # change how the spell is cast, not what it does; the fields are
+    # threaded onto the printing by ``_detect_casting_substrate_fields``.
+    clauses = [c for c in clauses if _casting_keyword_fields(c) is None]
     # Drop Delirium-prefix rider clauses BEFORE the cost-reduction pass.
     # These ``Delirium — …`` lines are unimplemented mechanics that the
     # parser drops entirely — doing so before the cost-reduction pass
@@ -1102,6 +1393,11 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
             # manifest, optional-graveyard-return), return just the
             # first-clause effect — mirroring the simplification the
             # bespoke entries already make (entries 23, 28, 34).
+            # "<effect> instead if <condition>." replacement rider
+            # (Cabal Ritual's Threshold line).
+            instead_if = _parse_instead_if_rider(clauses[1], first, name)
+            if instead_if is not None:
+                return instead_if
             if _is_unimplemented_secondary_rider(clauses[1]):
                 return first
     # General N-clause unimplemented-rider drop: if the first clause
@@ -1123,9 +1419,21 @@ def _parse_spell_oracle_text(text: str, name: str) -> Effect | None:
     # because Sequence would uselessly attempt to parse the modal
     # header as a spell-effect sentence, fail, and return None —
     # losing any modal spell whose modes are individually parseable.
+    # Multi-mode shapes (Choose two / three with repeats / one or more
+    # with Escalate / Spree) — ``modal_spells``.
+    if precise_grammar_active():
+        multi = parse_multi_modal(clauses, name)
+        if multi is not None:
+            return multi
     modal = _parse_modal_choose_one(clauses, name)
     if modal is not None:
         return modal
+    # Base clause + "... instead if <condition>" rider line (Unholy
+    # Heat's Delirium, Fatal Push's Revolt) — ``conditional_phrases``.
+    if precise_grammar_active():
+        instead = combine_instead_rider(clauses, name)
+        if instead is not None:
+            return instead
     # Sequence shape: every clause must be a plain spell-effect sentence.
     parsed: list[Effect] = []
     for clause in clauses:
@@ -1305,12 +1613,75 @@ def _detect_cost_reductions(text: str) -> tuple[CostReduction, ...]:
     return tuple(rules)
 
 
+# Modal DFC land back face (CR 712): "As this land enters, you may pay
+# N life. If you don't, it enters tapped." + "{T}: Add {C}." — the
+# pathway-style MDFC land. ``shock_land_life_cost`` carries the optional
+# life payment (the same ETB choice shock lands use).
+_MDFC_LAND_PAY_LIFE_LINE_RE = re.compile(
+    r"^As this land enters, you may pay (?P<n>\d+) life\. If you don't, it "
+    r"enters tapped\.$"
+)
+_MDFC_LAND_TAP_ADD_LINE_RE = re.compile(r"^\{T\}: Add \{(?P<c>[WUBRGC])\}\.$")
+
+
+def _build_mdfc_land_face(face: dict) -> CardPrinting | None:
+    """Build the land back face of a modal DFC, or ``None`` if its text
+    isn't the pay-life-or-tapped + single-color tap shape."""
+    supertypes, card_types, subtypes = _parse_type_line(face.get("type_line", ""))
+    if "Land" not in card_types:
+        return None
+    lines = [ln.strip() for ln in face.get("oracle_text", "").split("\n") if ln.strip()]
+    if len(lines) != 2:
+        return None
+    life = _MDFC_LAND_PAY_LIFE_LINE_RE.match(lines[0])
+    tap = _MDFC_LAND_TAP_ADD_LINE_RE.match(lines[1])
+    if life is None or tap is None:
+        return None
+    return CardPrinting(
+        name=face["name"],
+        mana_cost_str="",
+        mana_cost=parse_mana_cost(""),
+        type_line=face["type_line"],
+        supertypes=tuple(supertypes),
+        card_types=tuple(card_types),
+        subtypes=tuple(subtypes),
+        produces=frozenset({tap.group("c")}),
+        shock_land_life_cost=int(life.group("n")),
+    )
+
+
+def _build_mdfc_spell_printing(card: dict) -> CardPrinting | None:
+    """Modal DFC whose front is an instant / sorcery and whose back is a
+    land (Sink into Stupor // Soporific Springs): the front face is the
+    castable spell, with ``mdfc_back_face`` set to the land face. The
+    printing keeps the full card name (the pool / deck key)."""
+    import dataclasses
+
+    faces = card.get("card_faces") or []
+    if len(faces) != 2:
+        return None
+    front = _build_spell_printing({
+        "name": faces[0]["name"],
+        "mana_cost": faces[0].get("mana_cost", ""),
+        "type_line": faces[0].get("type_line", ""),
+        "oracle_text": faces[0].get("oracle_text", ""),
+    })
+    if front is None:
+        return None
+    back = _build_mdfc_land_face(faces[1])
+    if back is None:
+        return None
+    return dataclasses.replace(front, name=card["name"], mdfc_back_face=back)
+
+
 def _build_spell_printing(card: dict) -> CardPrinting | None:
     """Try to produce a ``CardPrinting`` for an instant or sorcery
     ``card`` (a Scryfall record). Returns ``None`` if the card is
     neither an instant nor a sorcery, or if its oracle text doesn't
     parse into a supported single-effect or composite shape.
     """
+    if card.get("layout") == "modal_dfc":
+        return _build_mdfc_spell_printing(card)
     supertypes, card_types, subtypes = _parse_type_line(
         card.get("type_line", "")
     )
@@ -1319,7 +1690,16 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     text = card.get("oracle_text", "").strip()
     if not text:
         return None
+    # Vintage Roto P5: spell lines that are rules of the card itself
+    # ("Cast this spell only before the combat damage step.").
+    from mtg_bot.cards.parser.roto_board import claim_spell_lines
+
+    text, roto_fields = claim_spell_lines(text)
     effect = _parse_spell_oracle_text(text, card["name"])
+    if effect is not None:
+        effect = apply_overload(
+            effect, text, card["name"], _parse_spell_oracle_text,
+        )
     if effect is None:
         return None
     factory = make_instant if "Instant" in card_types else make_sorcery
@@ -1327,7 +1707,7 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
     kwargs: dict = {}
     if kicker is not None:
         kwargs["kicker"] = kicker
-    return factory(
+    printing = factory(
         name=card["name"],
         cost=card["mana_cost"],
         effect=effect,
@@ -1337,3 +1717,56 @@ def _build_spell_printing(card: dict) -> CardPrinting | None:
         **_detect_additional_cost_flags(text),
         **kwargs,
     )
+    substrate = _detect_casting_substrate_fields(text)
+    # Spells-A printing lines the substrate doesn't own: alternative
+    # costs (incl. Overload), one-of additional costs, Replicate,
+    # Teamwork, "This spell can't be countered." (``spell_cost_lines``).
+    substrate.update(detect_spell_line_fields(
+        text, legacy_line=_is_substrate_cost_line,
+    ))
+    if subtypes or supertypes:
+        # "Instant — Arcane": the factories print a bare type line; keep
+        # the printed subtypes / supertypes (splice keys off Arcane).
+        substrate.update(
+            type_line=card.get("type_line", printing.type_line),
+            supertypes=tuple(supertypes),
+            subtypes=tuple(subtypes),
+        )
+    if "Kindred" in card_types:
+        # "Kindred Instant — Eldrazi" (CR 308): Kindred is a card type
+        # too (graveyard card-type counts); Vintage Roto P5.
+        substrate["card_types"] = tuple(card_types)
+    if substrate:
+        import dataclasses
+
+        printing = dataclasses.replace(printing, **substrate)
+    if roto_fields:
+        from mtg_bot.cards.parser.roto_board import apply_board_fields
+
+        printing = apply_board_fields(printing, roto_fields)
+    return printing
+
+
+def _detect_casting_substrate_fields(text: str) -> dict:
+    """``CardPrinting`` fields for the casting-substrate lines in
+    ``text``: casting keywords (Flashback / Delve / Buyback) anywhere,
+    plus leading additional-cost preambles modeled by the substrate
+    (sacrifice-a-<permanent>, pay X life). Mirrors the clause dropping
+    in ``_parse_spell_oracle_text``."""
+    fields: dict = {}
+    leading = True
+    for raw in [c.strip() for c in text.split("\n") if c.strip()]:
+        if leading and _is_additional_cost_preamble(raw):
+            body = _ADDITIONAL_COST_PREAMBLE_RE.match(raw).group(1)
+            if body not in _ADDITIONAL_COST_BODY_FLAGS:
+                fields.update(_substrate_additional_cost_fields(body) or {})
+            continue
+        if leading and _is_spell_keyword_preamble(raw):
+            continue
+        clause = _strip_reminder_text(raw)
+        kw = _casting_keyword_fields(clause) if clause else None
+        if kw is not None:
+            fields.update(kw)
+            continue
+        leading = False
+    return fields

@@ -2222,7 +2222,7 @@ def test_simple_creature_filter_admits_eumidian_terrabotanist():
         _printing_is_bridge_simple_creature,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     eumidian = src.get_printings().get("Eumidian Terrabotanist")
     assert eumidian is not None, (
         "Eumidian Terrabotanist not in OracleParserCardSource — "
@@ -2246,7 +2246,7 @@ def test_simple_creature_filter_still_rejects_tannuk_memorial_ensign():
         _printing_is_bridge_simple_creature,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     tannuk = src.get_printings().get("Tannuk, Memorial Ensign")
     if tannuk is None:
         # Parser hasn't claimed it yet — descope rationale still
@@ -2264,7 +2264,7 @@ def test_printing_to_card_def_carries_landfall_trigger_through():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     eumidian = src.get_printings()["Eumidian Terrabotanist"]
     cd = _printing_to_card_def(eumidian)
     assert cd.card_type == "Creature"
@@ -2504,7 +2504,7 @@ def test_simple_creature_filter_admits_icecave_crasher():
         _printing_is_bridge_simple_creature,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     icecave = src.get_printings().get("Icecave Crasher")
     assert icecave is not None, (
         "Icecave Crasher not in OracleParserCardSource — the parser "
@@ -2533,7 +2533,7 @@ def test_simple_creature_filter_admits_remnant_elemental():
         _python_ta_to_safe_dict,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     remnant = src.get_printings().get("Remnant Elemental")
     if remnant is None:
         # Parser hasn't claimed it yet — admit rationale still
@@ -2556,7 +2556,7 @@ def test_printing_to_card_def_carries_landfall_pump_self_through():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     icecave = src.get_printings()["Icecave Crasher"]
     cd = _printing_to_card_def(icecave)
     assert cd.card_type == "Creature"
@@ -2633,7 +2633,7 @@ def test_simple_creature_filter_drops_tannuk_memorial_ensign_despite_landfall_dr
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     tannuk = src.get_printings()["Tannuk, Memorial Ensign"]
     # Sanity: Tannuk's printing carries the landfall predicate.
     assert len(tannuk.triggered_abilities) == 1
@@ -2664,7 +2664,7 @@ def test_filter_drops_dynamic_pt_formula_grovestrider():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     p = src.get_printings()["Harmonious Grovestrider"]
     assert p.dynamic_pt_formula == "harmonious_grovestrider"
     assert _printing_is_bridge_simple_creature(p) is False
@@ -2681,7 +2681,7 @@ def test_filter_drops_dynamic_pt_formula_cosmogoyf_emissary():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     printings = src.get_printings()
     cosmogoyf = printings["Cosmogoyf"]
     assert cosmogoyf.dynamic_pt_formula == "cosmogoyf"
@@ -2705,7 +2705,7 @@ def test_filter_drops_ward_cost_bearers():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     printings = src.get_printings()
     # Pick at least one Ward-only creature (no other unsafe field) to
     # prove the ward_cost branch IS the rejecting check. Mouth of the
@@ -3248,7 +3248,7 @@ def test_simple_creature_filter_admits_real_eoe_wary_watchdog():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     watchdog = src.get_printings()["Wary Watchdog"]
     # Sanity: Watchdog carries the trigger pair this slice admits.
     assert len(watchdog.triggered_abilities) == 2
@@ -3278,7 +3278,7 @@ def test_simple_creature_filter_drops_skullsnap_nuisance_despite_surveil_extensi
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     skullsnap = src.get_printings()["Skullsnap Nuisance"]
     assert len(skullsnap.triggered_abilities) == 2
     # The whole-printing gate still drops Skullsnap on either
@@ -3472,7 +3472,7 @@ def test_simple_creature_filter_admits_real_eoe_fear_of_surveillance():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     printings = src.get_printings()
     assert "Fear of Surveillance" in printings, (
         "Fear of Surveillance no longer in the EoE Scryfall data; "
@@ -3501,7 +3501,7 @@ def test_printing_to_card_def_carries_attacks_surveil_through():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     fos = src.get_printings()["Fear of Surveillance"]
     cd = _printing_to_card_def(fos)
     assert cd.card_type == "Creature"
@@ -3524,7 +3524,7 @@ def test_printing_to_card_def_carries_surveil_etb_through():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     watchdog = src.get_printings()["Wary Watchdog"]
     cd = _printing_to_card_def(watchdog)
     assert cd.card_type == "Creature"
@@ -4284,7 +4284,7 @@ def test_simple_creature_filter_admits_real_eoe_icetill_explorer():
         _python_ta_to_safe_dict,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     icetill = src.get_printings().get("Icetill Explorer")
     assert icetill is not None, (
         "Icetill Explorer not in OracleParserCardSource — the parser "
@@ -4309,7 +4309,7 @@ def test_simple_creature_filter_still_rejects_seedship_broodtender():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     seedship = src.get_printings().get("Seedship Broodtender")
     if seedship is None:
         # Parser hasn't claimed it yet — reject rationale still
@@ -4332,7 +4332,7 @@ def test_printing_to_card_def_carries_landfall_mill_through():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     icetill = src.get_printings().get("Icetill Explorer")
     if icetill is None:
         return
@@ -4562,7 +4562,7 @@ def test_simple_creature_filter_admits_real_eoe_seedship_agrarian():
         _python_ta_to_safe_dict,
     )
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     seedship = src.get_printings().get("Seedship Agrarian")
     assert seedship is not None, (
         "Seedship Agrarian not in OracleParserCardSource — the parser "
@@ -4600,7 +4600,7 @@ def test_printing_to_card_def_carries_seedship_agrarian_both_triggers():
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    src = OracleParserCardSource()
+    src = OracleParserCardSource(pool="eoe")
     seedship = src.get_printings().get("Seedship Agrarian")
     if seedship is None:
         return
@@ -6311,7 +6311,7 @@ def test_r60_nonbasic_mana_land_admits_each_shockland(name):
         _printing_is_bridge_nonbasic_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     printing = by[name]
     assert _printing_is_bridge_nonbasic_mana_land(printing) is True
     # And it is genuinely non-basic (not double-counted by the basic arm).
@@ -6333,7 +6333,7 @@ def test_r60_nonbasic_mana_land_declines_the_other_18(name):
         _printing_is_bridge_nonbasic_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     assert _printing_is_bridge_nonbasic_mana_land(by[name]) is False
 
 
@@ -6348,7 +6348,7 @@ def test_r60_nonbasic_mana_land_exactly_five_pool_wide():
         _printing_is_bridge_nonbasic_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     passers = sorted(
         nm for nm, p in by.items()
         if _printing_is_bridge_nonbasic_mana_land(p)
@@ -6371,7 +6371,7 @@ def test_r60_printing_to_card_def_shockland_is_untapped_dual(
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     cd = _printing_to_card_def(by[name])
     assert cd.name == name
     assert cd.card_type == "Land"
@@ -6391,7 +6391,7 @@ def test_r60_nonbasic_shockland_admitted_by_production_loader():
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     deck = list(_R60_NONBASIC_SHOCKLANDS) + ["Forest", "Island"]
     filtered, defs = _filter_deck_to_bridge_supported(deck, by)
     for nm in _R60_NONBASIC_SHOCKLANDS:
@@ -6433,7 +6433,7 @@ def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     deck = ["Secluded Starforge", "Echoing Deeps", "Forest"]
     filtered, _ = _filter_deck_to_bridge_supported(deck, by)
     assert "Secluded Starforge" not in filtered
@@ -6457,7 +6457,7 @@ def test_r85_tapped_mana_land_admits_each_planet_land(name):
         _printing_is_bridge_simple_tapped_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     printing = by[name]
     assert _printing_is_bridge_simple_tapped_mana_land(printing) is True
     # And it is genuinely non-basic + structurally tapped on the parser
@@ -6483,7 +6483,7 @@ def test_r85_tapped_mana_land_declines_the_other_13(name):
         _printing_is_bridge_simple_tapped_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     assert _printing_is_bridge_simple_tapped_mana_land(by[name]) is False
 
 
@@ -6498,7 +6498,7 @@ def test_r85_tapped_mana_land_exactly_five_pool_wide():
         _printing_is_bridge_simple_tapped_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     passers = sorted(
         nm for nm, p in by.items()
         if _printing_is_bridge_simple_tapped_mana_land(p)
@@ -6521,7 +6521,7 @@ def test_r85_tapped_and_untapped_predicates_are_disjoint():
         _printing_is_bridge_simple_tapped_mana_land,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     overlap = [
         nm for nm, p in by.items()
         if (
@@ -6554,7 +6554,7 @@ def test_r85_printing_to_card_def_planet_land_is_untapped_mono(
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     cd = _printing_to_card_def(by[name])
     assert cd.name == name
     assert cd.card_type == "Land"
@@ -6575,7 +6575,7 @@ def test_r85_nonbasic_planet_lands_admitted_by_production_loader():
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     deck = list(_R85_TAPPED_NONBASIC_PLANET_LANDS) + ["Forest", "Island"]
     filtered, defs = _filter_deck_to_bridge_supported(deck, by)
     for nm in _R85_TAPPED_NONBASIC_PLANET_LANDS:
@@ -6709,7 +6709,7 @@ def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
         _printing_is_bridge_pure_warp_creature,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     pr = by.get(card_name)
     if pr is None:
         _pytest_warp.skip(f"{card_name} absent from active CardSource")
@@ -6788,7 +6788,7 @@ def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
         _printing_is_bridge_pure_warp_creature,
     )
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     passing = sorted(
         n for n, pr in by.items()
         if _printing_is_bridge_pure_warp_creature(pr)
@@ -6835,7 +6835,7 @@ def test_r63_warp_phase2_residue_trio_and_tlc_admitted_by_loader():
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    by = OracleParserCardSource().get_printings()
+    by = OracleParserCardSource(pool="eoe").get_printings()
     trio = ["Germinating Wurm", "Knight Luminary", "Starbreach Whale"]
     present = [n for n in trio if n in by]
     if not present:

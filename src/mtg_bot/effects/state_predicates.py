@@ -23,6 +23,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.card_types import DELIRIUM_THRESHOLD
+
 if TYPE_CHECKING:
     from mtg_bot.game import GameState
 
@@ -135,49 +137,44 @@ class OpponentControlsMoreLandsThanYou(StatePredicate):
         return False
 
 
-# The Duskmourn "Delirium" mechanic counts distinct *card types* in the
-# viewer's graveyard — Creature, Land, Sorcery, Instant, Enchantment,
-# Artifact, Planeswalker, Battle, Tribal. The threshold is the printed
-# "four or more" gate on every Delirium card. Supertypes (Legendary,
-# Snow, Basic) and subtypes (Goblin, Forest, Equipment) don't count.
-_DELIRIUM_CARD_TYPES: frozenset[str] = frozenset({
-    "Creature",
-    "Land",
-    "Sorcery",
-    "Instant",
-    "Enchantment",
-    "Artifact",
-    "Planeswalker",
-    "Battle",
-    "Tribal",
-})
+@dataclass(frozen=True)
+class Delirium(StatePredicate):
+    """There are ``min_card_types`` (printed: four) or more card types
+    among cards in the viewer's graveyard -- the Delirium ability word's
+    condition at the trigger layer (``StateBound(Delirium())`` for the
+    "Delirium -- Whenever ..., if there are four or more card types
+    among cards in your graveyard, ..." intervening-if gates).
+
+    The count itself is :func:`mtg_bot.effects.card_types.delirium_active`
+    -- the ONE shared definition (CR 205.2a types incl. kindred, split
+    halves combined, DFCs by their front face, tokens excluded) that the
+    Condition-tier twin :class:`mtg_bot.effects.conditions.DeliriumActive`
+    (statics, spell riders, activation restrictions) also delegates to.
+    """
+
+    min_card_types: int = DELIRIUM_THRESHOLD
+
+    def test(self, state, viewer_id):
+        from mtg_bot.effects.card_types import delirium_active
+
+        return delirium_active(state, viewer_id, self.min_card_types)
 
 
 @dataclass(frozen=True)
-class Delirium(StatePredicate):
-    """The viewer has at least four distinct card types among cards in
-    their graveyard.
+class NoncreatureSpellsCastThisTurn(StatePredicate):
+    """The viewer has cast exactly ``n`` noncreature spells this turn
+    (``Player.noncreature_spells_cast_this_turn``, read post-increment
+    like ``SpellsCastThisTurn``). The Fantasticar's "Whenever you cast
+    your fourth noncreature spell each turn"."""
 
-    Models the Duskmourn "Delirium" mechanic — every card that prints a
-    ``Delirium —`` ability word or the ``if there are four or more
-    card types among cards in your graveyard`` intervening-if gate
-    delegates to this predicate. The card-type set is fixed by the
-    comprehensive rules' card-type taxonomy (CR 205.2a).
-    """
+    n: int
 
     def test(self, state, viewer_id):
         try:
             player = state.player_by_id(viewer_id)
         except (KeyError, AttributeError):
             return False
-        seen: set[str] = set()
-        for card in player.graveyard:
-            for t in card.printing.card_types:
-                if t in _DELIRIUM_CARD_TYPES:
-                    seen.add(t)
-                    if len(seen) >= 4:
-                        return True
-        return False
+        return getattr(player, "noncreature_spells_cast_this_turn", 0) == self.n
 
 
 @dataclass(frozen=True)
@@ -257,3 +254,71 @@ class AnyPlayerControlsNoCreatures(StatePredicate):
             if not has_creature:
                 return True
         return False
+
+
+@dataclass(frozen=True)
+class IsMonarch(StatePredicate):
+    """The viewer is the monarch (CR 724) — ``if you're the monarch``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).is_monarch
+
+
+@dataclass(frozen=True)
+class HasInitiative(StatePredicate):
+    """The viewer has the initiative (CR 725) — ``if you have the
+    initiative``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).has_initiative
+
+
+@dataclass(frozen=True)
+class GainedLifeThisTurn(StatePredicate):
+    """The viewer gained life this turn -- ``if you gained life this
+    turn`` (Ocelot Pride)."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).life_gained_this_turn > 0
+
+
+@dataclass(frozen=True)
+class HasCitysBlessing(StatePredicate):
+    """The viewer has the city's blessing (Ascend, CR 702.131) -- ``if
+    you have the city's blessing``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).has_citys_blessing
+
+
+@dataclass(frozen=True)
+class CompletedADungeon(StatePredicate):
+    """The viewer has completed at least one dungeon (CR 309.7) —
+    ``if you've completed a dungeon``."""
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).dungeons_completed > 0
+
+
+@dataclass(frozen=True)
+class CardsInGraveyardAtLeast(StatePredicate):
+    """The viewer has at least ``n`` cards in their graveyard —
+    Threshold's ``if there are seven or more cards in your graveyard``
+    (``n=7``)."""
+
+    n: int = 7
+
+    def test(self, state, viewer_id):
+        return len(state.player_by_id(viewer_id).graveyard) >= self.n
+
+
+@dataclass(frozen=True)
+class LandsPlayedThisTurnAtLeast(StatePredicate):
+    """The viewer has played at least ``n`` lands this turn — Fastbond's
+    ``if it wasn't the first land you played this turn`` (``n=2``,
+    checked after the land play that triggered it is counted)."""
+
+    n: int = 2
+
+    def test(self, state, viewer_id):
+        return state.player_by_id(viewer_id).lands_played_this_turn >= self.n

@@ -129,7 +129,7 @@ def test_parse_clause_recognizes_each_evergreen_keyword(line, engine_keyword):
 
 
 def test_parse_effect_unknown_returns_none():
-    assert _parse_effect("scry 1") is None
+    assert _parse_effect("fateseal 1") is None
     assert _parse_effect("") is None
 
 
@@ -399,7 +399,7 @@ def test_parse_effect_phrase_returns_none_for_unknown():
     # singular/plural draw forms or the gain-life form.
     assert _parse_effect_phrase("draw cards") is None
     assert _parse_effect_phrase("you gain life") is None
-    assert _parse_effect_phrase("scry 1") is None
+    assert _parse_effect_phrase("fateseal 1") is None
     assert _parse_effect_phrase("") is None
 
 
@@ -446,8 +446,11 @@ def test_parse_triggered_ability_line_accepts_whenever():
     # No "Whenever this creature enters" trigger phrase, but the
     # line-level structural match should still be tried — failure
     # comes from the condition parser, not the line regex.
+    # ("you draw a card" is a recognized condition since the cube
+    # planeswalker bucket added the DRAWS_CARD event, so the probe uses a
+    # condition that is still unknown.)
     assert _parse_triggered_ability_line(
-        "Whenever you draw a card, it deals 1 damage to any target."
+        "Whenever you frobnicate a widget, it deals 1 damage to any target."
     ) is None  # condition phrase unknown
 
 
@@ -462,7 +465,7 @@ def test_parse_triggered_ability_line_rejects_unknown_effect():
     """Trigger condition parses, effect doesn't → line as a whole
     fails (no fallback)."""
     assert _parse_triggered_ability_line(
-        "When this creature enters, scry 1."
+        "When this creature enters, fateseal 1."
     ) is None
 
 
@@ -949,14 +952,20 @@ def test_build_land_printing_skips_shock_with_wrong_life_cost():
 
 def test_build_land_printing_skips_shock_with_missing_rider():
     """Just the dual-mana reminder line, no ETB rider, isn't a shock —
-    skip rather than build a shock with shock_land_life_cost=2."""
+    never build a shock with shock_land_life_cost=2. (It's an original
+    dual, Tropical Island's shape; the line-composed land grammar claims
+    it as an untapped Forest Island.)"""
     card = {
         "name": "Hypothetical Dual",
         "mana_cost": "",
         "type_line": "Land — Forest Island",
         "oracle_text": "({T}: Add {G} or {U}.)",
     }
-    assert _build_land_printing(card) is None
+    built = _build_land_printing(card)
+    assert built is not None
+    assert built.shock_land_life_cost == 0
+    assert built.enters_tapped is False
+    assert built.produces == frozenset({"G", "U"})
 
 
 def test_build_land_printing_skips_shock_dual_with_no_subtypes():
@@ -1559,11 +1568,11 @@ def test_parse_spell_oracle_text_skips_when_any_clause_unparseable():
     """If even one clause fails to parse, the whole spell is skipped."""
     # First clause OK, second clause unknown shape.
     assert _parse_spell_oracle_text(
-        "Put a +1/+1 counter on target creature.\nScry 1.", "Honor"
+        "Put a +1/+1 counter on target creature.\nFateseal 1.", "Honor"
     ) is None
     # First clause unknown, second clause OK.
     assert _parse_spell_oracle_text(
-        "Scry 1.\nDraw a card.", "Honor"
+        "Fateseal 1.\nDraw a card.", "Honor"
     ) is None
 
 
@@ -1783,7 +1792,7 @@ def test_parse_activated_ability_line_accepts_mana_plus_sacrifice():
 
 def test_parse_activated_ability_line_rejects_unknown_effect():
     """Cost parses, effect doesn't → whole line fails."""
-    assert _parse_activated_ability_line("{2}: Scry 1.") is None
+    assert _parse_activated_ability_line("{2}: Fateseal 1.") is None
 
 
 def test_parse_activated_ability_line_rejects_non_activated_lines():
@@ -2067,12 +2076,14 @@ def test_parse_activated_ability_line_accepts_tap_plus_pay_life():
     assert ab.cost.mana is None
 
 
-def test_parse_activated_ability_line_rejects_tap_plus_remove_counter():
-    """``{T}, Remove a +1/+1 counter from this creature: ...`` —
-    tap plus a counter-removal cost. Out of scope; must not match."""
-    assert _parse_activated_ability_line(
+def test_parse_activated_ability_line_tap_plus_remove_counter_from_self():
+    """``{T}, Remove a +1/+1 counter from this creature: ...`` — tap
+    plus the composable remove-counters-from-self atom (cube creatures
+    bucket)."""
+    ab = _parse_activated_ability_line(
         "{T}, Remove a +1/+1 counter from this creature: Draw a card."
-    ) is None
+    )
+    assert ab.cost.tap_self and len(ab.cost.extra_costs) == 1
 
 
 def test_parse_activated_ability_line_tap_only_strips_whitespace():
@@ -2252,7 +2263,7 @@ def test_build_creature_printing_skips_tap_with_unsupported_effect():
         "type_line": "Creature — Wizard",
         "power": "1",
         "toughness": "1",
-        "oracle_text": "{T}: Scry 1.",
+        "oracle_text": "{T}: Fateseal 1.",
     }
     assert _build_creature_printing(card) is None
 

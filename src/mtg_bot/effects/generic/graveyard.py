@@ -460,6 +460,9 @@ class PutCardFromGraveyardOnBottomOfLibrary(Effect):
                 f"{card.printing.name} put on the bottom of "
                 f"P{p.id}'s library"
             )
+            from mtg_bot.turn import note_cards_put_into_library
+
+            note_cards_put_into_library(state, p.id)
             return
 
     def describe(self) -> str:

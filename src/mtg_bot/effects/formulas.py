@@ -114,3 +114,30 @@ class CountControlledMatching(Formula):
             if o.controller_id == controller_id
             and self.predicate.test(o, state)
         )
+
+
+@dataclass(frozen=True)
+class ResolvingX(Formula):
+    """The ``X`` chosen when the resolving spell / ability was put on
+    the stack (``state.resolving_x_value``).
+
+    Used by "Target player discards X cards at random" (Mind Twist) and
+    "Draw X cards, then discard X cards" (Occult Epiphany) — any effect
+    whose amount is the printed ``{X}`` of its own cost. Clamped at 0.
+    """
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        return max(0, state.resolving_x_value)
+
+
+@dataclass(frozen=True)
+class Scaled(Formula):
+    """``factor`` times another formula's value — "twice the number of
+    lands you control" is ``Scaled(CountControlledMatching(IsLand()),
+    factor=2)`` (Pillage the Bog)."""
+
+    inner: Formula
+    factor: int = 1
+
+    def value(self, state: "GameState", controller_id: int) -> int:
+        return self.factor * self.inner.value(state, controller_id)

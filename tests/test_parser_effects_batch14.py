@@ -221,15 +221,15 @@ def test_parse_effect_returns_none_for_unknown_granted_keyword():
     ) is None
 
 
-def test_parse_effect_returns_none_for_grant_without_another_qualifier():
-    # The ``another`` prefix is required — the bare ``target
-    # creature you control gains <kw> until end of turn`` shape
-    # would imply a different (no-exclude-self) primitive and isn't
-    # claimed by this regex. No EoE card prints that bare form as a
-    # standalone clause but rejecting it keeps the boundary explicit.
-    assert _parse_effect(
+def test_bare_you_control_grant_maps_to_no_exclude_self_primitive():
+    # Without ``another`` the bare ``target creature you control gains
+    # <kw> until end of turn`` shape (cube: Sylvan Safekeeper) parses
+    # through ``parser.keyword_actions`` to the no-exclude-self
+    # primitive — the source itself is a legal target.
+    eff = _parse_effect(
         "target creature you control gains deathtouch until end of turn"
-    ) is None
+    )
+    assert eff.you_control_only and not eff.exclude_self
 
 
 def test_parse_effect_returns_none_for_grant_without_you_control():

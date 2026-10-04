@@ -11811,9 +11811,9 @@ pub struct TriggeredAbility {
 //   and planeswalker loyalty-as-cost (`pay_loyalty`).
 // - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
 // - Activation-gate predicates (`requires_*` Bonders' Enclave shape).
-// - Sorcery-speed gate (`sorcery_speed`) — already implicit in the
-//   Slice 1 emission position INSIDE the sorcery-timing block; the
-//   per-ability field is a more granular over-ride.
+// - Sorcery-speed gate (`sorcery_speed`) — enforced at legal-emit
+//   time by `GameState::push_battlefield_activations`
+//   (`state_ops_legal.rs`) since `feature/roto-instant-activations`.
 // - Spacecraft tier / Rooms `room_half` / activate_only_once gates.
 //
 /// Cost composition for an `ActivatedAbility`. First-slice minimal —
@@ -12345,14 +12345,15 @@ pub struct ActivatedAbility {
     /// 4C carrier) is the first EoE printing whose live AA carries
     /// this rider through the bridge floor.
     ///
-    /// **Data-carrying only at this slice.** The activation-time
-    /// legality gate (block when not the active player's main phase
-    /// with an empty stack) defers to a follow-up cycle; today Rust
-    /// admits regardless of timing. The slot exists so the bridge
-    /// round-trip stays bit-equal to Python, the parse +
-    /// `to_pydict` arms accept the flag, and the SL entry at
-    /// `docs/SEARCH_LIMITATIONS.md` Phase 4C documents the legality
-    /// gap.
+    /// **Enforced at legal-emit time** (`feature/roto-instant-
+    /// activations`, 2026-10-03): `GameState::
+    /// push_battlefield_activations` (`state_ops_legal.rs`) skips a
+    /// `sorcery_speed` ability outside the active player's main phase
+    /// with an empty stack, mirroring Python's
+    /// `legal.activation_timing_permits`. (Before that change every
+    /// Rust AA emission sat behind the sorcery-timing early return, so
+    /// the slot was data-carrying only.) `apply_action` does not
+    /// re-check timing, like Python's `_activate_ability`.
     ///
     /// Mirrors Python's `ActivatedAbility.sorcery_speed: bool = False`
     /// at `effects/base.py:447`.

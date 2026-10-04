@@ -161,6 +161,25 @@ class CounterTargetSpell(Effect):
         # Self-flag: "This spell can't be countered."
         if src.spell_is_uncounterable:
             return True
+        # Battlefield static grant: "Spells you control can't be
+        # countered." (Hexing Squelcher) -- every spell.
+        spell_controller = item.controller_id  # type: ignore[attr-defined]
+        for obj in state.battlefield:
+            if obj.controller_id != spell_controller:
+                continue
+            for sa in obj.printing.static_abilities:
+                if sa.grants_spells_uncounterable:
+                    return True
+        # Paid with "that spell can't be countered" mana (Delighted
+        # Halfling).
+        if getattr(item.source, "cast_uncounterable", False):
+            return True
+        # "Spells you control can't be countered this turn." (Veil of
+        # Summer; Vintage Roto P5).
+        from mtg_bot.roto_board_statics import spells_uncounterable_now
+
+        if spells_uncounterable_now(state, spell_controller):
+            return True
         # Battlefield static grant: "Creature spells you control can't be
         # countered." Only applies to creature spells.
         if "Creature" in src.card_types:

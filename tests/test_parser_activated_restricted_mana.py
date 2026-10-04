@@ -80,8 +80,17 @@ def test_add_two_mismatched_color_rejected():
     """Defensive: the two-coin same-color regex captures both letters
     independently and the dispatcher rejects mismatched pairs so the
     engine class always sees a uniform color tuple. No EoE printing
-    uses a dual-color two-coin add anyway."""
-    assert _parse_effect("add {U}{R}") is None
+    uses a dual-color two-coin add anyway: with the bucket grammars off
+    (as for EoE-only printings) the phrase stays unparsed. The Vintage
+    Roto P3 karoo recognizer (Simic Growth Chamber's "{T}: Add {G}{U}.")
+    mints one coin of each color instead."""
+    from mtg_bot.cards.parser.creature_rmc_grammar import rmc_grammar_disabled
+
+    with rmc_grammar_disabled():
+        assert _parse_effect("add {U}{R}") is None
+    assert _parse_effect("add {U}{R}") == AddManaToPool(
+        produces=(("U", 1), ("R", 1)),
+    )
 
 
 # --- Activated-ability line level tests -------------------------------------

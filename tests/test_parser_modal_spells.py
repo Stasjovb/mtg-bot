@@ -133,20 +133,19 @@ def test_helper_returns_modal_choose_one_directly():
 # ---------- partial-mode behavior (parser-is-right fallback) ----------
 
 def test_modal_with_exactly_one_parseable_mode_returns_that_mode():
-    # When EXACTLY ONE mode parses and all others are unrecognized,
-    # the parser returns that one mode's effect directly (not
-    # ModalChooseOne). This is the "parser-is-right" simplification:
-    # the engine can only model the parseable mode, so presenting the
-    # spell as a fixed non-modal effect is the most faithful available
-    # representation. Same precedent as Get Out (mode 1 = counter
-    # creature/enchantment) and Untimely Malfunction (mode 1 = destroy
-    # artifact) — which the bespoke table previously hard-coded.
+    # When EXACTLY ONE mode parses and all others are unrecognized, the
+    # "parser-is-right" fallback returns that one mode's effect directly
+    # -- but only for the grandfathered printings that claimed through
+    # it before the no-silent-no-op rule (Get Out, Untimely
+    # Malfunction, Sheoldred's Edict). Any other modal spell with an
+    # unparsed mode stays unclaimed.
     text = (
         "Choose one —\n"
         "• Destroy target creature.\n"
         "• Do something completely unsupported by the grammar."
     )
-    assert _parse_spell_oracle_text(text, "Bogus Half-Modal") == DestroyTargetCreature()
+    assert _parse_spell_oracle_text(text, "Get Out") == DestroyTargetCreature()
+    assert _parse_spell_oracle_text(text, "Bogus Half-Modal") is None
 
 
 def test_modal_with_first_mode_unrecognized_and_second_parses_returns_second():
@@ -158,7 +157,10 @@ def test_modal_with_first_mode_unrecognized_and_second_parses_returns_second():
         "• Do something completely unsupported by the grammar.\n"
         "• Draw a card."
     )
-    assert _parse_spell_oracle_text(text, "Bogus Half-Modal 2") == DrawCards(amount=1)
+    assert _parse_spell_oracle_text(
+        text, "Untimely Malfunction",
+    ) == DrawCards(amount=1)
+    assert _parse_spell_oracle_text(text, "Bogus Half-Modal 2") is None
 
 
 def test_modal_with_two_parseable_and_one_unparseable_returns_none():
@@ -203,16 +205,21 @@ def test_choose_one_or_both_header_is_claimed_with_or_both_flag():
     )
 
 
-def test_choose_two_header_is_not_claimed_by_this_branch():
-    # `Choose two` is also out of scope — it requires the agent to
-    # pick TWO modes, not one. The parser must decline.
+def test_choose_two_header_is_claimed_by_choose_modes():
+    # `Choose two` requires the agent to pick TWO modes — not this
+    # ModalChooseOne branch; the multi-mode ``ChooseModes`` shape
+    # (``modal_spells``) claims it.
+    from mtg_bot.effects.generic.multi_modal import ChooseModes
+
     text = (
         "Choose two —\n"
         "• Destroy target creature.\n"
         "• Draw a card.\n"
         "• You gain 3 life."
     )
-    assert _parse_spell_oracle_text(text, "Bogus Choose Two") is None
+    eff = _parse_spell_oracle_text(text, "Bogus Choose Two")
+    assert isinstance(eff, ChooseModes)
+    assert (eff.min_modes, eff.max_modes, eff.repeats) == (2, 2, False)
 
 
 def test_modal_header_with_no_modes_returns_none():

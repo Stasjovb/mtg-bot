@@ -289,20 +289,83 @@ def _apply_damage(state: "GameState", target: Target, amount: int) -> None:
     damage amount in ``state.resolving_combat_damage_amount``.
     """
     kind, target_id = target
+    # Roto P6: prevention / redirection effects (Black Panther, Nomads
+    # en-Kor); redirected damage is dealt from inside the router.
+    from mtg_bot.effects.generic.roto_damage import (
+        damage_cant_be_prevented, route_damage,
+    )
+
+    amount = route_damage(state, target, amount)
+    if amount <= 0:
+        return
     if kind == "player":
+        from mtg_bot.game import player_damage_prevented
+        if player_damage_prevented(state, target_id):
+            return
         p = state.player_by_id(target_id)
-        p.life -= amount
+        from mtg_bot.effects.generic.roto_keywords import life_after_damage
+
+        p.life = life_after_damage(state, p, amount)  # Angel's Grace floor
         state.log.append(f"P{target_id} takes {amount} damage (life: {p.life})")
+        _fire_deals_damage(state, amount)
+        from mtg_bot.effects.generic.roto_keywords import after_damage_to_player
+        from mtg_bot.keyword_rules import current_damage_source
+
+        after_damage_to_player(state, current_damage_source(state), target_id, amount)
     elif kind == "creature":
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is not None:
+            from mtg_bot.keyword_rules import (
+                current_damage_source, is_protected_from,
+            )
+
+            source = current_damage_source(state)
+            if is_protected_from(state, obj, source) and not (
+                damage_cant_be_prevented(state)
+            ):
+                state.log.append(
+                    f"{amount} damage to {obj.printing.name} from "
+                    f"{source.printing.name} is prevented (protection)"
+                )
+                return
+            if obj.printing.heals_other_damage_when_dealt_damage:
+                from mtg_bot.effects.generic.cube_creatures_rmc import (
+                    heal_before_damage,
+                )
+
+                heal_before_damage(obj)
             obj.damage += amount
             obj.damaged_this_turn = True
+            if obj.printing.is_planeswalker:
+                # CR 120.3c + 120.3e: a planeswalker creature (Kaito
+                # during your turn) both loses loyalty and is marked.
+                obj.loyalty_counters -= amount
             state.log.append(f"{obj.printing.name} takes {amount} damage")
             # Lazy-imported to avoid an effects <-> combat import cycle.
             from mtg_bot.combat import _fire_enchanted_dealt_damage_triggers
 
             _fire_enchanted_dealt_damage_triggers(state, obj, amount)
+            _fire_deals_damage(state, amount)
+    elif kind == "planeswalker":
+        # CR 120.3c: damage dealt to a planeswalker removes that many
+        # loyalty counters from it. The 0-loyalty SBA (704.5i) buries it.
+        obj = next((o for o in state.battlefield if o.id == target_id), None)
+        if obj is not None:
+            obj.loyalty_counters -= amount
+            state.log.append(
+                f"{obj.printing.name} takes {amount} damage "
+                f"(loyalty: {obj.loyalty_counters})"
+            )
+            _fire_deals_damage(state, amount)
+
+
+def _fire_deals_damage(state: "GameState", amount: int) -> None:
+    """Noncombat damage: "whenever <source> deals damage" observers of
+    the object dealing it (``keyword_rules.current_damage_source``)."""
+    from mtg_bot.keyword_rules import current_damage_source
+    from mtg_bot.layouts import fire_deals_damage
+
+    fire_deals_damage(state, current_damage_source(state), amount)
 
 
 
@@ -344,15 +407,34 @@ class ActivationCost:
     # sacrifice_self) so target selection and other cost payments can
     # still read the source from the battlefield.
     exile_self: bool = False
+    # "Discard a card" — the activator discards a card of their choice
+    # from hand as a cost (Blood token, Iron-Shield Elf). Legal only
+    # with a nonempty hand.
+    discard_a_card: bool = False
+    # "Pay {E}{E}" — spend N energy counters (CR 122.1). Legal only with
+    # at least N energy.
+    pay_energy: int = 0
     # "Tap an untapped permanent you control" — Gene Pollinator's mana
     # ability. The activating player picks any other untapped permanent
     # they control (not the source) and taps it as a cost.
     tap_permanent_you_control: bool = False
+    # Narrows ``tap_permanent_you_control`` to a card type: "Tap an
+    # untapped artifact you control" (Urza, Lord High Artificer) ->
+    # ``"Artifact"``. Empty = any permanent.
+    tap_permanent_type: str = ""
     # "Exile an artifact card from your graveyard" — Rust Harvester's
     # activated ability. The activating player exiles one artifact card
     # from their graveyard as a cost. Legal only when the graveyard
     # contains at least one artifact card.
     exile_artifact_from_graveyard: bool = False
+    # "Exile three cards from your graveyard" — Psychic Frog. The
+    # activating player exiles N cards of their choice from their own
+    # graveyard; legal only with at least N cards there.
+    exile_cards_from_graveyard: int = 0
+    # Ninjutsu's "Return an unblocked attacker you control to hand"
+    # (CR 702.49a). Legal only in the declare blockers step with an
+    # unblocked attacker the activator controls.
+    return_unblocked_attacker: bool = False
     # "Sacrifice another creature or artifact" — the caster picks a
     # legal target via choose_sacrifice. Cannot be the source itself.
     sacrifice_another_creature_or_artifact: bool = False
@@ -415,6 +497,40 @@ class ActivationCost:
     # count via the existing ``choose_x`` agent hook; the engine taps
     # the lowest-id-first X untapped artifacts deterministically.
     tap_x_untapped_artifacts_you_control: bool = False
+    # "Discard your hand" — Lion's Eye Diamond. The activator discards
+    # every card in their hand as part of the cost (an empty hand is a
+    # legal, zero-card payment). Discard triggers fire per card.
+    discard_hand: bool = False
+    # "Sacrifice a <Subtype>" (Retrofitter Foundry's "Sacrifice a Servo"
+    # / "Sacrifice a Thopter"). Any permanent the activator controls
+    # with that (effective) subtype is a legal sacrifice, the source
+    # included if it has the subtype. Empty string disables.
+    sacrifice_subtype: str = ""
+    # "Sacrifice a nontoken artifact" (Thopter Foundry). Any nontoken
+    # artifact the activator controls, the source itself included.
+    sacrifice_nontoken_artifact: bool = False
+    # "Remove N <kind> counter(s) from this <permanent>" (Staff of the
+    # Storyteller's story counter, Wishclaw Talisman's wish counter,
+    # Reckoner Bankbuster's charge counter, Pentad Prism). ``kind`` is
+    # the printed counter name; legal only while the source has at least
+    # ``remove_counters_from_self_amount`` such counters.
+    remove_counters_from_self_kind: str = ""
+    remove_counters_from_self_amount: int = 0
+    # Crew N (CR 702.122): "Tap any number of untapped creatures you
+    # control with total power N or more". The activator picks the
+    # creatures one at a time (``Agent.choose_permanent_to_tap``) until
+    # the total reaches N; summoning-sick creatures may crew. A
+    # creature's ``crew_power_bonus`` (Reckoner Bankbuster's Pilot:
+    # "crews Vehicles as though its power were 2 greater") is added.
+    crew: int = 0
+    # Saddle N (CR 702.171): tap any number of other untapped creatures
+    # you control with total power N or more (plain power -- crew-only
+    # bonuses don't apply).
+    saddle: int = 0
+    # "Sacrifice N nonland permanents" (Bolas's Citadel: ten). The
+    # activator picks them one at a time (``choose_sacrifice``); the
+    # source itself is a legal choice.
+    sacrifice_n_nonland_permanents: int = 0
     # **Planeswalker loyalty cost (CR 606).** Signed loyalty cost.
     # Positive values are PAY costs (the walker LOSES N loyalty
     # counters); negative values are ADD costs (the walker GAINS |N|
@@ -436,11 +552,70 @@ class ActivationCost:
     # ``state.loyalty_activated_this_turn``. The loyalty-at-0 SBA
     # (``turn.py`` 704.5i) catches a walker that drops to 0.
     loyalty: int = 0
+    # "-X" loyalty cost (Ugin, the Spirit Dragon; Jace, the Perfected
+    # Mind): X is chosen as the ability is activated (0 .. the walker's
+    # loyalty), that many loyalty counters are removed, and X rides the
+    # stack item as ``state.resolving_x_value``
+    # (``roto_walkers.choose_and_pay_loyalty_x``).
+    loyalty_x: bool = False
+    # "Discard this card" — the hand-activated cost atom of Cycling
+    # (CR 702.29a: "[Cost], Discard this card: Draw a card.") and
+    # Channel (CR 702.140 ability word over the same shape). Only
+    # meaningful on abilities listed in
+    # ``CardPrinting.hand_activated_abilities``: the source is the card
+    # in its owner's hand, and paying the cost moves it to the
+    # graveyard (a discard — discard triggers fire) before the ability
+    # goes on the stack.
+    discard_self: bool = False
+    # "Remove a <kind> counter from this <permanent>" for a
+    # ``GameObject.named_counters`` kind (Gemstone Mine: "mining").
+    # ``legal_actions`` requires at least one such counter on the
+    # source; ``_activate_ability`` removes one. "" = no such cost.
+    remove_named_counter_from_self: str = ""
+    # "Exert this <permanent>" (CR 701.39) — sets
+    # ``GameObject.exerted`` so the source skips its controller's next
+    # untap step (Arena of Glory).
+    exert_self: bool = False
+    # "Sacrifice a <card type>" for a lowercase card type
+    # (Goblin Bombardment's "Sacrifice a creature"). Any permanent the
+    # activator controls of that (current) type is a legal sacrifice,
+    # the source included when it qualifies. "" = no such cost. The
+    # dedicated land field (``sacrifice_a_land``, Dust Bowl) keeps its
+    # own source-excluding semantics.
+    sacrifice_a_permanent_type: str = ""
+    # Composable cost atoms beyond the dedicated boolean fields above
+    # (cube creatures R/multicolor/colorless bucket): each entry is an
+    # object exposing ``payable(state, player_id, source) -> bool``,
+    # ``pay(state, player_id, source) -> list[GameObject]`` (the objects
+    # paid, threaded onto ``StackItem.cost_paid_objects``) and
+    # ``describe() -> str``. ``legal_actions`` gates activation on every
+    # atom being payable; ``_activate_ability`` pays them after target
+    # selection and before sacrifice-self / exile-self. See
+    # ``mtg_bot.effects.generic.cube_creatures_rmc`` ("Sacrifice a
+    # Forest", "Sacrifice five Treasures", "Remove a +1/+1 counter from
+    # this creature", "Tap an untapped Rebel you control", "Exile this
+    # card from your graveyard").
+    extra_costs: tuple = ()
+    # Waterbend {N} (Avatar: The Last Airbender): "While paying a
+    # waterbend cost, you can tap your untapped artifacts and creatures to
+    # help. Each one pays for {1}." (``layouts.pay_waterbend``).
+    waterbend: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
+        for atom in self.extra_costs:
+            parts.append(atom.describe())
         if self.mana_str:
             parts.append(self.mana_str)
+        if self.discard_self:
+            parts.append("Discard this card")
+        if self.exert_self:
+            parts.append("Exert ~")
+        if self.remove_named_counter_from_self:
+            parts.append(
+                f"Remove a {self.remove_named_counter_from_self} counter "
+                f"from ~"
+            )
         if self.tap_self:
             parts.append("{T}")
         if self.sacrifice_self:
@@ -448,9 +623,17 @@ class ActivationCost:
         if self.exile_self:
             parts.append("Exile ~")
         if self.tap_permanent_you_control:
-            parts.append("Tap an untapped permanent you control")
+            noun = (self.tap_permanent_type or "permanent").lower()
+            parts.append(f"Tap an untapped {noun} you control")
         if self.exile_artifact_from_graveyard:
             parts.append("Exile an artifact card from your graveyard")
+        if self.return_unblocked_attacker:
+            parts.append("Return an unblocked attacker you control to hand")
+        if self.exile_cards_from_graveyard:
+            parts.append(
+                f"Exile {self.exile_cards_from_graveyard} cards from your "
+                "graveyard"
+            )
         if self.sacrifice_another_creature_or_artifact:
             parts.append("Sacrifice another creature or artifact")
         if self.sacrifice_another_artifact_or_land:
@@ -473,6 +656,28 @@ class ActivationCost:
             parts.append("Sacrifice a Desert")
         if self.tap_x_untapped_artifacts_you_control:
             parts.append("Tap X untapped artifacts you control")
+        if self.discard_hand:
+            parts.append("Discard your hand")
+        if self.sacrifice_subtype:
+            parts.append(f"Sacrifice a {self.sacrifice_subtype}")
+        if self.sacrifice_a_permanent_type:
+            parts.append(f"Sacrifice a {self.sacrifice_a_permanent_type}")
+        if self.sacrifice_nontoken_artifact:
+            parts.append("Sacrifice a nontoken artifact")
+        if self.crew:
+            parts.append(f"Crew {self.crew}")
+        if self.saddle:
+            parts.append(f"Saddle {self.saddle}")
+        if self.sacrifice_n_nonland_permanents:
+            parts.append(
+                f"Sacrifice {self.sacrifice_n_nonland_permanents} nonland "
+                f"permanents"
+            )
+        if self.remove_counters_from_self_kind:
+            parts.append(
+                f"Remove {self.remove_counters_from_self_amount} "
+                f"{self.remove_counters_from_self_kind} counter(s) from ~"
+            )
         if self.loyalty:
             # Printed-sign convention: positive cost.loyalty is a "-N"
             # ability, negative is "+N".
@@ -541,9 +746,42 @@ class ActivatedAbility:
     # blink-and-recast (a fresh ``GameObject`` instance) gets a fresh
     # one-shot per CR 706.2.
     activate_only_once: bool = False
+    # "Activate only if <condition>." rider (CR 602.5b) — Library of
+    # Alexandria's "Activate only if you have exactly seven cards in
+    # hand." A ``Condition`` evaluated from the activator's viewpoint
+    # (``condition.matches(state, activator_id)``); ``legal_actions``
+    # omits the activation while it's False and ``_activate_ability``
+    # refuses it defensively. ``None`` = no restriction.
+    activate_only_if: "Condition | None" = None
+    # ``Activate only as an instant.`` rider (Lion's Eye Diamond). The
+    # ability may be activated only when its controller could cast an
+    # instant — i.e. while holding priority. Every activation in this
+    # engine already happens through ``legal_actions`` at priority, so
+    # the rider's observable consequence is that the ability may NOT
+    # be activated in the middle of paying another spell's cost: the
+    # sac-for-mana auto-payment path (``_classify_sac_for_mana``)
+    # skips abilities carrying this flag.
+    activate_only_as_instant: bool = False
+    # ``Activate only during your turn.`` rider (Wishclaw Talisman).
+    # ``legal_actions`` filters the ability out unless the activator is
+    # the active player.
+    activate_only_during_your_turn: bool = False
+    # Exhaust (CR 702.177): "Activate each exhaust ability only once."
+    # Tracked per ability index on ``GameObject.exhausted_abilities`` so
+    # a permanent with several exhaust abilities (Loot, the Pathfinder)
+    # can use each of them once; a new object (CR 400.7) starts fresh.
+    exhaust: bool = False
+    # Boast (CR 702.142): "Activate only if this creature attacked this
+    # turn and only once each turn." Gated in ``legal_actions`` on the
+    # source being among its controller's attackers this turn and
+    # ``GameObject.boasted_turn`` differing from the current turn.
+    boast: bool = False
 
     def describe(self) -> str:
-        return f"{self.cost.describe()}: {self.effect.describe()}"
+        prefix = "Exhaust — " if self.exhaust else ""
+        if self.boast:
+            prefix = "Boast — "
+        return f"{prefix}{self.cost.describe()}: {self.effect.describe()}"
 
 
 
@@ -565,6 +803,23 @@ class StaticScope:
     )
     # Slivers you control — Thrumming Hivepool.
     SLIVERS_YOU_CONTROL = "slivers_you_control"
+    # "[Other ]<Subtype>s you control" — ``subtype_you_control(...)``
+    # builds ``"subtype_you_control:<other|all>:<Subtype>"``.
+    SUBTYPE_PREFIX = "subtype_you_control:"
+    # "<Card type>s you control have <keyword>." for a NONcreature card
+    # type ("Lands you control have indestructible." -- Nissa, Who
+    # Shakes the World's emblem): the only scope family that reaches
+    # noncreature permanents. ``card_type_you_control(...)`` builds
+    # ``"card_type_you_control:<Type>"``.
+    CARD_TYPE_PREFIX = "card_type_you_control:"
+
+    @staticmethod
+    def card_type_you_control(card_type: str) -> str:
+        return f"card_type_you_control:{card_type}"
+
+    @staticmethod
+    def subtype_you_control(subtype: str, *, other: bool) -> str:
+        return f"subtype_you_control:{'other' if other else 'all'}:{subtype}"
 
 
 
@@ -616,6 +871,37 @@ class StaticAbility:
     # stack, not permanents on the battlefield). Matches Frenzied Baloth's
     # third oracle line.
     grants_creature_spells_uncounterable: bool = False
+    # "Spells you control can't be countered." (Hexing Squelcher) — the
+    # all-spells sibling of ``grants_creature_spells_uncounterable``;
+    # read by ``CounterTargetSpell._is_uncounterable``.
+    grants_spells_uncounterable: bool = False
+    # 'Other creatures you control have "Ward—Pay N life."' (Hexing
+    # Squelcher): each creature this static ``applies_to`` gains an
+    # additional ward instance costing N life. Summed with the printed
+    # ``ward_life_cost`` by ``cube_creatures_rmc.effective_ward_life_cost``.
+    grants_ward_life_cost: int = 0
+    # "... attacks each combat if able." (Dragon's Rage Channeler's
+    # delirium clause): every creature this static ``applies_to`` is
+    # forced into the attack declaration while able
+    # (``designations.forced_attackers``).
+    must_attack_each_combat: bool = False
+    # "<Types> your opponents control enter tapped." (Spider-Woman):
+    # card types (``"Artifact"``, ``"Creature"``) of permanents entering
+    # under an opponent's control that enter tapped.
+    opponents_enter_tapped_types: tuple = ()
+    # "Abilities you activate that aren't mana abilities cost {N} less to
+    # activate. This effect can't reduce the mana in that cost to less
+    # than one mana." (Zirda) — ``cube_creatures_rmc.activation_cost_reduction``.
+    activation_cost_reduction: int = 0
+    # "Once during each of your turns, you may cast a permanent spell
+    # with mana value N or less from your graveyard." (Lurrus): N, or -1.
+    graveyard_permanent_cast_mv_max: int = -1
+    # 'Creatures you control have "Whenever this creature becomes the
+    # target of a spell or ability, <effect>. This ability triggers only
+    # N times each turn."' (Nadu): the granted trigger's effect, stacked
+    # by ``cube_creatures_rmc.fire_becomes_target``; N (0 = no cap).
+    granted_becomes_target_effect: "Effect | None" = None
+    granted_trigger_limit_per_turn: int = 0
     # ─── Modifier-grammar slots (additive; PR D consumers and later) ───
     # Optional structural condition gating ``applies_to``. When
     # present, evaluated against ``(state, source.controller_id,
@@ -647,14 +933,27 @@ class StaticAbility:
     # effective state at the declared layer. Unused today — empty
     # for every existing card.
     continuous_effect: "ContinuousModifier | None" = None
+    # "gets +N/+M for each <X> you control": when True the
+    # ``power_bonus`` / ``toughness_bonus`` are PER UNIT of
+    # ``condition.multiplier(state, controller)`` (a variable-amount
+    # condition such as ``PerControlled(IsArtifact())``) instead of
+    # flat. Read by ``game._static_bonuses``. Karn, Scion of Urza's
+    # Construct token.
+    bonus_per_condition_count: bool = False
+    # "Skip your draw step." (Necropotence, Yawgmoth's Bargain): the
+    # source's controller skips their draw step while this is active
+    # (``roto_turns.skips_draw_step``, consulted by ``turn.next_step``).
+    skips_your_draw_step: bool = False
 
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
         from mtg_bot.game import is_creature_now
 
-        # Creatures only, under the source's controller.
+        # Creatures only (except the card-type scope, which can name a
+        # noncreature type), under the source's controller.
         if not is_creature_now(target):
-            return False
+            if not self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
+                return False
         if target.controller_id != source.controller_id:
             return False
         # Spacecraft tier gate — source needs enough charge counters.
@@ -668,7 +967,13 @@ class StaticAbility:
         if self.condition is not None:
             if state is None:
                 return False
-            if not self.condition.matches(
+            # A source-aware condition ("cards exiled with this
+            # creature" -- Keen-Eyed Curator) reads the static's source.
+            source_check = getattr(self.condition, "matches_for_source", None)
+            if source_check is not None:
+                if not source_check(state, source):
+                    return False
+            elif not self.condition.matches(
                 state, source.controller_id, chosen_targets=None,
             ):
                 return False
@@ -686,6 +991,20 @@ class StaticAbility:
                 and target.tapped
                 and "Legendary" in target.printing.supertypes
             )
+        if self.scope.startswith(StaticScope.SUBTYPE_PREFIX):
+            # "[Other ]<Subtype>s you control ..." (Magda's Dwarf lord).
+            other, _, subtype = self.scope[len(StaticScope.SUBTYPE_PREFIX):].partition(":")
+            if other == "other" and target.id == source.id:
+                return False
+            if state is not None:
+                from mtg_bot.game import effective_subtypes
+                return subtype in effective_subtypes(state, target)
+            return subtype in target.printing.subtypes
+        if self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
+            card_type = self.scope[len(StaticScope.CARD_TYPE_PREFIX):]
+            if card_type == "Creature":
+                return is_creature_now(target)
+            return card_type in target.printing.card_types
         if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
             # Read effective_subtypes so a creature granted "Sliver"
             # by a layer-4 add_subtype effect (Conspiracy-style) is
@@ -773,6 +1092,12 @@ class TriggeredAbility:
     # ``unlocked_halves``), the ability is inert and won't fire.
     # ``None`` for non-Room triggers — always active.
     room_half: "str | None" = None
+    # True for abilities that function only while their source card is
+    # in its owner's graveyard (Sword of the Meek's "Whenever a 1/1
+    # creature you control enters, you may return this card from your
+    # graveyard …"). ``actions.dispatch_event`` scans graveyards for these
+    # and never fires them from the battlefield.
+    functions_in_graveyard: bool = False
 
     def __post_init__(self) -> None:
         if self.event is not None and self.trigger:
@@ -844,6 +1169,9 @@ class TriggeredAbility:
                 ),
                 "beginning_of_end_step": (
                     "At the beginning of your end step"
+                ),
+                "beginning_of_precombat_main": (
+                    "At the beginning of your first main phase"
                 ),
                 "beginning_of_postcombat_main": (
                     "At the beginning of your second main phase"

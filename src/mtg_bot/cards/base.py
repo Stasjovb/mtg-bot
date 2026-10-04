@@ -276,17 +276,43 @@ class ManaCost:
     # of each hybrid symbol contribute to the card's color identity via
     # the ``colors`` property.
     hybrid: tuple[tuple[str, str], ...] = ()
+    # Phyrexian mana symbols ({U/P}), one color letter per symbol
+    # (CR 107.4f): each can be paid with one mana of its color or with
+    # 2 life. MV 1 each; the color counts toward the card's colors.
+    # The cast pipeline settles each pip (life vs. mana) before paying
+    # (``actions._settle_phyrexian_pips``); ``can_pay_cost`` checks
+    # every life/mana split for affordability.
+    phyrexian: tuple[str, ...] = ()
 
     @property
     def total(self) -> int:
-        return self.generic + sum(n for _, n in self.colored) + len(self.hybrid)
+        return (
+            self.generic + sum(n for _, n in self.colored)
+            + len(self.hybrid) + len(self.phyrexian)
+        )
 
     @property
     def colors(self) -> frozenset[str]:
         hybrid_colors: frozenset[str] = frozenset(
             c for pair in self.hybrid for c in pair
         )
-        return frozenset(c for c, _ in self.colored) | hybrid_colors
+        return (
+            frozenset(c for c, _ in self.colored if c != "S") | hybrid_colors
+            | frozenset(self.phyrexian)
+        )
+
+    def with_colored(self, extra: "tuple[str, ...] | list[str]") -> "ManaCost":
+        """Return a copy with one more colored pip per entry of
+        ``extra`` and no Phyrexian pips (they've been settled)."""
+        merged: dict[str, int] = dict(self.colored)
+        for c in extra:
+            merged[c] = merged.get(c, 0) + 1
+        return ManaCost(
+            generic=self.generic,
+            colored=tuple(sorted(merged.items())),
+            x_pips=self.x_pips,
+            hybrid=self.hybrid,
+        )
 
     def reduced(self, amount: int) -> "ManaCost":
         """Return a new ManaCost with ``amount`` generic mana removed
@@ -302,6 +328,7 @@ class ManaCost:
             colored=self.colored,
             x_pips=self.x_pips,
             hybrid=self.hybrid,
+            phyrexian=self.phyrexian,
         )
 
 
@@ -352,6 +379,7 @@ def parse_mana_cost(s: str) -> ManaCost:
     colored: dict[str, int] = {}
     x_pips = 0
     hybrid_list: list[tuple[str, str]] = []
+    phyrexian_list: list[str] = []
     for sym in re.findall(r"\{([^}]+)\}", s):
         if sym.isdigit():
             generic += int(sym)
@@ -359,6 +387,12 @@ def parse_mana_cost(s: str) -> ManaCost:
             colored[sym] = colored.get(sym, 0) + 1
         elif sym == "C":
             generic += 1
+        elif sym == "S":
+            # Snow mana {S} (CR 107.4h): one mana from a snow source.
+            # Carried as the pseudo-color "S" in ``colored`` (payment:
+            # ``actions._coin_matches_color`` / the snow-land branch);
+            # it is not a color (``ManaCost.colors`` skips it).
+            colored["S"] = colored.get("S", 0) + 1
         elif sym == "X":
             x_pips += 1
         elif "/" in sym:
@@ -367,14 +401,10 @@ def parse_mana_cost(s: str) -> ManaCost:
             parts = sym.split("/")
             if len(parts) == 2:
                 a, b = parts[0], parts[1]
-                if b == "P":
-                    # Phyrexian hybrid: {W/P} etc. MV=1, can be paid with
-                    # the color or 2 life. Engine simplification: treat as
-                    # generic-1 (same as non-Phyrexian hybrid — life-payment
-                    # path not yet modeled). Store as hybrid for color identity.
-                    color_a = tuple(sorted((a, b)))[0]
-                    color_b = tuple(sorted((a, b)))[1]
-                    hybrid_list.append((color_a, color_b))
+                if b == "P" and a in COLORS:
+                    # Phyrexian mana {W/P} etc. (CR 107.4f): MV 1, paid
+                    # with one mana of the color or 2 life.
+                    phyrexian_list.append(a)
                 elif a in COLORS and b in COLORS:
                     # Standard two-color hybrid: store canonical (alpha) order.
                     pair = tuple(sorted((a, b)))
@@ -390,6 +420,7 @@ def parse_mana_cost(s: str) -> ManaCost:
         colored=tuple(sorted(colored.items())),
         x_pips=x_pips,
         hybrid=tuple(hybrid_list),
+        phyrexian=tuple(phyrexian_list),
     )
 
 
@@ -680,6 +711,10 @@ class CardPrinting:
     attached_sets_base_pt: "tuple[int, int] | None" = None
     attached_grants_lose_all_abilities: bool = False
     attached_grants_subtype: "str | None" = None
+    # "Enchanted <permanent> has "<activated ability>"" (Tarmogoyf Nest;
+    # roto integration): layer 6 ``"grant_activated_ability"`` entries on
+    # the enchanted permanent while the Aura is attached.
+    attached_grants_activated_abilities: tuple = ()
     # Clone-style ETB replacement: "You may have this creature enter
     # as a copy of any creature on the battlefield." When True, the
     # spell-resolution path prompts the controller for a target
@@ -761,6 +796,11 @@ class CardPrinting:
     # to discard from their hand to pay the ward; if their hand is empty,
     # the spell is countered.
     ward_discard_chosen: bool = False
+    # ``Ward—Pay N life.`` — the caster of a spell targeting this
+    # permanent pays N life or the spell is countered (CR 702.21a;
+    # life can be paid only if the caster's life total is >= N,
+    # CR 119.4). 0 = no life-cost ward.
+    ward_life_cost: int = 0
     # Equipment: continuous bonuses granted to the equipped creature.
     # Tuple (power_bonus, toughness_bonus, granted_keywords). None on
     # non-Equipment cards. Consumed by game._static_bonuses.
@@ -773,6 +813,51 @@ class CardPrinting:
     # When True, this card always enters the battlefield tapped
     # (Planet-style utility lands and other "enters tapped" permanents).
     enters_tapped: bool = False
+    # "This artifact doesn't untap during your untap step." (Grim
+    # Monolith, Basalt Monolith, Mana Vault, Time Vault). Honored by
+    # ``turn.run_untap_step``: the permanent itself stays tapped through
+    # its controller's untap step. Other untap effects (its own
+    # ``{N}: Untap this artifact.`` ability, Voltaic Key) still work.
+    doesnt_untap_during_untap_step: bool = False
+    # Mox Diamond: "If this artifact would enter, you may discard a land
+    # card instead. If you do, put this artifact onto the battlefield.
+    # If you don't, put it into its owner's graveyard." Replacement
+    # effect applied at the top of ``actions.put_into_battlefield``.
+    enters_only_by_discarding_land: bool = False
+    # Time Vault: "If you would begin your turn while this artifact is
+    # tapped, you may skip that turn instead. If you do, untap this
+    # artifact." Replacement applied by
+    # ``simulate._advance_to_next_active_player`` when the controller's
+    # turn would begin.
+    may_skip_turn_to_untap: bool = False
+    # "Equipped creature gets +P/+T for each <types> you control."
+    # (Nettlecyst: ``(("Artifact", "Enchantment"), 1, 1)``). Added to the
+    # equipped creature's layer-7c bonus by ``game._static_bonuses``,
+    # counting permanents with ANY of the listed card types controlled
+    # by the Equipment's controller (each permanent counted once).
+    equipment_bonus_per_controlled: "tuple[tuple[str, ...], int, int] | None" = None
+    # "This token crews Vehicles as though its power were N greater."
+    # (Reckoner Bankbuster's Pilot token). Added to the creature's power
+    # when it is tapped to pay a Crew cost.
+    crew_power_bonus: int = 0
+    # Fast-path flag for ``actions._dispatch_graveyard_triggers``: True
+    # iff some triggered ability has ``functions_in_graveyard`` (Sword
+    # of the Meek). Set by the builder alongside those abilities.
+    has_graveyard_triggers: bool = False
+    # Sunburst (CR 702.44, Pentad Prism): enters with a charge counter
+    # (+1/+1 counter if a creature) per color of mana spent to cast it.
+    sunburst: bool = False
+    # Bolas's Citadel: "You may play lands and cast spells from the top
+    # of your library. If you cast a spell this way, pay life equal to
+    # its mana value rather than pay its mana cost." Honored by
+    # ``legal_actions`` (offers the top card) and ``_cast_spell`` /
+    # ``_play_land`` (source zone + life payment).
+    grants_play_from_top_paying_life: bool = False
+    # Triggered abilities an Equipment grants to the equipped creature
+    # (Kaldra Compleat: "… and has 'Whenever this creature deals combat
+    # damage to a creature, exile that creature.'"). ``dispatch_event``
+    # evaluates them with the equipped creature as their source.
+    equipment_granted_triggers: tuple = ()
     # Duskmourn "horror dual" cycle (Bleeding Woods, Etched Cornfield,
     # …). When > 0, the land enters tapped unless any player's life
     # total is at or below this threshold at ETB time. No agent choice
@@ -786,6 +871,75 @@ class CardPrinting:
     # target and it enters tapped. If they decline (or no legal
     # target exists), the land enters per its normal rules.
     optional_copy_land_from_graveyard: bool = False
+    # Generic "This land enters tapped unless <condition>." ETB
+    # replacement (CR 614.1d / 614.12). ``None`` disables. When set, the
+    # land enters tapped iff ``condition.matches(state, controller_id)``
+    # is False, evaluated BEFORE the land joins the battlefield (so
+    # "unless you control two or fewer other lands" counts only the
+    # other lands). Applied by ``actions.apply_land_etb_replacements`` on
+    # both the land-drop path and effect-driven puts (fetch lands).
+    # Fast lands (``ControlsAtMost(IsLand(), 2)``), check lands
+    # (``ControlPermanent(HasSubtype("Mountain"))``) and the basic-land
+    # variant (``ControlPermanent(IsLand() & IsBasic())``).
+    enters_tapped_unless: "Condition | None" = None
+    # When True, ``produces`` is the EXHAUSTIVE set of mana this land's
+    # cost-free (or life-cost, see ``produces_life_cost``) ``{T}`` mana
+    # abilities make, and the land contributes to automatic cost
+    # payment only through that set. The legacy default (False) keeps
+    # the engine's historical fallback where every untapped land can
+    # pay one generic even with an empty ``produces`` — pre-existing
+    # printings rely on it for their dropped ``{T}: Add {C}.`` lines.
+    # The line-composed land grammar sets this True and writes
+    # colorless production explicitly as ``"C"``; a land whose only
+    # mana abilities carry extra costs (Gaea's Cradle, Mishra's
+    # Workshop, Gemstone Mine) or that has no mana ability at all
+    # (fetch lands) therefore never taps for free phantom mana.
+    mana_only_from_produces: bool = False
+    # Life paid each time this land is tapped for its ``produces``
+    # mana: "{T}, Pay 1 life: Add {G} or {W}." (Horizon Canopy cycle)
+    # folds into ``produces={G, W}`` + ``produces_life_cost=1``.
+    # Automatic payment charges the life per tapped land and treats the
+    # land as unavailable once paying would drop its controller to 0
+    # (the same "don't pay to death" gate ``legal_actions`` applies to
+    # explicit ``pay_life`` activations). 0 = free.
+    produces_life_cost: int = 0
+    # "{T}: Add {C}. If <this> has a <kind> counter on it, instead add
+    # one mana of any color." (Gemstone Caverns): ``(kind, colors)`` --
+    # while the permanent has at least one ``kind`` counter, automatic
+    # payment taps it for ``colors`` instead of ``produces``
+    # (``game.effective_land_produces``). The explicit mana ability is
+    # the matching ``IfConditionElse(SourceHasCounter(kind), ...)``, so
+    # both payment paths read the same counter.
+    produces_with_counter: "tuple[str, frozenset[str]] | None" = None
+    # CR 103.6 opening-hand action ("If this card is in your opening
+    # hand ..., you may begin the game with it on the battlefield ...");
+    # an ``mtg_bot.opening_hand.BeginGameOnBattlefield`` run by
+    # ``simulate.setup_game`` after the final keep. None for every other
+    # card.
+    opening_hand_action: "object | None" = None
+    # Activated abilities that function while this card is in its
+    # owner's hand (CR 602.2 + 702.29 Cycling / 702.140 Channel). Each
+    # ability's cost carries ``discard_self=True``; ``legal_actions``
+    # offers ``ActivateAbility(source_id=<hand card>, ability_index=i)``
+    # indexing into THIS tuple, and ``actions._activate_ability``
+    # resolves a hand-resident source against it.
+    hand_activated_abilities: tuple["ActivatedAbility", ...] = ()
+    # "As this land enters, choose a basic land type." — the entry-time
+    # choice (``actions.apply_land_etb_replacements`` asks the agent via
+    # ``choose_mode`` over the five type names and stores it on
+    # ``GameObject.chosen_basic_land_type``) ...
+    enters_choosing_basic_land_type: bool = False
+    # ... and "This land is the chosen type." — the static that makes
+    # the permanent that type (``effective_subtypes``; its intrinsic
+    # mana ability follows via ``effective_land_produces``).
+    is_chosen_basic_land_type: bool = False
+    # "This <permanent> enters with N <kind> counters on it." — ETB
+    # replacement ``((kind, n), ...)``: Gemstone Mine's mining counters
+    # (lands, ``actions.apply_land_etb_replacements``), Wishclaw
+    # Talisman's wish / Reckoner Bankbuster's charge counters (every
+    # other entry, ``actions.put_into_battlefield``). Kinds with a
+    # dedicated ``GameObject`` field (charge, ...) land in that field.
+    enters_with_named_counters: tuple = ()
     # Additional cost to cast: sacrifice a creature or artifact the
     # caster controls (other than any source-of-the-spell). Matches
     # Embrace Oblivion's "As an additional cost to cast this spell,
@@ -880,8 +1034,10 @@ class CardPrinting:
     #   "emissary_escort": +X/+0 where X is the greatest mana value
     #     among OTHER artifacts the controller controls; base stays
     #     printed (0/4).
+    # A structured formula object with a ``base_pt(state, obj)`` method
+    # (cube W/G bucket: ``PowerEqualsCount`` -- Adeline) computes itself.
     # None = use printed P/T (default).
-    dynamic_pt_formula: str | None = None
+    dynamic_pt_formula: "str | object | None" = None
     # Spell-cast restriction: when any permanent with this flag is on
     # the battlefield (regardless of controller), each player may cast
     # at most one noncreature spell per turn. Matches Deafening Silence.
@@ -889,6 +1045,25 @@ class CardPrinting:
     # aren't proposed once the caster's
     # Player.noncreature_spells_cast_this_turn is already ≥ 1.
     restricts_noncreature_spells_to_one_per_turn: bool = False
+    # Narset, Parter of Veils: "Each opponent can't draw more than one
+    # card each turn." While a permanent with this flag is on the
+    # battlefield, ``turn.draw_card`` skips any draw by an opponent of
+    # its controller who has already drawn a card this turn
+    # (``Player.cards_drawn_this_turn``).
+    opponents_cant_draw_more_than_one_card_each_turn: bool = False
+    # Teferi, Time Raveler: "Each opponent can cast spells only any time
+    # they could cast a sorcery." While a permanent with this flag is on
+    # the battlefield, ``legal.legal_actions`` offers an opponent of its
+    # controller no spell casts outside that opponent's sorcery timing
+    # (instants and flash included).
+    opponents_cast_spells_only_at_sorcery_speed: bool = False
+    # The Wandering Emperor: "As long as ~ entered this turn, you may
+    # activate her loyalty abilities any time you could cast an
+    # instant." ``legal.legal_actions`` lifts the sorcery-timing gate
+    # on this permanent's loyalty abilities while
+    # ``GameObject.entered_battlefield_turn == state.turn_number``
+    # (the once-per-turn loyalty gate still applies).
+    loyalty_abilities_at_instant_speed_if_entered_this_turn: bool = False
     # Type-change flag: while any permanent with this flag is on the
     # battlefield, every nonbasic land's mana-production colors are
     # overridden to {R} and its activated abilities are suppressed —
@@ -931,6 +1106,10 @@ class CardPrinting:
     # interleaves correctly with Scuttlemutt-style set_colors per
     # CR 613 layer-5 timestamp rules.
     paints_all_objects_chosen_color_at_etb: bool = False
+    # "As this creature enters, choose a player." (True-Name Nemesis) —
+    # the chosen player's id lands on ``GameObject.chosen_player_id``
+    # (read by the ``protection from the chosen player`` quality).
+    chooses_player_as_enters: bool = False
     # Found Footage (Duskmourn): "You may look at face-down creatures
     # your opponents control any time." Today the engine doesn't model
     # hidden information for face-down permanents (the controller can
@@ -1008,6 +1187,11 @@ class CardPrinting:
     # for now; extend to a frozenset if real cards need protection
     # from multiple colors at once.
     protection_from_color: str | None = None
+    # Color indicator / token color (CR 204, CR 111.4): colors an
+    # object has that its mana cost doesn't show — a "1/1 white Spirit
+    # creature token" is white. ``game.effective_colors`` unions this
+    # with ``mana_cost.colors`` as the layer-5 base.
+    color_indicator: frozenset[str] = frozenset()
     # Convoke (CR 702.51): "Your creatures can help cast this spell.
     # Each creature you tap while casting this spell pays for {1} or
     # one mana of that creature's color." Wires the per-cast prompt
@@ -1036,20 +1220,345 @@ class CardPrinting:
     # Islandcycling {2} as ``("Island", "{2}")``, etc. ``None`` when
     # the card has no landcycling.
     #
-    # Today this field is **purely declarative**: the parser populates
-    # it from the printed ``Plainscycling/Islandcycling/...`` line so
-    # the printing accurately reflects oracle text, but the engine
-    # does NOT yet enumerate hand-activated abilities, so the
-    # cycling cost cannot actually be paid in simulation. Activation
-    # support requires (1) ``legal_actions`` to enumerate from-hand
-    # ability activations against this field and (2) an
-    # ``ActivationCost.discard_self`` cost atom. Both lifts are
-    # follow-up work that this batch deliberately scopes out — keeping
-    # the printing-level field distinct from the activation pipeline
-    # mirrors the precedent set by ``warp_castable_from_graveyard``
-    # and ``warp_additional_life_cost`` (declarative metadata stored
-    # on the printing; activation logic plumbs separately).
+    # This field is descriptive metadata; the ACTIVATABLE ability lives
+    # on ``hand_activated_abilities`` (the oracle parser's source layer peels every
+    # cycling-family line into a hand-activated ``ActivatedAbility``
+    # with a ``discard_self`` cost and fills this tuple from it too).
     landcycling: tuple[str, str] | None = None
+    # ---- Spell casting substrate (cube spells-B bucket) -------------
+    # "Flashback {cost}" (CR 702.34): the card may be cast from its
+    # owner's graveyard for ``flashback_cost``; a spell cast this way
+    # is exiled instead of going anywhere else when it leaves the
+    # stack. ``legal_actions`` offers ``CastSpell(id, use_flashback=True)``
+    # for graveyard cards carrying it (instants at instant speed,
+    # everything else at sorcery speed).
+    flashback_cost: ManaCost | None = None
+    flashback_cost_str: str = ""
+    # "Delve" (CR 702.66): each card exiled from the caster's graveyard
+    # while casting pays for {1}. Handled at cost payment in
+    # ``actions._cast_spell`` (count chosen via ``choose_x``).
+    has_delve: bool = False
+    # "Buyback {cost}" (CR 702.27): optional additional cost; if paid,
+    # the spell returns to its owner's hand as it resolves instead of
+    # going to the graveyard. Offered as ``CastSpell(id,
+    # use_buyback=True)``.
+    buyback_cost: ManaCost | None = None
+    buyback_cost_str: str = ""
+    # "As an additional cost to cast this spell, sacrifice a <filter>."
+    # A ``mtg_bot.effects.generic.card_flow.CardFilter`` over the
+    # caster's permanents (Tinker: artifact; Natural Order: green
+    # creature; Crop Rotation: land). ``None`` = no such cost.
+    additional_cost_sacrifice_filter: "object | None" = None
+    # "As an additional cost to cast this spell, pay X life." The
+    # caster picks X at cast time (``choose_x``); X is stored on the
+    # StackItem's ``x_value`` and read at resolve through
+    # ``state.resolving_x_value`` (Toxic Deluge).
+    additional_cost_pay_x_life: bool = False
+    # "If <condition>, you may cast it without paying its mana cost."
+    # (Once Upon a Time: ``FirstSpellYouCastThisGame``). A
+    # ``mtg_bot.effects.conditions.Condition`` evaluated for the caster;
+    # when it holds ``legal_actions`` also offers the
+    # ``CastSpell(cast_for_free=True)`` variant.
+    free_cast_condition: "object | None" = None
+    # "Storm" (CR 702.40): when cast, copy it for each spell cast before
+    # it this turn (``actions._cast_spell`` pushes the trigger).
+    has_storm: bool = False
+    # "You may exile a <filter> card from your hand rather than pay this
+    # spell's mana cost." (Pyrokinesis) — an alternative cost offered as
+    # ``CastSpell(cast_for_free=True)``; a ``CardFilter`` over the other
+    # cards in hand.
+    alt_cost_exile_from_hand: "object | None" = None
+    # Roto P4: how many such cards the pitch cost exiles ("exile two blue
+    # cards from your hand" -- Commandeer).
+    alt_cost_exile_from_hand_count: int = 1
+    # "Splice onto <subtype> {cost}" (CR 702.47): while casting a spell
+    # with that subtype, this card may be revealed from hand and its
+    # splice cost paid to add its effects to that spell.
+    splice_onto: "str | None" = None
+    splice_cost: ManaCost | None = None
+    splice_cost_str: str = ""
+    # Modal double-faced card (CR 712): the back face's printing when it
+    # is a land the card may be played as (Sink into Stupor // Soporific
+    # Springs). ``legal_actions`` offers ``PlayLand`` for the card from
+    # hand; ``actions._play_land`` turns it to this face. When the back
+    # face is a castable permanent (The Sensational She-Hulk), the card
+    # may instead be cast as that face (``CastSpell(cast_face=<name>)``,
+    # ``mtg_bot.layouts``).
+    mdfc_back_face: "CardPrinting | None" = None
+    # --- Non-normal layouts (cube layouts bucket; ``mtg_bot.layouts``) --
+    # Transforming double-faced card (CR 712 / 701.28): the back face's
+    # printing. ``layouts.transform_permanent`` turns a permanent to this
+    # face (and back); ``layouts.put_onto_battlefield_transformed`` puts
+    # the card onto the battlefield with it up. Also set on a modal DFC
+    # whose front face carries a "Transform ~" ability (the back is then
+    # both castable and transformable).
+    transform_back_face: "CardPrinting | None" = None
+    # The colors of a DFC back face (CR 204: its color indicator; no
+    # indicator = colorless). A transforming back face borrows the front
+    # face's mana cost for its mana value (CR 712.8e), so its colors
+    # can't be read off that cost: ``game.effective_colors`` uses this
+    # set instead of ``mana_cost.colors`` when it isn't ``None``.
+    face_colors: "frozenset[str] | None" = None
+    # Daybound / nightbound (CR 702.145): the front face of a daybound
+    # werewolf has ``daybound``, its back face ``nightbound``. The
+    # day/night cycle (``layouts.run_day_night_check``) transforms them.
+    daybound: bool = False
+    nightbound: bool = False
+    # Class enchantments (CR 716): this printing's class level (1 for
+    # the card as printed), and the printings for each further level in
+    # order (level 2, level 3, ...). Each level printing carries every
+    # ability of the levels below it plus its own; gaining a level turns
+    # the permanent to that printing (``layouts.gain_class_level``).
+    class_level: int = 0
+    class_levels: tuple["CardPrinting", ...] = ()
+    # Split card (CR 709): the two halves' printings. The card's own
+    # printing carries the combined characteristics it has outside the
+    # stack (CR 709.4); it's cast as one half
+    # (``CastSpell(cast_face=<half name>)``), which turns the spell to
+    # that half's printing until it leaves the stack.
+    split_faces: tuple["CardPrinting", ...] = ()
+    # "Each nonland card in your graveyard has mayhem. The mayhem cost is
+    # equal to its mana cost." (Green Goblin's Goblin Formula): while its
+    # controller controls this permanent, they may cast a nonland card
+    # from their graveyard for its mana cost if they discarded it this
+    # turn (``layouts.mayhem_castable``).
+    grants_mayhem_to_graveyard: bool = False
+    # Adventurer card (CR 715): the Adventure half's printing (an instant
+    # or sorcery with the Adventure subtype). The card may be cast as it
+    # (``CastSpell(cast_face=<name>)``); as that spell resolves it's
+    # exiled "on an adventure" and its controller may cast the creature
+    # from exile (``layouts.exile_on_adventure``).
+    adventure_face: "CardPrinting | None" = None
+    # Preparation card (Secrets of Strixhaven "prepare"): the printing of
+    # the creature's prepare spell. As the creature becomes prepared its
+    # controller creates a copy of this spell in exile they may cast while
+    # the creature stays prepared (``layouts.become_prepared``).
+    prepare_spell: "CardPrinting | None" = None
+    # "This creature enters prepared."
+    enters_prepared: bool = False
+    # "Plot {cost}" (CR 702.170): as a sorcery, pay the plot cost and
+    # exile the card from hand; on a later turn it may be cast from
+    # exile without paying its mana cost, as a sorcery. The special
+    # action is ``CastSpell(id, use_plot=True)``; the later cast is
+    # ``CastSpell(id, cast_for_free=True)`` from exile.
+    plot_cost: ManaCost | None = None
+    plot_cost_str: str = ""
+    # "Escape—{cost}, Exile N other cards from your graveyard." (CR
+    # 702.138): cast from the graveyard for ``escape_cost`` plus exiling
+    # ``escape_exile_count`` other graveyard cards. Offered as
+    # ``CastSpell(id, use_escape=True)``.
+    escape_cost: ManaCost | None = None
+    escape_cost_str: str = ""
+    escape_exile_count: int = 0
+    # Granted escape (Underworld Breach): "Each nonland card in your
+    # graveyard has escape. The escape cost is equal to the card's mana
+    # cost plus exile N other cards from your graveyard." Nonzero N
+    # grants that escape to every nonland card in this permanent's
+    # controller's graveyard (``alt_casting.escape_terms``).
+    grants_graveyard_escape_exile_count: int = 0
+    # Necromancy: "If you cast it any time a sorcery couldn't have been
+    # cast, the controller of the permanent it becomes sacrifices it at
+    # the beginning of the next cleanup step."
+    sacrifice_at_cleanup_if_cast_without_sorcery_timing: bool = False
+    # ── Cube creatures (R / multicolor / colorless bucket) ──
+    # Activated abilities that function from the owner's graveyard
+    # (CR 113.6k): Seasoned Pyromancer's "{3}{R}{R}, Exile this card
+    # from your graveyard: ...", Otharri's "Return this card from your
+    # graveyard to the battlefield tapped". Offered by ``legal_actions``
+    # as ``ActivateAbility(source_id=<graveyard card>, ability_index)``.
+    graveyard_activated_abilities: tuple["ActivatedAbility", ...] = ()
+    # "Dash {cost}" (CR 702.109): cast from hand for ``dash_cost``; the
+    # permanent gains haste and returns to its owner's hand at the
+    # beginning of the next end step. Offered as
+    # ``CastSpell(id, use_dash=True)``.
+    dash_cost: ManaCost | None = None
+    dash_cost_str: str = ""
+    # "If damage would be dealt to <this creature>, instead that damage
+    # is dealt, but all other damage already dealt to him is healed."
+    # (Wolverine, Fierce Fighter): marked damage is cleared right
+    # before new damage is marked (``cube_creatures_rmc.heal_before_damage``).
+    heals_other_damage_when_dealt_damage: bool = False
+    # Fast-path flag for ``cube_creatures_rmc.sweep_graveyard_watch``:
+    # the card has a "... put into a graveyard from anywhere"
+    # replacement or trigger (Blightsteel Colossus, Emrakul).
+    watched_in_graveyard: bool = False
+    # "Whenever one or more cards are put into exile from your library
+    # and/or your graveyard" watcher (Laelia) — fast-path flag for
+    # ``cube_creatures_rmc.sweep_library_graveyard_exile_watch``.
+    watches_library_graveyard_exile: bool = False
+    # Multikicker (CR 702.33c): the kicker cost (``kicker_cost``) may be
+    # paid any number of times; the count rides ``StackItem.kick_count``
+    # onto ``GameObject.kick_count``.
+    multikicker: bool = False
+    # "<This> enters with a +1/+1 counter on it for each time it was
+    # kicked." (Batroc the Leaper)
+    enters_with_counter_per_kick: bool = False
+    # ── Cube W/G creature bucket (casting / printing mechanics) ──────
+    # Evoke (CR 702.74): "Evoke—<cost>". The alternative cost is either
+    # mana (``evoke_cost``) or "Exile a <filter> card from your hand"
+    # (``evoke_exile_from_hand``, a ``CardFilter`` — Solitude / Endurance
+    # / the Modern Horizons 2 Incarnations). Offered as
+    # ``CastSpell(id, use_evoke=True)`` (``mtg_bot.evoke``); the printing
+    # also carries the evoke sacrifice trigger ("When this permanent
+    # enters, if its evoke cost was paid, its controller sacrifices it").
+    evoke_cost: ManaCost | None = None
+    evoke_cost_str: str = ""
+    evoke_exile_from_hand: "object | None" = None
+    # Rules-restricting statics (``mtg_bot.creature_statics_wg``):
+    # "Your opponents can't cast spells during your turn." (Voice of
+    # Victory) and "Each player can't cast more than one spell each
+    # turn." / "Nonbasic lands your opponents control enter tapped."
+    # (Archon of Emeria).
+    opponents_cant_cast_spells_during_your_turn: bool = False
+    each_player_one_spell_per_turn: bool = False
+    opponents_nonbasic_lands_enter_tapped: bool = False
+    # "<Filter> spells cost {N} more to cast." (Thalia, Guardian of
+    # Thraben): ``((CardFilter, N), ...)`` applied to every player's
+    # matching spells while this permanent is on the battlefield.
+    spell_cost_increases: tuple = ()
+    # "<This> can't be blocked by <creatures with ...>." (Questing
+    # Beast): an ObjectPredicate over would-be blockers.
+    cant_be_blocked_by: "object | None" = None
+    # "Combat damage that would be dealt by creatures you control can't
+    # be prevented." (Questing Beast).
+    your_creatures_combat_damage_cant_be_prevented: bool = False
+    # "Activated abilities of <types> can't be activated." (Clarion
+    # Conqueror): the card types whose permanents' activated abilities
+    # (mana abilities included) are locked while this is on the
+    # battlefield.
+    locks_activated_abilities_of: tuple = ()
+    # "If a nontoken creature would enter and it wasn't cast, exile it
+    # instead." (Containment Priest).
+    exiles_uncast_nontoken_creatures_entering: bool = False
+    # Graveyard play permissions (``mtg_bot.graveyard_casting_wg``):
+    # Six's "During your turn, nonland permanent cards in your graveyard
+    # have retrace." and Serra Paragon's once-per-turn land / permanent
+    # spell (mana value <= N) from your graveyard.
+    grants_retrace_to_nonland_permanents_during_your_turn: bool = False
+    grants_once_per_turn_graveyard_play_mv: int = 0
+    # "<Cards> in your graveyard have retrace." on a permanent or emblem
+    # (Wrenn and Six's emblem: instant and sorcery cards) -- a
+    # ``CardFilter`` over the controller's graveyard cards, always on.
+    grants_retrace_to: "object | None" = None
+    # "Spells and abilities your opponents control can't cause you to
+    # discard cards or sacrifice permanents." (Tamiyo, Collector of
+    # Tales) -- ``mtg_bot.player_protections``.
+    opponents_cant_make_you_discard_or_sacrifice: bool = False
+    # "Whenever you tap a <Subtype> for mana, add an additional {C}."
+    # (Nissa, Who Shakes the World) -- ``(subtype, color)`` pairs read
+    # by automatic payment (``actions.extra_mana_grants_for_tapped_lands``).
+    extra_mana_when_you_tap_land_subtype: tuple = ()
+    # "During your turn, as long as <this> has one or more loyalty
+    # counters on <it>, <it>'s a P/T <Subtypes> creature [and has
+    # <keywords>]." (Kaito, Bane of Nightmares) -- ``(power, toughness,
+    # subtypes, keywords)``, applied at each of the controller's turns
+    # (``mtg_bot.cube_glue_statics``).
+    creature_during_your_turn: tuple = ()
+    # Anointed Peacekeeper: "As this creature enters, look at an
+    # opponent's hand, then choose any card name." plus the named-card
+    # taxes -- opponents' spells with the chosen name cost {N} more;
+    # activated abilities (not mana abilities) of sources with the
+    # chosen name cost {M} more (``creature_statics_wg``).
+    chooses_card_name_as_enters: bool = False
+    named_spell_cost_increase: int = 0
+    named_ability_cost_increase: int = 0
+    # Reconfigure (CR 702.151; Lion Sash): the printing also carries the
+    # attach / unattach activated abilities; while attached to a
+    # creature it isn't a creature (``game.is_creature_now``).
+    reconfigure_cost: "ManaCost | None" = None
+    reconfigure_cost_str: str = ""
+    # "Equipped creature gets +P/+T for each <kind> counter on this
+    # Equipment." -- ``(kind, P, T)`` (Lion Sash).
+    equipment_bonus_per_own_counter: tuple = ()
+    # Bestow (CR 702.103; Springheart Nantuko): cast as an Aura with
+    # enchant creature for ``bestow_cost`` (``CastSpell(use_bestow=True)``);
+    # ``bestow_enchanted_bonus`` is the printed "Enchanted creature gets
+    # +P/+T." while it's attached.
+    bestow_cost: "ManaCost | None" = None
+    bestow_cost_str: str = ""
+    bestow_enchanted_bonus: tuple = ()
+    # "Whenever you tap a creature for mana, add an additional {G}."
+    # (Badgermole Cub): the extra coin colors (a triggered mana ability).
+    extra_mana_when_you_tap_creature_for_mana: tuple = ()
+    # ── U/B cube creatures ──────────────────────────────────────────
+    # "This creature can't be blocked except by N or more creatures."
+    # (Troll of Khazad-dûm, N=3): a block by fewer than N creatures is
+    # illegal -- the menace check generalized (menace is N=2).
+    min_blockers: int = 0
+    # "Squad {cost}" (CR 702.157): an additional cost payable any number
+    # of times; one token copy per payment when it enters.
+    squad_cost: ManaCost | None = None
+    squad_cost_str: str = ""
+    # "Offspring {cost}" (CR 702.175): an optional additional cost; if
+    # paid, a 1/1 token copy when it enters.
+    offspring_cost: ManaCost | None = None
+    offspring_cost_str: str = ""
+    # Improvise (CR 702.126): each untapped artifact the caster taps
+    # while paying pays for {1}.
+    has_improvise: bool = False
+    # "If a card would be put into an opponent's graveyard from
+    # anywhere, instead exile it with a void counter on it." (Dauthi
+    # Voidwalker). See ``game.void_exile_replacement_active``.
+    void_exile_replacement: bool = False
+    # Roto P2 zone abilities (replacements, graveyard abilities): frozen specs
+    # from ``effects.generic.roto_zones`` (``GraveyardExileInstead`` --
+    # Rest in Peace / Leyline of the Void / Sanctifier en-Vec, ...),
+    # read by that module's hooks.
+    zone_abilities: tuple = ()
+    # "Emerge [from artifact] {cost}" (CR 702.119): alternative cost --
+    # sacrifice a creature (or artifact) and pay the emerge cost reduced
+    # by that permanent's mana value.
+    emerge_cost: ManaCost | None = None
+    emerge_cost_str: str = ""
+    emerge_sacrifice_type: str = "Creature"
+    # "Miracle {cost}" (CR 702.94): if it's the first card its owner drew
+    # this turn, they may reveal it and cast it for this cost when the
+    # miracle trigger resolves.
+    miracle_cost: ManaCost | None = None
+    miracle_cost_str: str = ""
+    # "As an additional cost to cast this spell, exile N cards from your
+    # graveyard." (Abhorrent Oculus)
+    additional_cost_exile_from_graveyard: int = 0
+    # "Activated abilities of artifacts you control cost {N} less to
+    # activate. This effect can't reduce the mana in that cost to less
+    # than one mana." (Forensic Gadgeteer)
+    artifact_ability_cost_reduction: int = 0
+    # "As <this> enters, choose odd or even." (Gollum, Riddle Master)
+    chooses_parity_as_enters: bool = False
+    # "X can't be 0." (Thieving Skydiver's "Kicker {X}. X can't be 0."):
+    # the least X the caster may choose.
+    x_min: int = 0
+    # "This creature can't block or be blocked by non-<Subtype>
+    # creatures." (Wan Shi Tong's Spirit tokens)
+    blocks_only_with_subtype: str = ""
+    # Clone family beyond ``enters_as_copy_of_creature`` (U/B cube):
+    # "You may have this creature enter as a copy of any <types> on the
+    # battlefield" (``enters_as_copy_types``, e.g. ("Artifact",
+    # "Creature") for Phyrexian Metamorph) or "... any creature card in a
+    # graveyard" (``enters_as_copy_zone="graveyard"``, Superior
+    # Spider-Man); the "except ..." riders: an added card type, a kept
+    # name, a set base P/T and added subtypes; and "When you do, exile
+    # that card." (``enters_as_copy_exiles_card``).
+    enters_as_copy_types: tuple[str, ...] = ()
+    enters_as_copy_zone: str = "battlefield"
+    enters_as_copy_add_type: str = ""
+    enters_as_copy_keep_name: bool = False
+    enters_as_copy_base_pt: "tuple[int, int] | None" = None
+    enters_as_copy_add_subtypes: tuple[str, ...] = ()
+    enters_as_copy_exiles_card: bool = False
+    # Roto P4: "... except ... and it has <keywords> / "<ability>""
+    # riders (Phantasmal Image's granted becomes-the-target trigger).
+    enters_as_copy_add_triggers: tuple = ()
+    enters_as_copy_add_keywords: frozenset = frozenset()
+    # "... any creature on the battlefield with mana value less than or
+    # equal to the amount of mana spent to cast this creature" (Mockingbird;
+    # roto integration): candidates are capped by
+    # ``GameObject.mana_spent_to_cast`` (0 unless it was cast).
+    enters_as_copy_max_mv_mana_spent: bool = False
+    # Roto P4: Rebound (CR 702.88) -- cast from hand, the spell is exiled
+    # as it resolves and may be cast free at its owner's next upkeep
+    # (``roto_walkers.exile_with_rebound``).
+    rebound: bool = False
     # DSK Rooms: a tuple of two ``RoomHalf`` entries when this printing
     # is a Room. Empty for non-Room cards. The Room's overall
     # ``mana_cost`` mirrors one half's cost at print time, but at cast
@@ -1062,6 +1571,117 @@ class CardPrinting:
     # set to the half-name, so the existing iterators (filtered through
     # ``effective_*_abilities``) gate them by ``unlocked_halves``.
     room_halves: tuple[RoomHalf, ...] = ()
+    # --- Spell costs (cube spells A) -------------------------------
+    # Printed alternative costs ("You may <cost> rather than pay this
+    # spell's mana cost", CR 118.9): Force of Will, Daze, Snuff Out,
+    # Mine Collapse, Baleful Mastery, Overload ... — tuple of
+    # ``mtg_bot.cards.spell_costs.AlternativeCost``. Cast through the
+    # ``CastSpell(cast_for_free=True)`` variant, shared with the pitch
+    # cost above (``spell_costs.select_alternative_cost``).
+    alternative_costs: tuple = ()
+    # One-of additional costs ("As an additional cost to cast this
+    # spell, discard a card or pay 3 life."): tuple of
+    # ``spell_costs.AdditionalCostOption``; the caster pays exactly one
+    # payable arm (``spell_costs.pay_additional_cost_option``).
+    additional_cost_options: tuple = ()
+    # Replicate (CR 702.56): "When you cast this spell, copy it for each
+    # time you paid its replicate cost." Mana-cost string ("{U}"); the
+    # caster picks how many times to pay at cast time.
+    replicate_cost: str = ""
+    # Teamwork N: "As an additional cost to cast this spell, you may
+    # tap any number of untapped creatures you control with total power
+    # N or more." Optional; recorded on the spell object as
+    # ``GameObject.optional_additional_cost_paid``.
+    teamwork_power: int = 0
+    # Roto P1 (stack & restrictions): rules-modifying statics read by
+    # ``mtg_bot.roto_restrictions`` -- conditional spell taxes, the
+    # Trinisphere cost floor, can't-cast / can't-activate prohibitions
+    # (named, player-scoped, mana-value capped). A tuple of that
+    # module's static descriptors; empty on every other printing.
+    roto_statics: tuple = ()
+    # --- Vintage Roto P3: mana, costs, cast permissions -------------
+    # "As this land enters, choose a creature type." (Cavern of Souls):
+    # the choice lands on ``GameObject.chosen_creature_type``
+    # (``effects.generic.roto_mana.choose_creature_type_as_enters``).
+    enters_choosing_creature_type: bool = False
+    # "You may cast artifact spells and colorless spells from the top of
+    # your library." (Mystic Forge): the spell kinds ("artifact",
+    # "colorless") castable from the top of the controller's library. The
+    # artifact-only grant keeps ``grants_cast_artifact_from_top_of_library``.
+    cast_from_top_of_library_kinds: tuple = ()
+    # Suspend N--<cost> (CR 702.62): ``suspend_count`` time counters,
+    # ``suspend_cost`` paid by the special action
+    # (``CastSpell(id, use_suspend=True)``, ``roto_mana.suspend_card``).
+    suspend_count: int = 0
+    suspend_cost: "ManaCost | None" = None
+    suspend_cost_str: str = ""
+    # A nonland card printed with no mana cost (Lotus Bloom): it can't be
+    # cast by paying its mana cost (CR 202.1b / 601.2f), only through an
+    # alternative cost such as "without paying its mana cost".
+    has_no_mana_cost: bool = False
+    # Activated abilities that function while the card is in exile
+    # (Greater Gargadon's "Activate only if this card is suspended."),
+    # offered by ``roto_mana.roto_legal_actions`` and activated through
+    # ``roto_mana.activate_exile_ability``.
+    exile_activated_abilities: tuple = ()
+    # "Enchant Forest" (Utopia Sprawl): with ``aura_enchant_type="land"``,
+    # the land subtype the enchanted land must have.
+    aura_enchant_subtype: str = ""
+    # "As this <permanent> enters, choose a color." -> GameObject.chosen_color
+    enters_choosing_color: bool = False
+    # "Whenever enchanted <land> is tapped for mana, its controller adds an
+    # additional one mana of the chosen color." (Utopia Sprawl).
+    enchanted_land_adds_chosen_color: bool = False
+    # "As an additional cost to cast this spell, discard X cards."
+    # (Firestorm): X is announced before targets and becomes the spell's X.
+    additional_cost_discard_x: bool = False
+    # "As an additional cost to cast this spell, you may sacrifice any
+    # number of <permanents>." (Rottenmouth Viper): the ObjectPredicate
+    # over sacrificeable permanents; the matching "costs {1} less for each
+    # permanent sacrificed this way" is a ``cost_reductions`` entry.
+    optional_sacrifice_any_number: "object | None" = None
+    # Cast permissions (``effects.generic.roto_mana``): "You may cast
+    # spells from your hand without paying their mana costs."
+    # (Omniscience); "Any player may cast creature spells with mana value
+    # N or less without paying their mana costs and as though they had
+    # flash." (Aluren: N); "Rather than pay the mana cost for a spell, its
+    # controller may discard a card that shares a color with that
+    # spell." (Dream Halls, ``spell_costs.alternative_costs_for``).
+    grants_free_casts_from_hand: bool = False
+    free_flash_creature_casts_max_mv: "int | None" = None
+    grants_discard_alternative_cost: bool = False
+    # Mana triggers: "Whenever you tap this land for mana, <effect>."
+    # (Forbidden Orchard; ``TriggeredAbility`` entries stacked by
+    # ``roto_mana.after_mana_ability`` / automatic payment) and "Whenever
+    # you tap a nonland permanent for mana, add one mana of any type that
+    # permanent produced." (Kinnan, Bonder Prodigy).
+    tapped_for_mana_triggers: tuple = ()
+    extra_mana_when_you_tap_nonland_for_mana: bool = False
+    # Vintage Roto P5 (board-state prison & layers): static abilities
+    # that change the board's rules -- attack / block restrictions,
+    # untap-step limits, ... -- as rule objects read through
+    # ``mtg_bot.roto_board_statics`` (which honors "loses all
+    # abilities" and Blood Moon's ability loss for the source).
+    board_rules: tuple = ()
+    # Escape whose exile part is "Exile any number of other cards from
+    # your graveyard with N or more card types among them." (Nethergoyf):
+    # N; 0 = the plain "Exile <count> other cards" form
+    # (``escape_exile_count``). Read by ``alt_casting``'s escape helpers.
+    escape_exile_card_types: int = 0
+    # --- Conspiracies (CR 313; roto P6) ----------------------------
+    # The static abilities of a conspiracy card (``card_types ==
+    # ("Conspiracy",)``), which function from the command zone, where
+    # the card starts the game face up (CR 313.2): tuple of
+    # ``mtg_bot.conspiracies`` rules (``YouAreTheStartingPlayer``,
+    # ``MinimumDeckSizeChange``) applied by ``simulate.setup_game``.
+    conspiracy_rules: tuple = ()
+    # Printed static prevention / replacement effects modeled by roto
+    # P6: ``effects.generic.roto_damage.PreventAllDamageToSelf`` ("Prevent
+    # all damage that would be dealt to <this creature>.", read by the
+    # damage routing hooks) and
+    # ``roto_keywords.FewerMinusOneCountersOnYourCreatures`` (Vizier of
+    # Remedies, read by ``game.add_minus_one_counters``).
+    replacement_statics: tuple = ()
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including
@@ -1138,6 +1758,12 @@ class CardPrinting:
         """A Duskmourn Room (Enchantment — Room) — has two halves."""
         return bool(self.room_halves)
 
+    @property
+    def is_conspiracy(self) -> bool:
+        """A conspiracy card (CR 313): never a permanent, never cast;
+        it starts the game in the command zone."""
+        return "Conspiracy" in self.card_types
+
 
 _KNOWN_SUPERTYPES = {"Basic", "Legendary", "Snow", "World", "Token"}
 
@@ -1167,6 +1793,8 @@ def make_creature(
     ward: str | None = None,
     ward_discard_random: bool = False,
     ward_discard_chosen: bool = False,
+    ward_life_cost: int = 0,
+    chooses_player_as_enters: bool = False,
     grants_additional_land_per_turn: int = 0,
     grants_play_lands_from_graveyard: bool = False,
     grants_look_at_top_of_library: bool = False,
@@ -1194,6 +1822,7 @@ def make_creature(
     enters_tapped: bool = False,
     must_be_blocked_if_able: bool = False,
     landcycling: tuple[str, str] | None = None,
+    hand_activated_abilities: tuple["ActivatedAbility", ...] = (),
     enters_with_plus_one_counter_if_creature_died_this_turn: bool = False,
     enters_with_minus_one_counters_from_hand_cast: int = 0,
     spell_is_uncounterable: bool = False,
@@ -1223,6 +1852,8 @@ def make_creature(
         ward_cost_str=ward or "",
         ward_discard_random=ward_discard_random,
         ward_discard_chosen=ward_discard_chosen,
+        ward_life_cost=ward_life_cost,
+        chooses_player_as_enters=chooses_player_as_enters,
         grants_additional_land_per_turn=grants_additional_land_per_turn,
         grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
         grants_look_at_top_of_library=grants_look_at_top_of_library,
@@ -1261,6 +1892,7 @@ def make_creature(
         enters_tapped=enters_tapped,
         must_be_blocked_if_able=must_be_blocked_if_able,
         landcycling=landcycling,
+        hand_activated_abilities=tuple(hand_activated_abilities),
         enters_with_plus_one_counter_if_creature_died_this_turn=(
             enters_with_plus_one_counter_if_creature_died_this_turn
         ),
@@ -1422,6 +2054,9 @@ def make_artifact(
     paints_all_objects_chosen_color_at_etb: bool = False,
     subtype: str | None = None,
     looks_at_opponents_face_down_creatures: bool = False,
+    enters_tapped: bool = False,
+    doesnt_untap_during_untap_step: bool = False,
+    grants_play_lands_from_graveyard: bool = False,
 ) -> CardPrinting:
     """Build a non-creature, non-Spacecraft Artifact permanent.
 
@@ -1464,6 +2099,9 @@ def make_artifact(
         looks_at_opponents_face_down_creatures=(
             looks_at_opponents_face_down_creatures
         ),
+        enters_tapped=enters_tapped,
+        doesnt_untap_during_untap_step=doesnt_untap_during_untap_step,
+        grants_play_lands_from_graveyard=grants_play_lands_from_graveyard,
     )
 
 
@@ -1603,16 +2241,26 @@ def make_planeswalker(
     name: str,
     cost: str,
     loyalty: int,
-    subtype: str,
+    subtype: str | None,
     triggered_abilities: tuple[TriggeredAbility, ...] = (),
     static_abilities: tuple[StaticAbility, ...] = (),
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     legendary: bool = True,
+    keywords: frozenset[str] | set[str] | tuple[str, ...] = (),
+    opponents_cant_draw_more_than_one_card_each_turn: bool = False,
+    opponents_cast_spells_only_at_sorcery_speed: bool = False,
+    loyalty_abilities_at_instant_speed_if_entered_this_turn: bool = False,
 ) -> CardPrinting:
     """Build a Legendary Planeswalker card. Loyalty is the printed
     starting loyalty; it initializes ``GameObject.loyalty_counters``
     when the planeswalker enters the battlefield. SBAs send it to
     graveyard at 0 loyalty.
+
+    ``subtype`` may be ``None`` / empty for a planeswalker printed with
+    no planeswalker type (The Wandering Emperor's bare "Legendary
+    Planeswalker" type line). ``keywords`` carries printed keyword
+    lines (Flash). The remaining flags are the planeswalker statics
+    documented on ``CardPrinting``.
 
     Loyalty-activated abilities ARE modeled via ``activated_abilities``
     carrying ``ActivationCost.loyalty`` (signed cost) + ``sorcery_speed``
@@ -1624,7 +2272,10 @@ def make_planeswalker(
     abilities on the walker still fire normally.
     """
     prefix = "Legendary " if legendary else ""
-    type_line = f"{prefix}Planeswalker — {subtype}"
+    type_line = (
+        f"{prefix}Planeswalker — {subtype}" if subtype
+        else f"{prefix}Planeswalker"
+    )
     supertypes, card_types, subtypes = _parse_type_line(type_line)
     return CardPrinting(
         name=name,
@@ -1634,10 +2285,20 @@ def make_planeswalker(
         supertypes=supertypes,
         card_types=card_types,
         subtypes=subtypes,
+        keywords=frozenset(keywords),
         triggered_abilities=tuple(triggered_abilities),
         static_abilities=tuple(static_abilities),
         activated_abilities=tuple(activated_abilities),
         loyalty=loyalty,
+        opponents_cant_draw_more_than_one_card_each_turn=(
+            opponents_cant_draw_more_than_one_card_each_turn
+        ),
+        opponents_cast_spells_only_at_sorcery_speed=(
+            opponents_cast_spells_only_at_sorcery_speed
+        ),
+        loyalty_abilities_at_instant_speed_if_entered_this_turn=(
+            loyalty_abilities_at_instant_speed_if_entered_this_turn
+        ),
     )
 
 
@@ -1824,6 +2485,10 @@ def make_token_creature(
     artifact: bool = False,
     activated_abilities: tuple[ActivatedAbility, ...] = (),
     can_only_block_creatures_with_flying: bool = False,
+    legendary: bool = False,
+    static_abilities: tuple[StaticAbility, ...] = (),
+    colors: frozenset[str] | set[str] | tuple[str, ...] = (),
+    enchantment: bool = False,
 ) -> CardPrinting:
     """Build a CardPrinting representing a creature token.
 
@@ -1833,13 +2498,18 @@ def make_token_creature(
     ``artifact=True`` adds the Artifact card type (e.g. for EoE's colorless
     Robot tokens). ``can_only_block_creatures_with_flying`` plumbs the
     block-restriction flag onto the resulting printing — used by the EoE
-    Drone token.
+    Drone token. ``legendary=True`` adds the Legendary supertype (Minsc &
+    Boo's "Boo, a legendary 1/1 red Hamster creature token") so the legend
+    rule applies to it.
     """
     subtypes_str = " ".join(subtypes)
-    extra_type = "Artifact " if artifact else ""
+    legend = "Legendary " if legendary else ""
+    extra_type = ("Artifact " if artifact else "") + (
+        "Enchantment " if enchantment else ""
+    )
     type_line = (
-        f"Token {extra_type}Creature — {subtypes_str}"
-        if subtypes else f"Token {extra_type}Creature"
+        f"{legend}Token {extra_type}Creature — {subtypes_str}"
+        if subtypes else f"{legend}Token {extra_type}Creature"
     )
     supertypes, card_types, subtypes_tup = _parse_type_line(type_line)
     return CardPrinting(
@@ -1854,9 +2524,11 @@ def make_token_creature(
         toughness=toughness,
         keywords=frozenset(keywords),
         activated_abilities=tuple(activated_abilities),
+        static_abilities=tuple(static_abilities),
         can_only_block_creatures_with_flying=(
             can_only_block_creatures_with_flying
         ),
+        color_indicator=frozenset(colors),
     )
 
 
@@ -1918,6 +2590,16 @@ def make_utility_land(
     keywords: "frozenset[str] | set[str] | tuple[str, ...]" = (),
     optional_copy_land_from_graveyard: bool = False,
     enters_tapped_unless_any_player_life_at_most: int = 0,
+    enters_tapped_unless: "Condition | None" = None,
+    mana_only_from_produces: bool = False,
+    produces_life_cost: int = 0,
+    hand_activated_abilities: tuple = (),
+    shock_land_life_cost: int = 0,
+    enters_choosing_basic_land_type: bool = False,
+    is_chosen_basic_land_type: bool = False,
+    enters_with_named_counters: tuple = (),
+    produces_with_counter: "tuple[str, frozenset[str]] | None" = None,
+    opening_hand_action: "object | None" = None,
 ) -> CardPrinting:
     """Build a non-basic land with arbitrary activated/triggered
     abilities and an explicit produces set. Used by Stellar Sights."""
@@ -1943,6 +2625,16 @@ def make_utility_land(
         enters_tapped_unless_any_player_life_at_most=(
             enters_tapped_unless_any_player_life_at_most
         ),
+        enters_tapped_unless=enters_tapped_unless,
+        mana_only_from_produces=mana_only_from_produces,
+        produces_life_cost=produces_life_cost,
+        hand_activated_abilities=tuple(hand_activated_abilities),
+        shock_land_life_cost=shock_land_life_cost,
+        enters_choosing_basic_land_type=enters_choosing_basic_land_type,
+        is_chosen_basic_land_type=is_chosen_basic_land_type,
+        enters_with_named_counters=tuple(enters_with_named_counters),
+        produces_with_counter=produces_with_counter,
+        opening_hand_action=opening_hand_action,
     )
 
 

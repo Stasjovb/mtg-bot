@@ -11,6 +11,10 @@ from mtg_bot.effects.base import (
     _apply_damage, _multicolored_permanents_count,
     _find_moonlit_replacement_source,
 )
+from mtg_bot.effects.generic.roto_search import (
+    library_search,
+    searched_card_taken,
+)
 from mtg_bot.effects.generic.targets_helpers import (
     _eff_subtypes,
     _slot_target_still_legal,
@@ -46,6 +50,10 @@ class SearchLibraryForCard(Effect):
     filter_name: str
     max_mv: int = 0
     may_fail: bool = True
+    # ``filter_name="subtype"``: any card with one of these subtypes
+    # (landcycling "Search your library for a Plains card", typecycling
+    # "... for a Wizard card").
+    subtypes: tuple[str, ...] = ()
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name
@@ -88,8 +96,11 @@ class SearchLibraryForCard(Effect):
         # convention.
         if fn == "demon":
             return "Demon" in printing.subtypes
+        if fn == "subtype":
+            return any(s in printing.subtypes for s in self.subtypes)
         return False
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -120,6 +131,9 @@ class SearchLibraryForCard(Effect):
             chosen_id = options[0].id
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         card.zone = Zone.HAND
         p.hand.append(card)
         state.log.append(
@@ -129,8 +143,12 @@ class SearchLibraryForCard(Effect):
         shuffle_library(state, controller_id)
 
     def describe(self) -> str:
+        what = (
+            " or ".join(self.subtypes) if self.filter_name == "subtype"
+            else self.filter_name
+        )
         return (
-            f"search your library for a {self.filter_name} card, reveal "
+            f"search your library for a {what} card, reveal "
             f"it, put it into your hand, then shuffle"
         )
 
@@ -169,6 +187,7 @@ class SearchLibraryForBasicLandTapped(Effect):
 
     count: int = 1
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -192,6 +211,8 @@ class SearchLibraryForBasicLandTapped(Effect):
                 shuffle_library(state, controller_id)
                 return
             p.library.remove(land)
+            if searched_card_taken(state, controller_id, land):
+                continue
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
             # CR 302.1 — summoning sickness applies only to creatures;
@@ -206,6 +227,7 @@ class SearchLibraryForBasicLandTapped(Effect):
             # SEARCH_LIMITATIONS #15 shuffle restoration).
             land.summoning_sick = False
             land.controller_id = controller_id
+            land.entered_battlefield_turn = state.turn_number
             state.battlefield.append(land)
             state.log.append(
                 f"P{controller_id} puts {land.printing.name} onto the "
@@ -233,6 +255,101 @@ class SearchLibraryForBasicLandTapped(Effect):
 
 
 @dataclass(frozen=True)
+class SearchLibraryForLandCardToBattlefield(Effect):
+    """Search your library for a land card of a named kind, put it onto
+    the battlefield (``tapped`` if printed so), then shuffle.
+
+    ``land_types`` — "a Mountain or Plains card" (the fetch lands):
+    any card whose printed subtypes include one of the named land
+    types. ``basic_only`` — "a basic land card" (Prismatic Vista). Both
+    may combine; with neither set any land card qualifies.
+
+    The controller's agent picks via ``choose_card_from_library``;
+    ``None`` declines (a search for a card with a stated quality may
+    fail to find, CR 701.19b). The found land enters through
+    ``actions.apply_land_etb_replacements`` so its OWN printed entry
+    rules apply (a fetched surveil land or triome enters tapped, a
+    fetched shock land offers its life payment, a fetched fast land
+    checks its land count), then its ENTERS triggers and landfall
+    fire. The library is shuffled whether or not a card was found.
+    """
+
+    land_types: tuple[str, ...] = ()
+    basic_only: bool = False
+    tapped: bool = False
+
+    def _matches(self, printing) -> bool:
+        if not printing.is_land:
+            return False
+        if self.basic_only and not printing.is_basic_land:
+            return False
+        if self.land_types:
+            return any(t in printing.subtypes for t in self.land_types)
+        return True
+
+    @library_search
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.actions import (
+            _trigger_etb_abilities, apply_land_etb_replacements,
+        )
+        from mtg_bot.game import Zone, shuffle_library
+
+        p = state.player_by_id(controller_id)
+        options = [c for c in p.library if self._matches(c.printing)]
+        chosen_id = None
+        if options and p.agent is not None:
+            chosen_id = p.agent.choose_card_from_library(
+                state, controller_id, [c.id for c in options],
+            )
+        card = next((c for c in options if c.id == chosen_id), None)
+        if card is None:
+            state.log.append(
+                f"P{controller_id} searches library — finds no "
+                f"{self._describe_kind()}"
+            )
+            shuffle_library(state, controller_id)
+            return
+        p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
+        card.zone = Zone.BATTLEFIELD
+        card.controller_id = controller_id
+        card.summoning_sick = False
+        apply_land_etb_replacements(
+            state, controller_id, card, force_tapped=self.tapped,
+        )
+        card.entered_battlefield_turn = state.turn_number
+        state.battlefield.append(card)
+        p.lands_entered_this_turn += 1
+        state.log.append(
+            f"P{controller_id} puts {card.printing.name} onto the "
+            f"battlefield{' tapped' if card.tapped else ''}"
+        )
+        _trigger_etb_abilities(state, card)
+        shuffle_library(state, controller_id)
+
+    def _describe_kind(self) -> str:
+        if self.land_types:
+            kind = " or ".join(self.land_types)
+        else:
+            kind = "land"
+        if self.basic_only:
+            kind = "basic " + kind
+        return kind + " card"
+
+    def describe(self) -> str:
+        tapped = " tapped" if self.tapped else ""
+        return (
+            f"search your library for a {self._describe_kind()}, put it "
+            f"onto the battlefield{tapped}, then shuffle"
+        )
+
+
+@dataclass(frozen=True)
 class SearchLibraryForEquipmentToBattlefield(Effect):
     """Search the controller's library for an Equipment card, put it
     onto the battlefield (untapped, under the controller's control),
@@ -249,6 +366,7 @@ class SearchLibraryForEquipmentToBattlefield(Effect):
     normally.
     """
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -276,6 +394,9 @@ class SearchLibraryForEquipmentToBattlefield(Effect):
             (c for c in options if c.id == chosen_id), options[0],
         )
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} to "
             f"battlefield (Honored Knight-Captain)"
@@ -302,6 +423,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
     fetch is legal (matches the "search ... may fail" convention).
     """
 
+    @library_search
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -337,6 +459,9 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
             return
         card = next((c for c in options if c.id == chosen_id), options[0])
         p.library.remove(card)
+        if searched_card_taken(state, controller_id, card):
+            shuffle_library(state, controller_id)
+            return
         state.log.append(
             f"P{controller_id} fetches {card.printing.name} onto the battlefield"
         )

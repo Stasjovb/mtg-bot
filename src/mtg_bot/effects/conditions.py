@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.card_types import DELIRIUM_THRESHOLD
 from mtg_bot.effects.object_predicates import ObjectPredicate
 
 if TYPE_CHECKING:
@@ -155,6 +156,30 @@ class ControlPermanent(Condition):
             if self.filter.test(obj, state):
                 return True
         return False
+
+
+@dataclass(frozen=True)
+class ControlsAtMost(Condition):
+    """``viewer_id`` controls at most ``n`` permanents matching
+    ``filter``.
+
+    Models the fast-land ETB gate "This land enters tapped unless you
+    control two or fewer other lands." via
+    ``ControlsAtMost(IsLand(), 2)``: the land's ETB replacement is
+    evaluated before it joins the battlefield, so every counted land is
+    an "other" land.
+    """
+
+    filter: ObjectPredicate
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        count = sum(
+            1 for obj in state.battlefield
+            if obj.controller_id == viewer_id
+            and self.filter.test(obj, state)
+        )
+        return count <= self.n
 
 
 @dataclass(frozen=True)
@@ -373,6 +398,37 @@ class TargetMatches(Condition):
 
 
 @dataclass(frozen=True)
+class PerBasicLandTypeAmongLandsYouControl(Condition):
+    """Variable-amount Domain count: the number of basic land types
+    (Plains, Island, Swamp, Mountain, Forest) among lands the viewer
+    controls, read through ``effective_subtypes`` so type-changing
+    effects and chosen-type lands count. ``matches`` is true iff the
+    count is at least 1; ``multiplier`` returns the count.
+
+    Models Leyline Binding's "Domain — This spell costs {1} less to
+    cast for each basic land type among lands you control."
+    """
+
+    def _types(self, state, viewer_id) -> set[str]:
+        from mtg_bot.game import _BASIC_LAND_TYPE_TO_COLOR, effective_subtypes
+
+        found: set[str] = set()
+        for o in state.battlefield:
+            if o.controller_id == viewer_id and o.printing.is_land:
+                found.update(
+                    s for s in effective_subtypes(state, o)
+                    if s in _BASIC_LAND_TYPE_TO_COLOR
+                )
+        return found
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return bool(self._types(state, viewer_id))
+
+    def multiplier(self, state, viewer_id, chosen_targets=None):
+        return len(self._types(state, viewer_id))
+
+
+@dataclass(frozen=True)
 class PerDifferentlyNamedLand(Condition):
     """Variable-amount: count distinctly-named lands the viewer
     controls. ``matches`` is true iff the count is at least 1;
@@ -498,6 +554,39 @@ class HandSizeAtMost(Condition):
 
 
 @dataclass(frozen=True)
+class YourTurnOfGameAtMost(Condition):
+    """It is the viewer's turn and it's one of their first ``n`` turns
+    of the game (``Player.turns_started`` counts each turn they begin,
+    extra turns included).
+
+    Models Starting Town's "This land enters tapped unless it's your
+    first, second, or third turn of the game." via
+    ``YourTurnOfGameAtMost(3)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        if state.active_player().id != viewer_id:
+            return False
+        return 1 <= state.player_by_id(viewer_id).turns_started <= self.n
+
+
+@dataclass(frozen=True)
+class HandSizeExactly(Condition):
+    """The viewer's hand has exactly ``n`` cards.
+
+    Models Library of Alexandria's "Activate only if you have exactly
+    seven cards in hand." via ``HandSizeExactly(7)``.
+    """
+
+    n: int
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        return len(state.player_by_id(viewer_id).hand) == self.n
+
+
+@dataclass(frozen=True)
 class UnlockedDoorsAmongRoomsAtLeast(Condition):
     """The viewer controls Rooms whose total ``len(unlocked_halves)``
     sum to at least ``n``.
@@ -528,35 +617,86 @@ class UnlockedDoorsAmongRoomsAtLeast(Condition):
 
 @dataclass(frozen=True)
 class DeliriumActive(Condition):
-    """The viewer has at least four distinct card types among cards in
-    their graveyard.
+    """There are ``min_card_types`` (printed: four) or more card types
+    among cards in the viewer's graveyard -- the Delirium ability word's
+    condition at the Condition tier: statics ("Delirium -- As long as
+    ...", Dragon's Rage Channeler), "instead if" spell riders (Unholy
+    Heat, via ``IfConditionElse`` at resolution) and "Activate only if"
+    restrictions (Shifting Woodland).
 
-    Walks the viewer's graveyard once and counts distinct card-type
-    entries from the comprehensive-rules taxonomy (CR 205.2a — Creature,
-    Land, Sorcery, Instant, Enchantment, Artifact, Planeswalker,
-    Battle, Tribal); supertypes (Legendary, Snow, Basic) and subtypes
-    don't count. Short-circuits as soon as the running set hits four.
-
-    Mirrors :class:`mtg_bot.effects.state_predicates.Delirium` — the
-    StatePredicate sibling used at the trigger layer — so static and
-    trigger evaluations of "Delirium —" share the same game-state
-    semantics. Models Wildfire Wickerfolk's ``Delirium — This creature
-    gets +1/+1 and has trample as long as there are four or more
-    card types among cards in your graveyard.`` rider.
+    Delegates to :func:`mtg_bot.effects.card_types.delirium_active`, the
+    ONE shared definition the trigger-tier twin
+    :class:`mtg_bot.effects.state_predicates.Delirium` also uses, so every
+    delirium check in the engine counts card types the same way (CR
+    205.2a incl. kindred, split halves combined, DFCs by their front
+    face, tokens excluded). Evaluated on every call: statics see the
+    graveyard continuously, spells see it as they resolve.
     """
 
-    def matches(self, state, viewer_id, chosen_targets=None):
-        from mtg_bot.effects.state_predicates import _DELIRIUM_CARD_TYPES
+    min_card_types: int = DELIRIUM_THRESHOLD
 
+    def matches(self, state, viewer_id, chosen_targets=None):
+        from mtg_bot.effects.card_types import delirium_active
+
+        return delirium_active(state, viewer_id, self.min_card_types)
+
+
+
+@dataclass(frozen=True)
+class SourceHasCounter(Condition):
+    """"If <this permanent> has a <kind> counter on it" -- the object
+    whose ability is resolving (``state.resolving_source``; set for mana
+    abilities too) has at least one ``kind`` counter. Source-aware in
+    statics through :meth:`matches_for_source`. Gemstone Caverns' luck
+    counter."""
+
+    kind: str
+
+    def matches(self, state, viewer_id, chosen_targets=None):
+        source = getattr(state, "resolving_source", None)
+        return source is not None and self.matches_for_source(state, source)
+
+    def matches_for_source(self, state, source) -> bool:
+        from mtg_bot.game import counter_count
+
+        return counter_count(source, self.kind) > 0
+
+
+@dataclass(frozen=True)
+class FirstSpellYouCastThisGame(Condition):
+    """The viewer hasn't cast a spell yet this game (Once Upon a Time's
+    "If this spell is the first spell you've cast this game")."""
+
+    def matches(self, state, viewer_id, chosen_targets=None):
         try:
             player = state.player_by_id(viewer_id)
         except (KeyError, AttributeError):
             return False
-        seen: set[str] = set()
-        for card in player.graveyard:
-            for t in card.printing.card_types:
-                if t in _DELIRIUM_CARD_TYPES:
-                    seen.add(t)
-                    if len(seen) >= 4:
-                        return True
-        return False
+        return player.spells_cast_this_game == 0
+
+
+@dataclass(frozen=True)
+class SpellCastFromOutsideHand(Condition):
+    """The spell whose cost is being determined is being cast from
+    anywhere other than its caster's hand (Bilbo, Thief in the Night:
+    "Spells you cast from anywhere other than your hand cost {1} less to
+    cast."). Reads the cast-origin context set by the cast pipeline and
+    ``legal_actions`` (``creature_casting_ub.casting_origin``)."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        from mtg_bot.creature_casting_ub import CASTING_FROM_OUTSIDE_HAND
+
+        return CASTING_FROM_OUTSIDE_HAND.get()
+
+
+@dataclass(frozen=True)
+class SpellCastFromGraveyard(Condition):
+    """The spell whose cost is being determined is being cast from a
+    graveyard (Green Goblin: "Spells you cast from your graveyard cost
+    {2} less to cast."). Reads the cast-origin context
+    (``creature_casting_ub.casting_origin``)."""
+
+    def matches(self, state, viewer_id, chosen_targets=None) -> bool:
+        from mtg_bot.creature_casting_ub import CASTING_FROM_GRAVEYARD
+
+        return CASTING_FROM_GRAVEYARD.get()

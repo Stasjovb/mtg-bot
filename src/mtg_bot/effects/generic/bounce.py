@@ -256,7 +256,15 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             )
             if obj is None:
                 continue
+            if obj.exile_instead_of_leaving:
+                from mtg_bot.turn import move_off_battlefield
+
+                move_off_battlefield(state, obj, destination="exile")
+                continue
             state.battlefield.remove(obj)
+            from mtg_bot.game import restore_mdfc_front
+
+            restore_mdfc_front(obj)
             obj.damage = 0
             obj.marked_lethal = False
             obj.damaged_this_turn = False
@@ -271,6 +279,9 @@ class ReturnUpToNTargetCreaturesToOwnersHands(Effect):
             obj.attached_to = None
             if not obj.printing.is_land:
                 state.permanent_left_battlefield_this_turn = True
+            state.player_by_id(
+                obj.controller_id
+            ).permanent_left_battlefield_this_turn = True
             if obj.printing.is_token:
                 state.log.append(
                     f"{obj.printing.name} token ceases to exist (bounced)"
