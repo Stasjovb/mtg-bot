@@ -1,13 +1,14 @@
 """Bundled training-time heuristic toggles for ``MtgGameStateAdapter``.
 
-Five separate priority short-circuit / filter heuristics live on the
+Six separate priority short-circuit / filter heuristics live on the
 adapter (phase prune, force land drop, skip empty combat, skip opp
-postcombat main, skip dead main 1). They share the same toggle shape
-(boolean on/off, default ON for self-play, default OFF for eval), the
+postcombat main, skip dead main 1, skip opp quiet windows). They share
+the same toggle shape (boolean on/off, default ON for self-play,
+default OFF for eval -- see ``live_eval`` for the live eval paths), the
 same JSON-serialization needs (the distributed orchestrator round-
 trips them via ``SelfPlayJobSpec`` / ``EvalJobSpec``), and travel
 together through the call chain. Bundling them as one config means
-adding a sixth heuristic doesn't fan out into ~16 plumbing edits
+adding another heuristic doesn't fan out into ~16 plumbing edits
 across data_gen / self_play / distributed / both job specs / the
 worker packed-args tuple.
 
@@ -23,7 +24,7 @@ adapter so that's the default in test sessions.
 
 Each entry's rationale + acceptable-failure case lives at the
 corresponding helper docstring on ``MtgGameStateAdapter`` and at the
-SEARCH_LIMITATIONS.md entries (#6, #7, #9, #10, #11).
+SEARCH_LIMITATIONS.md entries (#6, #7, #9, #10, #11, #17).
 """
 
 from __future__ import annotations
@@ -72,6 +73,9 @@ class HeuristicsConfig:
     skip_empty_combat_enabled: bool = True
     skip_opp_postcombat_main_enabled: bool = True
     skip_dead_main1_enabled: bool = True
+    # SEARCH_LIMITATIONS #17: the non-active player's empty-stack
+    # upkeep / draw / precombat-main priority windows auto-pass.
+    skip_opp_quiet_windows_enabled: bool = True
     decision_source: DecisionSource = DEFAULT_DECISION_SOURCE
 
     def __post_init__(self) -> None:
@@ -95,7 +99,26 @@ class HeuristicsConfig:
             skip_empty_combat_enabled=False,
             skip_opp_postcombat_main_enabled=False,
             skip_dead_main1_enabled=False,
+            skip_opp_quiet_windows_enabled=False,
         )
+
+    @classmethod
+    def live_eval(cls) -> "HeuristicsConfig":
+        """The config the live eval paths play with: the v2 worker eval
+        stage (``worker_daemon_production_runner._play_eval_game``,
+        behind ``iterate``'s arena and ``mtg_bot eval``) and
+        ``mtg_bot ladder``.
+
+        Those paths have always passed ``heuristics=None`` -- the
+        production default, every flag ON -- so #6 / #7 / #9 / #10 /
+        #11 apply in the arena exactly as in self-play (the "EvalJobSpec
+        defaults OFF" rule covers the legacy ``EvalJobSpec`` only). This
+        keeps that unchanged and turns OFF only
+        ``skip_opp_quiet_windows_enabled`` (SEARCH_LIMITATIONS #17), so
+        arena / ladder games play exactly as they did before #17 landed
+        and strength numbers keep the plays it hides.
+        """
+        return cls(skip_opp_quiet_windows_enabled=False)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Round-trips through ``from_dict``.
@@ -134,6 +157,9 @@ class HeuristicsConfig:
             ),
             skip_dead_main1_enabled=bool(
                 d.get("skip_dead_main1_enabled", True),
+            ),
+            skip_opp_quiet_windows_enabled=bool(
+                d.get("skip_opp_quiet_windows_enabled", True),
             ),
             # decision_source defaults to "python" (the safe-by-
             # default flip knob) when absent — every pre-B3 serialized

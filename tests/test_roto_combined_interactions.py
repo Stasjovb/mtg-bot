@@ -362,7 +362,11 @@ def test_search_in_an_instant_speed_window_uses_the_reveal():
     searches worlds holding P1's revealed hand. (A tap ability: a free
     repeatable one such as Nomads en-Kor's would keep the random
     rollouts activating it to the decision cap -- SEARCH_LIMITATIONS,
-    instant-speed activations #4.)"""
+    instant-speed activations #4.)
+
+    The window is a search decision only where SEARCH_LIMITATIONS #17
+    (the opponent's quiet-window skip) is off: the live eval config and
+    ``disabled()`` offer it, the self-play default auto-passes it."""
     state = _wizard_game(
         [], agents=[RandomAgent(), RandomAgent()], starting=1,
     )
@@ -380,6 +384,15 @@ def test_search_in_an_instant_speed_window_uses_the_reveal():
     engine = adapter.engine_state
     assert engine.active_player_idx == 1 and engine.step == Step.UPKEEP
     assert ActivateAbility(vial.id, 0) in legal_actions(engine, 0)
+    assert ActivateAbility(vial.id, 0) in legal
+    for config, offered in (
+        (HeuristicsConfig.live_eval(), True), (HeuristicsConfig(), False),
+    ):
+        other = adapter.clone()
+        other._heuristics = config
+        other._invalidate_legal_actions_cache()
+        assert (ActivateAbility(vial.id, 0) in other.legal_decisions()) is offered
+    assert other.legal_decisions() == [PassPriority()]
     known = {
         c.id: c.printing.name for c in engine.players[1].hand
         if 0 in c.publicly_known_to

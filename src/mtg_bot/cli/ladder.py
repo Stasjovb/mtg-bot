@@ -261,6 +261,7 @@ def play_pair(
     """Play ``n_games`` seat-alternated games of ``a`` vs ``b`` on a
     local pool. Seat 0 in the aggregated stats always means ``a``
     (``run_match_parallel(alternate_seats=True)`` remaps odd games)."""
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
     from mtg_bot.training.self_play import run_match_parallel
 
     t0 = time.perf_counter()
@@ -273,6 +274,10 @@ def play_pair(
         per_game_timeout_sec=per_game_timeout_sec,
         deck_pool=deck_pool,
         alternate_seats=True,
+        # Production heuristic defaults minus the opponent-quiet-window
+        # skip (SEARCH_LIMITATIONS #17) -- see
+        # ``HeuristicsConfig.live_eval``.
+        heuristics=HeuristicsConfig.live_eval(),
     )
     return PairResult(
         a=spec_a.label, b=spec_b.label,

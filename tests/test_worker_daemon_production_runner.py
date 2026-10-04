@@ -671,6 +671,40 @@ def test_play_eval_game_handles_timeout_preserves_partial(monkeypatch):
     assert outcome == "timed_out"
 
 
+def test_play_eval_game_keeps_the_quiet_window_skip_off(monkeypatch):
+    """The arena / ``mtg_bot eval`` path plays with the production
+    heuristic defaults minus the opponent-quiet-window skip
+    (SEARCH_LIMITATIONS #17): ``HeuristicsConfig.live_eval()``."""
+    import mtg_bot.training.self_play as sp_mod
+    from mtg_bot.search.heuristics_config import HeuristicsConfig
+
+    seen = {}
+
+    def fake(**kwargs):
+        seen.update(kwargs)
+        return 0, 7
+
+    monkeypatch.setattr(sp_mod, "_play_one_match_game", fake)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from _test_decks import simple_test_deck_pool
+    finally:
+        sys.path.pop(0)
+    winner, decisions, outcome = prr._play_eval_game(
+        p0_factory=lambda seed: None,
+        p1_factory=lambda seed: None,
+        base_seed=0,
+        game_idx=0,
+        deck_pool=simple_test_deck_pool(),
+        deck_indices=[0, 1],
+        per_game_timeout_sec=None,
+    )
+    assert (winner, decisions, outcome) == (0, 7, "completed")
+    assert seen["heuristics"] == HeuristicsConfig.live_eval()
+    assert seen["heuristics"].skip_opp_quiet_windows_enabled is False
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 — subprocess-pool wiring (use_subprocess_pool=True).
 #
