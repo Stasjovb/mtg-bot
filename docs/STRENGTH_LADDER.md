@@ -253,3 +253,54 @@ head-to-head. The gains per cycle (if real) are below what 300 games can
 resolve. v18 promoted to `current_best` on the ladder evidence; the next
 run switches to always-promote (accept 0.0) at nodes 200 / 1,000 games
 per cycle with the ladder as the yardstick.
+
+### 2026-10-04 -- the value calibration, actually applied in play (nodes 100 / samples 2, batch 1, 300 games per pair)
+
+**Every earlier row in this file ran the NN uncalibrated.** The post-hoc
+value calibration (`metadata.value_calibration`, `tanh(logit / T + b)`)
+was only applied by `NNEvaluator.from_metadata`; `NNPimcConfig.build` --
+the builder behind every ladder seat, worker self-play / arena game and
+iterate's local arenas -- never passed it (nor `value_head_input`, which
+is `trunk` on every s2 version, so that half was a no-op). Fixed on
+`feature/nnpimc-value-calibration`: all paths share one resolver, and
+the label modifier `<version>+nocal` reproduces the old evaluator, i.e.
+**`vN+nocal` today == `vN` in every table above.** For v15-v26 the fit
+*sharpens* the root-trained head (T 0.49-0.71, mean |value| ~0.21 ->
+~0.34); for v8-v14 it *shrank* an outcome-trained head (T 10.7-17.5).
+
+`ladder_runs/s2_calibration_b1/`: EoE deck pool, seed 0 (every pair plays
+the same 300 seat-alternated deal/seed pairs), per-game timeout 900 s
+(1-2 timeouts per pair, dropped), all seats leaf batch 1, ladder search
+heuristics as in every earlier ladder (`heuristics=None`). Code
+`2a81ea1b` = the leaf-batch-1 stack + main@`66888991` + this fix (Python
+engine; pre-roto rules -- no instant-speed activations, which main
+gained at `46efc8b9`).
+
+| agent | T | vs heuristic (W-L) | score [95 % Wilson CI] |
+|---|---:|---|---|
+| v22+b1 | 0.525 | 161-137 | **54.0 %** [48.4, 59.6] |
+| v22+b1+nocal | (1) | 155-144 | 51.8 % [46.2, 57.4] |
+| v18+b1 | 0.528 | 157-142 | **52.5 %** [46.9, 58.1] |
+| v18+b1+nocal | (1) | 149-149 | 50.0 % [44.4, 55.6] |
+
+Calibrated minus uncalibrated (Newcombe 95 % CI, treating the arms as
+independent -- conservative, they share deals): v22 **+2.2 pts** [-5.8,
++10.1], v18 **+2.5** [-5.5, +10.5], pooled 318/597 vs 304/597 = **+2.3**
+[-3.3, +8.0]. The `+nocal` arms reproduce the 2026-10-01 batch-1
+ladder (`feature/leaf-batch-1`'s section of this file: v22+b1 52.0 %,
+v18+b1 49.2 % at 200 games on the same seeds).
+
+Reading: the calibration is not a hidden multi-point lever. Both
+versions move the same direction by ~2 points, which is plausible
+(sharper leaf values let real differences outweigh the PUCT prior) but
+inside the noise of 600 games; the honest summary is "small positive or
+zero, not negative". It is still the right default: the held-out gate
+grades the calibrated head, so play now runs the evaluator that was
+graded. The bigger consequence is for data, not this ladder: every
+NN-driven self-play shard so far (v8-v10 in cycles 7-10; v15/v18/v20-v24
+in cycles 11-18) was searched with uncalibrated leaves, including the
+root values the root / blend:0.8 versions trained on. Cycles from now on
+(once the fix is merged and the cluster rolled) record root values from
+calibrated, ~1.6x larger leaf values; expect the next fits' temperatures
+to drift toward 1 (a hypothesis, not measured), and judge those cycles against the
+`+nocal`-equivalent history above with that scale change in mind.
