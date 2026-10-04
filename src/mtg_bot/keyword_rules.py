@@ -96,11 +96,9 @@ def _source_colors(state: "GameState", source: "GameObject") -> frozenset[str]:
 
 
 def _source_is_type(state: "GameState", source: "GameObject", card_type: str) -> bool:
-    from mtg_bot.game import Zone, is_creature_now
+    from mtg_bot.game import has_card_type
 
-    if card_type == "Creature" and source.zone == Zone.BATTLEFIELD:
-        return is_creature_now(source)
-    return card_type in source.printing.card_types
+    return has_card_type(state, source, card_type)
 
 
 _TYPE_QUALITIES: dict[str, str] = {

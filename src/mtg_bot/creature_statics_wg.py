@@ -80,15 +80,23 @@ def forced_to_enter_tapped(
 
 def spell_cost_increase(
     state: "GameState", printing, caster_id: "int | None" = None,
+    *, card: "GameObject | None" = None,
 ) -> int:
     """Total generic increase statics on the battlefield impose on
     ``caster_id`` casting ``printing`` (CR 601.2f): "<Filter> spells cost
     {N} more to cast." (every player's spells) and "Spells your
-    opponents cast with the chosen name cost {N} more to cast."."""
+    opponents cast with the chosen name cost {N} more to cast.".
+    ``card`` -- the spell's game object -- makes the filter read its
+    effective characteristics (a colorless-under-Lattice spell isn't a
+    "<color> spell"); without it the printing is tested."""
     total = 0
     for o in state.battlefield:
         for card_filter, amount in o.printing.spell_cost_increases:
-            if card_filter.matches(printing):
+            matched = (
+                card_filter.matches_card(state, card) if card is not None
+                else card_filter.matches(printing)
+            )
+            if matched:
                 total += amount
         if (
             o.printing.named_spell_cost_increase
@@ -199,17 +207,6 @@ def combat_damage_unpreventable(state: "GameState", source: "GameObject") -> boo
 # ---------------------------------------------------------------------
 
 
-def _card_types_now(obj) -> set:
-    from mtg_bot.game import is_creature_now
-
-    types = set(obj.printing.card_types)
-    if is_creature_now(obj):
-        types.add("Creature")
-    else:
-        types.discard("Creature")
-    return types
-
-
 def extra_mana_for_creature_tap(
     state: "GameState", player_id: int, tapped: "GameObject",
 ) -> None:
@@ -229,17 +226,47 @@ def extra_mana_for_creature_tap(
             state.log.append(f"{o.printing.name} adds an additional {{{color}}}")
 
 
+def any_activation_locks(state: "GameState") -> bool:
+    """Whether any permanent prints an "Activated abilities of <types>
+    [your opponents control] can't be activated." static."""
+    for o in state.battlefield:
+        pr = o.printing
+        if (
+            pr.locks_activated_abilities_of
+            or pr.locks_opponents_activated_abilities_of
+        ):
+            return True
+    return False
+
+
 def activation_locked(state: "GameState", obj: "GameObject") -> bool:
-    """"Activated abilities of <types> can't be activated." -- does a
-    permanent on the battlefield lock ``obj``'s activated abilities?"""
-    locks = [
-        o.printing.locks_activated_abilities_of for o in state.battlefield
-        if o.printing.locks_activated_abilities_of
-    ]
-    if not locks:
-        return False
-    types = _card_types_now(obj)
-    return any(types.intersection(lock) for lock in locks)
+    """"Activated abilities of <types> can't be activated." (Clarion
+    Conqueror, Null Rod, Stony Silence) and "Activated abilities of
+    <types> your opponents control can't be activated." (Karn, the Great
+    Creator) -- does a permanent on the battlefield lock ``obj``'s
+    activated abilities (mana abilities included)? ``obj``'s types are
+    its effective ones (``game.has_card_type``: under Mycosynth Lattice a
+    land or a planeswalker is an artifact). A lock source that has lost
+    its abilities (``roto_board_statics.abilities_suppressed``) or is
+    phased out locks nothing."""
+    from mtg_bot.game import has_card_type
+    from mtg_bot.roto_board_statics import abilities_suppressed
+
+    for src in state.battlefield:
+        pr = src.printing
+        everyone = pr.locks_activated_abilities_of
+        opponents = (
+            pr.locks_opponents_activated_abilities_of
+            if src.controller_id != obj.controller_id else ()
+        )
+        if not (everyone or opponents):
+            continue
+        if src.phased_out or abilities_suppressed(state, src):
+            continue
+        for card_type in everyone + opponents:
+            if has_card_type(state, obj, card_type):
+                return True
+    return False
 
 
 def filter_unusable_abilities(state: "GameState", actions: list) -> list:
@@ -267,7 +294,7 @@ def filter_unusable_abilities(state: "GameState", actions: list) -> list:
 def filter_activation_locks(state: "GameState", actions: list) -> list:
     """Drop ``ActivateAbility`` / ``ActivateStation`` proposals whose
     battlefield source is locked."""
-    if not any(o.printing.locks_activated_abilities_of for o in state.battlefield):
+    if not any_activation_locks(state):
         return actions
     from mtg_bot.actions import ActivateAbility, ActivateStation
 

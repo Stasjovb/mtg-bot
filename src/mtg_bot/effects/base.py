@@ -259,16 +259,18 @@ class ModalEffect(Effect):
 def _multicolored_permanents_count(
     state: "GameState", controller_id: int
 ) -> int:
-    """Count permanents the controller controls whose mana cost has
-    two or more colors. Matches the "multicolored permanent" filter
+    """Count permanents the controller controls that are two or more
+    colors (``game.effective_colors``: layer 5 -- Mycosynth Lattice makes
+    them all colorless). Matches the "multicolored permanent" filter
     used by Infinite Guideline Station.
     """
+    from mtg_bot.game import effective_colors
+
     count = 0
     for o in state.battlefield:
         if o.controller_id != controller_id:
             continue
-        colors = o.printing.mana_cost.colors
-        if len(colors) >= 2:
+        if len(effective_colors(state, o)) >= 2:
             count += 1
     return count
 
@@ -1004,6 +1006,9 @@ class StaticAbility:
             card_type = self.scope[len(StaticScope.CARD_TYPE_PREFIX):]
             if card_type == "Creature":
                 return is_creature_now(target)
+            if state is not None:
+                from mtg_bot.game import has_card_type
+                return has_card_type(state, target, card_type)
             return card_type in target.printing.card_types
         if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
             # Read effective_subtypes so a creature granted "Sliver"

@@ -542,11 +542,13 @@ class Surveil(Effect):
     use_artifact_count: bool = False
 
     def _amount(self, state: "GameState", controller_id: int) -> int:
+        from mtg_bot.game import is_artifact_now
+
         if not self.use_artifact_count:
             return self.amount
         return sum(
             1 for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         )
 
     def resolve(

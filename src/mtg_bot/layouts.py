@@ -434,12 +434,12 @@ def waterbend_helpers(state: "GameState", player_id: int) -> list:
     """Untapped artifacts and creatures ``player_id`` controls -- each can
     be tapped to pay {1} of a waterbend cost (summoning sickness doesn't
     matter: tapping it isn't an activated ability's {T} cost)."""
-    from mtg_bot.game import is_creature_now
+    from mtg_bot.game import is_artifact_now, is_creature_now
 
     return [
         o for o in state.battlefield
         if o.controller_id == player_id and not o.tapped
-        and (o.printing.is_artifact or is_creature_now(o))
+        and (is_artifact_now(state, o) or is_creature_now(o))
     ]
 
 
@@ -575,6 +575,7 @@ def stop_being_prepared(state: "GameState", obj) -> None:
         for c in p.exile:
             if c.id == obj.prepared_copy_id:
                 p.exile.remove(c)
+                c.exiled_face_down = False  # left exile (CR 400.7)
                 break
     obj.prepared_copy_id = -1
 

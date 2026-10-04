@@ -712,6 +712,21 @@ class GameObject:
     # at the moment a card becomes a face-down permanent; cleared by
     # the ``TurnFaceUp`` action.
     face_down: bool = False
+    # A card exiled face down (CR 406.3: Necropotence, Memory Jar, Scroll
+    # Rack, Beseech the Mirror, "exile ... face down" effects): it isn't
+    # "a face-up card in exile" (Karn, the Great Creator's -2). Who may
+    # look at it stays ``publicly_known_to``'s job. Set by the face-down
+    # exile sites; cleared at every site that takes a card out of exile
+    # (a card that leaves exile is a new object, CR 400.7).
+    exiled_face_down: bool = False
+    # Last-known card types (CR 603.10a) of an object that is leaving
+    # the battlefield right now: ``turn.move_off_battlefield`` /
+    # ``turn.sacrifice`` snapshot ``effective_card_types`` before the
+    # move -- only when it differs from the printed types -- and clear
+    # it once the departure triggers have been dispatched. While set,
+    # ``effective_card_types`` reports it for the departed object (a land
+    # that was an artifact under Mycosynth Lattice dies as an artifact).
+    lki_card_types: Optional[tuple] = None
     # Basic land type chosen as this permanent entered ("As this land
     # enters, choose a basic land type." — Multiversal Passage). Set by
     # ``actions.apply_land_etb_replacements`` on every entry; read by
@@ -1208,6 +1223,195 @@ def is_creature_now(obj: GameObject) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Effective card types (CR 613 layer 4) -- the single read every "is this an
+# artifact?" / "does it have card type T?" question goes through. Design:
+# docs/EFFECTIVE_CHARACTERISTICS_DESIGN.md.
+# ---------------------------------------------------------------------------
+
+# The CR 205.2a card types an effect in the engine may add to a permanent.
+# Nothing adds or removes any other card type, so printed reads of Land /
+# Enchantment / Planeswalker / Battle / Instant / Sorcery stay exact; a
+# layer-4 ``add_type`` naming another type is rejected (loudly) by
+# ``GameState.add_continuous_effect`` and by the reader below.
+LAYER4_ADDABLE_CARD_TYPES: frozenset[str] = frozenset({"Artifact", "Creature"})
+
+# A face-down permanent's only card type (CR 708.2a).
+_FACE_DOWN_CARD_TYPES: tuple[str, ...] = ("Creature",)
+
+
+def normalize_added_card_type(name: str) -> str:
+    """``"artifact"`` / ``"Artifact"`` -> ``"Artifact"``; raises for a card
+    type no effect may add (see :data:`LAYER4_ADDABLE_CARD_TYPES`)."""
+    card_type = name[:1].upper() + name[1:].lower()
+    if card_type not in LAYER4_ADDABLE_CARD_TYPES:
+        raise ValueError(
+            f"layer-4 add_type {name!r}: only {sorted(LAYER4_ADDABLE_CARD_TYPES)}"
+            " can be added; route that card type's reads through"
+            " effective_card_types before adding it"
+        )
+    return card_type
+
+
+def _layer4_added_card_types(
+    state: "GameState", obj: "GameObject"
+) -> list[str]:
+    """Non-creature card types layer-4 effects add to battlefield object
+    ``obj``: registry ``add_type`` entries targeting it (Liquimetal
+    Coating, Karn's +1, Unable to Scream) and synthesized entries from
+    battlefield sources with ``all_permanents_gain_card_type`` (Mycosynth
+    Lattice -- computed per read like Magus / Dryad, so entering, leaving,
+    control changes and copies need no plumbing; a phased-out source
+    contributes nothing, CR 702.26b). Additions commute, so timestamps
+    don't matter here. Creature-ness is ``is_creature_now``'s.
+
+    Explicit loops: this sits under hot layered reads (closure-free; see
+    ``_static_bonuses``)."""
+    added: list[str] = []
+    oid = obj.id
+    for ce in state.continuous_effects:
+        if ce.layer != 4 or ce.kind != "add_type" or ce.target_id != oid:
+            continue
+        card_type = normalize_added_card_type(ce.params[0])
+        if card_type != "Creature" and card_type not in added:
+            added.append(card_type)
+    if not state.layered_statics_possible:
+        return added
+    for src in state.battlefield:
+        granted = src.printing.all_permanents_gain_card_type
+        if granted is None or src.phased_out:
+            continue
+        if granted not in added:
+            added.append(granted)
+    return added
+
+
+def effective_card_types(
+    state: "GameState", obj: "GameObject"
+) -> tuple[str, ...]:
+    """``obj``'s card types (CR 205.2a) after layer 4.
+
+    * Off the battlefield: the printed types -- no effect in any pool
+      changes the card types of a card in a library, hand, graveyard,
+      exile or on the stack -- except an object leaving the battlefield
+      right now (its last-known types, ``GameObject.lki_card_types``).
+    * On the battlefield: the printed types (just ``Creature`` while face
+      down, CR 708.2a), creature-ness from ``is_creature_now`` (the
+      layer-4 ``add_type "creature"`` cache, stations, impending /
+      enduring / reconfigure / bestow), plus :func:`_layer4_added_card_types`.
+    """
+    if obj.zone is not Zone.BATTLEFIELD:
+        lki = obj.lki_card_types
+        if lki is not None:
+            return lki
+        # (Face-down status is a battlefield characteristic here: the
+        # engine turns nothing face down outside the battlefield -- no
+        # morph casting -- and a manifested card that leaves keeps a
+        # stale ``face_down`` flag in a public zone.)
+        return obj.printing.card_types
+    printed = _FACE_DOWN_CARD_TYPES if obj.face_down else obj.printing.card_types
+    added = _layer4_added_card_types(state, obj)
+    creature = is_creature_now(obj)
+    if not added and creature == ("Creature" in printed):
+        return printed
+    types: list[str] = []
+    for t in printed:
+        if t == "Creature" and not creature:
+            continue
+        types.append(t)
+    if creature and "Creature" not in types:
+        types.append("Creature")
+    for t in added:
+        if t not in types:
+            types.append(t)
+    return tuple(types)
+
+
+def has_card_type(
+    state: "GameState", obj: "GameObject", card_type: str
+) -> bool:
+    """Whether ``obj`` currently has ``card_type`` -- the membership form
+    of :func:`effective_card_types` with a printed-membership fast path
+    (nothing removes a non-creature card type, so a printed type other
+    than Creature always holds on a face-up permanent)."""
+    if obj.zone is Zone.BATTLEFIELD:
+        if card_type == "Creature":
+            return is_creature_now(obj)
+        if not obj.face_down and card_type in obj.printing.card_types:
+            return True
+        if card_type not in LAYER4_ADDABLE_CARD_TYPES:
+            return False
+        return card_type in _layer4_added_card_types(state, obj)
+    return card_type in effective_card_types(state, obj)
+
+
+def is_artifact_now(state: "GameState", obj: "GameObject") -> bool:
+    """Whether ``obj`` is an artifact right now (layer 4: Mycosynth
+    Lattice, Liquimetal Coating, Karn's +1, Unable to Scream) --
+    ``has_card_type(state, obj, "Artifact")`` with the common cases
+    inlined (it is read for every permanent in ability enumeration)."""
+    if obj.zone is Zone.BATTLEFIELD:
+        if not obj.face_down and "Artifact" in obj.printing.card_types:
+            return True
+        if not state.continuous_effects and not state.layered_statics_possible:
+            return False
+        return "Artifact" in _layer4_added_card_types(state, obj)
+    return "Artifact" in effective_card_types(state, obj)
+
+
+def snapshot_departure_card_types(
+    state: "GameState", obj: "GameObject"
+) -> bool:
+    """Record ``obj``'s last-known card types before it leaves the
+    battlefield (CR 603.10a) when they differ from the printed ones.
+    Returns True when this call set the snapshot (the caller clears it
+    with :func:`clear_departure_card_types` after dispatching the
+    departure triggers); False when there was nothing to record or an
+    outer caller (``turn.sacrifice``) already holds one."""
+    if obj.lki_card_types is not None or obj.zone is not Zone.BATTLEFIELD:
+        return False
+    types = effective_card_types(state, obj)
+    if types == obj.printing.card_types:
+        return False
+    obj.lki_card_types = types
+    return True
+
+
+def clear_departure_card_types(obj: "GameObject") -> None:
+    obj.lki_card_types = None
+
+
+def sync_creature_type_cache(
+    state: "GameState", object_ids: "set[int] | None" = None,
+) -> None:
+    """Rebuild the ``permanent_is_creature`` cache from the registry: a
+    permanent keeps it only while a layer-4 ``add_type "creature"`` entry
+    still targets it. Called after every registry removal that can drop
+    such an entry (cleanup, the untap step's "until your next turn"
+    expiry, a source leaving the battlefield). ``object_ids`` limits the
+    rebuild to those objects (``None`` = every permanent with the cache
+    set)."""
+    for obj in state.battlefield:
+        if not obj.permanent_is_creature:
+            continue
+        if object_ids is not None and obj.id not in object_ids:
+            continue
+        oid = obj.id
+        still_creature = False
+        for ce in state.continuous_effects:
+            if (
+                ce.layer == 4
+                and ce.kind == "add_type"
+                and ce.target_id == oid
+                and ce.params
+                and str(ce.params[0]).lower() == "creature"
+            ):
+                still_creature = True
+                break
+        if not still_creature:
+            obj.permanent_is_creature = False
+
+
 def _source_layer6_wiped(
     state: "GameState", source: "GameObject"
 ) -> bool:
@@ -1370,7 +1574,7 @@ def _static_bonuses(
                 if o.controller_id != source.controller_id:
                     continue
                 for t in types:
-                    if t in o.printing.card_types:
+                    if has_card_type(state, o, t):
                         n += 1
                         break
             power_bonus += n * per_p
@@ -1797,7 +2001,7 @@ def _dynamic_base_pt(
             o2.printing.mana_cost.total
             for o2 in state.battlefield
             if o2.controller_id == obj.controller_id
-            and o2.printing.is_artifact
+            and is_artifact_now(state, o2)
             and o2.id != obj.id
         ]
         x = max(mvs) if mvs else 0
@@ -1942,7 +2146,10 @@ def effective_subtypes(
         and obj.chosen_basic_land_type not in subtypes
     ):
         subtypes.append(obj.chosen_basic_land_type)
-    if obj.printing.is_artifact:
+    # ``is_artifact_now``: Ragost's subtype grant depends on the card-type
+    # part of layer 4 (CR 613.8a -- Mycosynth Lattice changes which
+    # permanents are artifacts), so it reads the post-type-change types.
+    if is_artifact_now(state, obj):
         for o in state.battlefield:
             if o.id == obj.id:
                 continue
@@ -2094,24 +2301,48 @@ def effective_colors(
       - ``kind="add_colors"`` UNIONS ``params[0]`` into the current
         color set. Matches Painter's Servant-style "is the chosen
         color in addition to its other colors" clauses.
+
+    Applies to objects in every zone (cards in a library / hand /
+    graveyard / exile, spells, permanents): Painter's Servant's and
+    Mycosynth Lattice's synthesized entries reach all of them. A
+    face-down permanent has no color (CR 708.2a) before layer 5.
     """
-    # Devoid (CR 702.114a): the object is colorless regardless of cost.
-    base_cost_colors = (
-        () if "devoid" in obj.printing.keywords
-        else obj.printing.mana_cost.colors
-        if obj.printing.face_colors is None
-        # A DFC back face (CR 204 color indicator): its mana cost is the
-        # front face's, borrowed for mana value only.
-        else obj.printing.face_colors
-    )
-    colors: set[str] = set(base_cost_colors) | set(
-        obj.printing.color_indicator
-    )
+    if obj.face_down and obj.zone is Zone.BATTLEFIELD:
+        base_cost_colors = ()
+        indicator: frozenset[str] = frozenset()
+    else:
+        # Devoid (CR 702.114a): the object is colorless regardless of cost.
+        base_cost_colors = (
+            () if "devoid" in obj.printing.keywords
+            else obj.printing.mana_cost.colors
+            if obj.printing.face_colors is None
+            # A DFC back face (CR 204 color indicator): its mana cost is
+            # the front face's, borrowed for mana value only.
+            else obj.printing.face_colors
+        )
+        indicator = obj.printing.color_indicator
+    colors: set[str] = set(base_cost_colors) | set(indicator)
     # Real registry layer-5 entries on this object.
     layer5: list[ContinuousEffect] = [
         ce for ce in state.continuous_effects
         if ce.layer == 5 and ce.target_id == obj.id
     ]
+    # Mycosynth Lattice: "All cards that aren't on the battlefield,
+    # spells, and permanents are colorless." -- a synthesized layer-5
+    # set-colors(none) entry on every object, timestamped with the
+    # source's ``etb_timestamp`` so it interleaves with Painter's
+    # Servant and the registry by CR 613.7 timestamp order.
+    for src in (state.battlefield if state.layered_statics_possible else ()):
+        if src.printing.all_objects_colorless and not src.phased_out:
+            layer5.append(ContinuousEffect(
+                source_id=src.id,
+                layer=5,
+                timestamp=src.etb_timestamp,
+                kind="set_colors",
+                target_id=obj.id,
+                params=(frozenset(),),
+                description=f"{src.printing.name}: colorless",
+            ))
     # Synthesize Painter's-Servant-style ``add_colors`` entries from
     # any source on the battlefield with the painter flag and a
     # captured chosen color. Source's ``etb_timestamp`` is the
@@ -2402,7 +2633,7 @@ def effective_activated_abilities(
         ]
     else:
         base = list(obj.printing.activated_abilities)
-    if obj.printing.is_artifact:
+    if is_artifact_now(state, obj):
         seen_ragost = False
         seen_mmnemon = False
         for o in state.battlefield:
@@ -3716,6 +3947,16 @@ class GameState:
     # no player gets priority); while set only passing is legal, and
     # ``turn.next_step`` skips straight to the cleanup step, lowering it.
     turn_ending: bool = False
+    # Whether any card of this game (decks and sideboards) carries a
+    # layer-4 / layer-5 / mana-rule static that is synthesized from the
+    # battlefield (Mycosynth Lattice: ``CardPrinting.
+    # all_permanents_gain_card_type`` / ``all_objects_colorless`` /
+    # ``mana_spendable_as_any_color``). ``simulate.setup_game`` computes
+    # it from the game's cards; a state built any other way keeps the
+    # conservative default. When False the effective type / color reads
+    # skip the battlefield scan for such sources -- no object of this
+    # game can be one (copies copy a printing already in the game).
+    layered_statics_possible: bool = True
     # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
     # whenever ``continuous_effects`` mutates. Cache entries store
     # ``(version_at_compute, result)``; on lookup, an entry whose
@@ -3793,6 +4034,10 @@ class GameState:
         ``"controller_untap"`` (with ``expires_at_player_id`` set to
         the relevant controller id) for extended-temporal pumps.
         """
+        if layer == 4 and kind == "add_type":
+            # Only Artifact / Creature can be added (their reads are
+            # routed through ``effective_card_types`` / ``is_creature_now``).
+            normalize_added_card_type(params[0])
         ts = self.next_timestamp
         self.next_timestamp += 1
         effect = ContinuousEffect(
@@ -4381,6 +4626,7 @@ class GameState:
         new_state.creatures_died_this_turn = self.creatures_died_this_turn
         new_state.p2_zone_watch = self.p2_zone_watch
         new_state.turn_ending = self.turn_ending
+        new_state.layered_statics_possible = self.layered_statics_possible
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

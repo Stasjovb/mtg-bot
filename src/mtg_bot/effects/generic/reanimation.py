@@ -131,7 +131,7 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
             pool = [c for p in state.players for c in p.graveyard]
         else:
             pool = list(state.player_by_id(controller_id).graveyard)
-        return [c for c in pool if self.card_filter.matches(c.printing)]
+        return [c for c in pool if self.card_filter.matches_card(state, c)]
 
     def legal_targets(self, state, controller_id):
         if self.source == "top_of_your_graveyard":
@@ -217,7 +217,7 @@ class EachPlayerPutsCardFromGraveyardOntoBattlefield(Effect):
             p = state.players[(state.active_player_idx + i) % len(state.players)]
             if p.has_lost:
                 continue
-            options = [c for c in p.graveyard if self.card_filter.matches(c.printing)]
+            options = [c for c in p.graveyard if self.card_filter.matches_card(state, c)]
             if not options:
                 continue
             pick = options[0]

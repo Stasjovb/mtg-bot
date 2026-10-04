@@ -234,6 +234,7 @@ class ReturnResolvingSourceFromExileUnderOwner(Effect):
         if card not in owner.exile:
             return
         owner.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         state.log.append(
             f"{card.printing.name} returns to the battlefield under "
             f"P{owner.id}'s control"
@@ -332,6 +333,7 @@ class EachPlayerReturnsCardsExiledWithSource(Effect):
         for card in imprinted_cards(state, source):
             owner = state.player_by_id(card.owner_id)
             owner.exile.remove(card)
+            card.exiled_face_down = False  # left exile (CR 400.7)
             card.imprinted_on = None
             state.log.append(
                 f"{card.printing.name} returns to the battlefield under "

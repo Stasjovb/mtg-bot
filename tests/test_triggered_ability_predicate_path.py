@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from mtg_bot.game import Zone
+
 import pytest
 
 from mtg_bot.effects.base import TriggeredAbility
@@ -34,6 +36,11 @@ class FakeObject:
     id: int = 0
     controller_id: int = 0
     printing: FakePrinting = field(default_factory=FakePrinting)
+    face_down: bool = False
+    # Read by ``game.has_card_type`` / ``effective_card_types`` (CR 613
+    # layer 4): a battlefield object, no last-known snapshot.
+    zone: object = Zone.BATTLEFIELD
+    lki_card_types: tuple | None = None
 
 
 def _ab_predicate(predicate=None, event=Event.ENTERS):

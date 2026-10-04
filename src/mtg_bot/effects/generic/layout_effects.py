@@ -68,6 +68,7 @@ class ExileSourceThenReturnTransformed(Effect):
             source.owner_id if self.under_owners_control else controller_id
         )
         owner.exile.remove(source)
+        source.exiled_face_down = False  # left exile (CR 400.7)
         # CR 400.7: it returns as a new object -- no counters, damage or
         # temporary bonuses carry over (the flicker effects' reset).
         _reset_left_battlefield_object(source)
@@ -101,6 +102,7 @@ class YourPermanentsBecomeCreaturesUEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import has_card_type
         from mtg_bot.effects.combinators import ApplyEffect
         from mtg_bot.effects.durations import EndOfTurn
         from mtg_bot.effects.generic.become_type import BecomeType
@@ -108,7 +110,7 @@ class YourPermanentsBecomeCreaturesUEOT(Effect):
         affected = [
             o for o in state.battlefield
             if o.controller_id == controller_id
-            and self.card_type in o.printing.card_types
+            and has_card_type(state, o, self.card_type)
         ]
         for obj in affected:
             ApplyEffect(

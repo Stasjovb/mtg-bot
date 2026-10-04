@@ -242,15 +242,21 @@ def test_script_diagnose_card_gate_kind(script, monkeypatch):
 def test_script_diagnose_card_real_probe(script):
     from mtg_bot.cards.pools import load_pool_cards
 
-    coating = next(
+    # (Liquimetal Coating was the example until the layer-4 work claimed
+    # it; Helm of Obedience has one failing line too.)
+    helm = next(
         c for c in load_pool_cards("roto")
-        if c["name"] == "Liquimetal Coating"
+        if c["name"] == "Helm of Obedience"
     )
-    d = script.diagnose_card(coating)
+    d = script.diagnose_card(helm)
     assert d.kind == "lines" and d.confirmed
     assert d.failing_text == [
-        "{T}: Target permanent becomes an artifact in addition to its "
-        "other types until end of turn."
+        "{X}, {T}: Target opponent mills a card, then repeats this process "
+        "until a creature card or X cards have been put into their "
+        "graveyard this way, whichever comes first. If one or more creature "
+        "cards were put into that graveyard this way, sacrifice this "
+        "artifact and put one of them onto the battlefield under your "
+        "control. X can't be 0."
     ]
 
 

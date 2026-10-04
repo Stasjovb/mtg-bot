@@ -166,7 +166,7 @@ def test_spell_kinds_in_hand_excludes_outside_hand():
     card = _put(
         state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.HAND,
     )
-    kinds = _spell_kinds_for_card(card)
+    kinds = _spell_kinds_for_card(state, card)
     assert "cast_from_outside_hand" not in kinds
 
 
@@ -175,7 +175,7 @@ def test_spell_kinds_in_library_includes_outside_hand():
     card = _put(
         state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.LIBRARY,
     )
-    kinds = _spell_kinds_for_card(card)
+    kinds = _spell_kinds_for_card(state, card)
     assert "cast_from_outside_hand" in kinds
 
 
@@ -184,7 +184,7 @@ def test_spell_kinds_in_exile_includes_outside_hand():
     card = _put(
         state, _PRINTINGS["Auxiliary Boosters"], zone=Zone.EXILE,
     )
-    kinds = _spell_kinds_for_card(card)
+    kinds = _spell_kinds_for_card(state, card)
     assert "cast_from_outside_hand" in kinds
 
 
@@ -273,7 +273,7 @@ def test_normal_hand_cast_still_uses_default_spell_kind():
     card = _put(
         state, _PRINTINGS["Rayblade Trooper"], zone=Zone.HAND,
     )
-    kinds = _spell_kinds_for_card(card)
+    kinds = _spell_kinds_for_card(state, card)
     # The creature spell also carries its creature-type tags (Cavern of
     # Souls' restricted mana, ``roto_mana.roto_spell_kinds``).
     assert kinds - {"creature_type:Human", "creature_type:Soldier"} == (

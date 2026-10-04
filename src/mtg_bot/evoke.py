@@ -52,7 +52,7 @@ def evoke_pitch_options(
     if f is None:
         return []
     p = state.player_by_id(player_id)
-    return [c for c in p.hand if c.id != card.id and f.matches(c.printing)]
+    return [c for c in p.hand if c.id != card.id and f.matches_card(state, c)]
 
 
 def evoke_castable(

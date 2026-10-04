@@ -47,6 +47,10 @@ HOT_LAYERED_READS = [
     game._compute_effective_pt,
     game._layer6_entries_for,
     game.effective_keywords,
+    # Card types (CR 613 layer 4), read from ``_static_bonuses``.
+    game.has_card_type,
+    game.effective_card_types,
+    game._layer4_added_card_types,
     modifiers.active_static_abilities,
     modifiers.walk_continuous_modifiers,
 ]

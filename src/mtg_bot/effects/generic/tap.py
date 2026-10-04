@@ -241,17 +241,19 @@ class UntapTargetArtifactOrCreatureConditionalCounter(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if o.printing.is_artifact or o.printing.is_creature
+            if is_artifact_now(state, o) or o.printing.is_creature
         ]
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import add_plus_one_counters
+        from mtg_bot.game import add_plus_one_counters, is_artifact_now
 
         if not targets:
             return
@@ -265,13 +267,13 @@ class UntapTargetArtifactOrCreatureConditionalCounter(Effect):
             return
         # CR 608.2b — re-verify the target still matches the printed
         # filter (artifact or creature) at resolution.
-        if not (obj.printing.is_artifact or obj.printing.is_creature):
+        if not (is_artifact_now(state, obj) or obj.printing.is_creature):
             return
         if obj.tapped:
             obj.tapped = False
             state.log.append(f"{obj.printing.name} is untapped")
         # "If it's an artifact creature, put a +1/+1 counter on it."
-        if obj.printing.is_artifact and obj.printing.is_creature:
+        if is_artifact_now(state, obj) and obj.printing.is_creature:
             added = add_plus_one_counters(state, obj, 1)
             if added:
                 state.log.append(
@@ -300,10 +302,12 @@ class TapTargetOpponentPermanentAndStunIt(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if (o.printing.is_artifact or o.printing.is_creature)
+            if (is_artifact_now(state, o) or o.printing.is_creature)
             and o.controller_id != controller_id
         ]
 

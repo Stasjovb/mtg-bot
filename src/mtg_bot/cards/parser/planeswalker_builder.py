@@ -352,6 +352,17 @@ def _build_planeswalker_printing(card: dict) -> CardPrinting | None:
             if m.group(1) != name:
                 return None
             continue
+        # "Activated abilities of <types>[ your opponents control] can't
+        # be activated." (Karn, the Great Creator) -- the activation-lock
+        # recognizer the creature / artifact builders share.
+        from mtg_bot.cards.parser.creature_wg_lines import (
+            _parse_activation_lock_line,
+        )
+
+        lock = _parse_activation_lock_line(line, card)
+        if lock is not None:
+            printing_fields.update(lock.fields)
+            continue
         two_arm = _two_arm_enters_and_upkeep_triggers(line, name)
         if two_arm is not None:
             triggers.extend(two_arm)

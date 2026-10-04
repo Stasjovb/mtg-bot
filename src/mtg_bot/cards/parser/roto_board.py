@@ -1343,6 +1343,8 @@ def _trigger_with_quoted_tail(line: str) -> BoardLine | None:
     ),))
 
 
+from mtg_bot.cards.parser.roto_layers import LAYER_LINE_RECOGNIZERS  # noqa: E402
+
 _LINE_RECOGNIZERS = (
     _activated_with_and_joined_sacrifice,
     _trigger_with_quoted_tail,
@@ -1357,6 +1359,9 @@ _LINE_RECOGNIZERS = (
     _fading,
     _all_creatures_have_trigger,
     _untap_rules,
+    # Card types and colors (CR 613 layers 4 / 5): Mycosynth Lattice,
+    # Unable to Scream (``cards.parser.roto_layers``).
+    *LAYER_LINE_RECOGNIZERS,
 )
 
 

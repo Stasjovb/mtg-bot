@@ -974,3 +974,36 @@ PYTHONPATH=src .venv-py313/Scripts/python.exe \
     <branch>/scripts/scout_instant_activation_branching.py --games 30 --nodes 40 --out a.json
 # more games: --games 25 --start-game 60 (+25 per shard), --nodes 200, --agent random
 ```
+
+## 8F. Effective card types / colors — read overhead (2026-10-04)
+
+**Change measured:** `feature/roto-karn-lattice` (every artifact / card-type
+/ color read of a game object routed through `game.effective_card_types` /
+`has_card_type` / `is_artifact_now` / `effective_colors`;
+`docs/EFFECTIVE_CHARACTERISTICS_DESIGN.md`) vs its base
+`feature/roto-instant-activations` @ `aafcc5dc`.
+
+**Method.** 60 seeded random-agent games (a random agent capped at 120
+actions per turn, so free repeatable abilities can't loop) on the 17lands
+EoE deck pool and 30 on the PowerLSV cube deck pool, base and branch run
+back to back on the shared master (other agents' jobs running), full game
+logs hashed per game; one `cProfile` run per arm of the 60 EoE games.
+
+| arm | identical game logs | profiled total (60 EoE games) | new layered-read functions (cumulative) | unprofiled wall, 60 EoE / 30 cube |
+|---|---:|---:|---:|---:|
+| base | — | 24.0 s | — | 5.9-7.5 s / 3.3-4.3 s |
+| **branch** | 60/60 EoE, 30/30 cube | 24.8 s (**+3%**) | ~0.5 s (`is_artifact_now` 0.26, `any_activation_locks` 0.13, `has_card_type` 0.10) | 7.3-7.6 s / 3.5 s |
+
+**Reading it.** No game changes (no type- or color-changing effect occurs
+in these pools' games); the cost is the extra function call per read --
+`is_artifact_now` runs for every permanent in ability enumeration
+(`effective_activated_abilities`, ~0.5 M calls / 60 games). The
+battlefield scan for Lattice-style sources is skipped entirely when no card
+of the game carries one (`GameState.layered_statics_possible`, set by
+`simulate.setup_game`); before that guard the same profile was 25.4 s
+(+6%; the scan ran ~0.57 M times). The unprofiled wall times are within the
+machine's noise.
+
+**Reproduce.** The game-log comparison and profile scripts were throwaway
+(scratchpad); the method above is enough to redo it with
+`simulate.simulate_game` and `cProfile`.

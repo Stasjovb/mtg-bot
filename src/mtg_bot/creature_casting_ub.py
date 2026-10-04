@@ -80,16 +80,13 @@ def offer_creature_additional_costs(
 
 
 def _emerge_candidates(state: "GameState", player_id: int, card: "GameObject"):
-    from mtg_bot.game import is_creature_now
+    from mtg_bot.game import has_card_type
 
     kind = card.printing.emerge_sacrifice_type
     return [
         o for o in state.battlefield
         if o.controller_id == player_id
-        and (
-            is_creature_now(o) if kind == "Creature"
-            else kind in o.printing.card_types
-        )
+        and has_card_type(state, o, kind)
     ]
 
 
@@ -207,7 +204,7 @@ def apply_copy_on_entry(
     clone is on the battlefield."""
     import dataclasses
 
-    from mtg_bot.game import is_creature_now
+    from mtg_bot.game import has_card_type
 
     pr = clone.printing
     types = pr.enters_as_copy_types
@@ -220,10 +217,7 @@ def apply_copy_on_entry(
     else:
         candidates = [
             ("permanent", o.id) for o in state.battlefield
-            if o is not clone and (
-                any(t in o.printing.card_types for t in types)
-                or ("Creature" in types and is_creature_now(o))
-            )
+            if o is not clone and any(has_card_type(state, o, t) for t in types)
         ]
         if pr.enters_as_copy_max_mv_mana_spent:
             # "with mana value less than or equal to the amount of mana
@@ -414,7 +408,7 @@ def cast_from_hand_for(
         return False
     if not can_pay_cost(
         state, player_id,
-        apply_cost_reductions(card.printing, state, player_id, cost),
+        apply_cost_reductions(card.printing, state, player_id, cost, card=card),
         sac_for_mana=True,
     ):
         return False
@@ -506,6 +500,7 @@ def can_cast_now(
     ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, card.printing.mana_cost,
+            card=card,
         )
     return _can_cast(state, player_id, card, cost)
 

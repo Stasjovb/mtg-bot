@@ -400,9 +400,11 @@ class OptionalSacArtifactForEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         options = [
             o for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         ]
         if not options:
             return
@@ -456,6 +458,8 @@ class OptionalSacAnotherForEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         source = state.resolving_source
         if source is None:
             return
@@ -463,7 +467,7 @@ class OptionalSacAnotherForEffect(Effect):
             o for o in state.battlefield
             if o.controller_id == controller_id
             and o.id != source.id
-            and (o.printing.is_creature or o.printing.is_artifact)
+            and (o.printing.is_creature or is_artifact_now(state, o))
         ]
         if not options:
             return
@@ -518,6 +522,8 @@ class OptionalSacAnotherForPumpSelfUEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         source = state.resolving_source
         if source is None:
             return
@@ -525,7 +531,7 @@ class OptionalSacAnotherForPumpSelfUEOT(Effect):
             o for o in state.battlefield
             if o.controller_id == controller_id
             and o.id != source.id
-            and (o.printing.is_creature or o.printing.is_artifact)
+            and (o.printing.is_creature or is_artifact_now(state, o))
         ]
         if not options:
             return
@@ -902,13 +908,13 @@ class ConditionalIfYouControlAtLeast(Effect):
         return self.inner.legal_targets(state, controller_id)
 
     def _count(self, state: "GameState", controller_id: int) -> int:
-        from mtg_bot.game import is_creature_now
+        from mtg_bot.game import is_artifact_now, is_creature_now
 
         if self.predicate == "artifact":
             return sum(
                 1 for o in state.battlefield
                 if o.controller_id == controller_id
-                and o.printing.is_artifact
+                and is_artifact_now(state, o)
             )
         if self.predicate == "creature":
             return sum(

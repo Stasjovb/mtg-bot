@@ -1247,10 +1247,14 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
         ),))
     if line == _CHOOSE_A_COLOR_AS_ENTERS:
         return RmcLine(printing_fields={"_chooses_color": True})
-    if line == _PAINT_ALL_CHOSEN_COLOR:
-        return RmcLine(printing_fields={
-            "paints_all_objects_chosen_color_at_etb": True,
-        })
+    from mtg_bot.cards.parser.roto_layers import parse_all_objects_color_line
+
+    color_fields = parse_all_objects_color_line(line)
+    if color_fields is not None:
+        # Painter's Servant ("... are the chosen color in addition to
+        # their other colors."), one shape with Mycosynth Lattice's
+        # "... are colorless."
+        return RmcLine(printing_fields=color_fields)
     m = _HEAL_REPLACEMENT.match(line.replace(name, "this creature"))
     if m is None:
         from mtg_bot.cards.parser.triggers import _substitute_self_name as _sub
@@ -1560,10 +1564,8 @@ _OPPONENTS_ENTER_TAPPED = re.compile(
     r"[a-z]+)*) your opponents control enter tapped\.$"
 )
 _CHOOSE_A_COLOR_AS_ENTERS = "As this creature enters, choose a color."
-_PAINT_ALL_CHOSEN_COLOR = (
-    "All cards that aren't on the battlefield, spells, and permanents are "
-    "the chosen color in addition to their other colors."
-)
+# (The all-objects color line -- Painter's Servant -- is
+# ``roto_layers.parse_all_objects_color_line``.)
 _HEAL_REPLACEMENT = re.compile(
     r"^If damage would be dealt to this creature, instead that damage is "
     r"dealt, but all other damage already dealt to (?:him|her|it|them) is "

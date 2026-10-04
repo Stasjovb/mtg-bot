@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from mtg_bot.game import Zone
+
 import pytest
 
 from mtg_bot.effects.object_predicates import (
@@ -84,6 +86,10 @@ class FakeObject:
     impending_active: bool = False
     enduring_returned_as_enchantment: bool = False
     permanent_is_creature: bool = False
+    # Read by ``game.has_card_type`` / ``effective_card_types`` (CR 613
+    # layer 4): a battlefield object, no last-known snapshot.
+    zone: object = Zone.BATTLEFIELD
+    lki_card_types: tuple | None = None
 
 
 @dataclass
@@ -98,6 +104,8 @@ class FakeState:
     # layered walk is a no-op and printed subtypes flow through.
     battlefield: list = field(default_factory=list)
     continuous_effects: list = field(default_factory=list)
+    # ``game.GameState.layered_statics_possible``: the conservative default.
+    layered_statics_possible: bool = True
 
 
 # ---------- type predicates ----------

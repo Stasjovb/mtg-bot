@@ -42,7 +42,7 @@ def permanent_matches_filter(state: "GameState", obj: "GameObject", card_filter)
     which reads ``is_creature_now`` (an animated land is a creature;
     an impending Overlord is not). Color reads ``effective_colors``.
     """
-    from mtg_bot.game import effective_colors, is_creature_now
+    from mtg_bot.game import effective_colors, has_card_type, is_creature_now
 
     pr = obj.printing
     if card_filter.any_types:
@@ -52,7 +52,7 @@ def permanent_matches_filter(state: "GameState", obj: "GameObject", card_filter)
                 if is_creature_now(obj):
                     ok = True
                     break
-            elif t == "Permanent" or t in pr.card_types:
+            elif t == "Permanent" or has_card_type(state, obj, t):
                 ok = True
                 break
         if not ok:
@@ -61,7 +61,7 @@ def permanent_matches_filter(state: "GameState", obj: "GameObject", card_filter)
         if t == "Creature":
             if is_creature_now(obj):
                 return False
-        elif t in pr.card_types:
+        elif has_card_type(state, obj, t):
             return False
     if card_filter.max_mv is not None and pr.mana_cost.total > card_filter.max_mv:
         return False
@@ -279,7 +279,7 @@ def pitch_options(state: "GameState", player_id: int, card: "GameObject") -> lis
     if f is None:
         return []
     p = state.player_by_id(player_id)
-    options = [c for c in p.hand if c.id != card.id and f.matches(c.printing)]
+    options = [c for c in p.hand if c.id != card.id and f.matches_card(state, c)]
     # "Exile two <filter> cards" (Commandeer): payable only with enough.
     if len(options) < card.printing.alt_cost_exile_from_hand_count:
         return []

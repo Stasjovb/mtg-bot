@@ -229,6 +229,7 @@ def release_exiled_until_opponent_monarch(
                 continue
             c.exiled_until_opponent_monarch_of = None
             p.exile.remove(c)
+            c.exiled_face_down = False  # left exile (CR 400.7)
             state.log.append(
                 f"{c.printing.name} returns from exile (P{new_monarch_id} "
                 f"became the monarch)"
@@ -389,7 +390,7 @@ class PutCardFromHandOntoBattlefield(Effect):
         from mtg_bot.actions import put_into_battlefield
 
         p = state.player_by_id(controller_id)
-        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
         if not options:
             return False
         picked = None

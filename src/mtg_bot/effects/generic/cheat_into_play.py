@@ -120,6 +120,7 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
 
     @library_search
     def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.cards import ManaCost
         from mtg_bot.game import Zone, reveal_to_all, shuffle_library
@@ -128,7 +129,7 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
         p = state.player_by_id(controller_id)
         artifacts = [
             o for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         ]
         if not artifacts:
             state.log.append(f"P{controller_id} has no artifact to sacrifice")
@@ -141,7 +142,7 @@ class SacrificeArtifactTutorArtifactPayDifference(Effect):
             victim = next((o for o in artifacts if o.id == vid), artifacts[0])
         sacrificed_mv = victim.printing.mana_cost.total
         sacrifice(state, victim)
-        options = [c for c in p.library if c.printing.is_artifact]
+        options = [c for c in p.library if is_artifact_now(state, c)]
         found = None
         if options and p.agent is not None:
             picked = p.agent.choose_card_from_library(

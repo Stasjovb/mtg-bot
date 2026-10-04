@@ -5,7 +5,8 @@ from __future__ import annotations
 from enum import Enum
 
 from mtg_bot.game import (
-    GameState, Zone, effective_keywords, effective_toughness, is_creature_now,
+    GameState, Zone, effective_keywords, effective_toughness, has_card_type,
+    is_artifact_now, is_creature_now,
 )
 from mtg_bot.keyword_rules import attachment_illegal_by_protection
 
@@ -130,7 +131,17 @@ def run_untap_step(state: GameState) -> None:
     # under this lifetime are dropped here; the legacy
     # ``extended_temp_*`` mirror fields they previously fed have been
     # retired.
-    state.expire_continuous_effects("controller_untap", player_id=ap.id)
+    expired = state.expire_continuous_effects(
+        "controller_untap", player_id=ap.id,
+    )
+    # An "until your next turn" animation (Karn, the Great Creator's +1)
+    # ends here: rebuild the layer-4 creature cache of its targets.
+    from mtg_bot.game import sync_creature_type_cache
+
+    sync_creature_type_cache(state, {
+        ce.target_id for ce in expired
+        if ce.layer == 4 and ce.kind == "add_type"
+    })
     # Goad (CR 701.38a) lasts until the goading player's next turn.
     from mtg_bot.designations import clear_goad_for
 
@@ -454,7 +465,7 @@ def _reset_left_battlefield_object(obj: "GameObject") -> None:
 
 def move_off_battlefield(
     state: GameState, obj: "GameObject", destination: str = "graveyard",
-    library_index: int = 0,
+    library_index: int = 0, *, _hold_departure_lki: bool = False,
 ) -> None:
     """Remove ``obj`` from the battlefield and place it in ``destination``.
 
@@ -477,6 +488,15 @@ def move_off_battlefield(
     Note: Indestructible is NOT checked here — the caller (destroy effect
     or SBA) is responsible for that gate. Exile bypasses indestructible
     normally.
+
+    Last-known card types (CR 603.10a): the object's effective card
+    types are snapshot before it moves (``game.snapshot_departure_card_
+    types``) so the departure triggers see what it was -- a land that was
+    an artifact under Mycosynth Lattice dies as an artifact -- and cleared
+    once they have been dispatched, together with the layer-4 creature
+    cache (every registry entry targeting the object is gone by then).
+    ``_hold_departure_lki`` (``sacrifice``) leaves both for the caller to
+    clear after its own ``IS_SACRIFICED`` dispatch.
     """
     if obj not in state.battlefield:
         return
@@ -503,7 +523,10 @@ def move_off_battlefield(
                 f"{obj.printing.name} is shuffled into its owner's library "
                 f"instead"
             )
-            move_off_battlefield(state, obj, destination="library")
+            move_off_battlefield(
+                state, obj, destination="library",
+                _hold_departure_lki=_hold_departure_lki,
+            )
             from mtg_bot.game import shuffle_library
 
             shuffle_library(state, obj.owner_id)
@@ -532,6 +555,9 @@ def move_off_battlefield(
             # Dauthi Voidwalker: exiled with a void counter (never dies).
             destination = "exile"
             void_redirect = True
+    from mtg_bot.game import snapshot_departure_card_types
+
+    snapshot_departure_card_types(state, obj)
     was_creature = is_creature_now(obj)
     if obj.exile_if_dies_this_turn:
         obj.exile_if_dies_this_turn = False
@@ -582,6 +608,15 @@ def move_off_battlefield(
     dropped = state.remove_continuous_effects_from_source(
         obj.id, only_static=True,
     )
+    # A static type change this object made (Unable to Scream's
+    # "is a ... creature") ends with it: rebuild its targets' creature
+    # cache.
+    from mtg_bot.game import sync_creature_type_cache
+
+    sync_creature_type_cache(state, {
+        ce.target_id for ce in dropped
+        if ce.layer == 4 and ce.kind == "add_type"
+    })
     revert_targets: set[int] = {
         ce.target_id for ce in dropped
         if ce.layer == 2
@@ -721,7 +756,8 @@ def move_off_battlefield(
     # is put into a graveyard from the battlefield"); every DIES
     # observer's predicate is typed or self-referential.
     if destination == "graveyard" and (
-        was_creature or obj.printing.is_artifact or obj.printing.is_land
+        was_creature or has_card_type(state, obj, "Artifact")
+        or obj.printing.is_land
     ):
         from mtg_bot.actions import dispatch_event as _dispatch_event_dies
         from mtg_bot.effects.predicates import Event as _Event_dies
@@ -799,6 +835,20 @@ def move_off_battlefield(
     # future reanimation enters as the printed object.
     from mtg_bot.game import revert_printing_if_no_layer1_copies
     revert_printing_if_no_layer1_copies(state, obj)
+    if not _hold_departure_lki:
+        _end_departure(obj)
+
+
+def _end_departure(obj: "GameObject") -> None:
+    """The departure triggers have been dispatched: drop the last-known
+    card types and the layer-4 creature cache (it mirrors the registry,
+    and every entry targeting the object was dropped above -- an animated
+    manland that leaves and comes back the same turn is a new object, CR
+    400.7, and isn't a creature)."""
+    from mtg_bot.game import clear_departure_card_types
+
+    clear_departure_card_types(obj)
+    obj.permanent_is_creature = False
 
 
 def fire_counters_added_to_your_creature_triggers(
@@ -884,6 +934,7 @@ def _release_exiled_until_leaves(state: GameState, source_id: int) -> None:
         released = [c for c in p.exile if c.exiled_by_source == source_id]
         for c in released:
             p.exile.remove(c)
+            c.exiled_face_down = False  # left exile (CR 400.7)
             c.exiled_by_source = None
             if c.exiled_until_leaves_from_hand:
                 # Deep-Cavern Bat: a card exiled from a hand goes back
@@ -1010,14 +1061,28 @@ def sacrifice(state: GameState, obj: "GameObject") -> None:
 
     if opponent_effect_blocked_for(state, obj.controller_id):
         return
+    from mtg_bot.game import snapshot_departure_card_types
+
+    if obj in state.battlefield:
+        snapshot_departure_card_types(state, obj)
     was_creature = obj.printing.is_creature
-    was_artifact = obj.printing.is_artifact
+    was_artifact = is_artifact_now(state, obj)
     # Lands too: "Whenever you sacrifice a land" (Baloth Prime; cube W/G
     # bucket). Every IS_SACRIFICED observer's predicate is typed.
     was_land = obj.printing.is_land
-    move_off_battlefield(state, obj, destination="graveyard")
-    if not (was_creature or was_artifact or was_land):
-        return
+    was_on_battlefield = obj in state.battlefield
+    move_off_battlefield(
+        state, obj, destination="graveyard", _hold_departure_lki=True,
+    )
+    try:
+        if was_creature or was_artifact or was_land:
+            _dispatch_is_sacrificed(state, obj)
+    finally:
+        if was_on_battlefield:
+            _end_departure(obj)
+
+
+def _dispatch_is_sacrificed(state: GameState, obj: "GameObject") -> None:
     # Phase-8 predicate-style dispatch: fire IS_SACRIFICED with the
     # sacrificed permanent as subject. The legacy per-key walks for
     # ``sacrifice_creature_or_artifact`` (Lightless Evangel) and
@@ -1685,18 +1750,9 @@ def run_cleanup_step(state: GameState) -> None:
     # (types_to_add=("creature",))`` (manland animation, e.g. Raging
     # Ravine via the new pattern) would leave the permanent stuck as
     # a creature after cleanup.
-    for obj in state.battlefield:
-        if not obj.permanent_is_creature:
-            continue
-        still_creature = any(
-            ce.layer == 4
-            and ce.kind == "add_type"
-            and ce.target_id == obj.id
-            and ce.params == ("creature",)
-            for ce in state.continuous_effects
-        )
-        if not still_creature:
-            obj.permanent_is_creature = False
+    from mtg_bot.game import sync_creature_type_cache
+
+    sync_creature_type_cache(state)
     for obj in state.battlefield:
         obj.damage = 0
         obj.marked_lethal = False
@@ -2166,7 +2222,7 @@ def _state_based_actions_pass(state: GameState) -> bool:
             if not is_creature_now(target):
                 auras_to_bury.append(obj)
         elif kind == "artifact":
-            if not target.printing.is_artifact:
+            if not is_artifact_now(state, target):
                 auras_to_bury.append(obj)
         elif kind == "land":
             from mtg_bot.effects.generic.roto_mana import enchantable_land

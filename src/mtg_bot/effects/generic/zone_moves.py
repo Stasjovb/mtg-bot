@@ -51,10 +51,13 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
     def requires_target(self) -> bool:
         return True
 
-    def _matches(self, printing) -> bool:
+    def _matches(self, state, obj) -> bool:
+        from mtg_bot.game import is_artifact_now
+
+        printing = obj.printing
         if self.nonland_permanent:
             return not printing.is_land
-        return printing.is_artifact or printing.is_creature
+        return is_artifact_now(state, obj) or printing.is_creature
 
     def legal_targets(
         self, state: "GameState", controller_id: int
@@ -62,7 +65,7 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if self._matches(o.printing)
+            if self._matches(state, o)
         ]
 
     def resolve(
@@ -79,7 +82,7 @@ class OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary(Effect):
         obj = next((o for o in state.battlefield if o.id == target_id), None)
         if obj is None:
             return
-        if not self._matches(obj.printing):
+        if not self._matches(state, obj):
             return
         owner = state.player_by_id(obj.owner_id)
         # Owner picks top vs bottom via their agent's choose_mode.
@@ -214,6 +217,7 @@ class OwnerPutsTargetWarpedExileCardOnBottomOfLibrary(Effect):
         if not obj.warped:
             return
         owner.exile.remove(obj)
+        obj.exiled_face_down = False  # left exile (CR 400.7)
         obj.warped = False
         obj.zone = Zone.LIBRARY
         owner.library.append(obj)

@@ -143,17 +143,19 @@ class TezzeretEmblemBeginCombat(Effect):
     ) -> list[Target]:
         # "target artifact you control" — any artifact the controller
         # controls is legal (CR 115.1 target restriction).
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if o.printing.is_artifact and o.controller_id == controller_id
+            if is_artifact_now(state, o) and o.controller_id == controller_id
         ]
 
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import add_plus_one_counters
+        from mtg_bot.game import add_plus_one_counters, is_artifact_now
 
         if not targets:
             return
@@ -168,7 +170,7 @@ class TezzeretEmblemBeginCombat(Effect):
         # CR 608.2b — re-verify the target still matches "artifact you
         # control" at resolution.
         if not (
-            obj.printing.is_artifact and obj.controller_id == controller_id
+            is_artifact_now(state, obj) and obj.controller_id == controller_id
         ):
             return
         added = add_plus_one_counters(state, obj, self.amount)
