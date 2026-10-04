@@ -411,6 +411,24 @@ JSON, `metadata.json`, the training card, the CLI). A standalone
 `mtg_bot calibrate-value --version vN` re-fits an already-registered
 version without retraining.
 
+> **Correction (2026-10-04):** "applied at inference" was true only for
+> `NNEvaluator.from_metadata` (calibrate-value, the replay annotator).
+> `NNPimcConfig.build` -- the builder behind every worker self-play and
+> eval game, iterate's arenas and `mtg_bot ladder` -- read the trunk
+> dims from `metadata.json` itself and never passed the calibration
+> (or `value_head_input`). So until `feature/nnpimc-value-calibration`
+> no game was ever played with a calibrated value head: the v8-v14
+> shrink (T 10.7-17.5) and the v15+ sharpen (T 0.49-0.71) never
+> reached search. Every NN-driven self-play shard (cycles 7-10: v8-v10;
+> cycles 11-18: v15/v18/v20-v24) was searched with uncalibrated leaf
+> values -- its visit-count policy targets and, from cycle 11 on, the
+> recorded root values that v17-v21 (root) and v23-v25 (blend:0.8)
+> trained on. The heuristic corpora (v8, v13-v16, v22, v26) are
+> unaffected: no network in the loop. All paths now share one resolver
+> (`nn_evaluator.structured_kwargs_from_metadata`); the ladder's
+> `<v>+nocal` modifier reproduces the old evaluator. Measured effect:
+> `docs/STRENGTH_LADDER.md`, 2026-10-04.
+
 Two guards keep the calibrated gate honest: a zero-variance head is
 never calibrated (every monotone one-parameter family over a constant
 input degenerates into a fitted intercept), and the additive bias is
