@@ -125,7 +125,10 @@ def test_shard_entry_round_trip_and_errors():
 
 
 def test_data_gen_tokenises_at_the_recorded_cap():
-    assert shard_n_printings_cap() == DEFAULT_N_PRINTINGS == LEGACY_SHARD_N_PRINTINGS_CAP
+    assert shard_n_printings_cap() == DEFAULT_N_PRINTINGS
+    # The legacy cap is history (every pre-fingerprint shard), not a
+    # mirror of the current default.
+    assert LEGACY_SHARD_N_PRINTINGS_CAP == 320
     entry = shard_card_vocab_entries()
     assert decode_shard_card_vocab(entry[SHARD_KEY]) == (
         current_card_vocab(), DEFAULT_N_PRINTINGS,
@@ -220,6 +223,15 @@ def test_unjudged_files(tmp_path):
     stamped = _write(tmp_path / "s.npz", 2, "current")
     res = resolve_shards_card_vocab([empty_legacy, flat, stamped])
     assert (res.n_stamped, res.n_empty_legacy) == (1, 1)
+    # A structured-only shard (no ``outcomes``) is sized off its ids.
+    tokens_only = tmp_path / "t.npz"
+    a = _arrays(3)
+    np.savez_compressed(
+        tokens_only,
+        structured_token_emb_ids=a["structured_token_emb_ids"],
+    )
+    with pytest.raises(ShardCardVocabError, match="1 training shards"):
+        resolve_shards_card_vocab([tokens_only])
 
 
 def test_legacy_vocab_arg_and_env(tmp_path, monkeypatch):

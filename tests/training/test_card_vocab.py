@@ -704,19 +704,21 @@ def test_enlarged_vocabulary_preserves_network_outputs(tmp_path, restore_source)
 def test_shrunk_vocabulary_drops_removed_cards(tmp_path, restore_source):
     from mtg_bot.search.nn_evaluator import NNEvaluator
 
+    real = get_active_source().get_printings()
+    # A collision-free table for the full vocabulary, whatever the pool.
+    table = len(real) + 7
     torch.manual_seed(2)
-    ev = NNEvaluator(**_evaluator_kwargs(n_printings=600))
+    ev = NNEvaluator(**_evaluator_kwargs(n_printings=table))
     weights = tmp_path / "w.pt"
     ev.save(weights)
-    real = get_active_source().get_printings()
     keep = sorted(real)[::2]
     set_active_source(_FakeSource({n: real[n] for n in keep}))
-    loaded = NNEvaluator(weights_path=weights, **_evaluator_kwargs(n_printings=600))
+    loaded = NNEvaluator(weights_path=weights, **_evaluator_kwargs(n_printings=table))
     rep = loaded.card_vocab_report
     assert (rep.n_kept, rep.n_new, rep.n_dropped) == (
         len(keep), 0, len(real) - len(keep),
     )
-    assert loaded.model.config.n_printings == 600  # never shrinks
+    assert loaded.model.config.n_printings == table  # never shrinks
     old = torch.load(weights, map_location="cpu", weights_only=True)[
         "printing_embed.weight"
     ]

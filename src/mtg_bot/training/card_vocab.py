@@ -924,10 +924,10 @@ class ShardVocabResolution:
 
 
 def _shard_rows(data: Any) -> int:
-    for key in ("outcomes", "features", "structured_token_type"):
-        if key in data.files:
-            return int(data[key].shape[0])
-    return 0
+    """Row count of a structured shard, read off its smallest array
+    (``outcomes``) when present, else the token ids it is judged on."""
+    key = "outcomes" if "outcomes" in data.files else "structured_token_emb_ids"
+    return int(data[key].shape[0])
 
 
 def resolve_shards_card_vocab(

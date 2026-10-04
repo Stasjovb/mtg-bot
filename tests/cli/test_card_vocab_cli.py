@@ -324,6 +324,7 @@ def test_stamp_copies_skip_and_dry_run(tmp_path, fake_git, capsys):
         "stamp", "--version-dir", str(v2), "--use-metadata-commit",
         "--out-dir", str(v2),
     ]) == 1
+    assert "refusing to stamp in place" in capsys.readouterr().err
     # --out-root stamps several; MLP skipped; embedded noted.
     assert cli.main([
         "stamp", "--registry-root", str(reg), "--all-versions",

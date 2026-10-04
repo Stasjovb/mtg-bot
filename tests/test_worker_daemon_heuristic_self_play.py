@@ -256,9 +256,10 @@ def test_real_heuristic_game_emits_nn_compatible_npz(tmp_path):
             current_card_vocab,
             decode_shard_card_vocab,
         )
+        from mtg_bot.training.data_gen import shard_n_printings_cap
 
         assert decode_shard_card_vocab(data["structured_card_vocab"]) == (
-            current_card_vocab(), 320,
+            current_card_vocab(), shard_n_printings_cap(),
         )
         assert data["features"].shape[0] > 0
         # Dense value target (2026-09-26): the heuristic PIMC reports a

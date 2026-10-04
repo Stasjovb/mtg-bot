@@ -316,10 +316,10 @@ def _stamp_one(
     out = args.out_dir if args.out_dir is not None else (
         Path(args.out_root) / version_dir.name
     )
-    if out.exists() and any(out.iterdir()):
-        raise CardVocabError(f"{out} exists and is not empty")
     if Path(out).resolve() == version_dir.resolve():
         raise CardVocabError("refusing to stamp in place; pick another --out")
+    if out.exists() and any(out.iterdir()):
+        raise CardVocabError(f"{out} exists and is not empty")
     if args.dry_run:
         return f"would write a stamped copy to {out}"
     out.mkdir(parents=True, exist_ok=True)
