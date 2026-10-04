@@ -405,6 +405,8 @@ class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         source = state.resolving_source
         if source is None:
             return
@@ -414,7 +416,7 @@ class PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(Effect):
                 continue
             if o.controller_id != controller_id:
                 continue
-            if o.printing.is_creature or o.printing.is_artifact:
+            if o.printing.is_creature or is_artifact_now(state, o):
                 count += 1
         if count <= 0:
             return

@@ -46,6 +46,7 @@ class PutExiledSourceIntoOwnersHand(Effect):
         if card not in owner.exile:
             return
         owner.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         card.zone = Zone.HAND
         owner.hand.append(card)
         state.log.append(
@@ -82,6 +83,7 @@ class ExileTopCardsToHandAtYourNextEndStep(Effect):
             card = p.library.pop(0)
             card.zone = Zone.EXILE
             state.player_by_id(card.owner_id).exile.append(card)
+            card.exiled_face_down = self.face_down
             if self.face_down:
                 card.publicly_known_to = frozenset()
                 shown = "a card face down"
@@ -310,7 +312,7 @@ class PutUpToNCardsFromHandOntoBattlefield(Effect):
         while len(chosen) < self.count and p.agent is not None:
             options = [
                 c for c in p.hand
-                if c not in chosen and self.card_filter.matches(c.printing)
+                if c not in chosen and self.card_filter.matches_card(state, c)
             ]
             if not options:
                 break
@@ -637,6 +639,7 @@ class ExileTargetThenReturnUnderOwnersControl(Effect):
         if obj not in owner.exile:
             return  # a replacement sent it elsewhere
         owner.exile.remove(obj)
+        obj.exiled_face_down = False  # left exile (CR 400.7)
         # CR 400.7: it returns as a new object -- no counters.
         from mtg_bot.turn import _reset_left_battlefield_object
 
@@ -818,7 +821,7 @@ class CardsInYourZone:
         cards = getattr(state.player_by_id(controller_id), self.zone)
         if self.card_filter is None:
             return len(cards)
-        return sum(1 for c in cards if self.card_filter.matches(c.printing))
+        return sum(1 for c in cards if self.card_filter.matches_card(state, c))
 
 
 @dataclass(frozen=True)
@@ -1102,7 +1105,7 @@ class RevealTopPutMatchingInHandRestInGraveyard(Effect):
         while p.agent is not None:
             options = [
                 c for c in revealed
-                if c not in keep and self.card_filter.matches(c.printing)
+                if c not in keep and self.card_filter.matches_card(state, c)
             ]
             if not options:
                 break
@@ -1366,7 +1369,7 @@ class SearchUpToNDifferentNamesOntoBattlefield(Effect):
             options = [
                 c for c in p.library
                 if c not in chosen and c.printing.name not in names
-                and self.card_filter.matches(c.printing)
+                and self.card_filter.matches_card(state, c)
             ]
             if not options:
                 break
@@ -1581,7 +1584,7 @@ class ExileRandomGraveyardCardTokenCopyRepeatIfLand(Effect):
         p = state.player_by_id(controller_id)
         while True:
             options = [
-                c for c in p.graveyard if self.card_filter.matches(c.printing)
+                c for c in p.graveyard if self.card_filter.matches_card(state, c)
             ]
             if not options:
                 return
@@ -1698,7 +1701,7 @@ class ExileTopMayCastOneFromAmongUntilEndOfNextTurn(Effect):
             card = p.library.pop(0)
             exile_card(state, card)
             exiled.append(card)
-        eligible = [c for c in exiled if self.card_filter.matches(c.printing)]
+        eligible = [c for c in exiled if self.card_filter.matches_card(state, c)]
         group = tuple(c.id for c in eligible)
         for card in eligible:
             card.exile_play_permission = GroupedExilePlayPermission(
@@ -1767,15 +1770,12 @@ class TargetOpponentLosesThatMuchLife(Effect):
 # ---------------------------------------------------------------------------
 
 
-def _current_card_types(obj) -> frozenset:
-    from mtg_bot.game import is_creature_now
+def _current_card_types(state, obj) -> frozenset:
+    """The card types ``obj`` has right now (``game.effective_card_types``:
+    layer 4, creature-ness included)."""
+    from mtg_bot.game import effective_card_types
 
-    types = set(obj.printing.card_types)
-    if is_creature_now(obj):
-        types.add("Creature")
-    else:
-        types.discard("Creature")
-    return frozenset(types)
+    return frozenset(effective_card_types(state, obj))
 
 
 @dataclass(frozen=True)
@@ -1809,8 +1809,8 @@ class ExchangeControlOfTwoTargetsSharingCardType(Effect):
         return [
             t for t in pool
             if any(
-                u != t and _current_card_types(by_id[t[1]])
-                & _current_card_types(by_id[u[1]])
+                u != t and _current_card_types(state, by_id[t[1]])
+                & _current_card_types(state, by_id[u[1]])
                 for u in pool
             )
         ]
@@ -1825,7 +1825,7 @@ class ExchangeControlOfTwoTargetsSharingCardType(Effect):
         return [
             t for t in self._pool(state, controller_id)
             if t != chosen[0]
-            and _current_card_types(by_id[t[1]]) & _current_card_types(first)
+            and _current_card_types(state, by_id[t[1]]) & _current_card_types(state, first)
         ]
 
     def resolve(
@@ -1852,7 +1852,7 @@ class ExchangeControlOfTwoTargetsSharingCardType(Effect):
             return
         a = next(o for o in state.battlefield if o.id == targets[0][1])
         b = next(o for o in state.battlefield if o.id == targets[1][1])
-        if not (_current_card_types(a) & _current_card_types(b)):
+        if not (_current_card_types(state, a) & _current_card_types(state, b)):
             state.log.append("no exchange: they no longer share a card type")
             return
         if a.controller_id == b.controller_id:

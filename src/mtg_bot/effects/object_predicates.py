@@ -81,12 +81,14 @@ class ObjectNot(ObjectPredicate):
 
 @dataclass(frozen=True)
 class IsLand(ObjectPredicate):
-    """The object is a land (``"Land"`` in its card_types)."""
+    """The object is a land (``"Land"`` in its effective card types)."""
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Land" in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, "Land")
 
 
 @dataclass(frozen=True)
@@ -130,12 +132,16 @@ class IsCreature(ObjectPredicate):
 
 @dataclass(frozen=True)
 class IsArtifact(ObjectPredicate):
-    """The object is an artifact."""
+    """The object is an artifact -- its effective card types (CR 613
+    layer 4: Mycosynth Lattice, Liquimetal Coating, ...) through
+    :func:`mtg_bot.game.has_card_type`."""
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Artifact" in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, "Artifact")
 
 
 @dataclass(frozen=True)
@@ -169,7 +175,9 @@ class IsEnchantment(ObjectPredicate):
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Enchantment" in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, "Enchantment")
 
 
 @dataclass(frozen=True)
@@ -202,7 +210,9 @@ class IsPlaneswalker(ObjectPredicate):
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Planeswalker" in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, "Planeswalker")
 
 
 @dataclass(frozen=True)
@@ -218,7 +228,9 @@ class IsBattle(ObjectPredicate):
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return "Battle" in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, "Battle")
 
 
 @dataclass(frozen=True)
@@ -566,16 +578,21 @@ class HasToughnessAtMost(ObjectPredicate):
 
 @dataclass(frozen=True)
 class HasCardType(ObjectPredicate):
-    """The object's printed card types include ``card_type`` — the
-    zone-agnostic check the spell-cast trigger family needs
-    (``Whenever you cast a noncreature spell`` / ``an instant or
-    sorcery spell``), where the subject is a card on the stack."""
+    """The object's card types include ``card_type`` — the zone-agnostic
+    check the spell-cast trigger family needs (``Whenever you cast a
+    noncreature spell`` / ``an instant or sorcery spell``), where the
+    subject is a card on the stack. Reads :func:`mtg_bot.game.
+    has_card_type` (a permanent's layer-4 types; a card elsewhere has its
+    printed ones)."""
 
     card_type: str
 
     def test(self, obj, state):
-        printing = getattr(obj, "printing", None)
-        return printing is not None and self.card_type in printing.card_types
+        if getattr(obj, "printing", None) is None:
+            return False
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, self.card_type)
 
 
 # ---------- kicker ----------

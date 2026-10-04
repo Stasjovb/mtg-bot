@@ -60,13 +60,18 @@ def retrace_grant_filters(state: "GameState", player_id: int) -> list:
     return out
 
 
-def _retrace_card(card: "GameObject", six: bool, filters: list) -> bool:
+def _retrace_card(
+    state: "GameState", card: "GameObject", six: bool, filters: list,
+) -> bool:
     pr = card.printing
     if pr.is_land:
         return False  # retrace casts the card; lands can't be cast
     if six and pr.is_permanent:
         return True
-    return any(f.matches(pr) for f in filters)
+    for f in filters:
+        if f.matches_card(state, card):
+            return True
+    return False
 
 
 def paragon_source(state: "GameState", player_id: int) -> "GameObject | None":
@@ -102,7 +107,7 @@ def graveyard_cast_options(
     if (six or filters) and any(c.printing.is_land for c in p.hand):
         out += [
             (c, RETRACE) for c in p.graveyard
-            if _retrace_card(c, six, filters)
+            if _retrace_card(state, c, six, filters)
         ]
     source = paragon_source(state, player_id)
     if source is not None:

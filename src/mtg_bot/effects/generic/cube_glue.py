@@ -51,6 +51,7 @@ class ReturnCardsExiledWithSourceToOwnersHand(Effect):
         for card in cards_exiled_with(state, source):
             owner = state.player_by_id(card.owner_id)
             owner.exile.remove(card)
+            card.exiled_face_down = False  # left exile (CR 400.7)
             card.imprinted_on = None
             card.zone = Zone.HAND
             owner.hand.append(card)
@@ -134,7 +135,7 @@ class RevealHandMayExileCardOrChosenCreatureUntilSourceLeaves(Effect):
         )
         options = [
             c for c in opp.hand
-            if self.card_filter is None or self.card_filter.matches(c.printing)
+            if self.card_filter is None or self.card_filter.matches_card(state, c)
         ]
         choices = [c.id for c in options]
         if creature is not None:
@@ -208,7 +209,7 @@ class ReturnTargetGraveyardCardToHand(Effect):
         p = state.player_by_id(controller_id)
         return [
             ("graveyard_card", c.id) for c in p.graveyard
-            if self.card_filter is None or self.card_filter.matches(c.printing)
+            if self.card_filter is None or self.card_filter.matches_card(state, c)
         ]
 
     def resolve(
@@ -951,7 +952,7 @@ class SearchAnyNumberOntoBattlefield(Effect):
         while True:
             options = [
                 c for c in p.library
-                if self.card_filter is None or self.card_filter.matches(c.printing)
+                if self.card_filter is None or self.card_filter.matches_card(state, c)
             ]
             if not options:
                 break
@@ -1138,7 +1139,7 @@ class ReturnChosenGraveyardCardToHand(Effect):
         p = state.player_by_id(controller_id)
         options = [
             c for c in p.graveyard
-            if self.card_filter is None or self.card_filter.matches(c.printing)
+            if self.card_filter is None or self.card_filter.matches_card(state, c)
         ]
         if not options:
             return

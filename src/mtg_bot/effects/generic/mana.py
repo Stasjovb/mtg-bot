@@ -340,11 +340,13 @@ class AddOneManaOfChosenPermanentColor(Effect):
         from mtg_bot.game import ManaCoin
 
         p = state.player_by_id(controller_id)
+        from mtg_bot.game import effective_colors
+
         options: set[str] = set()
         for o in state.battlefield:
             if o.controller_id != controller_id:
                 continue
-            options |= set(o.printing.mana_cost.colors)
+            options |= set(effective_colors(state, o))
         if not options:
             color = "C"
         else:

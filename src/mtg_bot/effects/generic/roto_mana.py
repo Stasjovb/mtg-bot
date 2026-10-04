@@ -201,8 +201,8 @@ class LookAtTopMayPutOntoBattlefieldRestBottom(Effect):
     card_filter: object = None
     excluded_subtype: str = ""
 
-    def _ok(self, card) -> bool:
-        return self.card_filter.matches(card.printing) and (
+    def _ok(self, state, card) -> bool:
+        return self.card_filter.matches_card(state, card) and (
             not self.excluded_subtype
             or self.excluded_subtype not in card.printing.subtypes
         )
@@ -219,7 +219,7 @@ class LookAtTopMayPutOntoBattlefieldRestBottom(Effect):
         looked = [p.library.pop(0) for _ in range(n)]
         for c in looked:
             reveal_to(c, controller_id)
-        options = [c for c in looked if self._ok(c)]
+        options = [c for c in looked if self._ok(state, c)]
         chosen = None
         if options and p.agent is not None:
             pick = p.agent.choose_card_from_library(
@@ -910,6 +910,7 @@ class CopyImprintedCardMayCastFree(Effect):
             cast_now(state, controller_id, copy, free=True)
             return
         p.exile.remove(copy)
+        copy.exiled_face_down = False  # left exile (CR 400.7)
         state.log.append(f"the copy of {copy.printing.name} ceases to exist")
 
     def describe(self) -> str:
@@ -978,6 +979,11 @@ def life_mana_units_needed(
     if budget <= 0:
         return None
     need = cost.generic + len(cost.hybrid)
+    from mtg_bot.actions import mana_spendable_as_any_color
+
+    if mana_spendable_as_any_color(state):
+        # The {C} may pay colored pips too (Mycosynth Lattice).
+        need += sum(n for c, n in cost.colored if c != "S")
     for k in range(1, min(budget, need) + 1):
         pool = list(usable_pool) + [ManaCoin(color="C")] * k
         if _can_pay_from(state, cost, pool, lands):
@@ -1198,7 +1204,7 @@ def optional_sacrifice_for_cost(
         try:
             cost = apply_cost_reductions(
                 card.printing, state, player_id, base_cost,
-                chosen_targets=targets,
+                chosen_targets=targets, card=card,
             )
         finally:
             state.log.enabled = logging
@@ -1680,7 +1686,7 @@ class MayCastTargetGraveyardCardFree(Effect):
     mv_at_most_source_power: bool = False
 
     def _ok(self, state: "GameState", card) -> bool:
-        if not self.card_filter.matches(card.printing):
+        if not self.card_filter.matches_card(state, card):
             return False
         if self.mv_at_most_source_power:
             return card.printing.mana_cost.total <= _source_power(state)
@@ -1739,11 +1745,11 @@ class MayCastTargetGraveyardCardFree(Effect):
 
 
 def _top_card_kind_matches(state: "GameState", card, kinds) -> bool:
-    from mtg_bot.game import effective_colors
+    from mtg_bot.game import effective_colors, is_artifact_now
 
     if card.printing.is_land:
         return False
-    if "artifact" in kinds and card.printing.is_artifact:
+    if "artifact" in kinds and is_artifact_now(state, card):
         return True
     return "colorless" in kinds and not effective_colors(state, card)
 
@@ -1790,6 +1796,7 @@ def _castable_now(state: "GameState", player_id: int, card, *, free: bool) -> bo
     ):
         cost = apply_cost_reductions(
             card.printing, state, player_id, card.printing.mana_cost,
+            card=card,
         )
     return _can_cast(state, player_id, card, cost)
 
@@ -1845,10 +1852,10 @@ def _free_cast_tax_payable(state: "GameState", player_id: int, card) -> bool:
     from mtg_bot.creature_statics_wg import spell_cost_increase
     from mtg_bot.legal import _spell_kinds_for_card
 
-    tax = spell_cost_increase(state, card.printing, player_id)
+    tax = spell_cost_increase(state, card.printing, player_id, card=card)
     return tax == 0 or can_pay_cost(
         state, player_id, ManaCost(generic=tax),
-        spell_kind=_spell_kinds_for_card(card), sac_for_mana=True,
+        spell_kind=_spell_kinds_for_card(state, card), sac_for_mana=True,
     )
 
 

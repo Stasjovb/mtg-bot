@@ -1204,6 +1204,7 @@ class PutCardYouOwnWithCounterFromExileIntoHand(Effect):
             )
         card = next((c for c in options if c.id == pick_id), options[0])
         p.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         setattr(card, attr, 0)
         card.zone = Zone.HAND
         p.hand.append(card)

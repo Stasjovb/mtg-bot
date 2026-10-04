@@ -101,16 +101,19 @@ class HasTotalPowerAndToughnessAtMost(ObjectPredicate):
 
 @dataclass(frozen=True)
 class HasCardType(ObjectPredicate):
-    """The object's printed card types include ``card_type`` (e.g.
+    """The object's card types include ``card_type`` (e.g.
     ``"Instant"``, ``"Sorcery"``) — the spell-type heads of counterspell
-    noun phrases ("instant or sorcery spell")."""
+    noun phrases ("instant or sorcery spell"). Reads
+    :func:`mtg_bot.game.has_card_type` (layer 4 for permanents)."""
 
     card_type: str
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):
             return False
-        return self.card_type in obj.printing.card_types
+        from mtg_bot.game import has_card_type
+
+        return has_card_type(state, obj, self.card_type)
 
 
 @dataclass(frozen=True)

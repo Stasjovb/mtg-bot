@@ -424,6 +424,21 @@ def parse_mana_cost(s: str) -> ManaCost:
     )
 
 
+# Card types that make a card a permanent card (``CardPrinting.
+# is_permanent``; a card-type tuple's form for effective types).
+PERMANENT_CARD_TYPES: tuple[str, ...] = (
+    "Creature", "Artifact", "Land", "Enchantment", "Planeswalker",
+)
+
+
+def is_permanent_card_types(card_types: "tuple[str, ...]") -> bool:
+    """Whether a card with these card types is a permanent card."""
+    for t in PERMANENT_CARD_TYPES:
+        if t in card_types:
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class HandCardFilter:
     """Predicate for which cards in a player's hand a hand-ability
@@ -449,20 +464,31 @@ class HandCardFilter:
 
     predicates: tuple[tuple[str, "str | None"], ...] = ()
 
-    def matches(self, printing: "CardPrinting") -> bool:
+    def matches(
+        self, printing: "CardPrinting", *,
+        colors: "frozenset[str] | None" = None,
+    ) -> bool:
+        """``colors`` overrides the printed colors with a game object's
+        effective ones (:meth:`matches_card`)."""
         for card_type, color in self.predicates:
             if card_type not in printing.card_types:
                 continue
             if color is None:
                 return True
-            # Color match against printed mana cost colors. We use the
-            # printed cost's colors rather than effective color identity
-            # because hand grants in the pool today key on color of the
-            # casting cost (Tannuk: "red creature cards" = creature with
-            # R in its cost).
-            if color in printing.mana_cost.colors:
+            if color in (
+                printing.mana_cost.colors if colors is None else colors
+            ):
                 return True
         return False
+
+    def matches_card(self, state, card) -> bool:
+        """:meth:`matches` against a card in hand: its color is its
+        effective color (CR 105.2 / layer 5 -- Mycosynth Lattice makes a
+        red card in hand colorless); a card in hand has its printed card
+        types."""
+        from mtg_bot.game import effective_colors
+
+        return self.matches(card.printing, colors=effective_colors(state, card))
 
 
 @dataclass(frozen=True)
@@ -711,6 +737,16 @@ class CardPrinting:
     attached_sets_base_pt: "tuple[int, int] | None" = None
     attached_grants_lose_all_abilities: bool = False
     attached_grants_subtype: "str | None" = None
+    # "Enchanted creature ... is a Toy artifact creature ... in addition to
+    # its other types." (Unable to Scream): layer-4 ``add_type`` entries
+    # on the enchanted permanent while the Aura is attached (``"Artifact"``
+    # / ``"Creature"`` -- the addable card types, see
+    # ``game.LAYER4_ADDABLE_CARD_TYPES``).
+    attached_grants_card_types: tuple = ()
+    # "As long as enchanted creature is face down, it can't be turned
+    # face up." (Unable to Scream; ``effects.generic.roto_layers.
+    # turning_face_up_prevented``).
+    attached_prevents_turning_face_up: bool = False
     # "Enchanted <permanent> has "<activated ability>"" (Tarmogoyf Nest;
     # roto integration): layer 6 ``"grant_activated_ability"`` entries on
     # the enchanted permanent while the Aura is attached.
@@ -1106,6 +1142,24 @@ class CardPrinting:
     # interleaves correctly with Scuttlemutt-style set_colors per
     # CR 613 layer-5 timestamp rules.
     paints_all_objects_chosen_color_at_etb: bool = False
+    # Mycosynth Lattice: "All permanents are artifacts in addition to
+    # their other types." -- the card type (``"Artifact"``) every
+    # permanent gains while this is on the battlefield. A layer-4 effect
+    # synthesized per read by ``game.effective_card_types`` (the Magus /
+    # Dryad precedent), so it needs no enter / leave plumbing.
+    all_permanents_gain_card_type: "str | None" = None
+    # Mycosynth Lattice: "All cards that aren't on the battlefield,
+    # spells, and permanents are colorless." -- a layer-5 ``set_colors``
+    # (no colors) entry on every object, synthesized by
+    # ``game.effective_colors`` with this source's ``etb_timestamp``
+    # (Painter's Servant's shape with "colorless" for "the chosen color
+    # in addition to their other colors").
+    all_objects_colorless: bool = False
+    # Mycosynth Lattice: "Players may spend mana as though it were mana
+    # of any color." -- a rule modification (no layer): while a source
+    # with this flag still has its abilities, cost payment lets any mana
+    # pay a colored pip (``actions.mana_spendable_as_any_color``).
+    mana_spendable_as_any_color: bool = False
     # "As this creature enters, choose a player." (True-Name Nemesis) —
     # the chosen player's id lands on ``GameObject.chosen_player_id``
     # (read by the ``protection from the chosen player`` quality).
@@ -1427,6 +1481,10 @@ class CardPrinting:
     # (mana abilities included) are locked while this is on the
     # battlefield.
     locks_activated_abilities_of: tuple = ()
+    # "Activated abilities of <types> your opponents control can't be
+    # activated." (Karn, the Great Creator): the same lock, applied only to
+    # permanents an opponent of this permanent's controller controls.
+    locks_opponents_activated_abilities_of: tuple = ()
     # "If a nontoken creature would enter and it wasn't cast, exile it
     # instead." (Containment Priest).
     exiles_uncast_nontoken_creatures_entering: bool = False
@@ -1741,13 +1799,7 @@ class CardPrinting:
     @property
     def is_permanent(self) -> bool:
         """Resolves onto the battlefield when cast."""
-        return (
-            self.is_creature
-            or self.is_artifact
-            or self.is_land
-            or self.is_enchantment
-            or "Planeswalker" in self.card_types
-        )
+        return is_permanent_card_types(self.card_types)
 
     @property
     def is_planeswalker(self) -> bool:

@@ -62,8 +62,8 @@ class RotoCardFilter(CardFilter):
             or self.max_toughness is not None
         )
 
-    def matches(self, printing: "CardPrinting") -> bool:
-        if not super().matches(printing):
+    def matches(self, printing: "CardPrinting", **effective) -> bool:
+        if not super().matches(printing, **effective):
             return False
         for s in self.excluded_supertypes:
             if s in printing.supertypes:
@@ -134,7 +134,7 @@ class SearchToHandDiscardAtRandomThenShuffle(Effect):
         from mtg_bot.game import Zone, reveal_to, shuffle_library
 
         p = state.player_by_id(controller_id)
-        options = [c for c in p.library if self.card_filter.matches(c.printing)]
+        options = [c for c in p.library if self.card_filter.matches_card(state, c)]
         found = search_pick(
             state, p, options, may_fail=self.card_filter.has_quality,
         )
@@ -177,7 +177,7 @@ class SearchOntoBattlefieldTappedUntapIfLands(Effect):
         from mtg_bot.game import shuffle_library
 
         p = state.player_by_id(controller_id)
-        options = [c for c in p.library if self.card_filter.matches(c.printing)]
+        options = [c for c in p.library if self.card_filter.matches_card(state, c)]
         found = search_pick(
             state, p, options, may_fail=self.card_filter.has_quality,
         )
@@ -234,7 +234,7 @@ class SearchAnyNumberTotalManaValueOntoBattlefield(Effect):
         while True:
             options = [
                 c for c in p.library
-                if self.card_filter.matches(c.printing)
+                if self.card_filter.matches_card(state, c)
                 and c.printing.mana_cost.total <= budget
             ]
             pick = search_pick(state, p, options, may_fail=True)
@@ -314,7 +314,7 @@ class ControllerMaySearchOntoBattlefield(RemovalRider):
             return
         def search():
             options = [
-                c for c in p.library if self.card_filter.matches(c.printing)
+                c for c in p.library if self.card_filter.matches_card(state, c)
             ]
             found = search_pick(state, p, options, may_fail=True)
             if found is not None:
@@ -603,7 +603,7 @@ class RevealHandChooseExileUntilSourceLeaves(Effect):
         src = state.resolving_source
         if src is None or not any(o.id == src.id for o in state.battlefield):
             return
-        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
         if not options:
             return
         card = _pick_from_hand(state, controller_id, options)
@@ -650,7 +650,7 @@ class LookAtHandMayBottomCardThenDraw(Effect):
             return
         for c in p.hand:
             reveal_to(c, controller_id)
-        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
         if not options:
             return
         me = state.player_by_id(controller_id)
@@ -849,10 +849,10 @@ class RevealHandChooseFromHandAndGraveyardExile(Effect):
         for c in p.hand:
             reveal_to_all(state, c)
         chosen = []
-        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
         if options:
             chosen.append((p.hand, _pick_from_hand(state, controller_id, options)))
-        gy = [c for c in p.graveyard if self.card_filter.matches(c.printing)]
+        gy = [c for c in p.graveyard if self.card_filter.matches_card(state, c)]
         if gy:
             me = state.player_by_id(controller_id)
             pick = gy[0].id
@@ -899,7 +899,7 @@ def candidate_card_names(state, player, card_filter: CardFilter) -> list[str]:
     for c in zones:
         if c.printing.is_token or getattr(c, "is_spell_copy", False):
             continue
-        if card_filter.matches(c.printing):
+        if card_filter.matches_card(state, c):
             names.add(c.printing.name)
     return sorted(names)
 
@@ -1063,7 +1063,7 @@ class MillThenReturnCardFromGraveyardToHand(Effect):
             put_into_graveyard(state, p.library.pop(0))
             milled += 1
         state.log.append(f"P{controller_id} mills {milled} card(s)")
-        options = [c for c in p.graveyard if self.card_filter.matches(c.printing)]
+        options = [c for c in p.graveyard if self.card_filter.matches_card(state, c)]
         if not options:
             return
         pick = options[0].id
@@ -1088,7 +1088,7 @@ def _graveyard_card_targets(state, card_filter) -> list:
     return [
         ("card_in_graveyard", c.id)
         for p in state.players for c in p.graveyard
-        if card_filter.matches(c.printing)
+        if card_filter.matches_card(state, c)
     ]
 
 
@@ -1099,7 +1099,7 @@ def _graveyard_target_card(state, targets, card_filter):
             continue
         for p in state.players:
             for c in p.graveyard:
-                if c.id == tid and card_filter.matches(c.printing):
+                if c.id == tid and card_filter.matches_card(state, c):
                     return p, c
     return None, None
 
@@ -1170,7 +1170,7 @@ class ExileTargetGraveyardCardThenIfType(Effect):
         owner.exile.append(card)
         state.log.append(f"{card.printing.name} is exiled from a graveyard")
         branch = (
-            self.if_effect if self.if_filter.matches(card.printing)
+            self.if_effect if self.if_filter.matches_card(state, card)
             else self.else_effect
         )
         branch.resolve(state, controller_id, ())
@@ -1252,7 +1252,7 @@ class ReturnTargetsFromYourGraveyardToBattlefield(Effect):
         p = state.player_by_id(controller_id)
         return [
             ("card_in_graveyard", c.id) for c in p.graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -1267,7 +1267,7 @@ class ReturnTargetsFromYourGraveyardToBattlefield(Effect):
             seen.add(tid)
             card = next(
                 (c for c in p.graveyard
-                 if c.id == tid and self.card_filter.matches(c.printing)),
+                 if c.id == tid and self.card_filter.matches_card(state, c)),
                 None,
             )
             if card is not None:
@@ -1619,7 +1619,7 @@ class DefendingPlayerRevealsTopPutsIntoHandIf(Effect):
         top = p.library[0]
         reveal_to_all(state, top)
         state.log.append(f"P{p.id} reveals {top.printing.name}")
-        if self.card_filter.matches(top.printing):
+        if self.card_filter.matches_card(state, top):
             p.library.pop(0)
             top.zone = Zone.HAND
             p.hand.append(top)
@@ -1702,7 +1702,7 @@ class RevealUntilPutIntoHandRestIntoGraveyard(Effect):
         while p.library:
             card = p.library.pop(0)
             reveal_to_all(state, card)
-            if self.card_filter.matches(card.printing):
+            if self.card_filter.matches_card(state, card):
                 found = card
                 break
             revealed.append(card)
@@ -1749,7 +1749,7 @@ class LookAtTopPutUpToOntoBattlefield(Effect):
         for _ in range(self.take):
             options = [
                 c for c in looked
-                if c not in chosen and self.card_filter.matches(c.printing)
+                if c not in chosen and self.card_filter.matches_card(state, c)
             ]
             pick = search_pick(state, p, options, may_fail=True)
             if pick is None:
@@ -1842,6 +1842,7 @@ class ExileTopMayTakeUnlessSameName(Effect):
                 state, controller_id, f"put {name} into your hand?",
             ):
                 p.exile.remove(card)
+                card.exiled_face_down = False  # left exile (CR 400.7)
                 card.zone = Zone.HAND
                 p.hand.append(card)
                 state.log.append(f"P{controller_id} puts {name} into hand")
@@ -1870,10 +1871,12 @@ class Bargain:
     ``GameObject.cast_bargained``."""
 
     def options(self, state, player_id: int) -> list:
+        from mtg_bot.game import is_artifact_now
+
         return [
             o for o in state.battlefield
             if o.controller_id == player_id and (
-                o.printing.is_token or o.printing.is_artifact
+                o.printing.is_token or is_artifact_now(state, o)
                 or "Enchantment" in o.printing.card_types
             )
         ]
@@ -1928,6 +1931,7 @@ class SearchExileFaceDownCastFreeIfBargained(Effect):
                 found = None
         if found is not None:
             found.zone = Zone.EXILE
+            found.exiled_face_down = True
             p.exile.append(found)
             reveal_to(found, controller_id)
             state.log.append(f"P{controller_id} exiles a card face down")
@@ -1948,6 +1952,7 @@ class SearchExileFaceDownCastFreeIfBargained(Effect):
             return
         if found in p.exile:
             p.exile.remove(found)
+            found.exiled_face_down = False  # left exile (CR 400.7)
             found.zone = Zone.HAND
             p.hand.append(found)
 
@@ -1980,7 +1985,7 @@ class SearchManaValueOnePlusSacrificed(Effect):
         p = state.player_by_id(controller_id)
         options = [
             c for c in p.library
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
             and c.printing.mana_cost.total == mv
         ]
         found = search_pick(state, p, options, may_fail=True)
@@ -2014,7 +2019,7 @@ class DiscardCardCost:
     def _options(self, state, player_id: int) -> list:
         return [
             c for c in state.player_by_id(player_id).hand
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def payable(self, state, player_id: int, source) -> bool:
@@ -2125,7 +2130,7 @@ class SearchLibraryAndOrGraveyardXThenPump(Effect):
             pool = list(p.graveyard) + (list(p.library) if search_library else [])
             options = [
                 c for c in pool
-                if self.card_filter.matches(c.printing)
+                if self.card_filter.matches_card(state, c)
                 and c.printing.mana_cost.total <= x
             ]
             found = search_pick(state, p, options, may_fail=True)
@@ -2318,7 +2323,7 @@ class EachPlayerMayPutFromHand(Effect):
         for p in _turn_order_from(state, active):
             if p.has_lost:
                 continue
-            options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+            options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
             card = _hand_pick(state, p, options)
             if card is not None:
                 chosen.append((p, card))
@@ -2591,6 +2596,7 @@ class ScrollRackSwap(Effect):
                 break
             p.hand.remove(card)
             card.zone = Zone.EXILE
+            card.exiled_face_down = True
             p.exile.append(card)
             exiled.append(card)
         for _ in range(min(len(exiled), len(p.library))):
@@ -2604,6 +2610,7 @@ class ScrollRackSwap(Effect):
             order.append(search_pick(state, p, options, may_fail=False))
         for c in reversed(order):
             p.exile.remove(c)
+            c.exiled_face_down = False  # left exile (CR 400.7)
             c.zone = Zone.LIBRARY
             p.library.insert(0, c)
         state.log.append(f"P{controller_id} swaps {len(exiled)} card(s)")
@@ -2671,7 +2678,7 @@ class LookTopMayPutAttackingGainKeyword(Effect):
         looked = [p.library.pop(0) for _ in range(min(self.count, len(p.library)))]
         for c in looked:
             reveal_to(c, controller_id)
-        options = [c for c in looked if self.card_filter.matches(c.printing)]
+        options = [c for c in looked if self.card_filter.matches_card(state, c)]
         pick = search_pick(state, p, options, may_fail=True)
         rest = [c for c in looked if c is not pick]
         state.rng.shuffle(rest)
@@ -2949,7 +2956,7 @@ def on_enter_battlefield(state, obj) -> None:
     for spec in obj.printing.zone_abilities:
         if isinstance(spec, EntersWithCountersPerGraveyardCard):
             p = state.player_by_id(obj.controller_id)
-            n = sum(1 for c in p.graveyard if spec.card_filter.matches(c.printing))
+            n = sum(1 for c in p.graveyard if spec.card_filter.matches_card(state, c))
             if n:
                 add_plus_one_counters(state, obj, n)
                 state.log.append(

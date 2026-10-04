@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from mtg_bot.cards import ManaCost
 from mtg_bot.game import (
-    GameObject, GameState, StackItem, Zone, effective_land_produces,
+    GameObject, GameState, StackItem, Zone, effective_colors,
+    effective_land_produces, has_card_type, is_artifact_now,
 )
 from mtg_bot.keyword_rules import (
     filter_targetable, targets_all_illegal_on_resolution,
@@ -252,9 +253,13 @@ def _untapped_lands(state: GameState, player_id: int) -> list[GameObject]:
         o for o in state.battlefield
         if o.controller_id == player_id and o.printing.is_land and not o.tapped
     ]
-    # "Activated abilities of artifacts can't be activated." (Null Rod,
-    # Clarion Conqueror) locks an artifact land's mana ability too.
-    if any(o.printing.locks_activated_abilities_of for o in state.battlefield):
+    # "Activated abilities of artifacts [your opponents control] can't be
+    # activated." (Null Rod, Clarion Conqueror, Karn, the Great Creator)
+    # locks an artifact land's mana ability too -- under Mycosynth
+    # Lattice, every land is an artifact.
+    from mtg_bot.creature_statics_wg import any_activation_locks
+
+    if any_activation_locks(state):
         from mtg_bot.creature_statics_wg import activation_locked
 
         lands = [o for o in lands if not activation_locked(state, o)]
@@ -313,6 +318,36 @@ def _coin_matches_color(coin: "ManaCoin", color: str) -> bool:
     if coin.color == "any":
         return True
     return coin.color == color
+
+
+def mana_spendable_as_any_color(state: GameState) -> bool:
+    """"Players may spend mana as though it were mana of any color."
+    (Mycosynth Lattice; CR 609.4b): a rule modification, active while a
+    permanent with the ability is on the battlefield, not phased out, and
+    still has its abilities (``roto_board_statics.abilities_suppressed``
+    -- unlike the card's layer 4 / 5 effects, a rule modification ends
+    when the ability is removed). While it holds, any mana -- colorless
+    included -- pays a colored pip; {S} still needs snow mana, and spend
+    restrictions still apply."""
+    if not state.layered_statics_possible:
+        return False
+    for o in state.battlefield:
+        if not o.printing.mana_spendable_as_any_color or o.phased_out:
+            continue
+        from mtg_bot.roto_board_statics import abilities_suppressed
+
+        if not abilities_suppressed(state, o):
+            return True
+    return False
+
+
+def _pip_passes(color: str, any_color: bool) -> tuple:
+    """The matching passes for one colored pip: exact-color mana first,
+    then (under "spend mana as though it were mana of any color") any
+    mana. {S} is never widened."""
+    if any_color and color != "S":
+        return (True, False)
+    return (True,)
 
 
 def _coin_satisfies_context(
@@ -439,7 +474,7 @@ def effective_warp_cost(
         for grant in permanent.printing.hand_ability_grants:
             if grant.granted_warp_cost is None:
                 continue
-            if grant.card_filter.matches(card.printing):
+            if grant.card_filter.matches_card(state, card):
                 return (grant.granted_warp_cost, grant.granted_warp_cost_str)
     return None
 
@@ -690,17 +725,23 @@ def _can_pay_from(
     """The pool-then-lands affordability core of ``can_pay_cost``."""
     used_coins: set[int] = set()
     used_lands: set[int] = set()
-    # Pay colored requirements first — prefer pool coins, then lands.
+    any_color = mana_spendable_as_any_color(state)
+    # Pay colored requirements first — prefer pool coins, then lands
+    # (exact color first; any mana second while it may be spent as
+    # though it were any color).
     for color, count in cost.colored:
         need = count
-        for idx, coin in enumerate(usable_pool):
-            if idx in used_coins:
-                continue
-            if _coin_matches_color(coin, color):
-                used_coins.add(idx)
-                need -= 1
-                if need == 0:
-                    break
+        for exact in _pip_passes(color, any_color):
+            if need == 0:
+                break
+            for idx, coin in enumerate(usable_pool):
+                if idx in used_coins:
+                    continue
+                if not exact or _coin_matches_color(coin, color):
+                    used_coins.add(idx)
+                    need -= 1
+                    if need == 0:
+                        break
         if need == 0:
             continue
         if color == "S":
@@ -711,6 +752,11 @@ def _can_pay_from(
                 if color in effective_land_produces(state, l)
                 and l.id not in used_lands
             ]
+            if any_color:
+                matching += [
+                    l for l in lands
+                    if l.id not in used_lands and l not in matching
+                ]
         if len(matching) < need:
             return False
         for l in matching[:need]:
@@ -737,6 +783,7 @@ def apply_cost_reductions(
     caster_id: int,
     base_cost: ManaCost,
     chosen_targets: "tuple[tuple[str, int], ...] | None" = None,
+    card: "GameObject | None" = None,
 ) -> ManaCost:
     """Walk ``printing.cost_reductions`` and return a ManaCost with
     generic mana reduced accordingly. Each rule's
@@ -757,7 +804,7 @@ def apply_cost_reductions(
     # bucket): increases apply before reductions (CR 601.2f).
     from mtg_bot.creature_statics_wg import spell_cost_increase
 
-    increase = spell_cost_increase(state, printing, caster_id)
+    increase = spell_cost_increase(state, printing, caster_id, card=card)
     if increase:
         cost = ManaCost(
             generic=cost.generic + increase, colored=cost.colored,
@@ -916,7 +963,7 @@ def _improvise_candidates(
     return [
         o for o in state.battlefield
         if o.controller_id == player_id
-        and o.printing.is_artifact
+        and is_artifact_now(state, o)
         and not o.tapped
     ]
 
@@ -1153,15 +1200,16 @@ def _sac_for_mana_sources(
     Already-tapped sources can still fire (a tap-then-sac ability needs
     {T} which a tapped source can't pay; ``_can_fire_now`` filters that).
     """
-    from mtg_bot.creature_statics_wg import activation_locked
+    from mtg_bot.creature_statics_wg import activation_locked, any_activation_locks
 
+    locks = any_activation_locks(state)
     sources: list[tuple[GameObject, int, tuple[tuple[str, int], ...]]] = []
     for o in state.battlefield:
         if o.controller_id != player_id:
             continue
         if o.phased_out:
             continue
-        if activation_locked(state, o):
+        if locks and activation_locked(state, o):
             continue
         for idx, produces in _classify_sac_for_mana(state, o):
             if any(b.printing.roto_statics for b in state.battlefield):
@@ -1192,18 +1240,21 @@ def _can_fire_sac_for_mana(state: GameState, source: GameObject, ability_idx: in
 
 def _produces_satisfies(
     produces: "tuple[tuple[str, int], ...]", color: str,
+    any_color: bool = False,
 ) -> bool:
     """True if ``produces`` (one activation's mana output) covers a
     requirement for one pip of ``color``. ``"any"`` matches any color;
-    a colored requirement is satisfied only by exact match or "any";
-    a generic requirement (color="" / None) is satisfied by any output.
+    a colored requirement is satisfied only by exact match or "any"
+    -- or by any output while mana may be spent as though it were any
+    color (``any_color``, Mycosynth Lattice); a generic requirement
+    (color="" / None) is satisfied by any output.
     """
     if color == "S":
         return False  # sacrifice-for-mana sources aren't snow
     for c, n in produces:
         if n <= 0:
             continue
-        if color == "" or color is None:
+        if color == "" or color is None or any_color:
             return True
         if c == color or c == "any":
             return True
@@ -1231,6 +1282,7 @@ def _sac_for_mana_max_contribution(
     consumed: set[int] = set()
     generic = cost.generic
     colored = list(cost.colored)
+    any_color = mana_spendable_as_any_color(state)
     # Pay colored first.
     for i, (color, n) in enumerate(colored):
         need = n
@@ -1241,7 +1293,7 @@ def _sac_for_mana_max_contribution(
                     continue
                 if not _can_fire_sac_for_mana(state, src, ai):
                     continue
-                if _produces_satisfies(produces, color):
+                if _produces_satisfies(produces, color, any_color):
                     chosen_idx = sidx
                     break
             if chosen_idx is None:
@@ -1332,8 +1384,9 @@ def _activate_sac_for_mana_for_cost(
         # {R} cost. The agent's ordered list provides preference;
         # this gate keeps Treasures from being blown up uselessly
         # even if the agent listed them.
+        any_color = mana_spendable_as_any_color(state)
         helps_color = any(
-            n > 0 and _produces_satisfies(produces, color)
+            n > 0 and _produces_satisfies(produces, color, any_color)
             for color, n in cost.colored
         )
         helps_generic = (
@@ -1389,18 +1442,30 @@ def auto_tap_for_cost(
     used_coin_ids: list[int] = []  # indices into p.mana_pool
     used_lands: set[int] = set()
     tapped: list[GameObject] = []
-    # Consume pool coins by preference for colored requirements.
+    any_color = mana_spendable_as_any_color(state)
+    # Consume pool coins by preference for colored requirements (exact
+    # color first; any mana second while it may be spent as though it
+    # were any color -- Mycosynth Lattice).
     for color, count in cost.colored:
         need = count
-        for idx, coin in enumerate(p.mana_pool):
-            if idx in used_coin_ids:
-                continue
-            if not _coin_satisfies_context(coin, spell_kind):
-                continue
-            if _coin_matches_color(coin, color):
+        for exact in _pip_passes(color, any_color):
+            if need == 0:
+                break
+            for idx, coin in enumerate(p.mana_pool):
+                if idx in used_coin_ids:
+                    continue
+                if not _coin_satisfies_context(coin, spell_kind):
+                    continue
+                if exact and not _coin_matches_color(coin, color):
+                    continue
                 used_coin_ids.append(idx)
                 if track:
-                    color_sources.append(frozenset({color}))
+                    # The mana spent is the coin's own color (CR 106.1b).
+                    color_sources.append(
+                        frozenset({color}) if exact
+                        else _WUBRG_SET if coin.color == "any"
+                        else frozenset({coin.color}) - {"C"}
+                    )
                 need -= 1
                 if need == 0:
                     break
@@ -1414,13 +1479,20 @@ def auto_tap_for_cost(
                 if color in effective_land_produces(state, l)
                 and l.id not in used_lands
             ]
+            if any_color:
+                matching += [
+                    l for l in lands
+                    if l.id not in used_lands and l not in matching
+                ]
         for l in matching[:need]:
             used_lands.add(l.id)
             tapped.append(l)
             if track:
+                produces = frozenset(effective_land_produces(state, l))
                 color_sources.append(
-                    frozenset(effective_land_produces(state, l)) & _WUBRG_SET
-                    if color == "S" else frozenset({color})
+                    produces & _WUBRG_SET
+                    if color == "S" or color not in produces
+                    else frozenset({color})
                 )
     # Generic cost (including hybrid pips, treated as generic-1 per
     # the engine simplification): pool first, then lands. The hybrid
@@ -1610,6 +1682,10 @@ def _turn_face_up(state: GameState, player_id: int, card_id: int) -> None:
     if obj is None:
         return
     if not obj.printing.is_creature:
+        return
+    from mtg_bot.effects.generic.roto_layers import turning_face_up_prevented
+
+    if turning_face_up_prevented(state, obj):  # pragma: no cover - gated
         return
     cost_obj = obj.printing.mana_cost
     if not can_pay_cost(state, player_id, cost_obj):
@@ -2128,7 +2204,7 @@ def _select_spell_targets(
             legal = [
                 (enchant_type, o.id)
                 for o in state.battlefield
-                if o.printing.is_artifact
+                if is_artifact_now(state, o)
                 and (not yours_only or o.controller_id == player_id)
             ]
         elif enchant_type == "land":
@@ -2556,6 +2632,7 @@ def _cast_spell(
             free_by_permission = card.exile_play_permission.free
             cast_from_outside_hand = True
             perm_owner.exile.remove(card)
+            card.exiled_face_down = False  # left exile (CR 400.7)
             card.exile_play_permission = None
             card.playable_from_exile_this_turn = False
         elif card is not None:
@@ -2573,6 +2650,7 @@ def _cast_spell(
                 card.exile_cast_extra_surcharge = 0
             cast_from_outside_hand = True
             p.exile.remove(card)
+            card.exiled_face_down = False  # left exile (CR 400.7)
             card.warped = False
             card.playable_from_exile_this_turn = False
             card.play_from_exile_requires_kavu = False
@@ -2745,6 +2823,7 @@ def _cast_spell(
     ), optional_sacrifice_for_cost(state, player_id, card, cost, targets):
         cost = apply_cost_reductions(
             card.printing, state, player_id, cost, chosen_targets=targets,
+            card=card,
         )
     # Kicker: add the optional kicker cost onto the generic+colored
     # portion before X is resolved.
@@ -2883,7 +2962,9 @@ def _cast_spell(
             cast_from_outside_hand, from_graveyard=card.zone == Zone.GRAVEYARD,
             from_exile=card.zone == Zone.EXILE,
         ):
-            free_tax = spell_cost_increase(state, card.printing, player_id)
+            free_tax = spell_cost_increase(
+                state, card.printing, player_id, card=card,
+            )
         if free_tax:
             from mtg_bot.alt_casting import cost_plus as _cost_plus
 
@@ -2908,14 +2989,15 @@ def _cast_spell(
     # spell satisfies both "artifact_spell" and "legendary_spell"
     # restrictions on coins in the pool).
     spell_kinds: set[str] = {"spell"}
-    if card.printing.is_artifact:
+    if is_artifact_now(state, card):
         spell_kinds.add("artifact_spell")
     # Eldrazi Temple's second mana ability produces coins usable only
     # for colorless-Eldrazi costs. Detect colorless-Eldrazi casts here
-    # ("Eldrazi" in subtypes + no colored pips in the printed cost).
+    # ("Eldrazi" in subtypes + colorless: its effective colors -- devoid
+    # and Mycosynth Lattice included -- are empty).
     if (
         "Eldrazi" in card.printing.subtypes
-        and not card.printing.mana_cost.colored
+        and not effective_colors(state, card)
     ):
         spell_kinds.add("colorless_eldrazi_spell")
     # Plaza of Heroes's second mana ability produces coins usable only
@@ -3015,7 +3097,7 @@ def _cast_spell(
         sac_options = [
             o for o in state.battlefield
             if o.controller_id == player_id
-            and (o.printing.is_creature or o.printing.is_artifact)
+            and (o.printing.is_creature or is_artifact_now(state, o))
         ]
         if sac_options:
             from mtg_bot.turn import sacrifice as _sacrifice
@@ -3537,7 +3619,7 @@ def _effective_ability_mana_cost(
                 f"ability cost reduced by {reduction} "
                 f"({type(rule.condition).__name__})"
             )
-    if source.printing.is_artifact and source in state.battlefield:
+    if is_artifact_now(state, source) and source in state.battlefield:
         from mtg_bot.game import _source_layer6_wiped
 
         reduction = sum(
@@ -3873,10 +3955,10 @@ def _activate_ability(
         ability_spell_kinds: set[str] = {"spell", "activated_ability"}
         if (
             "Eldrazi" in source.printing.subtypes
-            and not source.printing.mana_cost.colored
+            and not effective_colors(state, source)
         ):
             ability_spell_kinds.add("colorless_eldrazi_ability")
-        if source.printing.is_artifact:
+        if is_artifact_now(state, source):
             ability_spell_kinds.add("artifact_activation")
         if source.printing.is_legendary:
             ability_spell_kinds.add("legendary_permanent_ability")
@@ -3927,7 +4009,7 @@ def _activate_ability(
                 o for o in state.battlefield
                 if o.controller_id == player_id
                 and o.id != source.id
-                and o.printing.is_artifact
+                and is_artifact_now(state, o)
                 and not o.tapped
             ),
             key=lambda o: o.id,
@@ -4069,13 +4151,13 @@ def _activate_ability(
         p = state.player_by_id(player_id)
         if ability.cost.sacrifice_another_creature_or_artifact:
             def _is_valid_sac(o):
-                return o.printing.is_creature or o.printing.is_artifact
+                return o.printing.is_creature or is_artifact_now(state, o)
         elif ability.cost.sacrifice_another_artifact_or_land:
             def _is_valid_sac(o):
-                return o.printing.is_artifact or o.printing.is_land
+                return is_artifact_now(state, o) or o.printing.is_land
         else:
             def _is_valid_sac(o):
-                return o.printing.is_artifact
+                return is_artifact_now(state, o)
         options = [
             o for o in state.battlefield
             if o.controller_id == player_id
@@ -4307,7 +4389,7 @@ def _activate_ability(
             and not o.tapped
             and (
                 not ability.cost.tap_permanent_type
-                or ability.cost.tap_permanent_type in o.printing.card_types
+                or has_card_type(state, o, ability.cost.tap_permanent_type)
             )
         ]
         chosen = options[0]
@@ -4357,7 +4439,7 @@ def _activate_ability(
         p = state.player_by_id(player_id)
         options = [
             card for card in p.graveyard
-            if card.printing.is_artifact
+            if is_artifact_now(state, card)
         ]
         chosen_card = options[0]
         if p.agent is not None:
@@ -4514,7 +4596,7 @@ def _activate_ability(
             options = [
                 o for o in state.battlefield
                 if o.controller_id == player_id
-                and o.printing.is_artifact and not o.printing.is_token
+                and is_artifact_now(state, o) and not o.printing.is_token
             ]
         if options:
             chosen = options[0]
@@ -5305,7 +5387,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                             target_obj = next(
                                 (o for o in state.battlefield
                                  if o.id == target_id
-                                 and o.printing.is_artifact),
+                                 and is_artifact_now(state, o)),
                                 None,
                             )
                         elif enchant_type == "land":
@@ -5583,6 +5665,26 @@ def apply_aura_static_grants_on_attach(
                 f"a {sub}"
             ),
         )
+
+    for card_type in aura.printing.attached_grants_card_types:
+        # Layer 4 ``add_type`` (Unable to Scream's "is a ... artifact
+        # creature ... in addition to its other types"): read by
+        # ``game.effective_card_types``; a Creature entry also sets the
+        # ``permanent_is_creature`` cache (rebuilt by
+        # ``game.sync_creature_type_cache`` when the Aura leaves).
+        state.add_continuous_effect(
+            source_id=aura.id,
+            layer=4,
+            kind="add_type",
+            target_id=target.id,
+            params=(card_type.lower(),),
+            description=(
+                f"{aura.printing.name}: {target.printing.name} is "
+                f"a {card_type.lower()}"
+            ),
+        )
+        if card_type == "Creature":
+            target.permanent_is_creature = True
 
 
 def apply_clone_enters_as_copy_replacement(
@@ -5975,7 +6077,7 @@ def put_into_battlefield(
         state.player_by_id(controller_id).lands_entered_this_turn += 1
     if obj.printing.is_token and obj.printing.is_creature:
         state.player_by_id(controller_id).pending_creature_tokens_created = True
-    if obj.printing.is_artifact:
+    if is_artifact_now(state, obj):
         # Track per-player "an artifact entered under your control
         # this turn" for static-ability gates like Mechan Shieldmate's
         # conditional attack-bypass for defenders. Counts artifact

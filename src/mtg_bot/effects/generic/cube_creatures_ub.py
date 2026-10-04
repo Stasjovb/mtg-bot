@@ -209,7 +209,7 @@ class MayCastTargetGraveyardCardThisTurn(Effect):
         p = state.player_by_id(controller_id)
         return [
             ("graveyard_card", c.id) for c in p.graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -573,7 +573,7 @@ class MayCastSpellFromGraveyardNow(Effect):
         p = state.player_by_id(controller_id)
         options = [
             c for c in p.graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
             and can_cast_now(state, controller_id, c, free=False)
         ]
         if not options:
@@ -902,6 +902,7 @@ class ReanimateExiledWithSourceFinalityHasteSacrifice(Effect):
             owner.exile.fork()
             card = next(c for c in owner.exile if c.id == card.id)
         owner.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         card.exiled_with = None
         card.named_counters = ()
         put_into_battlefield(state, card, controller_id)
@@ -1257,7 +1258,7 @@ class TargetPlayerPerformsActions(Effect):
             if verb == "sacrifice":
                 legal = [
                     o for o in state.battlefield
-                    if o.controller_id == p.id and arg.matches(o.printing)
+                    if o.controller_id == p.id and arg.matches_card(state, o)
                 ]
                 if not legal:
                     continue
@@ -1558,7 +1559,12 @@ class CounterTargetStackObject(Effect):
         if self.lose_abilities_while_source and item.ability is not None:
             src = item.source
             pr = src.printing
-            if pr.is_artifact or pr.is_creature or "Planeswalker" in pr.card_types:
+            from mtg_bot.game import is_artifact_now
+
+            if (
+                is_artifact_now(state, src) or pr.is_creature
+                or "Planeswalker" in pr.card_types
+            ):
                 _lose_abilities_while_source_remains(
                     state, state.resolving_source, src,
                 )

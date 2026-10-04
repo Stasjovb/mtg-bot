@@ -43,10 +43,10 @@ class ManaValueCardFilter(CardFilter):
     def has_quality(self) -> bool:
         return True
 
-    def matches(self, printing: "CardPrinting") -> bool:
+    def matches(self, printing: "CardPrinting", **effective) -> bool:
         return (
             printing.mana_cost.total == self.mana_value
-            and super().matches(printing)
+            and super().matches(printing, **effective)
         )
 
     def describe(self) -> str:
@@ -78,7 +78,7 @@ class LookAtTopMayRevealIfMatches(Effect):
             return
         top = player.library[0]
         reveal_to(top, controller_id)
-        if not self.card_filter.matches(top.printing):
+        if not self.card_filter.matches_card(state, top):
             state.log.append(f"P{controller_id} looks at the top card of their library")
             return
         if player.agent is not None and not player.agent.choose_yes_no(

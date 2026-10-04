@@ -205,7 +205,7 @@ def alternative_cost_payable(
         return False
     if alt.mana:
         cost = apply_cost_reductions(
-            card.printing, state, player_id, alt.mana_cost(),
+            card.printing, state, player_id, alt.mana_cost(), card=card,
         )
         if not can_pay_cost(state, player_id, cost, sac_for_mana=True):
             return False

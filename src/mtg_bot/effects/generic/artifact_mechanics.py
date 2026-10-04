@@ -192,15 +192,15 @@ class AddOneManaOfColorAmongControlled(Effect):
     legendary: bool = False
     group_description: str = ""
 
-    def _matches(self, obj) -> bool:
+    def _matches(self, state, obj) -> bool:
         if self.legendary and not obj.printing.is_legendary:
             return False
         if self.card_types:
-            from mtg_bot.game import is_creature_now
-            types = set(obj.printing.card_types)
-            if is_creature_now(obj):
-                types.add("Creature")
-            if not types.intersection(self.card_types):
+            from mtg_bot.game import effective_card_types
+
+            if not set(effective_card_types(state, obj)).intersection(
+                self.card_types,
+            ):
                 return False
         return True
 
@@ -212,7 +212,7 @@ class AddOneManaOfColorAmongControlled(Effect):
 
         colors: set[str] = set()
         for o in state.battlefield:
-            if o.controller_id == controller_id and self._matches(o):
+            if o.controller_id == controller_id and self._matches(state, o):
                 colors |= set(effective_colors(state, o))
         if not colors:
             state.log.append(
@@ -260,7 +260,7 @@ class ImprintCardFromHand(Effect):
         options = [
             c.id for c in p.hand
             if not any(t in c.printing.card_types for t in self.excluded_types)
-            and (self.card_filter is None or self.card_filter.matches(c.printing))
+            and (self.card_filter is None or self.card_filter.matches_card(state, c))
         ]
         if not options or p.agent is None:
             return
@@ -310,9 +310,11 @@ class AddOneManaOfImprintedColors(Effect):
         source = state.resolving_source
         if source is None:
             return
+        from mtg_bot.game import effective_colors
+
         colors: set[str] = set()
         for card in imprinted_cards(state, source):
-            colors |= set(card.printing.mana_cost.colors)
+            colors |= set(effective_colors(state, card))
         if not colors:
             state.log.append(
                 f"{source.printing.name}: no colored imprinted card; "
@@ -575,6 +577,7 @@ class ReturnExiledCardsAndDiscardHands(Effect):
             back = [c for c in p.exile if c.id in wanted]
             for card in back:
                 p.exile.remove(card)
+                card.exiled_face_down = False  # left exile (CR 400.7)
                 card.zone = Zone.HAND
                 p.hand.append(card)
             state.log.append(
@@ -614,6 +617,7 @@ class EachPlayerExilesHandDrawsNReturnsLater(Effect):
             for card in list(p.hand):
                 p.hand.remove(card)
                 card.zone = Zone.EXILE
+                card.exiled_face_down = True
                 card.publicly_known_to = frozenset({p.id})
                 p.exile.append(card)
                 exiled.append(card.id)
@@ -632,10 +636,10 @@ class EachPlayerExilesHandDrawsNReturnsLater(Effect):
         )
 
 
-def _share_a_color(a, b) -> bool:
-    return bool(
-        set(a.printing.mana_cost.colors) & set(b.printing.mana_cost.colors)
-    )
+def _share_a_color(state, a, b) -> bool:
+    from mtg_bot.game import effective_colors
+
+    return bool(effective_colors(state, a) & effective_colors(state, b))
 
 
 @dataclass(frozen=True)
@@ -668,7 +672,7 @@ class MillTwoRepeatWhileShareColor(Effect):
                 p.graveyard.append(card)
                 milled.append(card)
             total += len(milled)
-            if len(milled) < 2 or not _share_a_color(*milled):
+            if len(milled) < 2 or not _share_a_color(state, *milled):
                 break
         state.log.append(f"P{p.id} mills {total} cards")
 
@@ -743,7 +747,7 @@ class EachOpponentSacrificesN(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import is_creature_now
+        from mtg_bot.game import has_card_type, is_creature_now
         from mtg_bot.turn import sacrifice as _sacrifice
 
         def _legal(o, pid):
@@ -751,7 +755,7 @@ class EachOpponentSacrificesN(Effect):
                 return False
             if self.card_type == "Creature":
                 return is_creature_now(o)
-            return self.card_type in o.printing.card_types
+            return has_card_type(state, o, self.card_type)
 
         for p in state.players:
             if p.id == controller_id or p.has_lost:
@@ -1241,6 +1245,7 @@ class FlickerUpToOneOtherTargetNonlandPermanentYouControl(Effect):
         owner = state.player_by_id(obj.owner_id)
         if obj in owner.exile:
             owner.exile.remove(obj)
+            obj.exiled_face_down = False  # left exile (CR 400.7)
         state.log.append(f"{obj.printing.name} returns to the battlefield")
         put_into_battlefield(state, obj, obj.owner_id)
 
@@ -1331,6 +1336,7 @@ class ReturnExiledWithSourceToGraveyardThenToken(Effect):
             card = next((c for c in cards if c.id == pick), cards[0])
         owner = state.player_by_id(card.owner_id)
         owner.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         card.zone = Zone.GRAVEYARD
         card.imprinted_on = None
         owner.graveyard.append(card)

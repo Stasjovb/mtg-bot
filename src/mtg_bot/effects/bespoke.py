@@ -226,12 +226,13 @@ class SelfcraftMechanETBEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.turn import draw_n_cards, sacrifice as _sacrifice
 
         p = state.player_by_id(controller_id)
         artifacts = [
             o for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         ]
         if not artifacts:
             state.log.append(
@@ -1245,10 +1246,12 @@ class SeedshipImpactEffect(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if o.printing.is_artifact
+            if is_artifact_now(state, o)
             or "Enchantment" in o.printing.card_types
         ]
 
@@ -1256,6 +1259,7 @@ class SeedshipImpactEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.cards import TOKEN_PRINTINGS
         from mtg_bot.game import Zone
@@ -1272,7 +1276,7 @@ class SeedshipImpactEffect(Effect):
         if obj is None:
             return
         if not (
-            obj.printing.is_artifact
+            is_artifact_now(state, obj)
             or "Enchantment" in obj.printing.card_types
         ):
             return
@@ -1405,10 +1409,12 @@ class SystemsOverrideEffect(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
-            if o.printing.is_artifact or o.printing.is_creature
+            if is_artifact_now(state, o) or o.printing.is_creature
         ]
 
     def resolve(
@@ -2212,14 +2218,14 @@ class AlpharaelDreamingAcolyteDiscardEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
+        from mtg_bot.game import Zone, is_artifact_now
         from mtg_bot.turn import fire_opponent_discards_triggers
 
         p = state.player_by_id(controller_id)
         if not p.hand:
             return
 
-        artifact_ids = [c.id for c in p.hand if c.printing.is_artifact]
+        artifact_ids = [c.id for c in p.hand if is_artifact_now(state, c)]
         # If no artifact in hand, the "unless" branch is unavailable —
         # fall through to the discard-two path.
         use_artifact_dodge = False
@@ -2320,9 +2326,9 @@ class ExorciseEffect(Effect):
         # current state every time we filter, so a target picked at
         # high power and debuffed mid-stack falls out of the legal
         # set on the resolve recheck.
-        from mtg_bot.game import effective_power
+        from mtg_bot.game import effective_power, is_artifact_now
 
-        if obj.printing.is_artifact:
+        if is_artifact_now(state, obj):
             return True
         if "Enchantment" in obj.printing.card_types:
             return True
@@ -3103,6 +3109,7 @@ class TerminalVelocityEffect(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.effects.base import TriggeredAbility
         from mtg_bot.effects.combinators import ApplyEffect
@@ -3116,7 +3123,7 @@ class TerminalVelocityEffect(Effect):
         # Collect qualifying cards: artifact or creature cards in hand.
         qualifying = [
             c for c in p.hand
-            if c.printing.is_artifact or c.printing.is_creature
+            if is_artifact_now(state, c) or c.printing.is_creature
         ]
         if not qualifying:
             state.log.append(

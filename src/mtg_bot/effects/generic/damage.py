@@ -437,6 +437,8 @@ class DealDamageToOpponentCreatureByArtifactCount(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         if not targets:
             return
         prior = getattr(state, "resolving_controller_id", None)
@@ -448,7 +450,7 @@ class DealDamageToOpponentCreatureByArtifactCount(Effect):
                 return
             artifact_count = sum(
                 1 for o in state.battlefield
-                if o.controller_id == controller_id and o.printing.is_artifact
+                if o.controller_id == controller_id and is_artifact_now(state, o)
             )
             if artifact_count <= 0:
                 return

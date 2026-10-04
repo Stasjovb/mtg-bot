@@ -30,7 +30,7 @@ class GrantFlashbackToTargetCardUEOT(Effect):
         p = state.player_by_id(controller_id)
         return [
             ("graveyard_card", c.id) for c in p.graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -42,7 +42,7 @@ class GrantFlashbackToTargetCardUEOT(Effect):
         p = state.player_by_id(controller_id)
         card = next(
             (c for c in p.graveyard
-             if c.id == tid and self.card_filter.matches(c.printing)),
+             if c.id == tid and self.card_filter.matches_card(state, c)),
             None,
         )
         if card is None:

@@ -349,10 +349,12 @@ class ReturnTargetCardFromYourGraveyardToHand(Effect):
         return [
             ("graveyard_card", c.id)
             for c in state.player_by_id(controller_id).graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import effective_colors
+
         from mtg_bot.game import Zone, reveal_to_all
 
         if not targets:
@@ -360,7 +362,7 @@ class ReturnTargetCardFromYourGraveyardToHand(Effect):
         p = state.player_by_id(controller_id)
         card = next(
             (c for c in p.graveyard
-             if c.id == targets[0][1] and self.card_filter.matches(c.printing)),
+             if c.id == targets[0][1] and self.card_filter.matches_card(state, c)),
             None,
         )
         if card is None:
@@ -373,7 +375,7 @@ class ReturnTargetCardFromYourGraveyardToHand(Effect):
         state.log.append(f"{card.printing.name} returns to P{controller_id}'s hand")
         if (
             self.bonus is not None
-            and self.bonus_color in card.printing.mana_cost.colors
+            and self.bonus_color in effective_colors(state, card)
         ):
             self.bonus.resolve(state, controller_id, ())
 
@@ -418,14 +420,12 @@ class EachChoosesOneOfEachTypeSacrificesRest(Effect):
     nonland_only: bool = True
 
     def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import has_card_type
         from mtg_bot.effects.generic.mass_effects import _apnap
-        from mtg_bot.game import is_creature_now
         from mtg_bot.turn import sacrifice
 
         def has_type(o, t):
-            if t == "Creature":
-                return is_creature_now(o)
-            return t in o.printing.card_types
+            return has_card_type(state, o, t)
 
         for p in _apnap(state, controller_id):
             if self.opponents_only and p.id == controller_id:
@@ -480,7 +480,7 @@ class MayCastTargetGraveyardCardThisTurnExileInstead(Effect):
         return [
             ("graveyard_card", c.id)
             for c in state.player_by_id(controller_id).graveyard
-            if self.card_filter.matches(c.printing)
+            if self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -490,7 +490,7 @@ class MayCastTargetGraveyardCardThisTurnExileInstead(Effect):
             return
         p = state.player_by_id(controller_id)
         if not any(
-            c.id == targets[0][1] and self.card_filter.matches(c.printing)
+            c.id == targets[0][1] and self.card_filter.matches_card(state, c)
             for c in p.graveyard
         ):
             state.log.append("cast-permission target is gone")
@@ -687,12 +687,10 @@ class YouControlAtLeast(StatePredicate):
     card_type: str = "Land"
 
     def test(self, state, viewer_id):
-        from mtg_bot.game import is_creature_now
+        from mtg_bot.game import has_card_type
 
         def has(o):
-            if self.card_type == "Creature":
-                return is_creature_now(o)
-            return self.card_type in o.printing.card_types
+            return has_card_type(state, o, self.card_type)
 
         return sum(
             1 for o in state.battlefield

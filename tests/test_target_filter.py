@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from mtg_bot.game import Zone
+
 from mtg_bot.effects.object_predicates import (
     IsArtifact,
     IsBattle,
@@ -54,6 +56,10 @@ class FakeObject:
     impending_active: bool = False
     enduring_returned_as_enchantment: bool = False
     permanent_is_creature: bool = False
+    # Read by ``game.has_card_type`` / ``effective_card_types`` (CR 613
+    # layer 4): a battlefield object, no last-known snapshot.
+    zone: object = Zone.BATTLEFIELD
+    lki_card_types: tuple | None = None
 
 
 @dataclass
@@ -65,6 +71,8 @@ class FakePlayer:
 class FakeState:
     battlefield: list = field(default_factory=list)
     continuous_effects: list = field(default_factory=list)
+    # ``game.GameState.layered_statics_possible``: the conservative default.
+    layered_statics_possible: bool = True
 
 
 def test_oneof_matches_first_arm():

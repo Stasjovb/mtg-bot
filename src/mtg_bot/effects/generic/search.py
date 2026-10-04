@@ -428,6 +428,8 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import effective_colors
+
         from mtg_bot.actions import put_into_battlefield
         from mtg_bot.game import shuffle_library
 
@@ -436,7 +438,7 @@ class SearchLibraryForGreenCreatureWithMVAtMostX(Effect):
         options = [
             c for c in p.library
             if c.printing.is_creature
-            and "G" in c.printing.mana_cost.colors
+            and "G" in effective_colors(state, c)
             and c.printing.mana_cost.total <= x
         ]
         if not options:

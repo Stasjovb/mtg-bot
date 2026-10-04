@@ -63,13 +63,15 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         source = state.resolving_source
         source_id = source.id if source is not None else -1
         return [
             ("permanent", o.id)
             for o in state.battlefield
             if o.controller_id == controller_id
-            and o.printing.is_artifact
+            and is_artifact_now(state, o)
             and o.id != source_id
         ]
 

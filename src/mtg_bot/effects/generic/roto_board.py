@@ -552,7 +552,7 @@ class CardsInYourGraveyard(Condition):
 
     def _count(self, state, viewer_id) -> int:
         p = state.player_by_id(viewer_id)
-        return sum(1 for c in p.graveyard if self.card_filter.matches(c.printing))
+        return sum(1 for c in p.graveyard if self.card_filter.matches_card(state, c))
 
     def matches(self, state, viewer_id, chosen_targets=None):
         return self._count(state, viewer_id) >= self.at_least
@@ -867,7 +867,7 @@ class TapOrUntapAllOfChosenType(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import is_creature_now
+        from mtg_bot.game import has_card_type
         from mtg_bot.turn import tap_permanent
 
         pid = _event_player_id(state, targets)
@@ -884,9 +884,7 @@ class TapOrUntapAllOfChosenType(Effect):
         card_type = self.types[t_idx]
 
         def has_type(o) -> bool:
-            if card_type == "Creature":
-                return is_creature_now(o)
-            return card_type in o.printing.card_types
+            return has_card_type(state, o, card_type)
 
         mine = [o for o in state.battlefield if o.controller_id == pid and has_type(o)]
         if verb == 1:
@@ -1144,12 +1142,10 @@ class PumpPerTypeCountUEOT(Effect):
 
     @staticmethod
     def type_count(state, obj) -> int:
-        from mtg_bot.game import effective_subtypes, is_creature_now
+        from mtg_bot.game import effective_card_types, effective_subtypes
 
         supertypes = [s for s in obj.printing.supertypes if s != "Token"]
-        card_types = set(obj.printing.card_types)
-        if is_creature_now(obj):
-            card_types.add("Creature")
+        card_types = set(effective_card_types(state, obj))
         return (
             len(supertypes) + len(card_types)
             + len(effective_subtypes(state, obj))
@@ -1505,6 +1501,7 @@ def discover(state: "GameState", player_id: int, x: int) -> None:
             cast = cast_card_from_exile_for_free(state, player_id, hit)
         if not cast and hit in p.exile:
             p.exile.remove(hit)
+            hit.exiled_face_down = False  # left exile (CR 400.7)
             hit.exile_play_permission = None
             hit.zone = Zone.HAND
             p.hand.append(hit)
@@ -1513,6 +1510,7 @@ def discover(state: "GameState", player_id: int, x: int) -> None:
     state.rng.shuffle(rest)
     for c in rest:
         state.player_by_id(c.owner_id).exile.remove(c)
+        c.exiled_face_down = False  # left exile (CR 400.7)
         c.exile_play_permission = None
         c.zone = Zone.LIBRARY
         p.library.append(c)

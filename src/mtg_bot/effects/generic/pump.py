@@ -1378,10 +1378,12 @@ class PumpYoursAndDebuffOpponentByArtifactCountUntilEOT(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         x = sum(
             1
             for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         )
         x = max(0, x)
         if x <= 0:

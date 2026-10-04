@@ -81,6 +81,29 @@ def _build_player_from_names(
     return p
 
 
+def _game_has_layered_statics(state: GameState) -> bool:
+    """Whether a card of this game (in a library, hand or command zone at
+    setup, or outside the game) synthesizes layer-4 / layer-5 effects or
+    the any-color mana rule from the battlefield (Mycosynth Lattice) --
+    ``GameState.layered_statics_possible``."""
+    for p in state.players:
+        printings = [c.printing for c in (*p.library, *p.hand)]
+        printings += list(p.sideboard)
+        for pr in printings:
+            faces = (
+                pr, getattr(pr, "mdfc_back_face", None),
+                getattr(pr, "transform_back_face", None),
+            )
+            for face in faces:
+                if face is not None and (
+                    face.all_permanents_gain_card_type is not None
+                    or face.all_objects_colorless
+                    or face.mana_spendable_as_any_color
+                ):
+                    return True
+    return False
+
+
 def setup_game(
     agents: list[Agent],
     decks: list[list[str]],
@@ -197,6 +220,7 @@ def setup_game(
 
         for p, names in zip(state.players, sideboards):
             p.sideboard = sideboard_printings(p.id, list(names))
+    state.layered_statics_possible = _game_has_layered_statics(state)
 
     starting_player_idx = begin_game_with_conspiracies(
         state, starting_player_idx, rng, minimum_deck_size,

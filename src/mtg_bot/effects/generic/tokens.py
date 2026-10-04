@@ -420,11 +420,13 @@ class CreateXTokensOfTargetPermanentWithHasteEndStepSac(Effect):
     def legal_targets(
         self, state: "GameState", controller_id: int
     ) -> list[Target]:
+        from mtg_bot.game import is_artifact_now
+
         return [
             ("permanent", o.id)
             for o in state.battlefield
             if o.controller_id == controller_id
-            and (o.printing.is_artifact or o.printing.is_creature)
+            and (is_artifact_now(state, o) or o.printing.is_creature)
         ]
 
     def resolve(

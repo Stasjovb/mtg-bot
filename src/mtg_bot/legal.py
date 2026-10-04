@@ -14,7 +14,10 @@ from mtg_bot.actions import (
     can_pay_cost,
 )
 from mtg_bot.cards import ManaCost
-from mtg_bot.game import GameObject, GameState, Zone
+from mtg_bot.game import (
+    GameObject, GameState, Zone, effective_colors, has_card_type,
+    is_artifact_now,
+)
 from mtg_bot.turn import MAIN_STEPS
 
 
@@ -95,7 +98,9 @@ def _loyalty_abilities_at_instant_speed(
     )
 
 
-def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
+def _spell_kinds_for_card(
+    state: GameState, card: GameObject,
+) -> "frozenset[str]":
     """Build the set of spend-restriction context tags for casting
     ``card``. Mirrors the logic in ``actions._cast_spell``: a card may
     satisfy multiple coin restrictions at once (e.g., a legendary
@@ -106,11 +111,11 @@ def _spell_kinds_for_card(card: GameObject) -> "frozenset[str]":
     from mtg_bot.game import Zone
 
     kinds: set[str] = {"spell"}
-    if card.printing.is_artifact:
+    if is_artifact_now(state, card):
         kinds.add("artifact_spell")
     if (
         "Eldrazi" in card.printing.subtypes
-        and not card.printing.mana_cost.colored
+        and not effective_colors(state, card)
     ):
         kinds.add("colorless_eldrazi_spell")
     if card.printing.is_legendary:
@@ -192,7 +197,7 @@ def _can_cast(
         cost = apply_minimum_spell_cost(state, cost)
     return can_pay_cost(
         state, player_id, cost,
-        spell_kind=_spell_kinds_for_card(card),
+        spell_kind=_spell_kinds_for_card(state, card),
         convoke=card.printing.has_convoke,
         improvise=card.printing.has_improvise,
         sac_for_mana=True,
@@ -272,7 +277,7 @@ def _additional_costs_payable(
         have_sac = any(
             o for o in state.battlefield
             if o.controller_id == player_id
-            and (o.printing.is_creature or o.printing.is_artifact)
+            and (o.printing.is_creature or is_artifact_now(state, o))
         )
         if not have_sac:
             return False
@@ -401,6 +406,7 @@ def _exile_permission_plays(
             continue
         cost = apply_cost_reductions(
             pr, state, player_id, exile_permission_cast_cost(card, perm),
+            card=card,
         )
         if not (
             (perm.free or _can_cast(state, player_id, card, cost))
@@ -564,10 +570,10 @@ def battlefield_ability_activations(
                 ability_kinds: set[str] = {"spell", "activated_ability"}
                 if (
                     "Eldrazi" in obj.printing.subtypes
-                    and not obj.printing.mana_cost.colored
+                    and not effective_colors(state, obj)
                 ):
                     ability_kinds.add("colorless_eldrazi_ability")
-                if obj.printing.is_artifact:
+                if is_artifact_now(state, obj):
                     ability_kinds.add("artifact_activation")
                 if obj.printing.is_legendary:
                     ability_kinds.add("legendary_permanent_ability")
@@ -590,7 +596,7 @@ def battlefield_ability_activations(
                     o2 for o2 in state.battlefield
                     if o2.controller_id == player_id
                     and o2.id != obj.id
-                    and (o2.printing.is_creature or o2.printing.is_artifact)
+                    and (o2.printing.is_creature or is_artifact_now(state, o2))
                 )
                 if not has_another:
                     continue
@@ -599,7 +605,7 @@ def battlefield_ability_activations(
                     o2 for o2 in state.battlefield
                     if o2.controller_id == player_id
                     and o2.id != obj.id
-                    and (o2.printing.is_artifact or o2.printing.is_land)
+                    and (is_artifact_now(state, o2) or o2.printing.is_land)
                 )
                 if not has_another:
                     continue
@@ -608,7 +614,7 @@ def battlefield_ability_activations(
                     o2 for o2 in state.battlefield
                     if o2.controller_id == player_id
                     and o2.id != obj.id
-                    and o2.printing.is_artifact
+                    and is_artifact_now(state, o2)
                 )
                 if not has_another:
                     continue
@@ -689,7 +695,7 @@ def battlefield_ability_activations(
             if ability.cost.sacrifice_nontoken_artifact:
                 if not any(
                     o2.controller_id == player_id
-                    and o2.printing.is_artifact
+                    and is_artifact_now(state, o2)
                     and not o2.printing.is_token
                     for o2 in state.battlefield
                 ):
@@ -728,7 +734,7 @@ def battlefield_ability_activations(
                 artifact_count = sum(
                     1 for o2 in state.battlefield
                     if o2.controller_id == player_id
-                    and "Artifact" in o2.printing.card_types
+                    and is_artifact_now(state, o2)
                 )
                 if artifact_count < threshold:
                     continue
@@ -779,8 +785,9 @@ def battlefield_ability_activations(
                     and not o2.tapped
                     and (
                         not ability.cost.tap_permanent_type
-                        or ability.cost.tap_permanent_type
-                        in o2.printing.card_types
+                        or has_card_type(
+                            state, o2, ability.cost.tap_permanent_type,
+                        )
                     )
                 )
                 if not has_untapped_other:
@@ -804,7 +811,7 @@ def battlefield_ability_activations(
                 # activating player's graveyard.
                 has_artifact_in_gy = any(
                     card for card in p.graveyard
-                    if card.printing.is_artifact
+                    if is_artifact_now(state, card)
                 )
                 if not has_artifact_in_gy:
                     continue
@@ -887,7 +894,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
             from_exile=card.zone == Zone.EXILE,
         ):
             reduced = apply_cost_reductions(
-                card.printing, state, player_id, base_cost,
+                card.printing, state, player_id, base_cost, card=card,
             )
         cost = _delve_affordability_cost(state, player_id, card, reduced)
         # Spree: every cast chooses at least one mode, each with its own
@@ -941,7 +948,9 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
             card.zone != Zone.HAND, from_graveyard=card.zone == Zone.GRAVEYARD,
             from_exile=card.zone == Zone.EXILE,
         ):
-            tax = spell_cost_increase(state, card.printing, player_id)
+            tax = spell_cost_increase(
+                state, card.printing, player_id, card=card,
+            )
         from mtg_bot.roto_restrictions import minimum_spell_cost
 
         return (tax == 0 and not minimum_spell_cost(state)) or _can_cast(
@@ -1690,7 +1699,7 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
     )
     if has_cast_artifact_top and p.library:
         top = p.library[0]
-        if top.printing.is_artifact:
+        if is_artifact_now(state, top):
             # Sorcery timing check (all artifact tops, creature or not).
             if _is_sorcery_timing(state, player_id) and _can_cast(
                 state, player_id, top, _effective_cost(top, top.printing.mana_cost),
@@ -1776,6 +1785,14 @@ def _legal_actions_core(state: GameState, player_id: int) -> list[Action]:
         if not obj.printing.is_creature:
             continue
         if not can_pay_cost(state, player_id, obj.printing.mana_cost):
+            continue
+        from mtg_bot.effects.generic.roto_layers import (
+            turning_face_up_prevented,
+        )
+
+        if turning_face_up_prevented(state, obj):
+            # "As long as enchanted creature is face down, it can't be
+            # turned face up." (Unable to Scream.)
             continue
         actions.append(TurnFaceUp(card_id=obj.id))
 

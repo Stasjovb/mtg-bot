@@ -253,11 +253,11 @@ class GainLifeEqualToArtifactCount(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import gain_life
+        from mtg_bot.game import gain_life, is_artifact_now
 
         artifact_count = sum(
             1 for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         )
         if artifact_count <= 0:
             return
@@ -385,9 +385,11 @@ class EachOpponentLosesLifeEqualToArtifactCount(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
+
         artifact_count = sum(
             1 for o in state.battlefield
-            if o.controller_id == controller_id and o.printing.is_artifact
+            if o.controller_id == controller_id and is_artifact_now(state, o)
         )
         if artifact_count <= 0:
             return

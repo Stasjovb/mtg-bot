@@ -371,6 +371,7 @@ def exile_card(state: "GameState", card: "GameObject", *, face_down_for: int | N
 
     card.zone = Zone.EXILE
     state.player_by_id(card.owner_id).exile.append(card)
+    card.exiled_face_down = face_down_for is not None
     if face_down_for is None:
         reveal_to_all(state, card)
     else:
@@ -722,6 +723,7 @@ class Cascade(Effect):
         state.rng.shuffle(rest)
         for c in rest:
             state.player_by_id(c.owner_id).exile.remove(c)
+            c.exiled_face_down = False  # left exile (CR 400.7)
             c.exile_play_permission = None
             c.zone = Zone.LIBRARY
             p.library.append(c)
@@ -748,10 +750,18 @@ class CardTypeOrSubtypeFilter:
     def has_quality(self) -> bool:
         return True
 
-    def matches(self, printing) -> bool:
-        return any(t in printing.card_types for t in self.types) or any(
+    def matches(self, printing, *, types=None, colors=None) -> bool:
+        card_types = printing.card_types if types is None else types
+        return any(t in card_types for t in self.types) or any(
             s in printing.subtypes for s in self.subtypes
         )
+
+    def matches_card(self, state, card) -> bool:
+        """:meth:`matches` against a game object's effective card types
+        (``game.effective_card_types``)."""
+        from mtg_bot.game import effective_card_types
+
+        return self.matches(card.printing, types=effective_card_types(state, card))
 
     def describe(self) -> str:
         return " or ".join((*self.types, *self.subtypes)) + " card"
@@ -797,7 +807,7 @@ class ExileTargetGraveyardCardWithPlayPermission(Effect):
         p = state.player_by_id(controller_id)
         return [
             ("graveyard_card", c.id) for c in p.graveyard
-            if self.card_filter is None or self.card_filter.matches(c.printing)
+            if self.card_filter is None or self.card_filter.matches_card(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -1436,8 +1446,16 @@ def enters_tapped_by_opponent_static(state: "GameState", obj: "GameObject", cont
             continue
         for sa in source.printing.static_abilities:
             types = sa.opponents_enter_tapped_types
-            if types and any(t in obj.printing.card_types for t in types):
-                return True
+            if not types:
+                continue
+            # The entering permanent's types as it would exist on the
+            # battlefield (CR 614.12): ``obj.zone`` is already the
+            # battlefield here, so layer 4 (Mycosynth Lattice) applies.
+            from mtg_bot.game import has_card_type
+
+            for t in types:
+                if has_card_type(state, obj, t):
+                    return True
     return False
 
 
@@ -2300,9 +2318,11 @@ class SwapArtifactWithGraveyardArtifact(Effect):
         return (2, 2)
 
     def _artifact_ok(self, state, o) -> bool:
+        from mtg_bot.game import is_artifact_now
+
         pl = state.player_by_id(o.controller_id)
-        return "Artifact" in o.printing.card_types and any(
-            "Artifact" in c.printing.card_types for c in pl.graveyard
+        return is_artifact_now(state, o) and any(
+            is_artifact_now(state, c) for c in pl.graveyard
         )
 
     def legal_targets(self, state, controller_id):
@@ -2318,10 +2338,12 @@ class SwapArtifactWithGraveyardArtifact(Effect):
         first = next((o for o in state.battlefield if o.id == chosen[0][1]), None)
         if first is None:
             return []
+        from mtg_bot.game import is_artifact_now
+
         pl = state.player_by_id(first.controller_id)
         return [
             ("graveyard_card", c.id) for c in pl.graveyard
-            if "Artifact" in c.printing.card_types
+            if is_artifact_now(state, c)
         ]
 
     def resolve(self, state, controller_id, targets=()):
@@ -2330,9 +2352,11 @@ class SwapArtifactWithGraveyardArtifact(Effect):
 
         if len(targets) < 2:
             return
+        from mtg_bot.game import is_artifact_now
+
         art = next(
             (o for o in state.battlefield
-             if o.id == targets[0][1] and "Artifact" in o.printing.card_types),
+             if o.id == targets[0][1] and is_artifact_now(state, o)),
             None,
         )
         if art is None:
@@ -2340,7 +2364,7 @@ class SwapArtifactWithGraveyardArtifact(Effect):
         player = state.player_by_id(art.controller_id)
         card = next(
             (c for c in player.graveyard
-             if c.id == targets[1][1] and "Artifact" in c.printing.card_types),
+             if c.id == targets[1][1] and is_artifact_now(state, c)),
             None,
         )
         if card is None:

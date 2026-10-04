@@ -114,6 +114,7 @@ class ReturnExiledPermanentToOwnerTapped(Effect):
         if card is None or owner is None:
             return
         owner.exile.remove(card)
+        card.exiled_face_down = False  # left exile (CR 400.7)
         put_into_battlefield(state, card, owner.id)
         card.tapped = True
         state.log.append(
@@ -483,11 +484,12 @@ class ExileAllArtifactsWithManaValueAtMost(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.turn import move_off_battlefield
 
         victims = [
             o for o in state.battlefield
-            if o.printing.is_artifact and o.printing.mana_cost.total <= self.max_mv
+            if is_artifact_now(state, o) and o.printing.mana_cost.total <= self.max_mv
         ]
         for obj in victims:
             state.log.append(f"{obj.printing.name} is exiled (mass-artifact)")
@@ -793,6 +795,7 @@ class ExileAllMatchingUntilSourceLeaves(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
+        from mtg_bot.game import is_artifact_now
         from mtg_bot.turn import move_off_battlefield
 
         source = state.resolving_source
@@ -805,7 +808,7 @@ class ExileAllMatchingUntilSourceLeaves(Effect):
             if o.printing.is_land:
                 continue
             type_match = (
-                (self.match_artifact and o.printing.is_artifact)
+                (self.match_artifact and is_artifact_now(state, o))
                 or (self.match_creature and o.printing.is_creature)
             )
             if not type_match:
@@ -885,6 +888,7 @@ class MoveEachExiledWithSourceToOwnersGraveyard(Effect):
             tagged = [c for c in p.exile if c.exiled_by_source == source.id]
             for card in tagged:
                 p.exile.remove(card)
+                card.exiled_face_down = False  # left exile (CR 400.7)
                 card.zone = Zone.GRAVEYARD
                 card.exiled_by_source = None
                 p.graveyard.append(card)
@@ -1084,6 +1088,7 @@ class PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(Effect)
                 if not card.printing.is_creature:
                     continue
                 p.exile.remove(card)
+                card.exiled_face_down = False  # left exile (CR 400.7)
                 card.exiled_by_source = None
                 moved.append(card)
         if not moved:
@@ -1229,6 +1234,7 @@ class ReanimateOneExiledWithSourceWithCounters(Effect):
                         chosen_owner = owner
                         break
         chosen_owner.exile.remove(chosen_obj)
+        chosen_obj.exiled_face_down = False  # left exile (CR 400.7)
         chosen_obj.exiled_by_source = None
         state.log.append(
             f"{source.printing.name} puts {chosen_obj.printing.name} onto "

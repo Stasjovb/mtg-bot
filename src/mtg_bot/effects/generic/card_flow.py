@@ -62,6 +62,12 @@ def _describe_amount(amount: Amount) -> str:
 _PSEUDO_TYPE_PERMANENT = "Permanent"
 
 
+def _is_permanent_type_set(card_types: "tuple[str, ...]") -> bool:
+    from mtg_bot.cards.base import is_permanent_card_types
+
+    return is_permanent_card_types(card_types)
+
+
 @dataclass(frozen=True)
 class CardFilter:
     """Filter over a card's printed characteristics.
@@ -104,25 +110,36 @@ class CardFilter:
             or bool(self.mana_costs)
         )
 
-    def matches(self, printing: "CardPrinting") -> bool:
+    def matches(
+        self, printing: "CardPrinting", *,
+        types: "tuple[str, ...] | None" = None,
+        colors: "frozenset[str] | None" = None,
+    ) -> bool:
+        """Test ``printing``'s characteristics. ``types`` / ``colors``
+        override the printed card types / colors with a game object's
+        effective ones (:meth:`matches_card`); a bare printing (a card
+        outside the game -- a sideboard entry) uses its printed values."""
+        card_types = printing.card_types if types is None else types
         if self.any_types:
             ok = False
             for t in self.any_types:
                 if t == _PSEUDO_TYPE_PERMANENT:
-                    if printing.is_permanent:
+                    if _is_permanent_type_set(card_types):
                         ok = True
                         break
-                elif t in printing.card_types:
+                elif t in card_types:
                     ok = True
                     break
             if not ok:
                 return False
         for t in self.excluded_types:
-            if t in printing.card_types:
+            if t in card_types:
                 return False
         if self.max_mv is not None and printing.mana_cost.total > self.max_mv:
             return False
-        if self.color is not None and self.color not in printing.mana_cost.colors:
+        if self.color is not None and self.color not in (
+            printing.mana_cost.colors if colors is None else colors
+        ):
             return False
         if self.supertype is not None and self.supertype not in printing.supertypes:
             return False
@@ -131,6 +148,23 @@ class CardFilter:
         if self.mana_costs and printing.mana_cost_str not in self.mana_costs:
             return False
         return True
+
+    def matches_card(self, state: "GameState", card: "GameObject") -> bool:
+        """:meth:`matches` against the game object ``card``: its effective
+        card types (``game.effective_card_types`` -- layer 4 on the
+        battlefield, printed elsewhere) and its effective colors
+        (``game.effective_colors`` -- layer 5 in every zone: Mycosynth
+        Lattice makes a blue card in hand colorless)."""
+        from mtg_bot.game import effective_card_types, effective_colors
+
+        return self.matches(
+            card.printing,
+            types=effective_card_types(state, card),
+            colors=(
+                effective_colors(state, card) if self.color is not None
+                else None
+            ),
+        )
 
     def describe(self) -> str:
         words: list[str] = []
@@ -348,7 +382,7 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
             return
         for c in p.hand:
             reveal_to(c, controller_id)
-        options = [c for c in p.hand if self.card_filter.matches(c.printing)]
+        options = [c for c in p.hand if self.card_filter.matches_card(state, c)]
         if not options:
             state.log.append(
                 f"P{p.id} reveals a hand with no "
@@ -464,7 +498,7 @@ class SearchLibrary(Effect):
         from mtg_bot.game import Zone, reveal_to, reveal_to_all, shuffle_library
 
         p = state.player_by_id(controller_id)
-        options = [c for c in p.library if self.card_filter.matches(c.printing)]
+        options = [c for c in p.library if self.card_filter.matches_card(state, c)]
         chosen = None
         if options:
             picked = None
@@ -597,7 +631,7 @@ class LookAtTopCardsPutIntoHand(Effect):
         for _ in range(self.take):
             options = [
                 c for c in looked
-                if c not in taken and self.take_filter.matches(c.printing)
+                if c not in taken and self.take_filter.matches_card(state, c)
             ]
             if not options:
                 break
