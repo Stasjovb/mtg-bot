@@ -138,7 +138,8 @@ are listed in the `docs/SEARCH_LIMITATIONS.md` entry.
 ## Known risk (pre-existing class)
 
 `RandomAgent` never passes while a non-pass action exists, so a free,
-repeatable, non-sorcery ability (Nomads en-Kor's `{0}`, roto only) lets it
+repeatable, non-sorcery ability (Nomads en-Kor's `{0}`, a roto card -- in
+the default pool too since the roto fold) lets it
 hold priority forever. Sorcery-speed `{0}` equips (Lightning Greaves,
 Shuko) already loop it across resolutions today. Not addressed here (it is
 an agent behaviour, not a rule).
@@ -152,7 +153,11 @@ main phase (155 cards: 90 in both pools, 12
 cube-only, 53 roto-only; Tinder Wall, claimed by this
 change, not included). **Bold** = covered by a behavioural test in
 `tests/test_instant_activation_cards.py` /
-`tests/test_instant_speed_activations.py`.
+`tests/test_instant_speed_activations.py`. "Roto only" means not on the
+cube list; since roto joined the default `all` pool (2026-10-03,
+`feature/roto-default-pool-leyline-wizard`) every card below is in the
+default card source, built as in the `roto` pool
+(`tests/test_roto_combined_interactions.py`).
 
 * Both pools: Aang, Swift Savior // Aang and La, Ocean's Fury, Aether Spellbomb, Arid Mesa, Auriok Salvagers, Baloth Prime, Basalt Monolith, Bloodstained Mire, Bolas's Citadel, Bristly Bill, Spine Sower, Broadside Bombardiers, Candelabra of Tawnos, Cathar Commando, Celestial Colonnade, Coalition Relic, Creeping Tar Pit, Cryogen Relic, Currency Converter, Dauthi Voidwalker, Emperor of Bones, Emry, Lurker of the Loch, Expedition Map, Faerie Mastermind, Fiery Islet, Figure of Destiny, Figure of Fable, Flooded Strand, Formidable Speaker, Ghost Vacuum, **Giver of Runes**, Goblin Bombardment, Goblin Engineer, Goblin Welder, Grim Monolith, Grindstone, Griselbrand, Haywire Mite, Horizon Canopy, Jace, Vryn's Prodigy // Jace, Telepath Unbound, Karakas, Keen-Eyed Curator, Legion Extruder, Library of Alexandria, Loran of the Third Path, Magda, Brazen Outlaw, Manifold Key, Marsh Flats, Memory Jar, Mishra's Bauble, Misty Rainforest, **Mother of Runes**, Nurturing Peatland, Outland Liberator // Frenzied Trapbreaker, Parallax Wave, Polluted Delta, Prismatic Vista, Psychic Frog, Pyrite Spellbomb, Ravenous Robots, Relic of Sauron, Retrofitter Foundry, Scalding Tarn, Sensei's Divining Top, Sewer-veillance Cam, Shelldock Isle, Shifting Woodland, **Smuggler's Copter**, Sneak Attack, Soul-Guide Lantern, Spectacular Spider-Man, Staff of the Storyteller, Stoneforge Mystic, **Strip Mine**, Sunbaked Canyon, Sylvan Safekeeper, The Mind Stone, The One Ring, Thopter Foundry, Time Vault, Urza's Bauble, Urza, Lord High Artificer, Verdant Catacombs, Voltaic Key, **Walking Ballista**, **Wasteland**, Waterlogged Grove, Windswept Heath, **Wishclaw Talisman**, Wooded Foothills, Zirda, the Dawnwaker, Zuran Orb.
 * Cube only: Abandoned Air Temple, Alpha Deathclaw, Arwen, Mortal Queen, Esika's Chariot, Golos, Tireless Pilgrim, Iron-Shield Elf, Lion Sash, Loot, the Pathfinder, Mind Stone, Reckoner Bankbuster, Restless Vinestalk, Ulvenwald Oddity // Ulvenwald Behemoth.
