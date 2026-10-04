@@ -23,7 +23,10 @@ from mtg_bot.combat import (
     eligible_blockers,
     resolve_combat_damage,
 )
-from mtg_bot.conspiracies import begin_game_with_conspiracies
+from mtg_bot.conspiracies import (
+    begin_game_with_conspiracies,
+    reveal_hands_after_mulligans,
+)
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.opening_hand import (
@@ -163,7 +166,12 @@ def setup_game(
     ``minimum_deck_size`` (the format's minimum, e.g.
     ``conspiracies.LIMITED_MINIMUM_DECK_SIZE``) is given -- a deck below
     its adjusted minimum raises ``ValueError``. ``None`` (the default)
-    checks no deck size.
+    checks no deck size. "At the beginning of each game, after
+    mulligans, your opponent reveals their hand to you" (Meddling
+    Wizard) is applied once, after the final keep and bottoming (also
+    with ``enable_mulligans=False``) and before the opening-hand actions:
+    the opponent's hand becomes known to the Wizard's controller
+    (``conspiracies.reveal_hands_after_mulligans``).
     """
     if len(decks) != len(agents):
         raise ValueError(
@@ -280,6 +288,9 @@ def setup_game(
                     # which pops index 0).
                     p.library.append(card)
 
+    # Mulligans are over (every player kept and bottomed): Meddling
+    # Wizard's reveal, then the opening-hand actions (CR 103.6).
+    reveal_hands_after_mulligans(state, starting_player_idx)
     state.active_player_idx = starting_player_idx
     state.priority_player_idx = starting_player_idx
     apply_opening_hand_actions(state, starting_player_idx)

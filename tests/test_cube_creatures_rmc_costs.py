@@ -95,9 +95,11 @@ def test_grammar_disabled_and_eoe_guard():
         assert parse_rmc_creature_line_pre("Exhaust — {T}: Draw a card.", "X") is None
         assert parse_rmc_creature_line_post("Spells you control can't be countered.", "X") is None
     # Intruding Soulrager (Duskmourn only) keeps its pre-bucket
-    # unclaimed status; cube cards shared with the EoE dumps don't.
+    # unclaimed status; cube cards shared with the EoE dumps don't, nor
+    # do EoE-era printings on the roto list (since 2026-10-03).
     assert is_eoe_only_printing("Intruding Soulrager")
     assert not is_eoe_only_printing("Screaming Nemesis")
+    assert not is_eoe_only_printing("Leyline of the Void")
 
 
 def test_effect_grammar_shapes():

@@ -18,6 +18,7 @@ from mtg_bot.cards.parser.roto_zones import (
     parse_roto_zones_effect,
     parse_roto_zones_static_line,
 )
+from mtg_bot.cards.pools import load_pool_cards
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.generic import DiscardSelf
 from mtg_bot.effects.generic.roto_zones import (
@@ -298,37 +299,77 @@ def test_exile_target_players_graveyard_edges():
     assert eff.describe() == "exile target player's graveyard"
 
 
-# --- Leyline of the Void (built with the EoE-era pin lifted) ----------------------
+# --- Leyline of the Void ------------------------------------------------------------
+#
+# A Duskmourn printing (so in the EoE-era dumps) that is also on the roto
+# list. Since the user's 2026-10-03 decision the cube / roto grammars treat
+# the roto list as a target list, so the EoE-era guard no longer switches
+# them off for it, and its name is opted into the enchantment builder: it is
+# claimed in the `eoe`, `roto` and default pools, moving EoE's claimed set
+# 481 -> 482.
 
-def test_leyline_of_the_void_is_pinned_off_as_an_eoe_era_printing():
+LEYLINE = "Leyline of the Void"
+
+# The EoE-era printings on the roto list (not in the cube): the only
+# EoE-era cards the guard change can reach.
+EOE_ERA_ON_THE_ROTO_LIST = frozenset({
+    "Cosmogrand Zenith", "Deafening Silence", "Enduring Curiosity",
+    "Inkmoth Nexus", LEYLINE, "Magus of the Moon", "Nutrient Block",
+    "Overlord of the Mistmoors", "Thespian's Stage", "Unable to Scream",
+    "Untimely Malfunction",
+})
+
+
+def test_leyline_of_the_void_is_claimed_in_every_pool_holding_it():
     from mtg_bot.cards.parser.creature_rmc_grammar import is_eoe_only_printing
-    from mtg_bot.cards.parser.source import build_card_record
+    from mtg_bot.cards.parser.source import OracleParserCardSource, build_card_record
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.opening_hand import BeginGameOnBattlefield
 
     from tests._roto_helpers import roto_card
 
-    # A Duskmourn-pool printing: the P2 grammar is switched off for it so
-    # the EoE claimed set doesn't move (docs/ROTO_COVERAGE_PLAN.md).
-    assert is_eoe_only_printing("Leyline of the Void")
-    assert build_card_record(roto_card("Leyline of the Void")) is None
-
-
-def test_leyline_of_the_void_lines_build_and_play(monkeypatch):
-    import mtg_bot.cards.parser.roto_zones as grammar
-    from mtg_bot.cards.parser.cube_enchantments import build_cube_enchantment
-    from mtg_bot.opening_hand import apply_opening_hand_actions
-
-    from tests._roto_helpers import roto_card
-
-    import mtg_bot.cards.parser.cube_enchantments as enchantments
-
-    monkeypatch.setattr(grammar, "_disabled", lambda: False)
-    monkeypatch.setattr(
-        enchantments, "CUBE_ENCHANTMENT_NAMES",
-        enchantments.CUBE_ENCHANTMENT_NAMES | {"Leyline of the Void"},
-    )
-    pr = build_cube_enchantment(roto_card("Leyline of the Void"))
+    assert not is_eoe_only_printing(LEYLINE)
+    pr = build_card_record(roto_card(LEYLINE))
     assert pr is not None
     assert pr.zone_abilities == (GraveyardExileInstead(opponents_only=True),)
+    assert pr.opening_hand_action == BeginGameOnBattlefield()
+    for pool in ("eoe", "roto"):
+        assert OracleParserCardSource(pool=pool).get_printings()[LEYLINE] == pr
+    assert get_active_source().get_printings()[LEYLINE] == pr
+
+
+def test_lifting_the_guard_moves_only_leyline_in_the_eoe_pool():
+    """EoE's claimed set is 482: the 481 it had plus Leyline of the Void.
+    Every other EoE-era printing on the roto list builds exactly as it did
+    while the guard switched the cube / roto grammars off for it."""
+    from mtg_bot.cards.parser.creature_rmc_grammar import (
+        _eoe_only_names,
+        rmc_grammar_disabled,
+    )
+    from mtg_bot.cards.parser.source import OracleParserCardSource, build_card_record
+    from mtg_bot.cards.pools import pool_card_names
+
+    eoe_names = pool_card_names("eoe")
+    targets = pool_card_names("cube") | pool_card_names("roto")
+    assert _eoe_only_names() == eoe_names - targets
+    assert (eoe_names & pool_card_names("roto")) - pool_card_names("cube") == (
+        EOE_ERA_ON_THE_ROTO_LIST
+    )
+    eoe = OracleParserCardSource(pool="eoe").get_printings()
+    assert len(eoe) == 482 and LEYLINE in eoe
+    raw = {c["name"]: c for c in load_pool_cards("eoe")}
+    for name in sorted(EOE_ERA_ON_THE_ROTO_LIST - {LEYLINE}):
+        with rmc_grammar_disabled():
+            guarded = build_card_record(raw[name])
+        assert eoe.get(name) == guarded, name
+    with rmc_grammar_disabled():
+        assert build_card_record(raw[LEYLINE]) is None
+
+
+def test_leyline_of_the_void_lines_build_and_play():
+    from mtg_bot.opening_hand import apply_opening_hand_actions
+
+    pr = printing(LEYLINE)
     state = arena()
     leyline = to_hand(state, pr)
     apply_opening_hand_actions(state, 0)
@@ -341,3 +382,34 @@ def test_leyline_of_the_void_lines_build_and_play(monkeypatch):
     DiscardSelf().resolve(state, 0)
     state_based_actions(state)
     assert mine in state.players[0].graveyard
+
+
+def test_leyline_of_the_void_from_the_opening_hand_in_a_game():
+    """Through ``setup_game``: Leyline in P0's opening hand begins the game
+    on the battlefield (the player says yes), and from then on a card of
+    P1's that would go to the graveyard is exiled; P0's own cards aren't."""
+    from mtg_bot.simulate import setup_game
+    from mtg_bot.turn import move_off_battlefield
+
+    from tests._roto_p6_helpers import PregameAgent
+
+    state = setup_game(
+        [PregameAgent(yes_no=[True]), PregameAgent()],
+        decks=[[LEYLINE] * 8, ["Island"] * 20],
+        seed=1, starting_player_idx=0,
+    )
+    leylines = [o for o in state.battlefield if o.printing.name == LEYLINE]
+    assert len(leylines) == 1 and leylines[0].controller_id == 0
+    theirs = put(state, ZOMBIE, 1)
+    move_off_battlefield(state, theirs, "graveyard")
+    assert theirs in state.players[1].exile
+    mine = put(state, BEAR, 0)
+    move_off_battlefield(state, mine, "graveyard")
+    assert mine in state.players[0].graveyard
+    # Declining leaves it in hand.
+    state = setup_game(
+        [PregameAgent(yes_no=[False]), PregameAgent()],
+        decks=[[LEYLINE] * 8, ["Island"] * 20],
+        seed=1, starting_player_idx=0,
+    )
+    assert not any(o.printing.name == LEYLINE for o in state.battlefield)

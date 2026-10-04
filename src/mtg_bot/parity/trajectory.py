@@ -8859,6 +8859,27 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     # Cracked Skull's destroy-host shape) remain declined — this
     # closure is scoped to the S3 replacement-rider lane only.
     pass
+    # Enchant kinds the Rust Aura arms model: "creature" (the default
+    # arm of the cast-time host picker, ``state_ops_cast.rs``) and
+    # "artifact". Any other kind would be read there as "Enchant
+    # creature" -- a silent mistranslation. The land Auras of the
+    # Vintage Roto list (Utopia Sprawl's "Enchant Forest", Tarmogoyf
+    # Nest's "Enchant land"), reachable through the default card source
+    # since roto joined it (2026-10-03), are declined here, together
+    # with the land-Aura riders no bridge arm carries (the enchant
+    # subtype, a granted activated ability, the as-enters color choice
+    # and the enchanted land's extra mana).
+    if getattr(printing, "aura_enchant_type", "creature") not in (
+        "creature", "artifact",
+    ):
+        return False
+    if (
+        getattr(printing, "aura_enchant_subtype", "")
+        or getattr(printing, "attached_grants_activated_abilities", ())
+        or getattr(printing, "enters_choosing_color", False)
+        or getattr(printing, "enchanted_land_adds_chosen_color", False)
+    ):
+        return False
     # Defensive — Auras don't carry ward / dynamic-PT today, but keep
     # the substrate honest (mirrors the simple-creature guardrail).
     if getattr(printing, "ward_cost", None) is not None:

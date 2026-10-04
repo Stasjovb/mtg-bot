@@ -107,6 +107,18 @@ SUB_EFFECT_UNCOVERED = "effect_uncovered"
 # Unclassified bucket on the same shape Lane H / Lane Q used (no
 # engine change, scout-side attribution fix only).
 SUB_STATIC_RULE_TEXT = "static_rule_text"
+# Zone-move replacement abilities -- a printing's ``zone_abilities``
+# (Vintage Roto P2's ``GraveyardExileInstead``: Leyline of the Void's "If
+# a card would be put into an opponent's graveyard from anywhere, exile
+# it instead."). Rust has no replacement on graveyard-bound moves and no
+# bridge field for the spec. Added 2026-10-03 when Leyline of the Void
+# joined the EoE claimed set, so it is named rather than unclassified.
+SUB_ZONE_REPLACEMENT = "zone_move_replacement"
+# Pregame actions -- a printing's ``opening_hand_action`` (CR 103.5 /
+# 103.6: Leyline of the Void's and Gemstone Caverns' "you may begin the
+# game with it on the battlefield"). Rust's game setup has no
+# opening-hand step and no bridge field. Added 2026-10-03 (same reason).
+SUB_PREGAME = "pregame_action"
 SUB_UNCLASSIFIED = "unclassified"
 
 _SUB_LABEL = {
@@ -127,6 +139,8 @@ _SUB_LABEL = {
     SUB_NONBASIC_LAND: "Non-basic land substrate",
     SUB_EFFECT_UNCOVERED: "Effect-uncovered (no covered Rust counterpart)",
     SUB_STATIC_RULE_TEXT: "Static rule-text (printing-level bool field, no Rust mirror)",
+    SUB_ZONE_REPLACEMENT: "Zone-move replacement (`zone_abilities`, no Rust mirror)",
+    SUB_PREGAME: "Pregame / opening-hand action (no Rust setup step)",
     SUB_UNCLASSIFIED: "Unclassified (honest residual — needs hand re-walk)",
 }
 
@@ -154,6 +168,8 @@ _SUB_TRACTABILITY = {
     SUB_NONSAFE_TRIGGER: TRACT_DIFFUSE,
     SUB_EFFECT_UNCOVERED: TRACT_DIFFUSE,
     SUB_STATIC_RULE_TEXT: TRACT_MEDIUM,
+    SUB_ZONE_REPLACEMENT: TRACT_SPRAWLING,
+    SUB_PREGAME: TRACT_MEDIUM,
     SUB_UNCLASSIFIED: TRACT_DIFFUSE,
 }
 
@@ -248,6 +264,17 @@ _TRACT_NOTE = {
         "``StaticAbility`` objects that the layered-abilities substrate "
         "addresses."
     ),
+    SUB_ZONE_REPLACEMENT: (
+        "sprawling — a replacement on every graveyard-bound zone move "
+        "(Python routes ~45 sites plus an SBA catch-all; Rust has ~80 "
+        "graveyard insertions and no single zone-move chokepoint), plus "
+        "a bridge field for the ``zone_abilities`` spec."
+    ),
+    SUB_PREGAME: (
+        "medium — a CR 103.6 opening-hand step in Rust's setup (after "
+        "its mulligan loop, ``state_ops_mulligan.rs``) + a bridge field "
+        "for ``opening_hand_action`` + the yes/no decision surface."
+    ),
     SUB_UNCLASSIFIED: (
         "honest residual — no taxonomy gate fired; needs a hand "
         "re-walk before it can be sequenced."
@@ -305,6 +332,10 @@ def _gates_for_loader_card(printing) -> list[str]:
         gates.append(SUB_STATIC_RULE_TEXT)
     if printing.is_aura:
         gates.append(SUB_AURA)
+    if getattr(printing, "zone_abilities", ()):
+        gates.append(SUB_ZONE_REPLACEMENT)
+    if getattr(printing, "opening_hand_action", None) is not None:
+        gates.append(SUB_PREGAME)
     if printing.triggered_abilities:
         for ta in printing.triggered_abilities:
             if T._python_ta_to_safe_dict(ta) is None:
@@ -429,6 +460,8 @@ def subsystem_attribution() -> dict:
         SUB_NONSAFE_TRIGGER,
         SUB_EFFECT_UNCOVERED,
         SUB_STATIC_RULE_TEXT,
+        SUB_ZONE_REPLACEMENT,
+        SUB_PREGAME,
         SUB_UNCLASSIFIED,
     ]
     order = [s for s in declared if s in by_subsystem]

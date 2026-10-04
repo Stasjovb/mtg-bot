@@ -186,3 +186,40 @@ Move to Option B or C if any of these become true:
 
 Until then: per-card flag, reset on disturbance, accept the under-informed
 edge cases.
+
+## Private reveals to one player, and how they are forgotten (2026-10-03)
+
+`game.reveal_to(card, viewer)` records that one player has seen a card
+another player holds: Thoughtseize-style looks at a hand, and Meddling
+Wizard (the Vintage Roto group's custom conspiracy: "At the beginning of
+each game, after mulligans, your opponent reveals their hand to you.";
+`conspiracies.reveal_hands_after_mulligans`, run once by
+`simulate.setup_game` after every player has kept and bottomed). The
+determinizer never re-samples a card `viewer_knows`, and the ISMCTS
+information-set key hashes it by identity, so the search plays with the
+real hand while those cards stay put. The knowledge has to stop as soon
+as the viewer could no longer tell where the card is:
+
+- **Public zones** (battlefield, graveyard, exile, stack): known by zone
+  anyway. A card cast or discarded from the revealed hand stays known.
+- **Shuffles** forget everything in the library (`game.shuffle_library`).
+  Jace, the Mind Sculptor's -12 shuffled the target's hand in with a bare
+  `state.rng.shuffle` and kept the flags; it now goes through
+  `shuffle_library` (same RNG draw).
+- **Face-down moves from a hand into a library** (Brainstorm's
+  put-back, Jace's 0, Enter the Infinite, Scroll Rack):
+  `game.hide_hand_moved_into_library` drops every non-owner's knowledge
+  of the moved cards *and of every card still in that hand*, because the
+  viewer sees how many cards went back, not which. Forgetting only the
+  moved cards would tell the viewer, by elimination, which known cards
+  went back -- misinformed. Forgetting the whole hand is this model's
+  usual lossy reset: under-informed (the viewer forgets cards that are
+  probably still there), never misinformed.
+- **New cards** (draws) were never revealed.
+
+Not covered: the NN tokenizer still emits the opponent's hand as
+anonymous slots even when some cards are known (a representation limit;
+the search uses the knowledge through determinization and the
+information set), and the Rust determinizer (`search/rust_determinize.py`)
+ignores `publicly_known_to` -- no reveal carrier, Meddling Wizard
+included, is admitted into a Rust-authoritative game.

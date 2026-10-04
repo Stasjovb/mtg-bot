@@ -26,6 +26,12 @@ carry (``CardPrinting.conspiracy_rules``):
   then a deck below its owner's adjusted minimum is rejected loudly.
   Conspiracy cards aren't part of the deck, so they don't count toward
   it.
+* :class:`OpponentRevealsHandAfterMulligans` -- Meddling Wizard (a custom
+  conspiracy of the Vintage Roto group, record hand-authored in
+  ``data/cube_roto_custom.json``): "At the beginning of each game, after
+  mulligans, your opponent reveals their hand to you." Applied by
+  :func:`reveal_hands_after_mulligans`, ``simulate.setup_game``'s second
+  conspiracy hook, once every player has kept and bottomed.
 
 Conspiracies with other abilities (hidden agenda, draft-matters text)
 have no rule class here; the parser leaves them unclaimed.
@@ -64,6 +70,15 @@ class MinimumDeckSizeChange:
     def describe(self) -> str:
         verb = "reduced" if self.delta < 0 else "increased"
         return f"your minimum deck size is {verb} by {abs(self.delta)}"
+
+
+@dataclass(frozen=True)
+class OpponentRevealsHandAfterMulligans:
+    """"At the beginning of each game, after mulligans, your opponent
+    reveals their hand to you." """
+
+    def describe(self) -> str:
+        return "after mulligans, your opponent reveals their hand to you"
 
 
 def _rules(player: "Player", kind: type) -> list:
@@ -149,13 +164,65 @@ def begin_game_with_conspiracies(
     return choose_starting_player(state, default_starting_idx, rng)
 
 
+def reveal_hands_after_mulligans(
+    state: "GameState", starting_player_idx: int,
+) -> None:
+    """``simulate.setup_game``'s after-mulligans conspiracy hook, called
+    once: after every player has kept their opening hand and put their
+    mulligan cards on the bottom (the end of the mulligan process, CR
+    103.5) and before the opening-hand actions (CR 103.6). Players go in
+    turn order from the starting player; for each
+    :class:`OpponentRevealsHandAfterMulligans` among a player's
+    conspiracies, each opponent still in the game reveals their hand to
+    that player.
+
+    The reveal is recorded as per-card knowledge (``game.reveal_to``):
+    every card in the revealed hand is known to the conspiracy's
+    controller. That is what the search's hidden-information handling
+    reads -- the determinizer never re-samples a card its viewer knows,
+    and the ISMCTS information-set key folds it in by identity
+    (``search.determinize.viewer_knows``). The knowledge then follows
+    the cards like every other private reveal: kept while a card stays
+    in that hand, moot in a public zone, dropped when the card is
+    shuffled away (``game.shuffle_library``) or put face down into the
+    library from the hand (``game.hide_hand_moved_into_library``); a
+    card drawn later was never revealed."""
+    from mtg_bot.game import reveal_to
+
+    n = len(state.players)
+    for offset in range(n):
+        player = state.players[(starting_player_idx + offset) % n]
+        if player.has_lost:
+            continue
+        for card in player.conspiracies:
+            if not any(
+                isinstance(rule, OpponentRevealsHandAfterMulligans)
+                for rule in card.printing.conspiracy_rules
+            ):
+                continue
+            for opponent in state.players:
+                if opponent is player or opponent.has_lost:
+                    continue
+                for revealed in opponent.hand:
+                    reveal_to(revealed, player.id)
+                names = ", ".join(
+                    c.printing.name for c in opponent.hand
+                ) or "no cards"
+                state.log.append(
+                    f"P{opponent.id} reveals their hand to P{player.id} "
+                    f"({card.printing.name}): {names}"
+                )
+
+
 __all__ = [
     "LIMITED_MINIMUM_DECK_SIZE",
     "MinimumDeckSizeChange",
+    "OpponentRevealsHandAfterMulligans",
     "YouAreTheStartingPlayer",
     "begin_game_with_conspiracies",
     "check_minimum_deck_sizes",
     "choose_starting_player",
     "minimum_deck_size",
     "put_conspiracies_into_command_zone",
+    "reveal_hands_after_mulligans",
 ]

@@ -6,9 +6,9 @@ Planning doc for claiming the rest of **Retireddevil's Vintage Roto 1.1** (`roto
 
 - **578 of 865 pool cards claimed (66.8%)**: 860 Scryfall cards from the draft sheet plus the five basics. All 504 cards shared with the PowerLSV cube are claimed; 74 of the 361 roto-only cards are.
 - **287 unclaimed**, of which **89 are already in a drafted pool** of the live draft (marked **(drafted)** below). Those come first inside every package. Drafted = every pick in `roto-bot-draft/state.json` mapped through the sheet list's `scryfall_name`, minus cards sent back by I've Made a Huge Mistake; the draft is still running, so re-derive this before prioritizing.
-- 4 custom conspiracies on the sheet have no Scryfall record (Meddling Wizard, Quanitity Over Quality, I've Made a Huge Mistake, ANOTHER HEAD?!). They are listed in `data/cube_roto.meta.json` and the coverage doc, not faked into the pool; see P6.
+- 4 custom conspiracies on the sheet have no Scryfall record (Meddling Wizard, Quanitity Over Quality, I've Made a Huge Mistake, ANOTHER HEAD?!). They are listed in `data/cube_roto.meta.json`, never faked into the dump; see P6. Since 2026-10-03 Meddling Wizard has a hand-authored record (`data/cube_roto_custom.json`, part of the `roto` pool); the other three are listed apart in the coverage doc.
 - Every unclaimed card's failing oracle lines are in [`ROTO_POOL_COVERAGE.md`](ROTO_POOL_COVERAGE.md) (per-line probe, `mtg_bot.cards.unclaimed_lines`): 278 cards are `lines` (the listed lines are the whole blocker, confirmed by building the card without them) and 9 are `unconfirmed` (multi-face layouts, Conspiracy and Kindred types, snow cost: the card's frame may block too).
-- Enchantments are probed with the `cube_enchantments.CUBE_ENCHANTMENT_NAMES` gate opened: a roto enchantment also needs its name opted in when its lines land. Eleven roto cards are EoE-era printings outside the cube (`is_eoe_only_printing` pins them off the cube-creature grammar); the pin changes no roto claim today.
+- Enchantments are probed with the `cube_enchantments.CUBE_ENCHANTMENT_NAMES` gate opened: a roto enchantment also needs its name opted in when its lines land. Eleven roto cards are EoE-era printings outside the cube. `is_eoe_only_printing` pinned them off the cube-creature grammar while the packages ran (the pin changed no roto claim but kept Leyline of the Void unclaimed); since 2026-10-03 the roto list counts as a target list, so the pin no longer applies to them and Leyline is claimed (EoE's claimed set 481 -> 482).
 
 ## Package summary
 
@@ -28,7 +28,7 @@ Card lists are separated by semicolons (card names contain commas). Ordered by d
 - Branch each package off `feature/cube-roto-coverage` as `feature/roto-<package>` in its own worktree; commit as you go; don't merge to `main`.
 - Put new grammar in the package's own parser module and new effects in its own `effects/generic/` module (names below), the way the cube buckets did (`creature_wg_lines.py`, `cube_glue_grammar.py`, ...). Shared dispatchers (`effects.py`, `triggers.py`, `statics.py`, builders) get one import-and-call hook per package; that keeps conflicts to trivially mergeable appends.
 - Known shared hot spots: `cards/base.py` (`CardPrinting` fields), `cube_enchantments.CUBE_ENCHANTMENT_NAMES` (keep it alphabetical; on conflict take the union), `legal.py` (P1 prohibitions, P3 permissions, P6 split second), `turn.py` (P4 draw/extra turns, P5 untap/upkeep), `game.py` (P2 zone/draw replacements, P4 sideboard, P5 layers), `land_lines.py` (P2, P3, P5), `docs/SEARCH_LIMITATIONS.md` (everyone).
-- Roto-only cards are not in the default `all` pool. Test them through `tests/_roto_helpers.py` (`roto_card`, `printing`) or `OracleParserCardSource(pool="roto")`, never the default source.
+- Roto-only cards were not in the default `all` pool while the packages ran (they are since 2026-10-03). Test them through `tests/_roto_helpers.py` (`roto_card`, `printing`) or `OracleParserCardSource(pool="roto")`.
 - Oracle-text fidelity: no no-op recognizers, no partial claims, no name-keyed literals unless the parser CLAUDE.md's single-card exception applies. If a clause isn't modeled, the card stays unclaimed. Every deliberate shortcut gets a `docs/SEARCH_LIMITATIONS.md` entry.
 - Before each commit: refresh `docs/ROTO_POOL_COVERAGE.md` (`scripts/measure_cube_coverage.py --pool roto`; `tests/test_pool_coverage.py::test_committed_roto_doc_is_fresh` enforces it). On a merge conflict in that doc, re-run the script instead of hand-merging. `docs/CUBE_POOL_COVERAGE.md` must stay byte-identical (cube claims must not move).
 
@@ -161,7 +161,7 @@ Drafted custom conspiracies (no Scryfall record, outside the pool): ANOTHER HEAD
 
 ## Open decisions for the user
 
-1. **Fold `roto` into the default pool?** It is opt-in today so the default source and the EoE/cube evidence base don't move. Self-play on the roto cube also needs a deck pool; `scripts/build_cube_deck_pool.py` is cube-only today and would need a pool parameter.
+1. **Fold `roto` into the default pool?** Decided 2026-10-03: yes -- `all` is the EoE-era dumps + cube + roto (`feature/roto-default-pool-leyline-wizard`); no printing already in `all` changed. Self-play on the roto cube still needs a deck pool; `scripts/build_cube_deck_pool.py` is cube-only and would need a pool parameter.
 2. **Wish / sideboard semantics** (Burning Wish, Karn's -2): in a roto draft the sideboard is the drafter's unused picks.
-3. **Custom conspiracies**: whether to hand-author records for them (only Meddling Wizard changes a game; Quanitity Over Quality changes deck size; ANOTHER HEAD?! lets a deck run two copies of a card).
+3. **Custom conspiracies**: whether to hand-author records for them (only Meddling Wizard changes a game; Quanitity Over Quality changes deck size; ANOTHER HEAD?! lets a deck run two copies of a card). Decided 2026-10-03: Meddling Wizard yes (`data/cube_roto_custom.json`, `conspiracies.OpponentRevealsHandAfterMulligans`); the other three are left alone.
 

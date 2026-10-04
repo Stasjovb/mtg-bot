@@ -259,7 +259,8 @@ def test_script_roto_headline(script, tmp_path, capsys):
     assert script.main(["--pool", "roto", "--out", str(out)]) == 0
     printed = capsys.readouterr().out
     assert "roto:" in printed and "unclaimed by diagnosis" in printed
-    assert "custom cards without a Scryfall record: 4" in printed
+    # Meddling Wizard has a hand-authored record since 2026-10-03.
+    assert "custom cards without a Scryfall record: 3" in printed
     text = out.read_text(encoding="utf-8")
     assert "## Custom cards without a Scryfall record" in text
 

@@ -8,17 +8,33 @@ are written against those cards.
 
 Pool names (``MTG_BOT_CARD_POOL`` env var):
 
-- ``all`` (default): EoE pools + cube, deduped by name (first wins).
-  Production and tests see the same source; nothing is dropped.
+- ``all`` (default): EoE pools + cube + Vintage Roto, deduped by name
+  (first file wins: an EoE-era record, then the cube's, then roto's).
+  Production and tests see the same source; nothing is dropped. Roto
+  joined the default on 2026-10-03 (user decision); every card it
+  shares with the EoE-era dumps or the cube keeps the record (and so
+  the printing) it had before.
 - ``cube``: the PowerLSV cube + basic lands only. Use this for
   coverage measurement, cube deck-pool generation, and cube self-play.
-- ``eoe``: the legacy four EoE-era files only.
+- ``eoe``: the legacy four EoE-era files only (the Rust parity
+  campaign's pool, ``parity.effect_coverage.PARITY_POOL``).
 - ``roto``: Retireddevil's Vintage Roto 1.1 (``data/cube_roto.json``,
   860 Scryfall cards from the draft sheet's list + basic lands;
   regenerate via ``scripts/fetch_cube.py --names
-  data/cube_roto.sheet.json``). Opt-in only: it is not part of ``all``,
-  so the default source and its claimed set are unchanged. Coverage
-  lives in ``docs/ROTO_POOL_COVERAGE.md``.
+  data/cube_roto.sheet.json``) plus ``data/cube_roto_custom.json``, the
+  hand-authored records of the sheet's custom cards the engine models
+  (Meddling Wizard; see :data:`CUSTOM_CARD_FILES`). Part of ``all``;
+  selectable alone for coverage measurement
+  (``docs/ROTO_POOL_COVERAGE.md``).
+
+Custom cards: a pool's authority list can name cards with no Scryfall
+record (the roto sheet's four custom conspiracies). ``fetch_cube.py``
+lists them in the dump's ``.meta.json`` sidecar and never fakes them into
+the dump. A custom card the engine supports gets a hand-authored,
+Scryfall-shaped record in a ``*_custom.json`` file of the pool
+(``"custom_card": true``, its ``custom_source`` naming the sheet row and
+the sheet's text); :func:`pool_custom_cards` lists only the ones still
+without any record.
 
 Unknown values raise so a typo never silently becomes a different pool.
 """
@@ -33,7 +49,10 @@ POOL_ENV_VAR = "MTG_BOT_CARD_POOL"
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
 CUBE_POOL_FILES: tuple[str, ...] = ("cube_power_lsv.json",)
-ROTO_POOL_FILES: tuple[str, ...] = ("cube_roto.json",)
+# Hand-authored records for custom cards (no Scryfall record); never
+# written by a fetch script.
+CUSTOM_CARD_FILES: tuple[str, ...] = ("cube_roto_custom.json",)
+ROTO_POOL_FILES: tuple[str, ...] = ("cube_roto.json",) + CUSTOM_CARD_FILES
 EOE_POOL_FILES: tuple[str, ...] = (
     "edge_of_eternities.json",
     "stellar_sights.json",
@@ -41,7 +60,7 @@ EOE_POOL_FILES: tuple[str, ...] = (
     "duskmourn.json",
 )
 POOLS: dict[str, tuple[str, ...]] = {
-    "all": EOE_POOL_FILES + CUBE_POOL_FILES,
+    "all": EOE_POOL_FILES + CUBE_POOL_FILES + ROTO_POOL_FILES,
     "cube": CUBE_POOL_FILES,
     "eoe": EOE_POOL_FILES,
     "roto": ROTO_POOL_FILES,
@@ -83,6 +102,8 @@ def load_pool_cards(pool: str | None = None, *, data_dir: Path = DATA_DIR) -> li
         if not path.exists():
             if path.name in CUBE_POOL_FILES:
                 hint = "scripts/fetch_cube.py"
+            elif path.name in CUSTOM_CARD_FILES:
+                hint = "nothing -- it is hand-authored; restore it from git"
             elif path.name in ROTO_POOL_FILES:
                 hint = "scripts/fetch_cube.py --names data/cube_roto.sheet.json"
             else:
@@ -108,8 +129,9 @@ def pool_card_names(pool: str, *, data_dir: Path = DATA_DIR) -> frozenset[str]:
 def pool_custom_cards(pool: str, *, data_dir: Path = DATA_DIR) -> list[dict]:
     """Cards a pool's authority list names that have no Scryfall record
     (recorded by ``scripts/fetch_cube.py --names`` in each dump's
-    ``.meta.json`` sidecar as ``custom_cards_without_scryfall``). They
-    are never in the dump itself; coverage reports list them apart."""
+    ``.meta.json`` sidecar as ``custom_cards_without_scryfall``) and no
+    hand-authored record in the pool either (:data:`CUSTOM_CARD_FILES`).
+    They are in no file of the pool; coverage reports list them apart."""
     custom: list[dict] = []
     for path in pool_data_paths(pool, data_dir=data_dir):
         meta_path = path.with_suffix(".meta.json")
@@ -117,4 +139,7 @@ def pool_custom_cards(pool: str, *, data_dir: Path = DATA_DIR) -> list[dict]:
             continue
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         custom.extend(meta.get("custom_cards_without_scryfall") or ())
-    return custom
+    if not custom:
+        return custom
+    authored = pool_card_names(pool, data_dir=data_dir)
+    return [c for c in custom if c["name"] not in authored]

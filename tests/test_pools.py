@@ -24,6 +24,14 @@ def fake_data_dir(tmp_path: Path) -> Path:
     ])
     _write(tmp_path / pools.CUBE_POOL_FILES[0], [
         {"name": "Shared", "set": "cube"}, {"name": "Only Cube"},
+        {"name": "Cube And Roto", "set": "cube"},
+    ])
+    for fname in pools.ROTO_POOL_FILES:
+        _write(tmp_path / fname, [])
+    _write(tmp_path / pools.ROTO_POOL_FILES[0], [
+        {"name": "Shared", "set": "roto"},
+        {"name": "Cube And Roto", "set": "roto"},
+        {"name": "Only Roto"},
     ])
     return tmp_path
 
@@ -54,18 +62,23 @@ def test_registry_shape():
     assert pools.TARGET_POOL == "cube"
     assert pools.DEFAULT_POOL == "all"
     assert set(pools.POOLS) == {"all", "cube", "eoe", "roto"}
-    assert pools.POOLS["all"] == pools.EOE_POOL_FILES + pools.CUBE_POOL_FILES
+    assert pools.POOLS["all"] == (
+        pools.EOE_POOL_FILES + pools.CUBE_POOL_FILES + pools.ROTO_POOL_FILES
+    )
     assert pools.POOLS["cube"] == pools.CUBE_POOL_FILES
     assert pools.POOLS["roto"] == pools.ROTO_POOL_FILES
 
 
-def test_roto_pool_is_opt_in():
-    """The Vintage Roto pool is selectable but never folded into the
-    default: ``all`` keeps meaning EoE-era dumps + PowerLSV cube."""
+def test_roto_pool_is_part_of_the_default():
+    """Since 2026-10-03 (user decision) the Vintage Roto pool is folded
+    into ``all``, after the EoE-era dumps and the cube so every card it
+    shares with them keeps its earlier record. It stays selectable on
+    its own and is not part of the cube target pool."""
     assert pools.resolve_pool_name(" Roto ") == "roto"
     for fname in pools.ROTO_POOL_FILES:
-        assert fname not in pools.POOLS["all"]
+        assert fname in pools.POOLS["all"]
         assert fname not in pools.POOLS["cube"]
+        assert fname not in pools.POOLS["eoe"]
 
 
 # ------------------------------------------------------------------ paths
@@ -96,18 +109,24 @@ def test_load_pool_cards_dedupes_first_file_wins(fake_data_dir):
     assert names.count("Shared") == 1
     shared = next(c for c in cards if c["name"] == "Shared")
     assert "set" not in shared  # the EoE-file record came first
-    assert "Only Cube" in names and "Only EoE" in names
+    # Roto comes after the cube: a card on both lists keeps the cube's.
+    both = next(c for c in cards if c["name"] == "Cube And Roto")
+    assert both["set"] == "cube"
+    assert {"Only Cube", "Only EoE", "Only Roto"} <= set(names)
 
 
 def test_load_pool_cards_cube_only(fake_data_dir):
     names = pools.pool_card_names("cube", data_dir=fake_data_dir)
-    assert names == frozenset({"Shared", "Only Cube"})
+    assert names == frozenset({"Shared", "Only Cube", "Cube And Roto"})
 
 
 def test_load_pool_cards_missing_file_is_loud(tmp_path):
     with pytest.raises(FileNotFoundError, match="fetch_cube.py"):
         pools.load_pool_cards("cube", data_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="--names data/cube_roto.sheet.json"):
+        pools.load_pool_cards("roto", data_dir=tmp_path)
+    (tmp_path / "cube_roto.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="hand-authored; restore it from git"):
         pools.load_pool_cards("roto", data_dir=tmp_path)
     (tmp_path / pools.CUBE_POOL_FILES[0]).write_text("[]", encoding="utf-8")
     with pytest.raises(FileNotFoundError, match=r"fetch_\*\.py"):
@@ -135,6 +154,8 @@ def test_parser_source_default_pool_is_union(monkeypatch):
     claimed = set(union.claimed_names)
     assert "Mox Sapphire" in claimed
     assert "Lightning Bolt" in claimed
+    assert "Anticausal Vestige" in claimed  # EoE-era
+    assert "Smokestack" in claimed  # roto-only
 
 
 def test_parser_source_rejects_unknown_pool():
@@ -143,36 +164,74 @@ def test_parser_source_rejects_unknown_pool():
 
 
 def test_real_roto_pool_contents():
-    """The committed roto dump: the sheet's 860 Scryfall-backed cards +
-    the five basics, unique by name; the four custom conspiracies are
-    not faked into it."""
+    """The committed roto pool: the dump's 860 Scryfall-backed cards +
+    the five basics, plus the one hand-authored custom card (Meddling
+    Wizard, ``data/cube_roto_custom.json``), unique by name. The custom
+    conspiracies are never faked into the Scryfall dump, and the three
+    left alone have no record at all."""
     names = pools.pool_card_names("roto")
-    assert len(names) == 865
+    assert len(names) == 866
     assert {"Plains", "Island", "Swamp", "Mountain", "Forest"} <= names
     assert {"Black Lotus", "Smokestack", "Spectacular Spider-Man",
             "Life // Death", "Regrowth"} <= names
-    assert "Meddling Wizard" not in names
+    assert "Meddling Wizard" in names
     assert "ANOTHER HEAD?!" not in names
+    dump = json.loads(
+        (pools.DATA_DIR / "cube_roto.json").read_text(encoding="utf-8")
+    )
+    assert len(dump) == 865
+    assert "Meddling Wizard" not in {c["name"] for c in dump}
+    assert pools.CUSTOM_CARD_FILES == ("cube_roto_custom.json",)
+    assert pools.ROTO_POOL_FILES == ("cube_roto.json", "cube_roto_custom.json")
 
 
-def test_default_source_unchanged_by_roto(monkeypatch):
-    """A roto-only card (in the roto dump, absent from every ``all``
-    file) stays out of the default source."""
+def test_default_source_is_the_union_of_the_three_pools(monkeypatch):
+    """``all`` holds every card of the EoE-era dumps, the cube and the
+    roto list, each once; a roto-only card (Smokestack) is in it."""
     monkeypatch.delenv(pools.POOL_ENV_VAR, raising=False)
-    roto_only = pools.pool_card_names("roto") - pools.pool_card_names("all")
-    assert "Smokestack" in roto_only
     default_names = pools.pool_card_names(pools.DEFAULT_POOL)
-    assert not (roto_only & default_names)
+    assert default_names == (
+        pools.pool_card_names("eoe") | pools.pool_card_names("cube")
+        | pools.pool_card_names("roto")
+    )
+    assert "Smokestack" in default_names
+    assert "Smokestack" not in pools.pool_card_names("cube")
+
+
+def test_default_claims_are_the_union_of_the_pools_claims(monkeypatch):
+    """Folding roto in moves no other card: the default source claims
+    exactly the union of the three pools' claims, and a card the pools
+    share is built identically wherever it is claimed."""
+    monkeypatch.delenv(pools.POOL_ENV_VAR, raising=False)
+    union = OracleParserCardSource().get_printings()
+    parts = [OracleParserCardSource(pool=p).get_printings()
+             for p in ("eoe", "cube", "roto")]
+    assert set(union) == set().union(*parts)
+    for part in parts:
+        for name, printing in part.items():
+            assert union[name] == printing, name
 
 
 # ------------------------------------------------------- custom cards
 
 
 def test_pool_custom_cards_reads_sidecars(tmp_path):
-    _write(tmp_path / pools.ROTO_POOL_FILES[0], [])
+    for fname in pools.ROTO_POOL_FILES:
+        _write(tmp_path / fname, [])
     (tmp_path / "cube_roto.meta.json").write_text(json.dumps({
-        "custom_cards_without_scryfall": [{"name": "X", "custom_text": "t"}],
+        "custom_cards_without_scryfall": [
+            {"name": "X", "custom_text": "t"},
+            {"name": "Authored", "custom_text": "u"},
+        ],
     }), encoding="utf-8")
+    assert pools.pool_custom_cards("roto", data_dir=tmp_path) == [
+        {"name": "X", "custom_text": "t"},
+        {"name": "Authored", "custom_text": "u"},
+    ]
+    # A hand-authored record takes a custom card off the list.
+    _write(tmp_path / pools.CUSTOM_CARD_FILES[0], [
+        {"name": "Authored", "custom_card": True},
+    ])
     assert pools.pool_custom_cards("roto", data_dir=tmp_path) == [
         {"name": "X", "custom_text": "t"},
     ]
@@ -184,9 +243,11 @@ def test_pool_custom_cards_reads_sidecars(tmp_path):
 
 
 def test_real_roto_custom_cards():
+    """Meddling Wizard has a hand-authored record (2026-10-03, user
+    decision); the other three custom conspiracies stay without one."""
     assert [c["name"] for c in pools.pool_custom_cards("roto")] == [
-        "Meddling Wizard", "Quanitity Over Quality",
-        "I've Made a Huge Mistake", "ANOTHER HEAD?!",
+        "Quanitity Over Quality", "I've Made a Huge Mistake",
+        "ANOTHER HEAD?!",
     ]
     assert pools.pool_custom_cards("cube") == []
 

@@ -336,9 +336,10 @@ def _render_card_diagnosis(card: dict) -> list[str]:
 def _render_custom_cards(custom: list[dict]) -> list[str]:
     lines = ["## Custom cards without a Scryfall record", ""]
     lines.append(
-        "Named by the pool's authority list but absent from Scryfall, so "
-        "they are not in the dump and not counted above. Their text is "
-        "the draft group's own."
+        "Named by the pool's authority list but absent from Scryfall and "
+        "without a hand-authored record (`data/*_custom.json`), so they "
+        "are in no pool file and not counted above. Their text is the "
+        "draft group's own."
     )
     lines.append("")
     for card in custom:

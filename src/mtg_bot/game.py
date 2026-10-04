@@ -1099,6 +1099,28 @@ def reset_public_knowledge(obj: GameObject) -> None:
     obj.publicly_known_to = frozenset()
 
 
+def hide_hand_moved_into_library(
+    state: GameState, player_id: int, moved,
+) -> None:
+    """Cards in ``moved`` just went face down from ``player_id``'s hand
+    into their library (Brainstorm's put-back, Scroll Rack). The other
+    players see how many cards moved but not which, so a card they had
+    seen in that hand (Meddling Wizard's reveal, a Thoughtseize look)
+    may now be in either place: every moved card and every card still
+    in that hand is forgotten by everyone but its owner. Under-informed,
+    never misinformed (``docs/HIDDEN_INFO_MODEL.md``); the owner's own
+    entry, if any, is kept.
+
+    Call it at every site that moves hand cards into a library without
+    revealing them; a shuffle already forgets (``shuffle_library``)."""
+    owner_only = frozenset({player_id})
+    p = state.player_by_id(player_id)
+    if isinstance(p.library, _CowList):
+        p.library.fork()
+    for card in (*moved, *p.hand):
+        card.publicly_known_to = card.publicly_known_to & owner_only
+
+
 def reset_library_public_knowledge(state: GameState, player_id: int) -> None:
     """After shuffling ``player_id``'s library, forget who knew what
     about each card in it. Convenience wrapper around

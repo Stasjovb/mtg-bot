@@ -1,24 +1,24 @@
 """Shared fixtures for Vintage Roto (``roto`` pool) card tests.
 
-``roto_card(name)`` returns the raw Scryfall record from
-``data/cube_roto.json``; ``printing(name)`` builds it through the
-parser source's own claim path (``build_card_record``) and asserts the
-card is claimed. Arena/agent helpers are re-exported from the cube
+``roto_card(name)`` returns the raw record from the roto pool's files
+(the Scryfall dump ``data/cube_roto.json`` or the hand-authored custom
+cards ``data/cube_roto_custom.json``); ``printing(name)`` builds it
+through the parser source's own claim path (``build_card_record``) and
+asserts the card is claimed. Arena/agent helpers are re-exported from the cube
 artifact helpers so roto tests read like the cube bucket tests.
 
-Roto-only cards are not in the default ``all`` pool, so tests for them
-must build from these records (or from ``OracleParserCardSource(pool=
-"roto")``), never from the default card source.
+Roto cards are part of the default ``all`` pool since 2026-10-03, so
+the default card source holds them too; these helpers build one record
+through the claim path without depending on the active source.
 """
 
 from __future__ import annotations
 
-import json
 from functools import lru_cache
-from pathlib import Path
 
 from mtg_bot.cards.base import CardPrinting
 from mtg_bot.cards.parser.source import build_card_record
+from mtg_bot.cards.pools import load_pool_cards
 
 from tests._cube_artifact_helpers import (  # noqa: F401  (re-exports)
     ScriptedAgent,
@@ -30,13 +30,9 @@ from tests._cube_artifact_helpers import (  # noqa: F401  (re-exports)
     to_library,
 )
 
-_DATA = Path(__file__).resolve().parents[1] / "data" / "cube_roto.json"
-
-
 @lru_cache(maxsize=1)
 def _roto_index() -> dict[str, dict]:
-    with _DATA.open(encoding="utf-8") as fh:
-        return {c["name"]: c for c in json.load(fh)}
+    return {c["name"]: c for c in load_pool_cards("roto")}
 
 
 def roto_card(name: str) -> dict:

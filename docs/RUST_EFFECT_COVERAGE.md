@@ -6,10 +6,10 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **212 of 235 Python Effect classes covered (90.2%)** — by distinct-class count.
-- **691 of 714 per-card emissions covered (96.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **248 Rust `Effect` variants** in `rust/src/cards.rs` today; 481 parser-claimed printings across the loaded pools.
-- **WARNING: 1 Rust variant(s) with no Python counterpart**: `Effect::TezzeretEmblemBeginCombat` -> `TezzeretEmblemBeginCombat`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
+- **210 of 236 Python Effect classes covered (89.0%)** — by distinct-class count.
+- **690 of 718 per-card emissions covered (96.1%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **248 Rust `Effect` variants** in `rust/src/cards.rs` today; 482 parser-claimed printings across the loaded pools.
+- **WARNING: 3 Rust variant(s) with no Python counterpart**: `Effect::ConsultTheStarCharts` -> `ConsultTheStarChartsEffect`, `Effect::ExorciseEffect` -> `ExorciseEffect`, `Effect::TezzeretEmblemBeginCombat` -> `TezzeretEmblemBeginCombat`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **22 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `DealSelfMVDamageToEachCreature`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `RemoveChargeCountersFromSourceDelayed`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `ReturnExiledPermanentToOwnerTapped`, `SacrificeSourceDelayed`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`, `WarpExileSelf`. These have no pool card exercising them today and are NOT counted as orphans.
 
 ## Coverage by frequency tier
@@ -25,7 +25,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `Sequence` | 58 | yes |
 | `DrawCards` | 48 | yes |
 | `CreateToken` | 42 | yes |
-| `AddManaToPool` | 34 | yes |
+| `AddManaToPool` | 35 | yes |
 | `PumpTargetCreatureUntilEOT` | 27 | yes |
 | `GainLife` | 23 | yes |
 | `Surveil` | 17 | yes |
@@ -38,13 +38,13 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `ManifestDread` | 11 | yes |
 | `SearchLibraryForCard` | 10 | yes |
 
-### Frequency 2-9 (54 classes)
+### Frequency 2-9 (56 classes)
 
-- Covered by Rust: **54 / 54** (100.0%)
+- Covered by Rust: **54 / 56** (96.4%)
 
-### Frequency 1 (166 singletons)
+### Frequency 1 (165 singletons)
 
-- Covered by Rust: **143 / 166** (86.1%)
+- Covered by Rust: **141 / 165** (85.5%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -77,7 +77,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 24 | `Effect::CreateTokenAndAttachSelf` | `CreateTokenAndAttachSelf` | 1 |
 | 25 | `Effect::CreateTokenEachPlayer` | `CreateToken` | 42 |
 | 26 | `Effect::CreateTokenTapped` | `CreateToken` | 42 |
-| 27 | `Effect::AddManaToPool` | `AddManaToPool` | 34 |
+| 27 | `Effect::AddManaToPool` | `AddManaToPool` | 35 |
 | 28 | `Effect::SearchLibraryForBasicLandTapped` | `SearchLibraryForBasicLandTapped` | 15 |
 | 29 | `Effect::PutPlusOneCounterOnSelf` | `PutPlusOneCounterOnSelf` | 16 |
 | 30 | `Effect::PutLoyaltyCounterOnSelf` | `PutLoyaltyCounterOnSelf` | 1 |
@@ -121,7 +121,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 68 | `Effect::CutPropulsionEffect` | `CutPropulsionEffect` | 1 |
 | 69 | `Effect::InvasiveManeuversEffect` | `DealDamageToTargetCreatureSpacecraftBoosted` | 1 |
 | 70 | `Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature` | `DestroyTargetArtifactEnchantmentOrFlyingCreature` | 1 |
-| 71 | `Effect::ExorciseEffect` | `ExorciseEffect` | 1 |
+| 71 | `Effect::ExorciseEffect` | `ExorciseEffect` | 0 |
 | 72 | `Effect::CloseEncounterEffect` | `CloseEncounterEffect` | 1 |
 | 73 | `Effect::EmergencyEjectEffect` | `DestroyTargetNonlandPermanentWithLanderForController` | 1 |
 | 74 | `Effect::MutinousMassacreEffect` | `MutinousMassacreEffect` | 1 |
@@ -195,7 +195,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 142 | `Effect::MayDo` | `MayDo` | 4 |
 | 143 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 2 |
 | 144 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireETBEffect` | 1 |
-| 145 | `Effect::ConsultTheStarCharts` | `ConsultTheStarChartsEffect` | 1 |
+| 145 | `Effect::ConsultTheStarCharts` | `ConsultTheStarChartsEffect` | 0 |
 | 146 | `Effect::AnticausalVestigeLeavesEffect` | `AnticausalVestigeLeavesEffect` | 1 |
 | 147 | `Effect::AstelliReclaimerETBEffect` | `AstelliReclaimerETBEffect` | 1 |
 | 148 | `Effect::RovingActuatorETBEffect` | `RovingActuatorETBEffect` | 1 |
