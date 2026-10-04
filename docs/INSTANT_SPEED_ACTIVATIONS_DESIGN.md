@@ -127,10 +127,13 @@ quoted ability) go through the same activated grammar.
 ## Perf
 
 More legal actions at more priority points widen search and defeat
-capability auto-pass whenever a player has an activatable ability. Measured
-before/after with `scripts/scout_instant_activation_branching.py`
-(numbers in `docs/BENCHMARKING_FINDINGS.md` and the branch report). No
-legality-changing pruning is added.
+capability auto-pass whenever a player has an activatable ability.
+Measured before/after with `scripts/scout_instant_activation_branching.py`
+(`docs/BENCHMARKING_FINDINGS.md` §8D): at a fixed per-decision budget
+(heuristic PIMC, cube decks) a game has ~2x the priority windows that
+need a decision, ~1.4-1.5x the search nodes and ~1.6-1.9x the wall.
+No legality-changing pruning is added; candidate search-side mitigations
+are listed in the `docs/SEARCH_LIMITATIONS.md` entry.
 
 ## Known risk (pre-existing class)
 
@@ -139,3 +142,18 @@ repeatable, non-sorcery ability (Nomads en-Kor's `{0}`, roto only) lets it
 hold priority forever. Sorcery-speed `{0}` equips (Lightning Greaves,
 Shuko) already loop it across resolutions today. Not addressed here (it is
 an agent behaviour, not a rule).
+
+## Appendix: claimed cards whose abilities became instant-speed
+
+Every claimed PowerLSV (`cube`) and Vintage Roto (`roto`) card with at
+least one non-mana, non-sorcery-speed, non-loyalty battlefield activated
+ability -- the abilities the old gate confined to their controller's
+main phase (155 cards: 90 in both pools, 12
+cube-only, 53 roto-only; Tinder Wall, claimed by this
+change, not included). **Bold** = covered by a behavioural test in
+`tests/test_instant_activation_cards.py` /
+`tests/test_instant_speed_activations.py`.
+
+* Both pools: Aang, Swift Savior // Aang and La, Ocean's Fury, Aether Spellbomb, Arid Mesa, Auriok Salvagers, Baloth Prime, Basalt Monolith, Bloodstained Mire, Bolas's Citadel, Bristly Bill, Spine Sower, Broadside Bombardiers, Candelabra of Tawnos, Cathar Commando, Celestial Colonnade, Coalition Relic, Creeping Tar Pit, Cryogen Relic, Currency Converter, Dauthi Voidwalker, Emperor of Bones, Emry, Lurker of the Loch, Expedition Map, Faerie Mastermind, Fiery Islet, Figure of Destiny, Figure of Fable, Flooded Strand, Formidable Speaker, Ghost Vacuum, **Giver of Runes**, Goblin Bombardment, Goblin Engineer, Goblin Welder, Grim Monolith, Grindstone, Griselbrand, Haywire Mite, Horizon Canopy, Jace, Vryn's Prodigy // Jace, Telepath Unbound, Karakas, Keen-Eyed Curator, Legion Extruder, Library of Alexandria, Loran of the Third Path, Magda, Brazen Outlaw, Manifold Key, Marsh Flats, Memory Jar, Mishra's Bauble, Misty Rainforest, **Mother of Runes**, Nurturing Peatland, Outland Liberator // Frenzied Trapbreaker, Parallax Wave, Polluted Delta, Prismatic Vista, Psychic Frog, Pyrite Spellbomb, Ravenous Robots, Relic of Sauron, Retrofitter Foundry, Scalding Tarn, Sensei's Divining Top, Sewer-veillance Cam, Shelldock Isle, Shifting Woodland, **Smuggler's Copter**, Sneak Attack, Soul-Guide Lantern, Spectacular Spider-Man, Staff of the Storyteller, Stoneforge Mystic, **Strip Mine**, Sunbaked Canyon, Sylvan Safekeeper, The Mind Stone, The One Ring, Thopter Foundry, Time Vault, Urza's Bauble, Urza, Lord High Artificer, Verdant Catacombs, Voltaic Key, **Walking Ballista**, **Wasteland**, Waterlogged Grove, Windswept Heath, **Wishclaw Talisman**, Wooded Foothills, Zirda, the Dawnwaker, Zuran Orb.
+* Cube only: Abandoned Air Temple, Alpha Deathclaw, Arwen, Mortal Queen, Esika's Chariot, Golos, Tireless Pilgrim, Iron-Shield Elf, Lion Sash, Loot, the Pathfinder, Mind Stone, Reckoner Bankbuster, Restless Vinestalk, Ulvenwald Oddity // Ulvenwald Behemoth.
+* Roto only: Aang's Iceberg, **Aether Vial**, Aetherflux Reservoir, Bazaar of Baghdad, **Blight Mamba**, Carrion Feeder, **Cephalid Illusionist**, Claws of Gix, Dark Depths, Deathrite Shaman, Devoted Druid, Doctor Doom, Unrivaled, Earthcraft, Elvish Reclaimer, Engineered Explosives, Fabled Passage, Ghost Quarter, **Glen Elendra Guardian**, Golgari Grave-Troll, Hermit Druid, **High Noon**, Inkmoth Nexus, Isochron Scepter, Kiki-Jiki, Mirror Breaker, Kinnan, Bonder Prodigy, Knight of the Reliquary, **Maze of Ith**, Minamo, School at Water's Edge, Mistrise Village, Momentum Breaker, Mystic Forge, Necropotence, **Nomads en-Kor**, Nutrient Block, Opposition, Pendelhaven, Pernicious Deed, **Ranger-Captain of Eos**, Riptide Laboratory, Rishadan Port, Scroll Rack, Seal of Cleansing, Seeker of Skybreak, Silent Clearing, Slogurk, the Overslime, **Sundial of the Infinite**, Survival of the Fittest, The Filigree Sylex, Thespian's Stage, Umezawa's Jitte, Vexing Bauble, Viscera Seer, Yawgmoth's Bargain.

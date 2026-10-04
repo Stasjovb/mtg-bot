@@ -813,3 +813,71 @@ PYTHONPATH=src python scripts/bench_block_shuffle_io.py \
     --rows 262144 --batch-size 256 --block-rows 65536 --workers 2
 # add --cold for purged-cache epochs (win32 only)
 ```
+
+## 8D. Instant-speed activations — search work per game (2026-10-03)
+
+**Change measured:** `feature/roto-instant-activations` (activated
+abilities of permanents offered whenever their controller has priority,
+CR 117.1b; capability auto-pass taught the same rule) vs its base
+`feature/roto-integration` @ `65a8ce1c` (battlefield activations in an
+empty-stack own main phase only).
+
+**Method.** `scripts/scout_instant_activation_branching.py`: the
+production game driver (`self_play._play_one_match_game` — search
+adapter, default search heuristics, decision cap 3000), heuristic-
+evaluator PIMC in both seats (`samples=1`), PowerLSV cube deck pool
+(`data/cube/power_lsv_decks.json.gz`), same seeds per arm, arms run back
+to back in one window on the shared master (Win11, other agents' jobs
+running — compare ratios, not absolutes). Units per §2A: search nodes
+(`search.eval_counters`), `legal_decisions` calls at priority windows,
+how many the capability check short-circuited, and the legal-set size
+at the windows that weren't. Trajectories differ between arms (new legal
+actions change play), so per-game numbers are paired by seed only.
+
+| arm | games | decisions/game | non-trivial priority windows/game | auto-pass rate | mean legal set (non-trivial) | windows offering an ActivateAbility | search nodes/game | ms / search node | wall s/game |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| base, 40 nodes | 30 | 530 | 1,039 | 44.7% | 3.55 | 41.0% | 3,897 | 0.64 | 2.49 (median 1.92) |
+| **instant activations, 40 nodes** | 30 | 618 (**+17%**) | 2,109 (**x2.03**) | 38.9% | 3.13 | 69.5% | 5,597 (**+44%**) | 0.73 (+14%) | 4.09 (**x1.64**; median 3.44, x1.79) |
+| base, 200 nodes (11 of 12 games; 1 hit the decision cap) | 11 | 518 | 3,290 | 49.9% | 3.74 | 64.6% | 18,055 | 0.82 | 14.8 (median 11.4) |
+| **instant activations, 200 nodes** (games 0-4; 1 hit the cap) | 4 | 590 | 7,660 (x2.3) | 45.9% | 2.97 | 85.2% | 27,200 (+51%) | 1.03 (+25%) | 27.9 (x1.9) |
+| base, random agents | 29 of 30 | 748 | 96 | 39.9% | 4.04 | 69.6% | — | — | 0.08 |
+| instant activations, random agents | 28 of 30 | 771 | 116 | 38.7% | 3.42 | 72.9% | — | — | 0.11 |
+
+**Reading it.** At a fixed per-decision budget the search does ~1.4-1.5x
+the nodes per game, because a game has about twice as many priority
+windows that need a real decision: a player holding an activatable
+ability is no longer auto-passed outside their main phase (auto-pass
+rate 44.7% -> 38.9% of priority calls at 40 nodes), and the new windows
+are small (mean legal set 3.55 -> 3.13; ~44% of the non-trivial
+instant windows offer only activations plus pass). Per-node cost also
+rises (+14% at 40 nodes, +25% at 200) -- legal enumeration walks more
+abilities at more nodes and the capability check now runs the exact
+enumerator. Net: ~1.6-1.9x wall per game for heuristic-evaluator
+search at these budgets; with an NN evaluator expect NN evals per game
+to scale with the node ratio (~+45-50%) since `ms / NN-eval` is
+unchanged. Random agents are barely affected (+3% decisions).
+
+**Which cards drive it** (10 games, 40 nodes, new arm): Manifold Key
+14%, Currency Converter 13%, Grindstone 10%, Ghost Vacuum 9%, Dauthi
+Voidwalker 7%, Retrofitter Foundry 4%, Incubator tokens 4% of the
+non-trivial instant windows offer that card's ability -- `{T}` artifact
+abilities whose timing rarely matters.
+
+**Decision-cap games are pre-existing loops, not this change.** Both
+capped heuristic games inspected loop in a sorcery window: Lightning
+Greaves' `{0}` equip ping-ponging between two creatures (new arm game
+3) and Basalt Monolith tap-for-{C}{C}{C} / `{3}: untap` (new arm game
+5); the heuristic prior explores activations before passing
+(`mtg_priors._PRIORITY_ACTION_RANK`). The base arm's capped game is the
+same class. Both were reachable before this change; they're excluded
+from the 200-node rows (and the 200-node new arm stopped after game 5
+for that reason -- a small sample; the 40-node rows are the
+load-bearing comparison).
+
+**Reproduce:**
+
+```bash
+# from each worktree (base, then this branch), same seeds:
+PYTHONPATH=src .venv-py313/Scripts/python.exe \
+    scripts/scout_instant_activation_branching.py --games 30 --nodes 40 --out a.json
+```
