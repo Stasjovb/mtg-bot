@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import RemovalAction
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.generic.targets_helpers import (
     _fizzle_message,
@@ -292,7 +293,7 @@ class RemoveTargetPermanents(Effect):
     targets any permanent but only destroys a blue one.
     """
 
-    action: str
+    action: RemovalAction
     target_filter: "ObjectPredicate"
     count_min: int = 1
     count_max: int = 1
@@ -317,6 +318,7 @@ class RemoveTargetPermanents(Effect):
 
         if self.action not in _ACTIONS:
             raise ValueError(f"unknown removal action: {self.action!r}")
+        object.__setattr__(self, "action", RemovalAction(self.action))
         object.__setattr__(self, "targets", (TargetSpec(
             self.target_filter,
             count_min=self.count_min,
@@ -393,7 +395,7 @@ class RemoveAllMatching(Effect):
     """
 
     permanent_filter: "ObjectPredicate"
-    action: str = "destroy"
+    action: RemovalAction = RemovalAction.DESTROY
     can_be_regenerated: bool = True
     max_mana_value_from_x: bool = False
     rider: RemovalRider | None = None
@@ -402,6 +404,7 @@ class RemoveAllMatching(Effect):
     def __post_init__(self) -> None:
         if self.action not in _ACTIONS:
             raise ValueError(f"unknown removal action: {self.action!r}")
+        object.__setattr__(self, "action", RemovalAction(self.action))
 
     def resolve(
         self, state: "GameState", controller_id: int,

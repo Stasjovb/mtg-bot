@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import PlayerRuleKind, TargetingSource, plain
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.predicates import TriggerPredicate
@@ -243,7 +244,10 @@ class TargetingIs(TriggerPredicate):
     spell (``kind="spell"``, copies included) or an ability
     (``kind="ability"``)."""
 
-    kind: str = "spell"
+    kind: TargetingSource = TargetingSource.SPELL
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", TargetingSource(self.kind))
 
     def matches(self, state, subjects, source):
         item = subjects.get("targeting")
@@ -960,7 +964,7 @@ class PlayerRuleUntilEndOfTurn(Effect):
     turn, damage that would reduce your life total to less than 1 reduces
     it to 1 instead")."""
 
-    kind: str = CANT_LOSE_KIND
+    kind: PlayerRuleKind = PlayerRuleKind.CANT_LOSE_THE_GAME
 
     _TEXT = {
         CANT_LOSE_KIND: "you can't lose the game this turn",
@@ -971,6 +975,9 @@ class PlayerRuleUntilEndOfTurn(Effect):
         ),
     }
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", PlayerRuleKind(self.kind))
+
     def resolve(
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
@@ -980,7 +987,7 @@ class PlayerRuleUntilEndOfTurn(Effect):
         source = state.resolving_spell or state.resolving_source
         state.add_continuous_effect(
             source_id=source.id if source is not None else -1,
-            layer=0, kind=self.kind, params=(controller_id,),
+            layer=0, kind=plain(self.kind), params=(controller_id,),
             expires_at="cleanup",
             description=f"P{controller_id}: {self._TEXT[self.kind]}",
         )

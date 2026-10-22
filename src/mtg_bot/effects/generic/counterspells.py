@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import SpellDestination, plain
 from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
@@ -61,12 +62,13 @@ class CounterSpell(Effect):
     spell_filter: "ObjectPredicate | None" = None
     unless_pays: str = ""
     only_if: "ObjectPredicate | None" = None
-    destination: str = "graveyard"
+    destination: SpellDestination = SpellDestination.GRAVEYARD
     label: str = "spell"
 
     def __post_init__(self) -> None:
         if self.destination not in COUNTER_DESTINATIONS:
             raise ValueError(f"unknown counter destination: {self.destination!r}")
+        object.__setattr__(self, "destination", SpellDestination(self.destination))
 
     def requires_target(self) -> bool:
         return True
@@ -134,7 +136,7 @@ class CounterSpell(Effect):
                 )
                 return
         item.countered = True
-        item.countered_destination = self.destination
+        item.countered_destination = plain(self.destination)
         state.log.append(f"counterspell: {name} is countered")
 
     def describe(self) -> str:

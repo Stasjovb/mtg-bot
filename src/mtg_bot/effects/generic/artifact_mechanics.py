@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import DelayedStep
 from mtg_bot.effects.base import Effect, Target, _apply_damage
 
 if TYPE_CHECKING:
@@ -387,7 +388,10 @@ class ScheduleDelayedEffect(Effect):
     """
 
     inner: Effect
-    step: str = "upkeep"
+    step: DelayedStep = DelayedStep.UPKEEP
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "step", DelayedStep(self.step))
 
     def resolve(
         self, state: "GameState", controller_id: int,

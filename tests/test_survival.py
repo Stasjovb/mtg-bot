@@ -157,7 +157,7 @@ def test_is_self_with_permanent_subject_uses_identity():
 def test_is_tapped_false_when_subject_missing():
     # ``Subject("missing", IsTapped())`` resolves to no obj — predicate
     # evaluates false rather than KeyError'ing.
-    pred = Subject("missing", IsTapped())
+    pred = Subject("spell", IsTapped())  # a slot the event lacks
     src = _FakeObject(id=42)
     assert pred.matches(_FakeState(), {}, src) is False
 

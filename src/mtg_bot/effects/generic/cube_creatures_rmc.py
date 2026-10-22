@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import EventSubject, ExilePlayDuration, ImpulseLibraryOwner, ZoneName, coerce, coerce_tuple, plain
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 
@@ -470,13 +471,17 @@ class ExileTopCardsWithPlayPermission(Effect):
 
     count: int = 1
     free: bool = False
-    duration: str = THIS_TURN
-    whose: str = "you"
+    duration: ExilePlayDuration = ExilePlayDuration.THIS_TURN
+    whose: ImpulseLibraryOwner = ImpulseLibraryOwner.YOU
     cast_only: bool = False
     face_down: bool = False
     free_if: object = None
     requires_attacked_with_subtype: str = ""
     any_color_mana: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "duration", ExilePlayDuration(self.duration))
+        object.__setattr__(self, "whose", ImpulseLibraryOwner(self.whose))
 
     def _library_owner(self, state, controller_id, targets):
         if self.whose == "you":
@@ -509,7 +514,7 @@ class ExileTopCardsWithPlayPermission(Effect):
             )
             grant_exile_play(
                 state, card, controller_id,
-                duration=self.duration, free=free,
+                duration=plain(self.duration), free=free,
                 cast_only=self.cast_only,
                 requires_attacked_with_subtype=self.requires_attacked_with_subtype,
                 any_color_mana=self.any_color_mana,
@@ -773,7 +778,10 @@ class ExileRandomGraveyardCardWithPlayPermission(Effect):
     """"Exile a card at random from your graveyard. You may play that
     card this turn." (Tersa Lightshatter)."""
 
-    duration: str = THIS_TURN
+    duration: ExilePlayDuration = ExilePlayDuration.THIS_TURN
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "duration", ExilePlayDuration(self.duration))
 
     def resolve(self, state, controller_id, targets=()):
         p = state.player_by_id(controller_id)
@@ -782,7 +790,7 @@ class ExileRandomGraveyardCardWithPlayPermission(Effect):
         card = state.rng.choice(list(p.graveyard))
         p.graveyard.remove(card)
         exile_card(state, card)
-        grant_exile_play(state, card, controller_id, duration=self.duration)
+        grant_exile_play(state, card, controller_id, duration=plain(self.duration))
         state.log.append(
             f"P{controller_id} exiles {card.printing.name} at random from "
             f"their graveyard (may play {self.duration})"
@@ -799,7 +807,10 @@ class ExileTargetGraveyardCardWithPlayPermission(Effect):
     Thunder). ``card_filter`` is a ``CardFilter`` over printings."""
 
     card_filter: object = None
-    duration: str = UNTIL_END_OF_YOUR_NEXT_TURN
+    duration: ExilePlayDuration = ExilePlayDuration.UNTIL_END_OF_YOUR_NEXT_TURN
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "duration", ExilePlayDuration(self.duration))
 
     def requires_target(self) -> bool:
         return True
@@ -821,7 +832,7 @@ class ExileTargetGraveyardCardWithPlayPermission(Effect):
                 continue
             p.graveyard.remove(card)
             exile_card(state, card)
-            grant_exile_play(state, card, controller_id, duration=self.duration)
+            grant_exile_play(state, card, controller_id, duration=plain(self.duration))
             state.log.append(
                 f"P{controller_id} exiles {card.printing.name} from their "
                 f"graveyard (may play {self.duration})"
@@ -1086,9 +1097,12 @@ class DealDamageFromEvent(Effect):
 
     amount: object = None
     targets: tuple = ()
-    subject_slot: str = ""
+    subject_slot: "EventSubject | None" = None
     to_defending_player: bool = False
     no_lifegain_if_player_hit: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject_slot", coerce(EventSubject, self.subject_slot or None))
 
     def event_subject_id(self, subjects) -> int:
         if not self.subject_slot:
@@ -2491,7 +2505,10 @@ class EnteredNotFromZones(_TriggerPredicate):
     entering source's previous zone (``GameObject.entered_from_zone``)
     isn't one of ``zones``."""
 
-    zones: tuple = ("graveyard", "exile")
+    zones: tuple[ZoneName, ...] = (ZoneName.GRAVEYARD, ZoneName.EXILE)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "zones", coerce_tuple(ZoneName, self.zones))
 
     def matches(self, state, subjects, source):
         return getattr(source, "entered_from_zone", "") not in self.zones

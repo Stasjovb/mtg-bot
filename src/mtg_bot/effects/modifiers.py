@@ -32,6 +32,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
+from mtg_bot.effects.vocab import AffectedPlayers, ZoneName
 from mtg_bot.keyword_vocab import KeywordSpelling
 
 if TYPE_CHECKING:
@@ -125,7 +126,10 @@ class Replace(EventTransform):
     the card accordingly.
     """
 
-    new_destination: str
+    new_destination: ZoneName
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "new_destination", ZoneName(self.new_destination))
 
     def apply(self, payload):
         new = dict(payload)
@@ -427,7 +431,10 @@ class ReplacementEffect:
     # created under your control") or ``"opponents"`` ("If an opponent
     # would draw a card ...", Hullbreacher; "a card would be put into an
     # opponent's graveyard", Dauthi Voidwalker).
-    affects: str = "you"
+    affects: AffectedPlayers = AffectedPlayers.YOU
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "affects", AffectedPlayers(self.affects))
 
 
 # ────────────────────────────────────────────────────────────────────

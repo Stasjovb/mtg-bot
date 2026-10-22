@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mtg_bot.cards import ManaCost
+from mtg_bot.effects.vocab import plain
 from mtg_bot.game import (
     GameObject, GameState, StackItem, Zone, effective_colors,
     effective_land_produces, has_card_type, is_artifact_now,
@@ -2192,7 +2193,7 @@ def _select_spell_targets(
             targets = (chosen if chosen in legal else legal[0],)
         return targets
     if card.printing.is_aura:
-        enchant_type = card.printing.aura_enchant_type
+        enchant_type = plain(card.printing.aura_enchant_type)
         yours_only = card.printing.aura_yours_only
         if enchant_type == "creature_card_in_graveyard":
             # Animate Dead: "Enchant creature card in a graveyard".
@@ -5378,7 +5379,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                     f"graveyard"
                 )
             elif card.printing.is_aura:
-                enchant_type = card.printing.aura_enchant_type
+                enchant_type = plain(card.printing.aura_enchant_type)
                 target_obj = None
                 if item.targets:
                     kind, target_id = item.targets[0]

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from mtg_bot.effects.vocab import CastProhibitionScope
 
 if TYPE_CHECKING:
     from mtg_bot.cards.base import CardPrinting, ManaCost
@@ -79,7 +80,7 @@ class CastProhibition:
     number of lands the caster controls (X counts as chosen; see
     :func:`max_x_allowed`)."""
 
-    who: str = "each"
+    who: CastProhibitionScope = CastProhibitionScope.EACH
     spell_filter: object = None
     player_id: int = -1
     named: bool = False
@@ -90,6 +91,7 @@ class CastProhibition:
     def __post_init__(self) -> None:
         if self.who not in ("each", "opponents", "player"):
             raise ValueError(f"unknown CastProhibition scope: {self.who!r}")
+        object.__setattr__(self, "who", CastProhibitionScope(self.who))
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import CardTypeWord
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
@@ -375,9 +376,12 @@ class BecomeType(Effect):
     yields a battlefield object.
     """
 
-    types_to_add: tuple[str, ...] = ()
+    types_to_add: tuple[CardTypeWord, ...] = ()
     subtypes_to_add: tuple[str, ...] = ()
     base_pt: "tuple[int, int] | None" = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "types_to_add", tuple(CardTypeWord(t.lower()) for t in self.types_to_add))
 
     def resolve(
         self, state: "GameState", controller_id: int,

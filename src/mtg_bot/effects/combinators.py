@@ -8,6 +8,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import CardTypeWord
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.durations import Duration, Permanent
@@ -893,8 +894,11 @@ class ConditionalIfYouControlAtLeast(Effect):
     """
 
     threshold: int
-    predicate: str
+    predicate: CardTypeWord
     inner: Effect
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "predicate", CardTypeWord(self.predicate))
 
     def requires_target(self) -> bool:
         return self.inner.requires_target()

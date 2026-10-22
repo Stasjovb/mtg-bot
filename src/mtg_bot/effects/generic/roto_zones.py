@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import AffectedPlayers, GraveyardOwner, plain
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition as _Condition
@@ -1386,8 +1387,11 @@ class DiscardInsteadOfDraw:
     this same source doesn't replace again (CR 614.5) but every other
     replacement may (a second Chains, dredge)."""
 
-    affects: str = "any"
+    affects: AffectedPlayers = AffectedPlayers.ANY
     except_first_in_draw_step: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "affects", AffectedPlayers(self.affects))
 
     def applies_to(self, source, player_id: int) -> bool:
         if self.affects == "opponents":
@@ -2471,7 +2475,7 @@ class CreaturePutIntoGraveyardOf(_TriggerPredicate):
     graveyard it went to, i.e. its owner)."""
 
     def __init__(self, whose: str = "yours", nontoken: bool = False) -> None:
-        self.whose = whose
+        self.whose = GraveyardOwner(whose)
         self.nontoken = nontoken
 
     def matches(self, state, subjects, source) -> bool:
@@ -2493,7 +2497,7 @@ class CreaturePutIntoGraveyardOf(_TriggerPredicate):
         return hash(("CreaturePutIntoGraveyardOf", self.whose, self.nontoken))
 
     def __repr__(self):
-        return f"CreaturePutIntoGraveyardOf({self.whose!r}, {self.nontoken!r})"
+        return f"CreaturePutIntoGraveyardOf({plain(self.whose)!r}, {self.nontoken!r})"
 
 
 class SelfPutIntoYourGraveyard(_TriggerPredicate):

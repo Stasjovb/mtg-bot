@@ -10,6 +10,7 @@ import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import EventSubject, StackObjectKind, coerce_tuple
 from mtg_bot.effects.base import Effect, Target
 
 
@@ -44,7 +45,10 @@ class BindEventPlayer(Effect):
     """
 
     inner: Effect
-    slot: str = "player"
+    slot: EventSubject = EventSubject.PLAYER
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "slot", EventSubject(self.slot))
 
     def targets_from_event(self, state: "GameState", subjects) -> tuple:
         player = subjects.get(self.slot)
@@ -1509,9 +1513,14 @@ class CounterTargetStackObject(Effect):
     planeswalker, it loses all abilities while this creature remains.
     Mana abilities never use the stack, so they're never targets."""
 
-    kinds: tuple = ("spell", "activated", "triggered")
+    kinds: tuple[StackObjectKind, ...] = (
+        StackObjectKind.SPELL, StackObjectKind.ACTIVATED, StackObjectKind.TRIGGERED,
+    )
     up_to_one: bool = False
     lose_abilities_while_source: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kinds", coerce_tuple(StackObjectKind, self.kinds))
 
     def requires_target(self) -> bool:
         return True

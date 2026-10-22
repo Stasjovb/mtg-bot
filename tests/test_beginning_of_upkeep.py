@@ -154,14 +154,16 @@ def test_conditional_controls_n_lands():
     assert state.players[0].life == 21
 
 
-def test_conditional_unknown_predicate_returns_zero():
-    """Defensive: an unknown predicate counts 0 and skips the effect."""
-    state = _new_state()
-    eff = ConditionalIfYouControlAtLeast(
-        threshold=1, predicate="zzz", inner=GainLife(amount=10),
-    )
-    eff.resolve(state, 0, ())
-    assert state.players[0].life == 20
+def test_conditional_unknown_predicate_is_rejected():
+    """The predicate is a closed card-type vocabulary
+    (``effects.vocab.CardTypeWord``): an unknown word is a construction
+    error, not a silent zero count."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        ConditionalIfYouControlAtLeast(
+            threshold=1, predicate="zzz", inner=GainLife(amount=10),
+        )
 
 
 def test_conditional_describe_mentions_threshold_and_predicate():

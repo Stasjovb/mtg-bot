@@ -593,7 +593,7 @@ def test_cross_engine_real_eoe_search_library_for_equipment_to_battlefield_bridg
     try:
         result_card = _ta_dict_to_python_effect({
             "kind": "search_library_for_card",
-            "filter_name": "Creature",
+            "filter_name": "artifact",
         })
         assert isinstance(result_card, SearchLibraryForCard), (
             "Wired sibling 'search_library_for_card' should produce a "

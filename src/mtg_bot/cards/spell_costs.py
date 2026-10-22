@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from mtg_bot.effects.vocab import AdditionalCostKind, AlternativeCostTurn, coerce
 
 if TYPE_CHECKING:
     from mtg_bot.cards.base import ManaCost
@@ -85,7 +86,7 @@ class AlternativeCost:
     exile_card_color: str = ""
     return_subtype: str = ""
     sacrifice_subtype: str = ""
-    turn: str = ""
+    turn: "AlternativeCostTurn | None" = None
     requires_control_subtype: str = ""
     return_count: int = 1
     sacrifice_count: int = 1
@@ -102,6 +103,9 @@ class AlternativeCost:
     # an opponent cast three or more spells this turn, ..." (Mindbreak
     # Trap; roto P1).
     condition: object = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "turn", coerce(AlternativeCostTurn, self.turn or None))
 
     def mana_cost(self) -> "ManaCost":
         from mtg_bot.cards.base import ManaCost, parse_mana_cost
@@ -382,7 +386,7 @@ class AdditionalCostOption:
     ``additional_cost_pay_x_life``).
     """
 
-    kind: str
+    kind: AdditionalCostKind
     amount: int = 1
     permanent_filter: "ObjectPredicate | None" = None
     label: str = ""
@@ -390,6 +394,7 @@ class AdditionalCostOption:
     def __post_init__(self) -> None:
         if self.kind not in _ADDITIONAL_KINDS:
             raise ValueError(f"unknown additional cost kind: {self.kind!r}")
+        object.__setattr__(self, "kind", AdditionalCostKind(self.kind))
 
     def describe(self) -> str:
         if self.kind == "discard":

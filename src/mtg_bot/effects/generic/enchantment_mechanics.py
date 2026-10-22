@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import CardTypeWord
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.generic.exile import Exile
 
@@ -379,7 +380,10 @@ class OathRevealUntilCreature(Effect):
     cards stay in the library in order ("If the first player does"
     fails, so nothing moves)."""
 
-    card_type: str = "creature"
+    card_type: CardTypeWord = CardTypeWord.CREATURE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "card_type", CardTypeWord(self.card_type))
 
     def requires_target(self) -> bool:
         return True

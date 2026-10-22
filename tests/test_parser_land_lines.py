@@ -622,7 +622,7 @@ def test_simple_and_multi_mana_helpers():
     assert _simple_mana_colors(DrawCards(amount=1)) is None
     assert _multi_mana_kind(DrawCards(amount=1)) is None
     assert _multi_mana_kind(
-        AddManaToPool(produces=(("C", 2),), spend_restriction="x")
+        AddManaToPool(produces=(("C", 2),), spend_restriction="colored_only")
     ) is None
     assert _multi_mana_kind(AddManaToPool(produces=(("any", 2),))) is None
     assert _multi_mana_kind(AddManaToPool(produces=(("C", 1),))) is None

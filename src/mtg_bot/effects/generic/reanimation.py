@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import HasteRider, LibraryPosition, ReanimateSource, coerce
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.generic.card_flow import CardFilter
 
@@ -99,8 +100,8 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
     """
 
     card_filter: CardFilter = CardFilter(any_types=("Creature",))
-    source: str = "target_any_graveyard"
-    haste: "str | None" = None
+    source: ReanimateSource = ReanimateSource.TARGET_ANY_GRAVEYARD
+    haste: "HasteRider | None" = None
     exile_at_next_end_step: bool = False
     lose_life_equal_mv: bool = False
     # "... with a <name> counter on it" (From the Catacombs: corpse).
@@ -117,6 +118,8 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
             raise ValueError(f"unknown reanimate source {self.source!r}")
         if self.haste not in HASTE_RIDERS:
             raise ValueError(f"unknown haste rider {self.haste!r}")
+        object.__setattr__(self, "source", ReanimateSource(self.source))
+        object.__setattr__(self, "haste", coerce(HasteRider, self.haste))
 
     def requires_target(self) -> bool:
         return self.source != "top_of_your_graveyard" and not self.up_to_one
@@ -256,12 +259,13 @@ class PutTargetPermanentIntoOwnersLibrary(Effect):
     """
 
     card_filter: CardFilter = CardFilter(any_types=("Creature",))
-    position: str = "second_from_top"
+    position: LibraryPosition = LibraryPosition.SECOND_FROM_TOP
     controller_gains_life: int = 0
 
     def __post_init__(self) -> None:
         if self.position not in LIBRARY_POSITIONS:
             raise ValueError(f"unknown library position {self.position!r}")
+        object.__setattr__(self, "position", LibraryPosition(self.position))
 
     def requires_target(self) -> bool:
         return True

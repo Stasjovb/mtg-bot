@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import CardTypeWord, coerce
 from mtg_bot.keyword_vocab import KeywordSpelling
 
 if TYPE_CHECKING:
@@ -587,7 +588,7 @@ class ActivationCost:
     # the source included when it qualifies. "" = no such cost. The
     # dedicated land field (``sacrifice_a_land``, Dust Bowl) keeps its
     # own source-excluding semantics.
-    sacrifice_a_permanent_type: str = ""
+    sacrifice_a_permanent_type: "CardTypeWord | None" = None
     # Composable cost atoms beyond the dedicated boolean fields above
     # (cube creatures R/multicolor/colorless bucket): each entry is an
     # object exposing ``payable(state, player_id, source) -> bool``,
@@ -605,6 +606,9 @@ class ActivationCost:
     # waterbend cost, you can tap your untapped artifacts and creatures to
     # help. Each one pays for {1}." (``layouts.pay_waterbend``).
     waterbend: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sacrifice_a_permanent_type", coerce(CardTypeWord, self.sacrifice_a_permanent_type or None))
 
     def describe(self) -> str:
         parts: list[str] = []

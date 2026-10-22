@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import LibraryCardFilter
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -43,7 +44,7 @@ class LookAtTopNRevealOrCounter(Effect):
     """
 
     n: int = 5
-    filter_name: str = "spacecraft"
+    filter_name: LibraryCardFilter = LibraryCardFilter.SPACECRAFT
     # Inclusive upper bound on printed power for the ``creature`` filter
     # — used by Living Phone's ``creature card with power 2 or less``
     # tutor body. ``0`` (default) means "no power cap" so the existing
@@ -58,6 +59,9 @@ class LookAtTopNRevealOrCounter(Effect):
     # printing carries ``counter_on_miss=False`` and the resolution
     # short-circuits to bottoming the remainder when no card is revealed.
     counter_on_miss: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "filter_name", LibraryCardFilter(self.filter_name))
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name

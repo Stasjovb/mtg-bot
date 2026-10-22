@@ -277,7 +277,7 @@ def test_subject_with_none_slot_uses_single_subject_default():
 
 def test_subject_returns_false_when_slot_missing():
     src = _src()
-    pred = Subject("missing", IsCreature())
+    pred = Subject("spell", IsCreature())  # a slot the event lacks
     assert pred.matches(FakeState(), {}, src) is False
 
 

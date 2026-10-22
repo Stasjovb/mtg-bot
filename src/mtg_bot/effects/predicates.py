@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Mapping
 
+from mtg_bot.effects.vocab import EventSubject, coerce
 from mtg_bot.effects.object_predicates import ObjectPredicate
 from mtg_bot.effects.state_predicates import StatePredicate
 
@@ -507,8 +508,11 @@ class Subject(TriggerPredicate):
     subjects, but we short-circuit here for clarity).
     """
 
-    slot: str | None
+    slot: EventSubject | None
     inner: ObjectPredicate
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "slot", coerce(EventSubject, self.slot))
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.slot)
@@ -612,7 +616,10 @@ class IsSelf(TriggerPredicate):
     Detection: a Player exposes ``id`` but no ``printing`` attribute.
     """
 
-    subject: str | None = None
+    subject: EventSubject | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject", coerce(EventSubject, self.subject))
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.subject)
@@ -644,7 +651,10 @@ class IsHost(TriggerPredicate):
     via SBA cleanup never spuriously fire.
     """
 
-    subject: str | None = None
+    subject: EventSubject | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject", coerce(EventSubject, self.subject))
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.subject)
@@ -668,7 +678,10 @@ class IsFormerHost(TriggerPredicate):
     which this predicate reads.
     """
 
-    subject: str | None = None
+    subject: EventSubject | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject", coerce(EventSubject, self.subject))
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.subject)
@@ -724,7 +737,10 @@ class Controlled(TriggerPredicate):
     """
 
     by: _Controller = YOU
-    subject: str | None = None
+    subject: EventSubject | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject", coerce(EventSubject, self.subject))
 
     def matches(self, state, subjects, source):
         obj = _resolve_subject(subjects, self.subject)

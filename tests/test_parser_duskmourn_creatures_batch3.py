@@ -111,7 +111,7 @@ def test_has_power_at_most_handles_missing_subject():
         SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD,
     )
     state.battlefield.append(src)
-    p = Subject("missing", HasPowerAtMost(n=2))
+    p = Subject("spell", HasPowerAtMost(n=2))  # a slot the event lacks
     assert p.matches(state, {"obj": src}, source=src) is False
 
 

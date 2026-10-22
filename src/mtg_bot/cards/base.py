@@ -245,6 +245,7 @@ from mtg_bot.effects import (
     TriggeredAbility,
 )
 from mtg_bot.effects.pt_formulas import PTFormula
+from mtg_bot.effects.vocab import EnchantKind, XCounterMode, ZoneName, coerce
 
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
@@ -1020,7 +1021,7 @@ class CardPrinting:
     #   ``"mana_spent"`` — enters with counters equal to total mana paid,
     #     i.e. X + base generic + colored pips (Dyadrine).
     #   None — no such replacement.
-    enters_with_counters_from_x: str | None = None
+    enters_with_counters_from_x: "XCounterMode | None" = None
     # External-anthem flag. While this permanent is on the battlefield,
     # each creature its controller plays enters with one additional +1/+1
     # counter for each land that entered the battlefield under that
@@ -1052,7 +1053,7 @@ class CardPrinting:
     # Hardlight Containment enchants artifacts (and our machinery
     # wouldn't find a legal target otherwise). Accepts "creature" or
     # "artifact". Only consumed when is_aura is True.
-    aura_enchant_type: str = "creature"
+    aura_enchant_type: EnchantKind = EnchantKind.CREATURE
     # Aura target controller restriction — when True, the cast-time
     # target picker for ``is_aura`` cards only offers permanents the
     # caster controls. Mirrors the printed "Enchant creature you
@@ -1599,7 +1600,7 @@ class CardPrinting:
     # name, a set base P/T and added subtypes; and "When you do, exile
     # that card." (``enters_as_copy_exiles_card``).
     enters_as_copy_types: tuple[str, ...] = ()
-    enters_as_copy_zone: str = "battlefield"
+    enters_as_copy_zone: ZoneName = ZoneName.BATTLEFIELD
     enters_as_copy_add_type: str = ""
     enters_as_copy_keep_name: bool = False
     enters_as_copy_base_pt: "tuple[int, int] | None" = None
@@ -1748,6 +1749,14 @@ class CardPrinting:
         # rewrites in ``actions``/``effects.generic``), so a malformed
         # ``static_abilities`` can never reach the battlefield.
         _validate_static_abilities(self.name, self.static_abilities)
+        # String discriminants are closed vocabularies
+        # (``mtg_bot.effects.vocab``).
+        object.__setattr__(self, "aura_enchant_type", EnchantKind(self.aura_enchant_type))
+        object.__setattr__(
+            self, "enters_with_counters_from_x",
+            coerce(XCounterMode, self.enters_with_counters_from_x),
+        )
+        object.__setattr__(self, "enters_as_copy_zone", ZoneName(self.enters_as_copy_zone))
         # Keyword sets hold engine keyword spellings from the closed
         # vocabulary (``mtg_bot.keyword_vocab``).
         validate_keywords(self.name, self.keywords)

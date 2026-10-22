@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import SpendRestriction, coerce, plain
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -46,13 +47,16 @@ class AddManaToPool(Effect):
     """
 
     produces: tuple[tuple[str, int], ...]
-    spend_restriction: "str | None" = None
+    spend_restriction: "SpendRestriction | None" = None
     # "If any of that mana is spent on a creature spell, it gains haste
     # until end of turn." — tags each minted coin
     # (``ManaCoin.grants_haste_to_creature_spell``).
     grants_haste_to_creature_spell: bool = False
     # "... and that spell can't be countered" (Delighted Halfling).
     makes_spell_uncounterable: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "spend_restriction", coerce(SpendRestriction, self.spend_restriction))
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -67,7 +71,7 @@ class AddManaToPool(Effect):
                 p.mana_pool.append(
                     ManaCoin(
                         color=color,
-                        spend_restriction=self.spend_restriction,
+                        spend_restriction=plain(self.spend_restriction),
                         grants_haste_to_creature_spell=(
                             self.grants_haste_to_creature_spell
                         ),

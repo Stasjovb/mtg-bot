@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import LibraryCardFilter
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -47,13 +48,16 @@ class SearchLibraryForCard(Effect):
     MTG wording.
     """
 
-    filter_name: str
+    filter_name: LibraryCardFilter
     max_mv: int = 0
     may_fail: bool = True
     # ``filter_name="subtype"``: any card with one of these subtypes
     # (landcycling "Search your library for a Plains card", typecycling
     # "... for a Wizard card").
     subtypes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "filter_name", LibraryCardFilter(self.filter_name))
 
     def _matches(self, printing) -> bool:
         fn = self.filter_name

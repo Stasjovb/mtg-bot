@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import GraveyardReturnDestination
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -326,7 +327,7 @@ class ReturnUpToNSmallCreaturesFromGraveyardWithCounters(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "creature", True)
-        object.__setattr__(self, "destination", "battlefield")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.BATTLEFIELD)
         object.__setattr__(self, "min_n", 0)
         # Per-card MV cap mirrors the legacy single-target legality
         # filter ("a card bigger than the budget can never appear in
@@ -355,7 +356,7 @@ class ReturnTargetArtifactCardFromYourGraveyardToHand(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "artifact", True)
-        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.HAND)
         object.__setattr__(self, "target_kind", "graveyard_artifact")
 
     def describe(self) -> str:
@@ -387,7 +388,7 @@ class ReturnCreatureFromYourGraveyardToHand(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "creature", True)
-        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.HAND)
 
     def describe(self) -> str:
         # Preserve the legacy printed phrasing exactly. Extras live
@@ -438,7 +439,7 @@ class ReturnUpToNCreaturesFromYourGraveyardToHand(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "creature", True)
-        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.HAND)
 
     def describe(self) -> str:
         return (
@@ -466,7 +467,7 @@ class ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nonland_permanent", True)
-        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.HAND)
 
     def describe(self) -> str:
         return (
@@ -486,7 +487,7 @@ class ReturnTargetLandFromGraveyardToHand(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "land", True)
-        object.__setattr__(self, "destination", "hand")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.HAND)
         object.__setattr__(self, "target_kind", "graveyard_land")
         object.__setattr__(self, "log_suffix", "(Petrified Field)")
 

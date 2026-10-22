@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from mtg_bot.effects.vocab import GraveyardReturnDestination
 from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
@@ -151,7 +152,7 @@ class ReturnFromGraveyard(Effect):
     max_n: int = 1
     max_total_mv: int = 0  # 0 = no sum-budget rider
     # Move
-    destination: Literal["hand", "battlefield"] = "hand"
+    destination: GraveyardReturnDestination = GraveyardReturnDestination.HAND
     # Rider
     plus_one_counter: bool = False
     log_suffix: str = ""
@@ -160,6 +161,9 @@ class ReturnFromGraveyard(Effect):
     target_kind: str = "graveyard_creature"
 
     # ----- targeting protocol -----
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "destination", GraveyardReturnDestination(self.destination))
 
     def requires_target(self) -> bool:
         return not self.untargeted_all
@@ -375,7 +379,7 @@ class ReturnCreatureFromYourGraveyardToBattlefield(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "creature", True)
-        object.__setattr__(self, "destination", "battlefield")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.BATTLEFIELD)
         if self.max_mv is None:  # legacy callers may still pass None
             object.__setattr__(self, "max_mv", 0)
 
@@ -406,7 +410,7 @@ class ReturnAllCreaturesFromYourGraveyardToBattlefield(ReturnFromGraveyard):
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "creature", True)
-        object.__setattr__(self, "destination", "battlefield")
+        object.__setattr__(self, "destination", GraveyardReturnDestination.BATTLEFIELD)
         object.__setattr__(self, "untargeted_all", True)
 
     def describe(self) -> str:

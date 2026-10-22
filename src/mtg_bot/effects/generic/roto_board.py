@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from mtg_bot.effects.vocab import EventSubject, PerCounterAction, RemovalAction, coerce
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.pt_formulas import PTFormula
@@ -334,7 +335,7 @@ class EventPlayerActsPerSourceCounter(Effect):
     counter), then they are sacrificed / tapped together; with fewer
     candidates than counters, every candidate is used."""
 
-    action: str  # "sacrifice" | "tap"
+    action: PerCounterAction
     kind: str
     permanent_filter: ObjectPredicate
     label: str = "permanent"
@@ -342,6 +343,7 @@ class EventPlayerActsPerSourceCounter(Effect):
     def __post_init__(self) -> None:
         if self.action not in ("sacrifice", "tap"):
             raise ValueError(f"unknown action: {self.action!r}")
+        object.__setattr__(self, "action", PerCounterAction(self.action))
 
     def targets_from_event(self, state, subjects):
         player = subjects.get("player")
@@ -508,7 +510,10 @@ class EventSubjectDealsDamageToEachOpponent(Effect):
     "each opponent" is relative to the ability's controller."""
 
     amount: int = 1
-    subject_slot: str = "obj"
+    subject_slot: EventSubject = EventSubject.OBJ
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subject_slot", EventSubject(self.subject_slot))
 
     def event_subject_id(self, subjects) -> int:
         obj = subjects.get(self.subject_slot)
@@ -921,8 +926,11 @@ class SacrificeSourceUnlessDiscard(Effect):
     permanents matching ``reflexive_filter`` with mana value at most the
     discarded card's."""
 
-    reflexive_action: str = ""
+    reflexive_action: "RemovalAction | None" = None
     reflexive_filter: "ObjectPredicate | None" = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "reflexive_action", coerce(RemovalAction, self.reflexive_action or None))
 
     def resolve(
         self, state: "GameState", controller_id: int,

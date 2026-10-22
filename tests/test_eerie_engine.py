@@ -116,11 +116,11 @@ def test_is_enchantment_rejects_non_enchantment_subject():
 
 
 def test_is_enchantment_handles_missing_subject():
-    # ``Subject("missing", …)`` resolves to None — predicate evaluates
-    # false rather than raising.
+    # A slot the event didn't provide (``"spell"`` here) resolves to
+    # None — predicate evaluates false rather than raising.
     state = _new_state()
     bear = _put_battlefield(state, SYNTHETIC_CREATURES["Wild Bear"])
-    assert not Subject("missing", IsEnchantment()).matches(
+    assert not Subject("spell", IsEnchantment()).matches(
         state, {"obj": bear}, source=bear,
     )
 

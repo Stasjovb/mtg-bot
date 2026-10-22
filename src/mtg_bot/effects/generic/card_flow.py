@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union
 
+from mtg_bot.effects.vocab import DistributePile, RestZone, RevealedCardFate, SearchDestination, ZoneName, coerce_tuple
 from mtg_bot.effects.generic.roto_search import (
     library_search,
     searched_card_taken,
@@ -361,7 +362,10 @@ class TargetPlayerRevealsHandYouChooseDiscard(Effect):
     # card." (Tidehollow Sculler) -- the chosen card is exiled instead of
     # discarded; the parser wraps the effect in ``LinkExiledCardsToSource``
     # when the card prints a consumer of "the exiled card".
-    destination: str = "discard"
+    destination: RevealedCardFate = RevealedCardFate.DISCARD
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "destination", RevealedCardFate(self.destination))
 
     @property
     def links_exiled_cards(self) -> bool:
@@ -481,7 +485,7 @@ class SearchLibrary(Effect):
     # A ``CardFilter`` or the same-protocol ``cube_creatures_rmc.
     # CardTypeOrSubtypeFilter`` ("artifact or Dragon card").
     card_filter: "CardFilter | CardTypeOrSubtypeFilter" = ANY_CARD
-    destination: str = "hand"
+    destination: SearchDestination = SearchDestination.HAND
     reveal: bool = False
     # "put that card onto the battlefield tapped" (Golos, Tireless
     # Pilgrim). Only meaningful for the battlefield destination.
@@ -493,6 +497,7 @@ class SearchLibrary(Effect):
                 f"SearchLibrary destination must be one of "
                 f"{SEARCH_DESTINATIONS}, got {self.destination!r}"
             )
+        object.__setattr__(self, "destination", SearchDestination(self.destination))
 
     @library_search
     def resolve(self, state, controller_id, targets=()):
@@ -608,7 +613,7 @@ class LookAtTopCardsPutIntoHand(Effect):
     optional: bool = False
     reveal: bool = False
     reveal_taken: bool = False
-    rest_zone: str = "bottom"
+    rest_zone: RestZone = RestZone.BOTTOM
     rest_random: bool = False
 
     def __post_init__(self) -> None:
@@ -617,6 +622,7 @@ class LookAtTopCardsPutIntoHand(Effect):
                 f"rest_zone must be 'bottom' or 'graveyard', got "
                 f"{self.rest_zone!r}"
             )
+        object.__setattr__(self, "rest_zone", RestZone(self.rest_zone))
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, reveal_to, reveal_to_all
@@ -804,7 +810,10 @@ class EachPlayerShufflesZonesIntoLibrary(Effect):
     ``("hand", "graveyard")``. Cards leave their zone lists before their
     ``zone`` field is rewritten (copy-on-write safe)."""
 
-    zones: tuple[str, ...] = ("hand", "graveyard")
+    zones: tuple[ZoneName, ...] = (ZoneName.HAND, ZoneName.GRAVEYARD)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "zones", coerce_tuple(ZoneName, self.zones))
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, shuffle_library
@@ -955,12 +964,15 @@ class LookAtTopCardsDistribute(Effect):
     """
 
     count: int = 3
-    piles: tuple[str, ...] = ("hand", "bottom", "exile_playable")
+    piles: tuple[DistributePile, ...] = (
+        DistributePile.HAND, DistributePile.BOTTOM, DistributePile.EXILE_PLAYABLE,
+    )
 
     def __post_init__(self) -> None:
         for pile in self.piles:
             if pile not in DISTRIBUTE_PILES:
                 raise ValueError(f"unknown pile {pile!r}")
+        object.__setattr__(self, "piles", coerce_tuple(DistributePile, self.piles))
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.game import Zone, reveal_to

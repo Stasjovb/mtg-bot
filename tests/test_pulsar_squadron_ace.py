@@ -162,23 +162,13 @@ def test_pulsar_ace_filter_artifact():
     assert artifact in p.hand
 
 
-def test_pulsar_ace_unknown_filter_treats_as_no_match():
-    state = _new_state(agent=_TakeFirstAgent())
-    p = state.players[0]
-    for _ in range(5):
-        c = state.new_object(BASIC_LANDS["Plains"], 0, Zone.LIBRARY)
-        p.library.append(c)
-    ace = state.new_object(
-        _PRINTINGS["Pulsar Squadron Ace"], 0, Zone.BATTLEFIELD,
-    )
-    state.battlefield.append(ace)
-    state.resolving_source = ace
-    LookAtTopNRevealOrCounter(n=5, filter_name="nonsense").resolve(
-        state, 0, (),
-    )
-    state.resolving_source = None
-    # Unknown filter matches nothing → +1/+1 counter path.
-    assert ace.plus_one_counters == 1
+def test_pulsar_ace_unknown_filter_is_rejected():
+    # The filter is a closed vocabulary (``effects.vocab.LibraryCardFilter``):
+    # an unknown name is a construction error, not a silent no-match.
+    import pytest
+
+    with pytest.raises(ValueError):
+        LookAtTopNRevealOrCounter(n=5, filter_name="nonsense")
 
 
 def test_pulsar_ace_describe():

@@ -5491,18 +5491,15 @@ def test_search_library_no_match_logs_and_fizzles():
     assert any("no legendary_creature" in l for l in state.log)
 
 
-def test_search_library_unknown_filter_no_match():
+def test_search_library_unknown_filter_is_rejected():
+    import pytest
+
+    # ``filter_name`` is a closed vocabulary (``effects.vocab.
+    # LibraryCardFilter``): an unknown name fails at construction.
     from mtg_bot.effects import SearchLibraryForCard
 
-    state = _arena()
-    bear = state.new_object(
-        SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.LIBRARY
-    )
-    state.players[0].library.append(bear)
-    e = SearchLibraryForCard(filter_name="invented_filter_name")
-    e.resolve(state, 0)
-    assert bear in state.players[0].library
-    assert "library" in e.describe()
+    with pytest.raises(ValueError):
+        SearchLibraryForCard(filter_name="invented_filter_name")
 
 
 def test_search_library_agent_declines_when_may_fail():

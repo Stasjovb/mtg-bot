@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import ZoneName
 from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
@@ -816,8 +817,11 @@ class CardsInYourZone:
     = any card) -- "the number of cards in your library" (Enter the
     Infinite), "the number of creature cards in your graveyard" (Grist)."""
 
-    zone: str = "library"
+    zone: ZoneName = ZoneName.LIBRARY
     card_filter: object = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "zone", ZoneName(self.zone))
 
     def value(self, state: "GameState", controller_id: int) -> int:
         cards = getattr(state.player_by_id(controller_id), self.zone)

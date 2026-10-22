@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from mtg_bot.effects.vocab import CantCastScope
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.counterspells import CounterSpell
@@ -695,8 +696,11 @@ class CantCastSpellsThisTurn(Effect):
     this turn." (Orim's Chant): a cleanup-expiring emblem with a
     ``CastProhibition``."""
 
-    who: str = "opponents"  # "opponents" | "target_player"
+    who: CantCastScope = CantCastScope.OPPONENTS
     spell_filter: "ObjectPredicate | None" = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "who", CantCastScope(self.who))
 
     def requires_target(self) -> bool:
         return self.who == "target_player"

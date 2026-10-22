@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.effects.vocab import ZoneName, coerce_tuple
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -440,7 +441,10 @@ class ShuffleZonesIntoLibrary(Effect):
     different ``zones`` tuple.
     """
 
-    zones: tuple[str, ...] = ()
+    zones: tuple[ZoneName, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "zones", coerce_tuple(ZoneName, self.zones))
 
     def resolve(
         self, state: "GameState", controller_id: int,
