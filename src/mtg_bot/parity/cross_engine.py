@@ -103,6 +103,72 @@ def parity_smoke():
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Dynamic-P/T formula <-> legacy bridge key
+# ---------------------------------------------------------------------------
+#
+# ``CardPrinting.dynamic_pt_formula`` is a ``PTFormula`` object
+# (``mtg_bot.effects.pt_formulas``). The old Rust crate dispatches on the
+# pre-2026-10 string keys (``state_ops_combat::dynamic_base_pt_pub``,
+# ``cards.rs`` ``dynamic_pt_formula: Option<String>``), so the bridge
+# translates at its boundary. A formula with no legacy key maps to
+# ``"<unbridged:ClassName>"``: never in an admit set, so the printing is
+# dropped at filter time exactly as before.
+
+
+def dynamic_pt_formula_bridge_key(formula) -> Optional[str]:
+    """Legacy Rust-bridge key for ``formula`` (``None`` for no formula)."""
+    if formula is None:
+        return None
+    from mtg_bot.effects.pt_formulas import (
+        CardTypesInAllGraveyardsPT,
+        CardsYouOwnInExilePT,
+        DomainPT,
+        LandsYouControlPT,
+        PowerPlusGreatestManaValueOfOtherArtifactsPT,
+    )
+
+    if formula == CardsYouOwnInExilePT(toughness_plus=1):
+        return "cosmogoyf"
+    if formula == LandsYouControlPT():
+        return "harmonious_grovestrider"
+    if formula == PowerPlusGreatestManaValueOfOtherArtifactsPT():
+        return "emissary_escort"
+    if formula == DomainPT():
+        return "domain"
+    if isinstance(formula, CardTypesInAllGraveyardsPT):
+        return f"card_types_in_all_graveyards+{formula.toughness_plus}"
+    return f"<unbridged:{type(formula).__name__}>"
+
+
+def dynamic_pt_formula_from_bridge_key(key: Optional[str]):
+    """Inverse of :func:`dynamic_pt_formula_bridge_key` for the keys the
+    old crate's ``CardDef`` carries; raises on an unknown key."""
+    if key is None:
+        return None
+    from mtg_bot.effects.pt_formulas import (
+        CardTypesInAllGraveyardsPT,
+        CardsYouOwnInExilePT,
+        DomainPT,
+        LandsYouControlPT,
+        PowerPlusGreatestManaValueOfOtherArtifactsPT,
+    )
+
+    fixed = {
+        "cosmogoyf": CardsYouOwnInExilePT(toughness_plus=1),
+        "harmonious_grovestrider": LandsYouControlPT(),
+        "emissary_escort": PowerPlusGreatestManaValueOfOtherArtifactsPT(),
+        "domain": DomainPT(),
+    }
+    if key in fixed:
+        return fixed[key]
+    prefix = "card_types_in_all_graveyards+"
+    if key.startswith(prefix):
+        return CardTypesInAllGraveyardsPT(toughness_plus=int(key[len(prefix):]))
+    raise ValueError(f"unknown dynamic_pt_formula bridge key: {key!r}")
+
+
 @dataclass(frozen=True)
 class CardDef:
     """A minimal card definition shared by Python and Rust state builders.
@@ -393,13 +459,12 @@ class CardDef:
     # that absence to ``None`` (the same Option/serde-default pattern
     # every back-compat-added field uses).
     #
-    # Mirrors Python's ``CardPrinting.dynamic_pt_formula: str | None``
-    # at ``src/mtg_bot/cards/base.py:837``. Both engines dispatch on
-    # the formula key string at P/T read time (Python's
-    # ``game._dynamic_base_pt``; Rust's
-    # ``state_ops_combat::dynamic_base_pt_pub``); the dispatch tables
-    # MUST stay in lockstep per the "new code is right" SoT-flip
-    # discipline.
+    # The legacy bridge key of Python's ``CardPrinting.dynamic_pt_formula``
+    # (a ``PTFormula`` object; :func:`dynamic_pt_formula_bridge_key` /
+    # :func:`dynamic_pt_formula_from_bridge_key` translate). Rust
+    # dispatches on the key string at P/T read time
+    # (``state_ops_combat::dynamic_base_pt_pub``); Python asks the
+    # formula object (``game._dynamic_base_pt``).
     #
     # **Substrate-extension scope (round-78 — this slice):**
     # Harmonious Grovestrider's ``"harmonious_grovestrider"`` formula
@@ -18020,7 +18085,9 @@ def _card_def_to_python_printing(card: "CardDef"):
         # bit-identical to pre-substrate). Python's
         # ``game._dynamic_base_pt`` dispatches on this field at
         # P/T-read time.
-        dynamic_pt_formula=card.dynamic_pt_formula,
+        dynamic_pt_formula=dynamic_pt_formula_from_bridge_key(
+            card.dynamic_pt_formula
+        ),
         # Aura-attachment substrate — Phase 2 S2 (round-79+,
         # 2026-05-20). S2 static-grant fields. Defaults are
         # back-compat (every pre-S2 CardDef has these = False / None);

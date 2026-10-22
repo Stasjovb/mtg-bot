@@ -14,6 +14,7 @@ from mtg_bot.effects.base import Effect, Target, TriggeredAbility
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.object_predicates import ObjectPredicate
 from mtg_bot.effects.predicates import TriggerPredicate
+from mtg_bot.effects.pt_formulas import PTFormula
 
 if TYPE_CHECKING:
     from mtg_bot.game import GameState
@@ -988,7 +989,7 @@ class CardTypesAmongExiledWithSourceAtLeast(Condition):
 
 
 @dataclass(frozen=True)
-class PowerEqualsCount:
+class PowerEqualsCount(PTFormula):
     """Structured ``dynamic_pt_formula``: "<This>'s power is equal to
     the number of <permanents>" -- base power is the count of
     battlefield permanents matching ``count_filter`` (evaluated for the

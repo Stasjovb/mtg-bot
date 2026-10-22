@@ -2666,7 +2666,9 @@ def test_filter_drops_dynamic_pt_formula_grovestrider():
 
     src = OracleParserCardSource(pool="eoe")
     p = src.get_printings()["Harmonious Grovestrider"]
-    assert p.dynamic_pt_formula == "harmonious_grovestrider"
+    from mtg_bot.effects.pt_formulas import LandsYouControlPT
+
+    assert p.dynamic_pt_formula == LandsYouControlPT()
     assert _printing_is_bridge_simple_creature(p) is False
 
 
@@ -2684,10 +2686,17 @@ def test_filter_drops_dynamic_pt_formula_cosmogoyf_emissary():
     src = OracleParserCardSource(pool="eoe")
     printings = src.get_printings()
     cosmogoyf = printings["Cosmogoyf"]
-    assert cosmogoyf.dynamic_pt_formula == "cosmogoyf"
+    from mtg_bot.effects.pt_formulas import (
+        CardsYouOwnInExilePT,
+        PowerPlusGreatestManaValueOfOtherArtifactsPT,
+    )
+
+    assert cosmogoyf.dynamic_pt_formula == CardsYouOwnInExilePT(toughness_plus=1)
     assert _printing_is_bridge_simple_creature(cosmogoyf) is False
     emissary = printings["Emissary Escort"]
-    assert emissary.dynamic_pt_formula == "emissary_escort"
+    assert emissary.dynamic_pt_formula == (
+        PowerPlusGreatestManaValueOfOtherArtifactsPT()
+    )
     assert _printing_is_bridge_simple_creature(emissary) is False
 
 

@@ -188,7 +188,9 @@ def test_warp_guard_declines_station_threshold():
 def test_warp_guard_declines_dynamic_pt_formula():
     """A warp creature with a dynamic-P/T formula (``*`` power) is
     DECLINED — the bridge carries only fixed integer P/T."""
-    p = _warp_creature(dynamic_pt_formula="*")
+    from mtg_bot.effects.pt_formulas import CardsYouOwnInExilePT
+
+    p = _warp_creature(dynamic_pt_formula=CardsYouOwnInExilePT())
     assert _printing_is_bridge_pure_warp_creature(p) is False
 
 

@@ -186,11 +186,13 @@ def test_printed_cost_mismatch_is_shown():
 
 def test_dynamic_pt_and_produces():
     p = make_creature("Goyf", "{1}{G}", 0, 1)
-    text = rr.summarize_printing(dataclasses.replace(p, dynamic_pt_formula="cards_in_gy")).to_text()
-    assert "dynamic P/T: cards_in_gy" in text
+    from mtg_bot.effects.pt_formulas import LandsYouControlPT, PTFormula
+
+    text = rr.summarize_printing(dataclasses.replace(p, dynamic_pt_formula=LandsYouControlPT())).to_text()
+    assert "dynamic P/T:" in text and "Lands you control PT" in text
 
     @dataclass(frozen=True)
-    class Formula:
+    class Formula(PTFormula):
         base: int
         parts: tuple = ()
 

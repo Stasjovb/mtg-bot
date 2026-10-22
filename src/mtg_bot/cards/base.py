@@ -243,6 +243,7 @@ from mtg_bot.effects import (
     TargetOpponentDiscardsCasterChoice,
     TriggeredAbility,
 )
+from mtg_bot.effects.pt_formulas import PTFormula
 
 
 COLORS: tuple[str, ...] = ("W", "U", "B", "R", "G")
@@ -1060,20 +1061,17 @@ class CardPrinting:
     # any creature). Sheltered by Ghosts is the first DSK Aura that
     # carries this restriction in the parser pool.
     aura_yours_only: bool = False
-    # Dynamic power/toughness formula. When set, overrides the printed
-    # power/toughness inside effective_power and effective_toughness.
-    # Currently supported:
-    #   "cosmogoyf": power = number of cards the controller owns in
-    #     exile; toughness = that number + 1.
-    #   "harmonious_grovestrider": power = toughness = number of lands
-    #     the controller controls.
-    #   "emissary_escort": +X/+0 where X is the greatest mana value
-    #     among OTHER artifacts the controller controls; base stays
-    #     printed (0/4).
-    # A structured formula object with a ``base_pt(state, obj)`` method
-    # (cube W/G bucket: ``PowerEqualsCount`` -- Adeline) computes itself.
+    # Dynamic power/toughness formula: a ``PTFormula``
+    # (``mtg_bot.effects.pt_formulas``) whose ``base_pt(state, obj)``
+    # replaces the printed power/toughness inside effective_power and
+    # effective_toughness (``game._dynamic_base_pt``): CDAs such as
+    # ``CardTypesInAllGraveyardsPT`` (Lhurgoyfs), ``CardsYouOwnInExilePT``
+    # (Cosmogoyf), ``LandsYouControlPT`` (Harmonious Grovestrider),
+    # ``DomainPT`` (Territorial Kavu), ``PowerEqualsCount`` (Adeline),
+    # leveler ranges (``LevelerPT``) and Emissary Escort's +X/+0
+    # (``PowerPlusGreatestManaValueOfOtherArtifactsPT``).
     # None = use printed P/T (default).
-    dynamic_pt_formula: "str | object | None" = None
+    dynamic_pt_formula: "PTFormula | None" = None
     # Spell-cast restriction: when any permanent with this flag is on
     # the battlefield (regardless of controller), each player may cast
     # at most one noncreature spell per turn. Matches Deafening Silence.
@@ -1747,6 +1745,13 @@ class CardPrinting:
         # rewrites in ``actions``/``effects.generic``), so a malformed
         # ``static_abilities`` can never reach the battlefield.
         _validate_static_abilities(self.name, self.static_abilities)
+        if self.dynamic_pt_formula is not None and not isinstance(
+            self.dynamic_pt_formula, PTFormula,
+        ):
+            raise TypeError(
+                f"{self.name}: dynamic_pt_formula must be a PTFormula, got "
+                f"{self.dynamic_pt_formula!r}"
+            )
 
     @property
     def is_land(self) -> bool:
@@ -1860,7 +1865,7 @@ def make_creature(
     external_cost_reductions: tuple[ExternalCostReduction, ...] = (),
     enters_with_counters_from_x: str | None = None,
     subtypes: tuple[str, ...] = (),
-    dynamic_pt_formula: str | None = None,
+    dynamic_pt_formula: "PTFormula | None" = None,
     devour_land_multiplier: int = 0,
     nonbasic_lands_are_mountains: bool = False,
     grants_all_basic_land_types_to_lands_you_control: bool = False,

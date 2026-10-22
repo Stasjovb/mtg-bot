@@ -10,6 +10,7 @@ from mtg_bot.cards.parser.creature_rmc_grammar import (
     parse_rmc_effect,
     parse_rmc_trigger_phrase,
 )
+from mtg_bot.effects.pt_formulas import CardTypesInAllGraveyardsPT
 from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.combat import declare_attackers
 from mtg_bot.effects.predicates import Event
@@ -232,7 +233,7 @@ def test_pyrogoyf_pt_and_enters_damage():
     assert parse_rmc_dynamic_pt_line(
         "Barrowgoyf's power is equal to the number of card types among cards "
         "in all graveyards and its toughness is equal to that number plus 1."
-    ) == "card_types_in_all_graveyards+1"
+    ) == CardTypesInAllGraveyardsPT(toughness_plus=1)
     assert parse_rmc_dynamic_pt_line("Nope.") is None
     state = make_state()
     add(state, 1, "Lightning Bolt", Zone.GRAVEYARD)

@@ -374,7 +374,7 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
     landcycling: tuple[str, str] | None = None
     enters_with_plus_one_counter_if_creature_died_this_turn = False
     enters_with_minus_one_counters_from_hand_cast = 0
-    dynamic_pt_formula: str | None = None
+    dynamic_pt_formula = None
     enters_with_counters_from_x: str | None = None
     grants_additional_land_per_turn = 0
     grants_play_lands_from_graveyard = False
@@ -705,14 +705,14 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
                 ),
             ))
             continue
-        dpt_key = _parse_dynamic_pt_formula_line(line)
-        if dpt_key is not None:
+        dpt_formula = _parse_dynamic_pt_formula_line(line)
+        if dpt_formula is not None:
             # Dynamic P/T formula line (e.g. Emissary Escort, Cosmogoyf,
-            # Harmonious Grovestrider). The formula key is forwarded as
-            # ``dynamic_pt_formula`` to ``make_creature``; ``game._dynamic_pt``
-            # computes the actual P/T at query time. A card carries at most
-            # one such clause; idempotent on the same key.
-            dynamic_pt_formula = dpt_key
+            # Harmonious Grovestrider). The ``PTFormula`` is forwarded as
+            # ``dynamic_pt_formula`` to ``make_creature``;
+            # ``game._dynamic_base_pt`` asks it for the actual P/T at query
+            # time. A card carries at most one such clause.
+            dynamic_pt_formula = dpt_formula
             continue
         if _parse_enters_with_x_counters_line(line):
             # ``This creature enters with X +1/+1 counters on it.``

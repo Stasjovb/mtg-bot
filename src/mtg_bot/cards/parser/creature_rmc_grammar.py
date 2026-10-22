@@ -1592,16 +1592,18 @@ _DOMAIN_PT = re.compile(
 )
 
 
-def parse_rmc_dynamic_pt_line(line: str) -> str | None:
-    """``dynamic_pt_formula`` key for a parameterized characteristic-
-    defining P/T line (any card name), or ``None``."""
+def parse_rmc_dynamic_pt_line(line: str):
+    """``dynamic_pt_formula`` (a ``PTFormula``) for a parameterized
+    characteristic-defining P/T line (any card name), or ``None``."""
     if _DISABLED[0]:
         return None
+    from mtg_bot.effects.pt_formulas import CardTypesInAllGraveyardsPT, DomainPT
+
     m = _LHURGOYF_PT.match(line)
     if m is not None:
-        return f"card_types_in_all_graveyards+{int(m.group('k'))}"
+        return CardTypesInAllGraveyardsPT(toughness_plus=int(m.group("k")))
     if _DOMAIN_PT.match(line):
-        return "domain"
+        return DomainPT()
     return None
 
 

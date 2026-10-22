@@ -1969,50 +1969,9 @@ def _dynamic_base_pt(
     formula = obj.printing.dynamic_pt_formula
     if formula is None:
         return None
-    # Structured formulas (cube W/G bucket: Adeline's "power is equal to
-    # the number of creatures you control") compute themselves.
-    compute = getattr(formula, "base_pt", None)
-    if compute is not None:
-        return compute(state, obj)
-    if formula == "cosmogoyf":
-        # Cards owned in exile (by the creature's controller).
-        controller = state.player_by_id(obj.controller_id)
-        n = len(controller.exile)
-        return n, n + 1
-    if formula == "harmonious_grovestrider":
-        # P = T = number of lands the controller controls.
-        n = sum(
-            1 for o in state.battlefield
-            if o.controller_id == obj.controller_id and o.printing.is_land
-        )
-        return n, n
-    if formula == "card_types_in_all_graveyards":
-        types: set[str] = set()
-        for pl in state.players:
-            for c in pl.graveyard:
-                types.update(c.printing.card_types)
-        n = len(types)
-        return n, n + 1
-    if formula == "emissary_escort":
-        # "Gets +X/+0 where X is the greatest mana value among other
-        # artifacts you control." We encode that as a dynamic base
-        # derived from printed P/T plus X on power only.
-        mvs = [
-            o2.printing.mana_cost.total
-            for o2 in state.battlefield
-            if o2.controller_id == obj.controller_id
-            and is_artifact_now(state, o2)
-            and o2.id != obj.id
-        ]
-        x = max(mvs) if mvs else 0
-        printed_p = obj.printing.power or 0
-        printed_t = obj.printing.toughness or 0
-        return printed_p + x, printed_t
-    # Parameterized formulas of the cube creatures bucket (lhurgoyf
-    # card-type counts, domain).
-    from mtg_bot.effects.generic.cube_creatures_rmc import rmc_dynamic_base_pt
-
-    return rmc_dynamic_base_pt(state, obj, formula)
+    # Every formula is a ``PTFormula`` (``effects.pt_formulas``) and
+    # computes itself.
+    return formula.base_pt(state, obj)
 
 
 def gain_life(state: "GameState", player_id: int, amount: int) -> int:

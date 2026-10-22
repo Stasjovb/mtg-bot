@@ -87,7 +87,11 @@ def test_cosmogoyf_subtypes():
 
 
 def test_cosmogoyf_dynamic_pt_formula_set():
-    assert _PRINTINGS["Cosmogoyf"].dynamic_pt_formula == "cosmogoyf"
+    from mtg_bot.effects.pt_formulas import CardsYouOwnInExilePT
+
+    assert _PRINTINGS["Cosmogoyf"].dynamic_pt_formula == CardsYouOwnInExilePT(
+        toughness_plus=1,
+    )
 
 
 def test_non_dynamic_creature_uses_printed_pt():

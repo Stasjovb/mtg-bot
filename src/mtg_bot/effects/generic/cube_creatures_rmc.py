@@ -1136,43 +1136,6 @@ class DealDamageFromEvent(Effect):
 
 
 # ---------------------------------------------------------------------------
-# Dynamic P/T formulas (lhurgoyf card-type count, domain)
-# ---------------------------------------------------------------------------
-
-_BASIC_TYPES = ("Plains", "Island", "Swamp", "Mountain", "Forest")
-
-
-def rmc_dynamic_base_pt(state: "GameState", obj: "GameObject", formula: str):
-    """``(power, toughness)`` for the bucket's ``dynamic_pt_formula``
-    keys, or ``None``:
-
-    * ``card_types_in_all_graveyards+K`` — P = card types among cards in
-      all graveyards, T = P + K (Pyrogoyf, Barrowgoyf).
-    * ``domain`` — P = T = basic land types among lands you control
-      (Territorial Kavu).
-    """
-    if formula.startswith("card_types_in_all_graveyards+"):
-        k = int(formula.rsplit("+", 1)[1])
-        from mtg_bot.effects.card_types import count_card_types
-
-        n = count_card_types(c for pl in state.players for c in pl.graveyard)
-        return n, n + k
-    if formula == "domain":
-        from mtg_bot.game import effective_subtypes
-
-        seen: set[str] = set()
-        for o in state.battlefield:
-            if o.controller_id != obj.controller_id or not o.printing.is_land:
-                continue
-            seen.update(
-                s for s in effective_subtypes(state, o) if s in _BASIC_TYPES
-            )
-        n = len(seen)
-        return n, n
-    return None  # pragma: no cover - defensive fallback
-
-
-# ---------------------------------------------------------------------------
 # Hand / discard shapes
 # ---------------------------------------------------------------------------
 

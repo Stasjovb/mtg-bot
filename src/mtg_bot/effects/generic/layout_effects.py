@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.pt_formulas import PTFormula
 
 if TYPE_CHECKING:  # pragma: no cover
     from mtg_bot.game import GameState
@@ -312,7 +313,7 @@ class LevelCountersInRange(Condition):
 
 
 @dataclass(frozen=True)
-class LevelerPT:
+class LevelerPT(PTFormula):
     """Structured ``dynamic_pt_formula`` of a leveler (CR 711.2b): the
     base power / toughness printed in the level-symbol section whose
     range holds the creature's level-counter count, else its printed

@@ -539,11 +539,11 @@ def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
     return line.strip() == _UNBLOCKABLE_IF_TWO_SPELLS_CAST_THIS_TURN_LINE
 
 
-# Dynamic P/T formula recognizer. The engine stores a string key
-# (``dynamic_pt_formula``) on the ``CardPrinting``; ``game._dynamic_pt``
-# reads the key and computes the actual P/T at query time. Each distinct
-# oracle surface maps to its own key via the table below; adding a new
-# card is one entry, no new function.
+# Dynamic P/T formula recognizer. The engine stores a ``PTFormula``
+# (``dynamic_pt_formula``, ``mtg_bot.effects.pt_formulas``) on the
+# ``CardPrinting``; ``game._dynamic_base_pt`` asks it for the actual P/T
+# at query time. Each distinct oracle surface maps to its formula via the
+# table below; adding a new card is one entry, no new function.
 #
 # ``*``-based power/toughness cards (Cosmogoyf ``*/(1+*)``; Harmonious
 # Grovestrider ``*/*``) get 0 / ``offset`` as their placeholder P/T in
@@ -551,47 +551,62 @@ def _parse_unblockable_if_two_spells_cast_this_turn_line(line: str) -> bool:
 #
 # The Emissary Escort entry stays for backwards compatibility; it ships
 # with integer P/T (1/2) so no ``*`` handling is needed for it.
-_DYNAMIC_PT_FORMULA_LINES: dict[str, str] = {
+def _dynamic_pt_formula_lines() -> dict:
+    from mtg_bot.effects.pt_formulas import (
+        CardTypesInAllGraveyardsPT,
+        CardsYouOwnInExilePT,
+        LandsYouControlPT,
+        PowerPlusGreatestManaValueOfOtherArtifactsPT,
+    )
+
+    return {
     # Emissary Escort {2}{W} 1/2 — printed power incremented by the
     # greatest MV among other artifacts you control. Only card today
     # with this exact surface; parameterization deferred until a second
     # example (e.g. "+X/+0 where X is the number of creatures…") lands.
     "This creature gets +X/+0, where X is the greatest mana value "
-    "among other artifacts you control.": "emissary_escort",
+    "among other artifacts you control.": (
+        PowerPlusGreatestManaValueOfOtherArtifactsPT()
+    ),
     # Cosmogoyf {B}{G} */(1+*) Elemental Lhurgoyf — power = exile count,
     # toughness = exile count + 1. Only card with this formula today;
     # deferred until a second lhurgoyf-style formula lands.
     "Cosmogoyf's power is equal to the number of cards you own in "
-    "exile and its toughness is equal to that number plus 1.": "cosmogoyf",
+    "exile and its toughness is equal to that number plus 1.": (
+        CardsYouOwnInExilePT(toughness_plus=1)
+    ),
     # Harmonious Grovestrider {3}{G}{G} */* Beast — P/T each = lands
     # you control. Only card with this formula today; deferred until a
     # second land-count P/T formula lands.
     "Harmonious Grovestrider's power and toughness are each equal to "
-    "the number of lands you control.": "harmonious_grovestrider",
+    "the number of lands you control.": LandsYouControlPT(),
     # Barrowgoyf {2}{B} */(1+*) Lhurgoyf -- card types among cards in
-    # ALL graveyards (the classic Tarmogoyf formula).
+    # ALL graveyards (the classic Tarmogoyf formula; the parameterized
+    # ``creature_rmc_grammar`` recognizer builds the same formula).
     "Barrowgoyf's power is equal to the number of card types among cards "
     "in all graveyards and its toughness is equal to that number plus 1.": (
-        "card_types_in_all_graveyards"
+        CardTypesInAllGraveyardsPT(toughness_plus=1)
     ),
-}
+    }
 
 
-def _parse_dynamic_pt_formula_line(line: str) -> str | None:
-    """Return the ``dynamic_pt_formula`` key if ``line`` is a known
-    dynamic-P/T oracle surface, else ``None``. The key is forwarded as
-    the ``dynamic_pt_formula`` kwarg on ``make_creature``; the engine
-    reads it in ``game._dynamic_pt`` and computes the actual P/T at
-    query time.
+_DYNAMIC_PT_FORMULA_LINES: dict = _dynamic_pt_formula_lines()
+
+
+def _parse_dynamic_pt_formula_line(line: str):
+    """Return the ``PTFormula`` if ``line`` is a known dynamic-P/T
+    oracle surface, else ``None``. The formula is forwarded as the
+    ``dynamic_pt_formula`` kwarg on ``make_creature``; the engine asks
+    it for the actual P/T at query time (``game._dynamic_base_pt``).
 
     Adding a new card is one entry in ``_DYNAMIC_PT_FORMULA_LINES``;
     parameterized shapes (any name) fall back to
     ``creature_rmc_grammar.parse_rmc_dynamic_pt_line`` and then
     ``creature_wg_lines.parse_wg_dynamic_pt_line`` (cube W/G bucket).
     """
-    key = _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
-    if key is not None:
-        return key
+    formula = _DYNAMIC_PT_FORMULA_LINES.get(line.strip())
+    if formula is not None:
+        return formula
     from mtg_bot.cards.parser.creature_rmc_grammar import (
         parse_rmc_dynamic_pt_line,
     )
@@ -611,7 +626,7 @@ def _parse_dynamic_pt_formula_line(line: str) -> str | None:
     return parse_roto_dynamic_pt_line(line.strip())
 
 
-def _parse_emissary_escort_dynamic_pt_line(line: str) -> str | None:
+def _parse_emissary_escort_dynamic_pt_line(line: str):
     """Alias retained for backwards compatibility. Delegates to
     ``_parse_dynamic_pt_formula_line``.
     """

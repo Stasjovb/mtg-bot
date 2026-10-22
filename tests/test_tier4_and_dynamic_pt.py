@@ -247,6 +247,10 @@ def test_emissary_escort_excludes_opponent_artifacts():
 
 
 def test_emissary_escort_printing_has_formula():
+    from mtg_bot.effects.pt_formulas import (
+        PowerPlusGreatestManaValueOfOtherArtifactsPT,
+    )
+
     assert _PRINTINGS["Emissary Escort"].dynamic_pt_formula == (
-        "emissary_escort"
+        PowerPlusGreatestManaValueOfOtherArtifactsPT()
     )

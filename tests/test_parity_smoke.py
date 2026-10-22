@@ -70506,7 +70506,9 @@ def test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity(
     # ---- Python side: pull grove out of library, push onto bf ----
     py_grove = py_state.players[0].library[0]
     assert py_grove.printing.name == "Harmonious Grovestrider"
-    assert py_grove.printing.dynamic_pt_formula == "harmonious_grovestrider"
+    from mtg_bot.effects.pt_formulas import LandsYouControlPT
+
+    assert py_grove.printing.dynamic_pt_formula == LandsYouControlPT()
     py_state.players[0].library.remove(py_grove)
     py_grove.zone = Zone.BATTLEFIELD
     py_state.battlefield.append(py_grove)
@@ -70734,7 +70736,9 @@ def test_cross_engine_real_eoe_cosmogoyf_dynamic_pt_parity(
     )
     # Verify-against-live: the genuine printing IS the pure
     # dynamic-P/T CDA shape (no ward rider, no other riders).
-    assert real.dynamic_pt_formula == "cosmogoyf"
+    from mtg_bot.effects.pt_formulas import CardsYouOwnInExilePT
+
+    assert real.dynamic_pt_formula == CardsYouOwnInExilePT(toughness_plus=1)
     assert real.ward_cost is None
     assert real.triggered_abilities == ()
     assert real.static_abilities == ()
@@ -70781,7 +70785,9 @@ def test_cross_engine_real_eoe_cosmogoyf_dynamic_pt_parity(
 
     py_cosmo = py_state.players[0].library[0]
     assert py_cosmo.printing.name == "Cosmogoyf"
-    assert py_cosmo.printing.dynamic_pt_formula == "cosmogoyf"
+    assert py_cosmo.printing.dynamic_pt_formula == CardsYouOwnInExilePT(
+        toughness_plus=1,
+    )
     py_state.players[0].library.remove(py_cosmo)
     py_cosmo.zone = Zone.BATTLEFIELD
     py_state.battlefield.append(py_cosmo)

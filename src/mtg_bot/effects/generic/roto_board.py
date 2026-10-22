@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.pt_formulas import PTFormula
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.targeted_removal import RemoveTargetPermanents
 from mtg_bot.effects.object_predicates import ObjectPredicate
@@ -562,7 +563,7 @@ class CardsInYourGraveyard(Condition):
 
 
 @dataclass(frozen=True)
-class CardTypesInYourGraveyardPT:
+class CardTypesInYourGraveyardPT(PTFormula):
     """``dynamic_pt_formula`` for "<This>'s power is equal to the number
     of card types among cards in your graveyard and its toughness is
     equal to that number plus K." (Nethergoyf): "your" is the creature's

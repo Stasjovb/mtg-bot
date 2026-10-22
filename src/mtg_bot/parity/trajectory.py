@@ -58,6 +58,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from mtg_bot.parity.cross_engine import (
+    dynamic_pt_formula_bridge_key,
     CardDef,
     DeckSpec,
     build_matched_states,
@@ -5138,7 +5139,9 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
     # Python's ``game._dynamic_base_pt``. A formula key NOT in the
     # admit set drops the printing here so we never ship a 0/0
     # mistranslation on the Rust side.
-    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    dpt_formula = dynamic_pt_formula_bridge_key(
+        getattr(printing, "dynamic_pt_formula", None)
+    )
     if (
         dpt_formula is not None
         and dpt_formula not in _DYNAMIC_PT_FORMULA_ADMIT_SET
@@ -5317,7 +5320,9 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
     # so this branch is dead today; keeping the explicit gate
     # preserves the §2 substrate-honesty guarantee if a future warp
     # printing happens to be a layer-7 CDA carrier.
-    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    dpt_formula = dynamic_pt_formula_bridge_key(
+        getattr(printing, "dynamic_pt_formula", None)
+    )
     if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     if getattr(printing, "ward_cost", None) is not None:
@@ -5526,7 +5531,9 @@ def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    dpt_formula = dynamic_pt_formula_bridge_key(
+        getattr(printing, "dynamic_pt_formula", None)
+    )
     if (
         dpt_formula is not None
         and dpt_formula not in _DYNAMIC_PT_FORMULA_ADMIT_SET
@@ -13525,7 +13532,9 @@ def _printing_is_bridge_static_anthem_pt_conditional_warp_creature(
     # Dynamic P/T formulas — gated to the round-78 admit set; no
     # Phase-4 anthem carrier in the live pool is a CDA. Reject the
     # rest defensively (same shape as the pure-warp arm).
-    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    dpt_formula = dynamic_pt_formula_bridge_key(
+        getattr(printing, "dynamic_pt_formula", None)
+    )
     if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     if getattr(printing, "ward_cost", None) is not None:
@@ -14600,8 +14609,8 @@ def _printing_to_card_def(printing) -> CardDef:
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
             triggered_abilities=triggered_abilities,
-            dynamic_pt_formula=getattr(
-                printing, "dynamic_pt_formula", None
+            dynamic_pt_formula=dynamic_pt_formula_bridge_key(
+                getattr(printing, "dynamic_pt_formula", None)
             ),
         )
     if _printing_is_bridge_simple_cast_restriction_enchantment(printing):
