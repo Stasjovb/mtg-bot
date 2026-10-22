@@ -399,7 +399,9 @@ def test_card_def_to_python_phase4_anthem_materializes_static_ability():
     )
     printing = _card_def_to_python_printing(cd)
     [sa] = printing.static_abilities
-    assert sa.scope == "other_creatures_you_control"
+    from mtg_bot.effects.base import StaticScope
+
+    assert sa.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL
     assert sa.condition == DuringYourTurn()
     assert isinstance(sa.continuous_effect, ContinuousModifier)
     assert sa.continuous_effect.layer == 7
