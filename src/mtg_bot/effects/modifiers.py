@@ -32,6 +32,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
+from mtg_bot.keyword_vocab import KeywordSpelling
+
 if TYPE_CHECKING:
     from mtg_bot.effects.object_predicates import ObjectPredicate
     from mtg_bot.effects.predicates import Event
@@ -286,7 +288,7 @@ class GrantKeyword(LayerPayload):
     distinct and lives on :class:`CantBeBlocked` instead.
     """
 
-    keyword: str
+    keyword: KeywordSpelling
 
 
 @dataclass(frozen=True)
@@ -301,7 +303,7 @@ class RemoveKeyword(LayerPayload):
     expressed structurally.
     """
 
-    keyword: str
+    keyword: KeywordSpelling
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
+
 if TYPE_CHECKING:
     from mtg_bot.cards import CostReduction, ManaCost
     from mtg_bot.effects.conditions import Condition
@@ -894,7 +896,7 @@ class StaticAbility:
     """
 
     scope: StaticScope
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     power_bonus: int = 0
     toughness_bonus: int = 0
     # Tiered abilities on Spacecraft: the ability is only active when the

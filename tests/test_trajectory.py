@@ -506,7 +506,8 @@ def test_combat_agent_attack_unblockable_only_filters_to_evasion():
     spec = _vanilla_60_deckspec(shared_rng_seed=42)
     py_state, _ = setup_matched_game(spec)
 
-    # Three p0 creatures: a vanilla, a flier, an unblockable.
+    # Three p0 creatures: a vanilla, a flier, one with shadow (evasion
+    # keywords; printings only carry real keywords).
     grunt = _make_creature(
         py_state, name="Bear Grunt", power=2, toughness=2, controller=0,
     )
@@ -516,7 +517,7 @@ def test_combat_agent_attack_unblockable_only_filters_to_evasion():
     )
     sneaky = _make_creature(
         py_state, name="Bear Spy", power=2, toughness=2, controller=0,
-        keywords=("unblockable",),
+        keywords=("shadow",),
     )
 
     agent = RealGameCombatAgent(

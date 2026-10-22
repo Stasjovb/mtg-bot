@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Iterable
 
+from mtg_bot.keyword_vocab import ProtectionQuality
+
 if TYPE_CHECKING:  # pragma: no cover
     from mtg_bot.game import GameObject, GameState
 
@@ -40,24 +42,14 @@ LETTER_TO_COLOR_WORD: dict[str, str] = {
     v: k for k, v in COLOR_WORD_TO_LETTER.items()
 }
 
-# Qualities a protection keyword may name. Kept explicit so the parser
-# can refuse an unknown quality (``protection from the chosen player``)
-# instead of minting a keyword no consumer understands.
-PROTECTION_QUALITIES: frozenset[str] = frozenset(
-    set(COLOR_WORD_TO_LETTER)
-    | {
-        "colorless", "multicolored", "monocolored", "everything",
-        "creatures", "artifacts", "enchantments", "instants",
-        "sorceries", "planeswalkers",
-        # Player qualities (CR 702.16j): sources controlled by that
-        # player. Resolved against the protected object in
-        # ``is_protected_from``.
-        "the chosen player", "each of your opponents",
-        # Emrakul, the Aeons Torn: protection from spells that are one or
-        # more colors (a spell = the object on the stack / resolving).
-        "spells that are one or more colors",
-    }
-)
+# Qualities a protection keyword may name: the closed
+# ``keyword_vocab.ProtectionQuality`` vocabulary (colors, color counts,
+# "everything", card types, the player qualities of CR 702.16j resolved
+# against the protected object in ``is_protected_from``, and Emrakul's
+# "spells that are one or more colors"). The parser refuses any other
+# quality instead of minting a keyword no consumer understands.
+PROTECTION_QUALITIES: frozenset[str] = frozenset(q.value for q in ProtectionQuality)
+assert set(COLOR_WORD_TO_LETTER) <= PROTECTION_QUALITIES
 
 # "hexproof from <quality>" keyword spelling (CR 702.11d).
 HEXPROOF_FROM_PREFIX = "hexproof from "

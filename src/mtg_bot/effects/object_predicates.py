@@ -23,6 +23,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
+
 if TYPE_CHECKING:
     from mtg_bot.game import GameObject, GameState
 
@@ -460,7 +462,7 @@ class HasKeyword(ObjectPredicate):
     honored. Players have no keywords and evaluate false.
     """
 
-    name: str
+    name: KeywordSpelling
 
     def test(self, obj, state):
         if not hasattr(obj, "printing"):

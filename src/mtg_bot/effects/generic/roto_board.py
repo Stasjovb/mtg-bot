@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.pt_formulas import PTFormula
 from mtg_bot.effects.conditions import Condition
@@ -182,7 +183,7 @@ class LoseKeywordUEOT(Effect):
     Charm): a layer-6 ``lose_keyword`` entry, walked in timestamp order
     with keyword grants by ``game.effective_keywords``."""
 
-    keyword: str
+    keyword: KeywordSpelling
     targets: tuple = ()
 
     def resolve(
@@ -230,7 +231,7 @@ class GrantKeywordsToEachUEOT(Effect):
     layer-6 grant that expires at cleanup."""
 
     permanent_filter: ObjectPredicate
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     label: str = "permanents you control"
 
     def resolve(
@@ -593,7 +594,7 @@ class PumpEachYouControlByCountUEOT(Effect):
 
     permanent_filter: ObjectPredicate
     count_filter: ObjectPredicate
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     label: str = "creatures you control"
 
     def resolve(
@@ -1269,7 +1270,7 @@ class PowerPumpThenDestroyIfAttacked(Effect):
     whoever's it is) with the creature as its source, so it does nothing
     if the creature is gone."""
 
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     targets: tuple = ()
 
     def resolve(

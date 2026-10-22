@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.cube_creatures_rmc import ExilePlayPermission
@@ -946,7 +947,7 @@ class PumpCreaturesYouControlPerCount(Effect):
     power: int = 0
     toughness: int = 0
     count: object = None
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -986,7 +987,7 @@ class GrantKeywordsUntilYourNextTurn(Effect):
     controller's next turn begins (``expires_at="controller_untap"``)."""
 
     targets: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -1192,7 +1193,7 @@ class CopyExceptions:
     add_subtypes: tuple = ()
     base_pt: "tuple | None" = None
     colors: "frozenset | None" = None
-    add_keywords: frozenset = frozenset()
+    add_keywords: frozenset[KeywordSpelling] = frozenset()
 
     def apply(self, base):
         import dataclasses as _dc

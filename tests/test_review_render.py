@@ -435,7 +435,7 @@ def test_acknowledged_lines_produce_no_hints():
 def test_modeled_keywords_walks_faces(printings):
     p = printings["Brazen Borrower // Petty Theft"]
     assert {"flash", "flying"} <= rr.modeled_keywords(p)
-    back = make_creature("B", "{1}", 1, 1, keywords=("first_strike",))
+    back = make_creature("B", "{1}", 1, 1, keywords=("first strike",))
     front = dataclasses.replace(_bird(), transform_back_face=back)
     assert "first strike" in rr.modeled_keywords(front)
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -46,7 +47,7 @@ class AttachToTargetCreatureYouControl(Effect):
     keywords are granted.
     """
 
-    granted_keywords_ueot: frozenset[str] = frozenset()
+    granted_keywords_ueot: frozenset[KeywordSpelling] = frozenset()
 
     def requires_target(self) -> bool:
         return True

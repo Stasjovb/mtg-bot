@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target, TriggeredAbility
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.object_predicates import ObjectPredicate
@@ -659,7 +660,7 @@ class GrantKeywordsUEOTAndPutCounters(Effect):
     ``target_counters`` / ``self_counters`` are ``((kind, n), ...)``."""
 
     targets: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     target_counters: tuple = ()
     self_counters: tuple = ()
 
@@ -929,7 +930,7 @@ class GrantKeywordsUEOTThenExplores(Effect):
     explores." (Seasoned Dungeoneer.)"""
 
     targets: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.effects.combinators import ApplyEffect
@@ -1047,7 +1048,7 @@ class MillChooseOpponentAttackPump(Effect):
     the bonus is counted as the ability resolves."""
 
     mill: int = 1
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
@@ -1146,7 +1147,7 @@ class CounterThenWhenItAttacksMonarch(Effect):
     holder (``spell_misc.CreateThisTurnTriggeredAbility``)."""
 
     targets: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.effects.generic.spell_misc import (
@@ -1193,7 +1194,7 @@ class Backup(Effect):
     printed after the Backup line."""
 
     n: int = 1
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     targets: tuple = ()
 
     def resolve(self, state, controller_id, targets=()):

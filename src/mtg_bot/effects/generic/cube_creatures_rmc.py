@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 
 if TYPE_CHECKING:
@@ -1687,7 +1688,7 @@ class SourceBecomesIfSubtype(Effect):
 
     subtypes: tuple[str, ...] = ()
     base_pt: tuple = (0, 0)
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     requires_subtype: str = ""
 
     def resolve(self, state, controller_id, targets=()):

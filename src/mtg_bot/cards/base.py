@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mtg_bot.effects.conditions import Condition
 
+from mtg_bot.keyword_vocab import KeywordSpelling, validate_keywords
 from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
@@ -607,7 +608,7 @@ class CardPrinting:
     power: int | None = None
     toughness: int | None = None
     produces: frozenset[str] = frozenset()
-    keywords: frozenset[str] = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     triggered_abilities: tuple[TriggeredAbility, ...] = ()
     # For instants and sorceries: the effect that runs when the spell
     # resolves. After resolution the spell goes to its owner's graveyard.
@@ -668,7 +669,7 @@ class CardPrinting:
     # creature with its printed P/T and gains stationed_keywords. None on
     # non-Spacecraft cards.
     station_threshold: int | None = None
-    stationed_keywords: frozenset[str] = frozenset()
+    stationed_keywords: frozenset[KeywordSpelling] = frozenset()
     # Saga (Enchantment — Saga). When > 0, this card is a Saga
     # with the given final chapter number. Sagas would get a lore
     # counter at the start of each precombat main phase as a
@@ -1508,8 +1509,10 @@ class CardPrinting:
     # counters on <it>, <it>'s a P/T <Subtypes> creature [and has
     # <keywords>]." (Kaito, Bane of Nightmares) -- ``(power, toughness,
     # subtypes, keywords)``, applied at each of the controller's turns
-    # (``mtg_bot.cube_glue_statics``).
-    creature_during_your_turn: tuple = ()
+    # (``mtg_bot.cube_glue_statics``). ``None`` when absent.
+    creature_during_your_turn: (
+        "tuple[int, int, tuple[str, ...], frozenset[KeywordSpelling]] | None"
+    ) = None
     # Anointed Peacekeeper: "As this creature enters, look at an
     # opponent's hand, then choose any card name." plus the named-card
     # taxes -- opponents' spells with the chosen name cost {N} more;
@@ -1605,7 +1608,7 @@ class CardPrinting:
     # Roto P4: "... except ... and it has <keywords> / "<ability>""
     # riders (Phantasmal Image's granted becomes-the-target trigger).
     enters_as_copy_add_triggers: tuple = ()
-    enters_as_copy_add_keywords: frozenset = frozenset()
+    enters_as_copy_add_keywords: frozenset[KeywordSpelling] = frozenset()
     # "... any creature on the battlefield with mana value less than or
     # equal to the amount of mana spent to cast this creature" (Mockingbird;
     # roto integration): candidates are capped by
@@ -1745,6 +1748,13 @@ class CardPrinting:
         # rewrites in ``actions``/``effects.generic``), so a malformed
         # ``static_abilities`` can never reach the battlefield.
         _validate_static_abilities(self.name, self.static_abilities)
+        # Keyword sets hold engine keyword spellings from the closed
+        # vocabulary (``mtg_bot.keyword_vocab``).
+        validate_keywords(self.name, self.keywords)
+        validate_keywords(self.name, self.stationed_keywords)
+        validate_keywords(self.name, self.enters_as_copy_add_keywords)
+        if self.creature_during_your_turn is not None:
+            validate_keywords(self.name, self.creature_during_your_turn[3])
         if self.dynamic_pt_formula is not None and not isinstance(
             self.dynamic_pt_formula, PTFormula,
         ):

@@ -199,7 +199,7 @@ def test_lethal_detect_skipped_when_blocker_has_first_strike():
     from dataclasses import replace
     blk.printing = replace(
         blk.printing,
-        keywords=frozenset({"first_strike"}),
+        keywords=frozenset({"first strike"}),
     )
     assert detect_lethal_attack(state, player_id=0) is None
 
@@ -227,7 +227,7 @@ def test_lethal_detect_skipped_when_blocker_has_double_strike():
     from dataclasses import replace
     blk.printing = replace(
         blk.printing,
-        keywords=frozenset({"double_strike"}),
+        keywords=frozenset({"double strike"}),
     )
     assert detect_lethal_attack(state, player_id=0) is None
 

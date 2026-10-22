@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator
 
+from mtg_bot.keyword_vocab import KeywordSpelling
+
 if TYPE_CHECKING:
     from mtg_bot.game import GameObject, GameState
 
@@ -118,7 +120,7 @@ def any_rules(state: "GameState") -> bool:
 class WithoutKeyword:
     """"without <keyword>" (Moat: "Creatures without flying")."""
 
-    keyword: str
+    keyword: KeywordSpelling
 
     def holds(self, state, source, creature) -> bool:
         from mtg_bot.game import effective_keywords

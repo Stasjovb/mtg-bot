@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.generic.roto_search import (
     library_search,
     searched_card_taken,
@@ -865,7 +866,7 @@ class PutCountersUntapItBecomesCreature(Effect):
     counter_count: int = 0
     base_pt: tuple = (0, 0)
     subtypes: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -1096,7 +1097,7 @@ class CreateThenTheyGainKeywordsUEOT(Effect):
     controller) get UEOT keyword grants."""
 
     create: Effect | None = None
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,

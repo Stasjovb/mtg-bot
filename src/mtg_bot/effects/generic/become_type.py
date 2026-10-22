@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -51,7 +52,7 @@ class TargetArtifactBecomesCreatureUEOT(Effect):
 
     power: int = 0
     toughness: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
 
     def requires_target(self) -> bool:
         return True
@@ -153,7 +154,7 @@ class BecomeLandCreatureUEOT(Effect):
 
     power: int = 0
     toughness: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     unblockable: bool = False
     # Subtype the animated creature gains UEOT (e.g., "Blinkmoth" for
     # Blinkmoth Nexus, "Elemental" for Lavaclaw Reaches). Written as

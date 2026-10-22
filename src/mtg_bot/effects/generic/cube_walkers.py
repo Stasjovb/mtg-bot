@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target, _apply_damage
 from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.targets_helpers import (
@@ -251,7 +252,7 @@ class PutPlusOneCountersOnTargetThenGrantKeywordsUEOT(Effect):
 
     amount: int = 1
     targets: tuple = ()
-    granted_keywords: frozenset = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -319,7 +320,7 @@ class PutPlusOneCounterOnEachCreatureYouControlThenGrantKeywords(Effect):
     """
 
     amount: int = 1
-    granted_keywords: frozenset = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     until_your_next_turn: bool = False
 
     def resolve(

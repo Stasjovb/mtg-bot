@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import (
     Effect, Target, TriggeredAbility,
     _apply_damage, _multicolored_permanents_count,
@@ -49,7 +50,7 @@ class Pump(Effect):
 
     power_bonus: int = 0
     toughness_bonus: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     targets: tuple = ()
 
     def resolve(
@@ -277,13 +278,13 @@ class PumpTargetCreatureUntilEOT(Effect):
 
     power_bonus: int = 0
     toughness_bonus: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     you_control_only: bool = False  # restrict to "target creature you control"
     opponents_only: bool = False  # restrict to "an opponent controls"
     # Extra keywords granted UEOT only when the target was cast for its
     # warp cost (oracle: "If that creature was cast for its warp cost, it
     # also gains X"). Generic — any future card with the same rider uses it.
-    granted_keywords_if_warp_cast: frozenset[str] = frozenset()
+    granted_keywords_if_warp_cast: frozenset[KeywordSpelling] = frozenset()
     # Conditional draw rider: "If [target] has a +1/+1 counter on it,
     # draw a card." Matches Dual-Sun Technique. The controller of the
     # spell does the drawing. Inspected at resolution time.
@@ -657,7 +658,7 @@ class PumpSelfUntilEOT(Effect):
 
     power_bonus: int = 0
     toughness_bonus: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -720,7 +721,7 @@ class PumpCreaturesYouControlUntilEOT(Effect):
 
     power_bonus: int = 0
     toughness_bonus: int = 0
-    granted_keywords: frozenset[str] = frozenset()
+    granted_keywords: frozenset[KeywordSpelling] = frozenset()
     exclude_source: bool = False
     attacking_only: bool = False
     also_untap_if_not_your_turn: bool = False

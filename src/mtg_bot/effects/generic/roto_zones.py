@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.conditions import Condition as _Condition
 from mtg_bot.effects.predicates import TriggerPredicate as _TriggerPredicate
@@ -2669,7 +2670,7 @@ class LookTopMayPutAttackingGainKeyword(Effect):
 
     count: int = 6
     card_filter: CardFilter = CardFilter()
-    keyword: str = "indestructible"
+    keyword: KeywordSpelling = "indestructible"
 
     def resolve(self, state, controller_id, targets=()):
         from mtg_bot.actions import put_into_battlefield

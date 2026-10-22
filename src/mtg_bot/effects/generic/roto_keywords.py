@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from mtg_bot.keyword_vocab import KeywordSpelling
 from mtg_bot.effects.base import Effect, Target
 from mtg_bot.effects.predicates import TriggerPredicate
 from mtg_bot.effects.generic.card_flow import CardFilter
@@ -606,7 +607,7 @@ class UntapTargetThenGrantUntilEndOfTurn(Effect):
     "<triggered ability>"]." (Legolas's Quick Reflexes.)"""
 
     targets: tuple = ()
-    keywords: frozenset = frozenset()
+    keywords: frozenset[KeywordSpelling] = frozenset()
     granted_trigger: object = None
 
     def resolve(
