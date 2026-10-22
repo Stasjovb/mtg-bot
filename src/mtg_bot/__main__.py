@@ -1,12 +1,22 @@
-"""Entry point: run a random-vs-random game and print the result."""
+"""Entry point: ``python -m mtg_bot`` runs a random-vs-random game and
+prints the result; ``python -m mtg_bot <subcommand> ...`` dispatches to
+the ``mtg_bot.cli`` subcommands (e.g. ``python -m mtg_bot cards export-ir
+--pool cube --out DIR``)."""
 
 from __future__ import annotations
+
+import sys
 
 from mtg_bot.agents import RandomAgent
 from mtg_bot.simulate import simulate_game
 
 
-def main() -> None:
+def main(argv: "list[str] | None" = None) -> None:
+    if argv:
+        from mtg_bot.cli import main as cli_main
+
+        cli_main(argv)
+        return
     state = simulate_game(
         agents=[RandomAgent(), RandomAgent()],
         colors=["G", "R"],
@@ -33,4 +43,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
