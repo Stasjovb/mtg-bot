@@ -265,7 +265,8 @@ def test_resolve_nn_version_reads_registry_metadata(tmp_path):
     assert d["action_encoding_version"] == "canonical_v2"
     assert d["with_policy"] is True and d["puct"] is True
     assert d["inner_nodes"] == 8 and d["samples"] == 1
-    assert d["batch_size"] == 32
+    from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+    assert d["batch_size"] == SEARCH_LEAF_BATCH_SIZE == 1
     assert d["weights_path"].endswith(os.path.join("v13s", "weights.pt"))
     assert d["git_commit"] == "3af7edea"
 
@@ -505,3 +506,101 @@ def test_play_pair_keeps_the_quiet_window_skip_off(monkeypatch):
     assert result.wins_a == 1
     assert seen["heuristics"] == HeuristicsConfig.live_eval()
     assert seen["alternate_seats"] is True
+
+
+# --------------------------------------------------------------------------
+# Head-isolation variants: <version>+valueonly / <version>+heurvalue
+# --------------------------------------------------------------------------
+
+
+def _policy_version(tmp_path, label="v22"):
+    _fake_registry_version(tmp_path, label, {
+        "version": label, "created_at": "2026-09-28T02:01:22Z",
+        "feature_dim": 51, "hidden_sizes": [],
+        "with_policy": True, "architecture": "structured",
+        "action_encoding_version": "canonical_v2",
+        "training": {"structured_config": {"emb_dim": 128}},
+        "git_commit": "916b8972",
+    })
+
+
+def test_resolve_valueonly_variant_disables_puct_but_keeps_policy_head(tmp_path):
+    _policy_version(tmp_path)
+    s = L.resolve_agent("v22+valueonly", registry_root=tmp_path, nodes=8, samples=1)
+    d = s.description
+    assert s.label == "v22+valueonly"
+    assert d["kind"] == "nn_pimc_value_only" and d["version"] == "v22"
+    assert d["with_policy"] is True and d["puct"] is False
+    assert d["weights_path"].endswith(os.path.join("v22", "weights.pt"))
+    # Plain label is untouched.
+    assert L.resolve_agent("v22", registry_root=tmp_path, nodes=8, samples=1).description["puct"] is True
+
+
+def test_resolve_heurvalue_variant_builds_hybrid_config(tmp_path):
+    from mtg_bot.search.hybrid_evaluator import HybridPimcConfig
+    _policy_version(tmp_path)
+    s = L.resolve_agent("v22+heurvalue", registry_root=tmp_path, nodes=8, samples=2)
+    d = s.description
+    assert d["kind"] == "hybrid_heur_value_nn_policy" and d["version"] == "v22"
+    assert d["inner_nodes"] == 8 and d["samples"] == 2
+    assert d["nn"]["with_policy"] is True and d["nn"]["puct"] is True
+    assert d["heuristic"] is not None
+    assert isinstance(s.factory.__self__, HybridPimcConfig)
+
+
+def test_resolve_heurvalue_needs_policy_head(tmp_path):
+    _fake_registry_version(tmp_path, "v1", {
+        "version": "v1", "created_at": "x", "feature_dim": 51,
+        "hidden_sizes": [], "with_policy": False, "architecture": "structured",
+    })
+    with pytest.raises(ValueError, match="policy head"):
+        L.resolve_agent("v1+heurvalue", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_resolve_unknown_variant_rejected(tmp_path):
+    _policy_version(tmp_path)
+    with pytest.raises(ValueError, match="unknown agent variant"):
+        L.resolve_agent("v22+bogus", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_variant_labels_survive_pair_parsing():
+    pairs = L.parse_pairs(
+        "heuristic:v22+valueonly,heuristic:v22+heurvalue",
+        ["heuristic", "v22+valueonly", "v22+heurvalue"],
+    )
+    assert pairs == [("heuristic", "v22+valueonly"), ("heuristic", "v22+heurvalue")]
+
+
+def test_batch_modifier_overrides_leaf_batch_size(tmp_path):
+    _policy_version(tmp_path)
+    h = L.resolve_agent("heuristic+b32", registry_root=tmp_path, nodes=4, samples=1)
+    assert h.description["kind"] == "heuristic_pimc" and h.description["batch_size"] == 32
+    v = L.resolve_agent("v22+b1", registry_root=tmp_path, nodes=4, samples=1)
+    assert v.description["kind"] == "nn_pimc" and v.description["batch_size"] == 1
+    assert v.description["puct"] is True
+    both = L.resolve_agent("v22+heurvalue+b1", registry_root=tmp_path, nodes=4, samples=1)
+    assert both.description["kind"] == "hybrid_heur_value_nn_policy"
+    assert both.description["nn"]["batch_size"] == 1
+
+
+def test_batch_modifier_rejects_bad_values(tmp_path):
+    _policy_version(tmp_path)
+    with pytest.raises(ValueError, match="unknown agent variant"):
+        L.resolve_agent("v22+b0", registry_root=tmp_path, nodes=4, samples=1)
+    with pytest.raises(ValueError, match="head variants need a registered version"):
+        L.resolve_agent("heuristic+valueonly", registry_root=tmp_path, nodes=4, samples=1)
+    with pytest.raises(ValueError, match="more than one head variant"):
+        L.resolve_agent("v22+valueonly+heurvalue", registry_root=tmp_path, nodes=4, samples=1)
+
+
+def test_default_leaf_batch_is_one_for_every_agent(tmp_path):
+    """2026-10-01: batch 32 was an ~8-point search handicap vs the
+    batch-1 heuristic; the production default is now 1 everywhere."""
+    from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+    _policy_version(tmp_path)
+    assert SEARCH_LEAF_BATCH_SIZE == 1
+    for label in ("heuristic", "v22", "v22+valueonly"):
+        d = L.resolve_agent(label, registry_root=tmp_path, nodes=4, samples=1).description
+        assert d["batch_size"] == 1, label
+    hv = L.resolve_agent("v22+heurvalue", registry_root=tmp_path, nodes=4, samples=1).description
+    assert hv["nn"]["batch_size"] == 1

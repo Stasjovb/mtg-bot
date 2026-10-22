@@ -42,6 +42,8 @@ table.
 
 from __future__ import annotations
 
+from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+
 import argparse
 import itertools
 import json
@@ -66,6 +68,59 @@ from mtg_bot.search.strategy import RandomChoice, SearchStrategy
 # registry (``trained_weights/<label>/``).
 RANDOM_LABEL = "random"
 HEURISTIC_LABEL = "heuristic"
+VARIANT_SUFFIXES = frozenset({"valueonly", "heurvalue"})
+
+
+def _split_label(label: str) -> tuple[str, Optional[str], Optional[int]]:
+    """``"v22+heurvalue+b1"`` -> ``("v22", "heurvalue", 1)``.
+
+    Modifiers after ``+``: a head variant from ``VARIANT_SUFFIXES``
+    (at most one) and/or ``b<N>`` = MCTS leaf batch size (default
+    ``SEARCH_LEAF_BATCH_SIZE`` = 1 for every agent since 2026-10-01;
+    ``heuristic+b32`` / ``v22+b1`` are the search-batching controls,
+    2026-10-01). ``+nocal`` is NOT parsed here: ``resolve_agent``
+    strips it first via :func:`split_calibration_modifier`, so it may
+    appear anywhere among the modifiers (``v22+nocal+b1`` ==
+    ``v22+b1+nocal``).
+    """
+    parts = label.split("+")
+    base, variant, batch = parts[0], None, None
+    for mod in parts[1:]:
+        if mod in VARIANT_SUFFIXES:
+            if variant is not None:
+                raise ValueError(f"{label!r}: more than one head variant")
+            variant = mod
+        elif mod.startswith("b") and mod[1:].isdigit() and int(mod[1:]) >= 1:
+            batch = int(mod[1:])
+        else:
+            raise ValueError(
+                f"unknown agent variant {mod!r} in {label!r}; expected one "
+                f"of {sorted(VARIANT_SUFFIXES)}, b<N> (leaf batch size) "
+                f"or nocal (skip the value calibration)"
+            )
+    return base, variant, batch
+
+
+# ``<version>+nocal``: load the version WITHOUT its post-hoc value
+# calibration (``metadata.value_calibration``). Every NN seat applies
+# the calibration since 2026-10-04; before that ``NNPimcConfig.build``
+# silently dropped it, so ``+nocal`` reproduces every earlier ladder /
+# arena / self-play evaluator and measures what the calibration is
+# worth in play.
+NOCAL_MODIFIER = "nocal"
+
+
+def split_calibration_modifier(label: str) -> tuple[str, bool]:
+    """``"v22+nocal"`` -> ``("v22", False)``; ``"v22"`` -> ``("v22",
+    True)``. Returns the label with any ``+nocal`` removed (other
+    ``+`` modifiers keep their order) and whether the value
+    calibration is applied. ``+nocal`` twice is an error."""
+    parts = label.split("+")
+    kept = [parts[0]] + [m for m in parts[1:] if m != NOCAL_MODIFIER]
+    n_nocal = len(parts) - len(kept)
+    if n_nocal > 1:
+        raise ValueError(f"{label!r}: '+{NOCAL_MODIFIER}' given twice")
+    return "+".join(kept), n_nocal == 0
 
 RESULTS_FILENAME = "results.json"
 REPORT_FILENAME = "ladder.md"
@@ -120,38 +175,60 @@ def resolve_agent(
       version's ``metadata.json`` via :class:`Registry` exactly the
       way ``_eval_match`` / ``capture`` thread them into
       ``NNPimcConfig``; the ``structured`` architecture's trunk
-      hparams are discovered by ``NNPimcConfig.build`` from the
-      sibling metadata file in the worker.
+      hparams, value-head input and value calibration are discovered
+      by ``NNPimcConfig.build`` from the sibling metadata file in the
+      worker. ``<version>+nocal`` loads it without the calibration.
     """
     from mtg_bot.training import (
         HeuristicConfig, NNPimcConfig, PimcConfig, Registry,
     )
+
+    version, apply_value_calibration = split_calibration_modifier(label)
+    if not apply_value_calibration and version.split("+")[0] in (
+        RANDOM_LABEL, HEURISTIC_LABEL,
+    ):
+        raise ValueError(
+            f"{label!r}: '+{NOCAL_MODIFIER}' needs a registered version "
+            f"(it switches off a network's value calibration)"
+        )
 
     if label == RANDOM_LABEL:
         return AgentSpec(
             label=label, factory=RandomConfig().build,
             description={"kind": "random"},
         )
-    if label == HEURISTIC_LABEL:
+    # ``+nocal`` is stripped first (``version`` above); what remains are
+    # the head variant / leaf batch size modifiers, in any order.
+    base, variant, batch = _split_label(version)
+    if base == HEURISTIC_LABEL:
+        if variant is not None:
+            raise ValueError(f"{label!r}: head variants need a registered version")
         cfg = PimcConfig(
             samples=samples, inner_nodes=nodes,
-            heuristic=HeuristicConfig(), batch_size=1,
+            heuristic=HeuristicConfig(), batch_size=batch or 1,
         )
         return AgentSpec(
             label=label, factory=cfg.build,
             description={"kind": "heuristic_pimc", **cfg.to_dict()},
         )
 
+    # Head-isolation variants (2026-10-01): ``<version>+valueonly`` runs
+    # the net's value head under plain UCB1 (no policy priors, i.e. the
+    # heuristic's search); ``<version>+heurvalue`` runs PUCT on the
+    # net's policy priors with the heuristic's static value. See
+    # ``mtg_bot.search.hybrid_evaluator`` for the rationale.
+    version = base
+
     registry = Registry(registry_root)
-    if not registry.has(label):
+    if not registry.has(version):
         available = ", ".join(registry.list_versions()) or "<none>"
         raise ValueError(
             f"unknown agent {label!r}: not 'random', not 'heuristic', "
             f"and not a registered version under {registry_root} "
             f"(available: {available})"
         )
-    weights_path = registry.weights_path(label)
-    meta = registry.load_metadata(label)
+    weights_path = registry.weights_path(version)
+    meta = registry.load_metadata(version)
     hidden_sizes = tuple(meta.hidden_sizes) if meta.hidden_sizes else None
     policy_hidden = (
         tuple(meta.training.get("policy_hidden_sizes") or ()) or None
@@ -160,21 +237,56 @@ def resolve_agent(
         weights_path=str(weights_path),
         samples=samples,
         inner_nodes=nodes,
-        batch_size=32,
+        batch_size=batch or SEARCH_LEAF_BATCH_SIZE,
         with_policy=bool(meta.with_policy),
-        puct=bool(meta.with_policy),
+        puct=bool(meta.with_policy) and variant != "valueonly",
         hidden_sizes=hidden_sizes,
         architecture=meta.architecture,
         policy_hidden_sizes=policy_hidden,
         action_encoding_version=meta.action_encoding_version,
+        apply_value_calibration=apply_value_calibration,
     )
+    if variant == "heurvalue":
+        from mtg_bot.search.hybrid_evaluator import HybridPimcConfig
+        if not meta.with_policy:
+            raise ValueError(
+                f"{label!r}: the heurvalue variant needs a policy head, "
+                f"but {version} was trained without one"
+            )
+        if not apply_value_calibration:
+            # The heuristic supplies every value in this seat; the NN
+            # only contributes policy priors, which the calibration
+            # never touches. Refuse the no-op instead of recording a
+            # control arm that plays identically to the plain label.
+            raise ValueError(
+                f"{label!r}: '+{NOCAL_MODIFIER}' has no effect on the "
+                f"heurvalue variant (its values come from the heuristic, "
+                f"not the network's value head)"
+            )
+        hcfg = HybridPimcConfig(
+            nn=cfg, heuristic=HeuristicConfig(),
+            samples=samples, inner_nodes=nodes,
+        )
+        return AgentSpec(
+            label=label, factory=hcfg.build,
+            description={
+                "kind": "hybrid_heur_value_nn_policy",
+                "version": version,
+                "git_commit": meta.git_commit,
+                "created_at": meta.created_at,
+                **hcfg.to_dict(),
+            },
+        )
     return AgentSpec(
         label=label, factory=cfg.build,
         description={
-            "kind": "nn_pimc",
-            "version": label,
+            "kind": "nn_pimc_value_only" if variant == "valueonly" else "nn_pimc",
+            "version": version,
             "git_commit": meta.git_commit,
             "created_at": meta.created_at,
+            # The recorded fit; ``apply_value_calibration`` (from
+            # cfg.to_dict) says whether this seat applies it.
+            "value_calibration": dict(meta.value_calibration or {}),
             **cfg.to_dict(),
         },
     )

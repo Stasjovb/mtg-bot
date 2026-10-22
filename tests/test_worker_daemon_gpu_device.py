@@ -438,3 +438,14 @@ def test_create_app_threads_nn_device_into_claim_loop_config(nn_device):
     assert resp.status_code == 202
     assert captured, "runner factory was never invoked"
     assert captured[0].nn_device == nn_device
+
+
+def test_build_nn_pimc_config_uses_production_leaf_batch():
+    """2026-10-01: self-play searched at leaf batch 32 while the
+    heuristic opponent used 1, an ~8-point handicap at nodes 100-200
+    (docs/STRENGTH_LADDER.md). The runner must follow the single
+    production constant, which is 1."""
+    from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+    cfg = prr._build_nn_pimc_config(Path("weights.pt"), _minimal_metadata())
+    assert SEARCH_LEAF_BATCH_SIZE == 1
+    assert cfg.batch_size == SEARCH_LEAF_BATCH_SIZE

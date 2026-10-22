@@ -24,8 +24,30 @@ coordinator / worker daemons / runs.db) round-robin between any mix of:
   `v13s`, ...). Architecture, trunk shape and action-encoding version
   come from the version's `metadata.json` via `Registry`, exactly as
   the acceptance gate threads them into `NNPimcConfig`; the
-  `structured` architecture's trunk hparams are discovered from the
-  sibling metadata file inside each worker.
+  `structured` architecture's trunk hparams, value-head input and
+  post-hoc value calibration are discovered from the sibling metadata
+  file inside each worker (the same resolver as
+  `NNEvaluator.from_metadata`).
+
+### Agent label modifiers
+
+A participant label may carry `+`-separated modifiers, in any order
+(`v22+b1+nocal` == `v22+nocal+b1`). Each pair label is used verbatim
+in `--pairs` and the results, so `v22` and `v22+nocal` are distinct
+participants.
+
+| modifier | applies to | meaning |
+|---|---|---|
+| `+b<N>` | `heuristic`, versions | MCTS leaf batch size `N` (>= 1). Default for every agent is `SEARCH_LEAF_BATCH_SIZE` = **1** (`mtg_bot.search.leaf_batch`, since 2026-10-01); `heuristic+b32` / `v22+b32` reproduce the pre-2026-10-01 batched search. |
+| `+valueonly` | versions | NN value head under plain UCB1 (no policy priors) -- the heuristic's search with the net's evaluation. |
+| `+heurvalue` | versions with a policy head | PUCT on the NN's policy priors with the heuristic's static value (`mtg_bot.search.hybrid_evaluator`). |
+| `+nocal` | versions (not `+heurvalue`) | load the version WITHOUT its `metadata.value_calibration`. Every NN seat applies the calibration since 2026-10-04; `vN+nocal` reproduces every earlier ladder / arena / self-play evaluator. |
+
+At most one head variant (`+valueonly` / `+heurvalue`) per label.
+Rejected loudly: unknown modifiers, `b0`, `+nocal` twice, `+nocal` or
+a head variant on `heuristic` / `random`, and `+heurvalue+nocal` (the
+heuristic supplies that seat's values, so the calibration has nothing
+to act on).
 
 Each pair plays `--games` seat-alternated games through the same
 `run_match_parallel(alternate_seats=True)` path the gate uses, so seat
@@ -253,3 +275,141 @@ head-to-head. The gains per cycle (if real) are below what 300 games can
 resolve. v18 promoted to `current_best` on the ladder evidence; the next
 run switches to always-promote (accept 0.0) at nodes 200 / 1,000 games
 per cycle with the ladder as the yardstick.
+
+### 2026-09-28 -- v21-v25: deep-teacher warm start (v22) and blend:0.8 always-promote cycles
+
+"Do both" round (2026-09-27/28): (a) a heuristic corpus at **nodes 1600**
+(batches 21-23: 1,415 desktop+Mac games, 101 + 1,484 AWS games on 2 and
+14 c7i.4xlarge spot instances) and a warm start on the newest 3,000 of
+those shards with `--value-target root` = **v22**; (b) three
+always-promote self-play cycles from v22 with `--value-target blend:0.8`
+(nodes 200 / 1,000 games, the last two desktop-only because the Mac went
+offline). v21 is root-value cycle 15 from v20. Ladder at nodes 100 /
+samples 2, 200 games per pair.
+
+| version | how | held-out corr | ladder vs heuristic | vs random | Elo [95 % CI] |
+|---|---|---:|---|---|---:|
+| v21 | root cycle 15 from v20 | 0.403 | 88-111 (44.2 %) | 183-17 (91.5 %) | +408 [+335, +504] |
+| **v22** | deep-teacher warm start, 3,000 games @ nodes 1600, root target | 0.451 | **93-106 (46.7 %)** | 187-13 (93.5 %) | +457 [+378, +565] |
+| v23 | blend:0.8 cycle 16 from v22 | 0.446 | 80-119 (40.2 %) | 188-12 (94.0 %) | +471 [+388, +591] |
+| v24 | blend:0.8 cycle 17 from v23 | 0.462 | 86-113 (43.2 %) | 180-20 (90.0 %) | +378 [+313, +472] |
+| v25 | blend:0.8 cycle 18 from v24 | 0.479 | 71-128 (35.7 %) | 183-17 (91.5 %) | +408 [+343, +522] |
+
+Reading: the 4x deeper teacher did not move the value head (corr 0.451
+vs 0.449 for v15's nodes-400 corpus) and v22 lands where v18 did
+(46.7 vs 47.7 %). The always-promote blend cycles show the old pattern
+in a new form: held-out corr climbs every cycle (0.446 -> 0.479, the
+highest in the lineage) while ladder strength drifts down to 35.7 %.
+A better fit to the driver's own root values is not a stronger player.
+`current_best` was reverted to v22 by hand. Since v15 every version sits
+in a 36-48 % band vs heuristic; neither value-target choice nor teacher
+depth has cleared 50 %.
+
+### 2026-10-01 -- head isolation, then the search-batching control (nodes 100 / samples 2, 200 games per pair)
+
+Which head loses? Two agent variants (`mtg_bot.search.hybrid_evaluator`,
+ladder labels `<v>+valueonly` / `<v>+heurvalue`) split v22:
+
+| agent | search | vs heuristic | vs random |
+|---|---|---|---|
+| v22 (plain) | PUCT on NN priors, NN value, batch 32 | 93-106 (46.7 %) | 93.5 % |
+| v22+valueonly | UCB1, NN value, batch 32 | 93-107 (46.5 %) | 91.0 % |
+| v22+heurvalue | PUCT on NN priors, heuristic value, batch 32 | 89-110 (44.7 %) | 92.0 % |
+
+Neither head explains the gap and the effects do not add: three
+different head combinations land at the same ~46 %. The one thing
+they share is the search: every NN-side agent in this lineage runs
+MCTS with ``batch_size=32`` (batched leaf evaluation with virtual
+loss; ~3 waves at nodes 100) while the heuristic opponent runs
+``batch_size=1``. Controls with the new ``+b<N>`` label modifier:
+
+| agent | vs heuristic (batch 1) |
+|---|---|
+| heuristic+b32 (same evaluator, batched search) | **83-115 (41.9 %)** |
+| v22+b1 | **104-96 (52.0 %)** |
+| v22+valueonly+b1 | 103-96 (51.8 %) |
+
+Reading: batching alone costs the *heuristic* 8 points at nodes 100,
+and at equal search quality v22 beats the heuristic. The 36-48 % band
+every version sat in since v15 was a search handicap, not a learning
+ceiling. Production self-play (`worker_daemon_production_runner`),
+`iterate`'s arenas (NN seats batch 32, heuristic seat batch 1) and
+this ladder (`resolve_agent` hardcoded 32) all carried it; NN-vs-NN
+arenas were fair, which is why cycle gating never exposed it. All
+earlier "vs heuristic" rows in this file are biased low by roughly
+5-8 points; a batch-1 re-ladder of v15/v18/v25 is in progress.
+
+**Batch-1 re-ladder of the lineage and the depth sweep (same day):**
+
+| agent | nodes | vs heuristic (batch 1) |
+|---|---:|---|
+| v15+b1 | 100 | 102-98 (51.0 %) |
+| v18+b1 | 100 | 98-101 (49.2 %) |
+| v22+b1 | 100 | 104-96 (52.0 %) |
+| v25+b1 | 100 | 95-104 (47.7 %) |
+| heuristic+b32 | 200 | 83-117 (41.5 %) |
+| v22 (b32) | 200 | 101-98 (50.8 %) |
+| v22+b1 | 200 | 106-93 (53.3 %) |
+| heuristic+b32 | 400 | 93-106 (46.7 %) |
+
+Reading: at equal search every version since v15 sits at parity with
+the heuristic (48-52 %, inside the 200-game CI) -- the plateau is real
+but it is at 50 %, not 36-48 %, and the 12-point v15->v25 "decay" the
+batch-32 ladders showed shrinks to ~4. The handicap is ~8.5 points at
+the self-play depth (nodes 200) and ~3 at 400, and batch 1 costs ~3 %
+wall under the 16-worker production shape, so the production default
+is now batch 1 (`mtg_bot.search.leaf_batch`;
+`docs/BENCHMARKING_FINDINGS.md` §6c). The self-play data of every
+cycle so far was generated by the handicapped searcher.
+
+### 2026-10-04 -- the value calibration, actually applied in play (nodes 100 / samples 2, batch 1, 300 games per pair)
+
+**Every earlier row in this file ran the NN uncalibrated.** The post-hoc
+value calibration (`metadata.value_calibration`, `tanh(logit / T + b)`)
+was only applied by `NNEvaluator.from_metadata`; `NNPimcConfig.build` --
+the builder behind every ladder seat, worker self-play / arena game and
+iterate's local arenas -- never passed it (nor `value_head_input`, which
+is `trunk` on every s2 version, so that half was a no-op). Fixed on
+`feature/nnpimc-value-calibration` (merged to main together with
+`feature/leaf-batch-1` on 2026-10-04): all paths share one resolver, and
+the label modifier `<version>+nocal` reproduces the old evaluator, i.e.
+**`vN+nocal` today == `vN` in every table above.** For v15-v26 the fit
+*sharpens* the root-trained head (T 0.49-0.71, mean |value| ~0.21 ->
+~0.34); for v8-v14 it *shrank* an outcome-trained head (T 10.7-17.5).
+
+`ladder_runs/s2_calibration_b1/`: EoE deck pool, seed 0 (every pair plays
+the same 300 seat-alternated deal/seed pairs), per-game timeout 900 s
+(1-2 timeouts per pair, dropped), all seats leaf batch 1, ladder search
+heuristics as in every earlier ladder (`heuristics=None`). Code
+`2a81ea1b` = the leaf-batch-1 stack + main@`66888991` + this fix (Python
+engine; pre-roto rules -- no instant-speed activations, which main
+gained at `46efc8b9`).
+
+| agent | T | vs heuristic (W-L) | score [95 % Wilson CI] |
+|---|---:|---|---|
+| v22+b1 | 0.525 | 161-137 | **54.0 %** [48.4, 59.6] |
+| v22+b1+nocal | (1) | 155-144 | 51.8 % [46.2, 57.4] |
+| v18+b1 | 0.528 | 157-142 | **52.5 %** [46.9, 58.1] |
+| v18+b1+nocal | (1) | 149-149 | 50.0 % [44.4, 55.6] |
+
+Calibrated minus uncalibrated (Newcombe 95 % CI, treating the arms as
+independent -- conservative, they share deals): v22 **+2.2 pts** [-5.8,
++10.1], v18 **+2.5** [-5.5, +10.5], pooled 318/597 vs 304/597 = **+2.3**
+[-3.3, +8.0]. The `+nocal` arms reproduce the 2026-10-01 batch-1
+ladder (`feature/leaf-batch-1`'s section of this file: v22+b1 52.0 %,
+v18+b1 49.2 % at 200 games on the same seeds).
+
+Reading: the calibration is not a hidden multi-point lever. Both
+versions move the same direction by ~2 points, which is plausible
+(sharper leaf values let real differences outweigh the PUCT prior) but
+inside the noise of 600 games; the honest summary is "small positive or
+zero, not negative". It is still the right default: the held-out gate
+grades the calibrated head, so play now runs the evaluator that was
+graded. The bigger consequence is for data, not this ladder: every
+NN-driven self-play shard so far (v8-v10 in cycles 7-10; v15/v18/v20-v24
+in cycles 11-18) was searched with uncalibrated leaves, including the
+root values the root / blend:0.8 versions trained on. Cycles from now on
+(once the fix is merged and the cluster rolled) record root values from
+calibrated, ~1.6x larger leaf values; expect the next fits' temperatures
+to drift toward 1 (a hypothesis, not measured), and judge those cycles against the
+`+nocal`-equivalent history above with that scale change in mind.

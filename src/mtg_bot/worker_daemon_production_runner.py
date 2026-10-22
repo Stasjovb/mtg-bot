@@ -42,6 +42,8 @@ unchanged.
 
 from __future__ import annotations
 
+from mtg_bot.search.leaf_batch import SEARCH_LEAF_BATCH_SIZE
+
 import concurrent.futures
 import io
 import logging
@@ -166,7 +168,7 @@ def _build_nn_pimc_config(
         action_encoding_version=action_encoding_version,
         with_policy=with_policy,
         puct=with_policy,  # PUCT requires a policy head.
-        batch_size=32,
+        batch_size=SEARCH_LEAF_BATCH_SIZE,
         # ``device`` is threaded through verbatim from the daemon's
         # ``--nn-device`` flag (default ``None`` -> NNEvaluator's CPU
         # default, byte-identical to the pre-flag behavior). It is NOT

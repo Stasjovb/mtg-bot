@@ -308,6 +308,11 @@ def _build_env_injection(
     # The shell-side ${VAR:?...} reference in user-data.worker.warm.sh
     # will fail loud if this export is absent, so a missing storage_uri
     # never silently downgrades to the daemon's argparse default.
+    # Strip surrounding whitespace: the key usually comes from a file
+    # (`tr -d` in the s2 scripts, or a Windows editor), and a trailing
+    # CR made every `tailscale up` fail with "invalid key: unable to
+    # validate API key" on the 2026-09-27 validation fleet.
+    tailscale_authkey = (tailscale_authkey or "").strip()
     if not tailscale_authkey:
         raise FleetConfigError(
             f"{_TAILSCALE_AUTHKEY_ENV} must be exported in the launcher "
