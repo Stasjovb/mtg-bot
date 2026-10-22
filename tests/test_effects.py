@@ -892,15 +892,28 @@ def test_static_ability_describe_keywords_and_pt():
     assert ab3.describe().endswith("(no effect).")
 
 
-def test_static_unknown_scope_does_not_apply():
-    from mtg_bot.cards import SYNTHETIC_CREATURES
-    state = GameState()
-    state.players.append(Player(id=0))
-    src = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)
-    state.battlefield.append(src)
+def test_static_scope_is_a_closed_structure():
+    """``StaticAbility.scope`` is a structured ``StaticScope`` over the
+    closed ``ScopeKind`` vocabulary; an encoded string or unknown kind is
+    rejected at construction."""
+    import pytest
 
-    ab = StaticAbility(scope="bogus_scope")
-    assert ab.applies_to(src, src) is False
+    from mtg_bot.effects.base import ScopeKind
+
+    with pytest.raises(TypeError):
+        StaticAbility(scope="bogus_scope")
+    with pytest.raises(ValueError):
+        StaticScope("bogus_scope")
+    with pytest.raises(ValueError):
+        StaticScope(ScopeKind.SUBTYPE_YOU_CONTROL)  # needs a subtype
+    with pytest.raises(ValueError):
+        StaticScope(ScopeKind.SELF, other=True)
+    assert StaticScope.SLIVERS_YOU_CONTROL == StaticScope.subtype_you_control(
+        "Sliver", other=False,
+    )
+    assert StaticScope.subtype_you_control("Dwarf", other=True).describe() == (
+        "Other Dwarfs you control"
+    )
 
 
 def test_effective_power_folds_in_static_anthem_bonus():

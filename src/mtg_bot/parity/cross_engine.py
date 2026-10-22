@@ -117,6 +117,48 @@ def parity_smoke():
 # dropped at filter time exactly as before.
 
 
+# ---------------------------------------------------------------------------
+# StaticScope <-> legacy bridge key
+# ---------------------------------------------------------------------------
+#
+# ``StaticAbility.scope`` is a structured ``StaticScope``; the old crate's
+# anthem dicts (``CardDef.static_anthems``, ``cards.rs`` anthem parser)
+# carry the pre-2026-10 encoded strings ("self", "creatures_you_control",
+# "subtype_you_control:other:Dwarf", "card_type_you_control:Land", ...).
+
+
+def static_scope_bridge_key(scope) -> str:
+    """Legacy Rust-bridge string for a ``StaticScope``."""
+    from mtg_bot.effects.base import ScopeKind
+
+    if scope.kind is ScopeKind.SUBTYPE_YOU_CONTROL:
+        if scope.subtype == "Sliver" and not scope.other:
+            return "slivers_you_control"
+        return f"subtype_you_control:{'other' if scope.other else 'all'}:{scope.subtype}"
+    if scope.kind is ScopeKind.CARD_TYPE_YOU_CONTROL:
+        return f"card_type_you_control:{scope.card_type}"
+    return scope.kind.value
+
+
+def static_scope_from_bridge_key(key: str):
+    """Inverse of :func:`static_scope_bridge_key`; raises on an unknown key."""
+    from mtg_bot.effects.base import ScopeKind, StaticScope
+
+    if key == "slivers_you_control":
+        return StaticScope.SLIVERS_YOU_CONTROL
+    if key.startswith("subtype_you_control:"):
+        other, _, subtype = key[len("subtype_you_control:"):].partition(":")
+        if other not in ("other", "all") or not subtype:
+            raise ValueError(f"unknown static scope bridge key: {key!r}")
+        return StaticScope.subtype_you_control(subtype, other=other == "other")
+    if key.startswith("card_type_you_control:"):
+        return StaticScope.card_type_you_control(key[len("card_type_you_control:"):])
+    try:
+        return StaticScope(ScopeKind(key))
+    except ValueError:
+        raise ValueError(f"unknown static scope bridge key: {key!r}") from None
+
+
 def dynamic_pt_formula_bridge_key(formula) -> Optional[str]:
     """Legacy Rust-bridge key for ``formula`` (``None`` for no formula)."""
     if formula is None:
@@ -17725,7 +17767,7 @@ def _card_def_to_python_printing(card: "CardDef"):
             if power_bonus or toughness_bonus:
                 sa_list.append(
                     StaticAbility(
-                        scope=scope,
+                        scope=static_scope_from_bridge_key(scope),
                         condition=cond,
                         continuous_effect=ContinuousModifier(
                             layer=7,
@@ -17740,7 +17782,7 @@ def _card_def_to_python_printing(card: "CardDef"):
             for kw in granted_keywords:
                 sa_list.append(
                     StaticAbility(
-                        scope=scope,
+                        scope=static_scope_from_bridge_key(scope),
                         condition=cond,
                         continuous_effect=ContinuousModifier(
                             layer=6,
@@ -17764,11 +17806,11 @@ def _card_def_to_python_printing(card: "CardDef"):
     # (anthem-keyword statics first, then the uncounterable-grant
     # sentinel).
     if card.grants_creature_spells_uncounterable:
-        from mtg_bot.cards.base import StaticAbility
+        from mtg_bot.cards.base import StaticAbility, StaticScope
         static_abilities = (
             *static_abilities,
             StaticAbility(
-                scope="self",
+                scope=StaticScope.SELF,
                 grants_creature_spells_uncounterable=True,
                 continuous_effect=None,
             ),
@@ -17860,7 +17902,7 @@ def _card_def_to_python_printing(card: "CardDef"):
     # static so deterministic ordering is preserved (anthems →
     # uncounterable → self-bonuses → replacements).
     if card.static_replacements:
-        from mtg_bot.cards.base import StaticAbility
+        from mtg_bot.cards.base import StaticAbility, StaticScope
         from mtg_bot.effects.modifiers import (
             AddInstances,
             EventPattern,
@@ -17900,7 +17942,7 @@ def _card_def_to_python_printing(card: "CardDef"):
                 )
             rep_list.append(
                 StaticAbility(
-                    scope="self",
+                    scope=StaticScope.SELF,
                     replacement_effect=ReplacementEffect(
                         event_pattern=EventPattern(event=_Event(event)),
                         transform=transform,

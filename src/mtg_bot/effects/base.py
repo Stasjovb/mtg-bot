@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -787,41 +788,96 @@ class ActivatedAbility:
 
 
 
-class StaticScope:
-    """Scope of a static ability — which permanents it affects.
+class ScopeKind(StrEnum):
+    """Which permanents a ``StaticAbility`` affects (see ``StaticScope``)."""
 
-    Values are strings (not an Enum) to keep StaticAbility hashable and
-    frozen-friendly.
-    """
-
-    OTHER_CREATURES_YOU_CONTROL = "other_creatures_you_control"
+    # Only the source itself.
+    SELF = "self"
+    # Creatures the source's controller controls.
     CREATURES_YOU_CONTROL = "creatures_you_control"
+    # ... other than the source.
+    OTHER_CREATURES_YOU_CONTROL = "other_creatures_you_control"
+    # ... with a +1/+1 counter on them.
     CREATURES_YOU_CONTROL_WITH_COUNTER = "creatures_you_control_with_counter"
-    SELF = "self"  # only the source itself
-    # Other tapped legendary creatures you control — The Seriema's
-    # printed always-on static.
+    # Other tapped legendary creatures you control (The Seriema).
     OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL = (
         "other_tapped_legendary_creatures_you_control"
     )
-    # Slivers you control — Thrumming Hivepool.
-    SLIVERS_YOU_CONTROL = "slivers_you_control"
-    # "[Other ]<Subtype>s you control" — ``subtype_you_control(...)``
-    # builds ``"subtype_you_control:<other|all>:<Subtype>"``.
-    SUBTYPE_PREFIX = "subtype_you_control:"
-    # "<Card type>s you control have <keyword>." for a NONcreature card
-    # type ("Lands you control have indestructible." -- Nissa, Who
-    # Shakes the World's emblem): the only scope family that reaches
-    # noncreature permanents. ``card_type_you_control(...)`` builds
-    # ``"card_type_you_control:<Type>"``.
-    CARD_TYPE_PREFIX = "card_type_you_control:"
+    # "[Other ]<Subtype>s you control" (Magda's Dwarves, Slivers):
+    # creatures with ``StaticScope.subtype`` among their effective
+    # subtypes; ``StaticScope.other`` excludes the source.
+    SUBTYPE_YOU_CONTROL = "subtype_you_control"
+    # "<Card type>s you control" (``StaticScope.card_type``): the only
+    # kind that reaches noncreature permanents (Nissa, Who Shakes the
+    # World's emblem: "Lands you control have indestructible.").
+    CARD_TYPE_YOU_CONTROL = "card_type_you_control"
+
+
+@dataclass(frozen=True)
+class StaticScope:
+    """Scope of a static ability — which permanents it affects.
+
+    ``kind`` picks the family; ``subtype`` / ``other`` parameterize
+    ``SUBTYPE_YOU_CONTROL`` and ``card_type`` parameterizes
+    ``CARD_TYPE_YOU_CONTROL``. The common scopes are class constants
+    (``StaticScope.SELF``, ``StaticScope.CREATURES_YOU_CONTROL``, ...).
+    """
+
+    kind: ScopeKind
+    subtype: str = ""
+    other: bool = False
+    card_type: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", ScopeKind(self.kind))
+        if (self.kind is ScopeKind.SUBTYPE_YOU_CONTROL) != bool(self.subtype):
+            raise ValueError(f"subtype must be set exactly for SUBTYPE_YOU_CONTROL: {self!r}")
+        if (self.kind is ScopeKind.CARD_TYPE_YOU_CONTROL) != bool(self.card_type):
+            raise ValueError(f"card_type must be set exactly for CARD_TYPE_YOU_CONTROL: {self!r}")
+        if self.other and self.kind is not ScopeKind.SUBTYPE_YOU_CONTROL:
+            raise ValueError(f"other is only a SUBTYPE_YOU_CONTROL parameter: {self!r}")
 
     @staticmethod
-    def card_type_you_control(card_type: str) -> str:
-        return f"card_type_you_control:{card_type}"
+    def card_type_you_control(card_type: str) -> "StaticScope":
+        return StaticScope(ScopeKind.CARD_TYPE_YOU_CONTROL, card_type=card_type)
 
     @staticmethod
-    def subtype_you_control(subtype: str, *, other: bool) -> str:
-        return f"subtype_you_control:{'other' if other else 'all'}:{subtype}"
+    def subtype_you_control(subtype: str, *, other: bool) -> "StaticScope":
+        return StaticScope(ScopeKind.SUBTYPE_YOU_CONTROL, subtype=subtype, other=other)
+
+    def describe(self) -> str:
+        if self.kind is ScopeKind.SUBTYPE_YOU_CONTROL:
+            return f"{'Other ' if self.other else ''}{self.subtype}s you control"
+        if self.kind is ScopeKind.CARD_TYPE_YOU_CONTROL:
+            return f"{self.card_type}s you control"
+        return {
+            ScopeKind.SELF: "self",
+            ScopeKind.CREATURES_YOU_CONTROL: "Creatures you control",
+            ScopeKind.OTHER_CREATURES_YOU_CONTROL: "Other creatures you control",
+            ScopeKind.CREATURES_YOU_CONTROL_WITH_COUNTER: (
+                "Creatures you control with a +1/+1 counter on them"
+            ),
+            ScopeKind.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL: (
+                "Other tapped legendary creatures you control"
+            ),
+        }[self.kind]
+
+
+StaticScope.SELF = StaticScope(ScopeKind.SELF)
+StaticScope.CREATURES_YOU_CONTROL = StaticScope(ScopeKind.CREATURES_YOU_CONTROL)
+StaticScope.OTHER_CREATURES_YOU_CONTROL = StaticScope(
+    ScopeKind.OTHER_CREATURES_YOU_CONTROL,
+)
+StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER = StaticScope(
+    ScopeKind.CREATURES_YOU_CONTROL_WITH_COUNTER,
+)
+StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL = StaticScope(
+    ScopeKind.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL,
+)
+# Slivers you control — Thrumming Hivepool.
+StaticScope.SLIVERS_YOU_CONTROL = StaticScope.subtype_you_control(
+    "Sliver", other=False,
+)
 
 
 
@@ -837,7 +893,7 @@ class StaticAbility:
     don't apply.
     """
 
-    scope: str
+    scope: StaticScope
     granted_keywords: frozenset[str] = frozenset()
     power_bonus: int = 0
     toughness_bonus: int = 0
@@ -947,14 +1003,19 @@ class StaticAbility:
     # (``roto_turns.skips_draw_step``, consulted by ``turn.next_step``).
     skips_your_draw_step: bool = False
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.scope, StaticScope):
+            raise TypeError(f"StaticAbility.scope must be a StaticScope, got {self.scope!r}")
+
     def applies_to(self, source, target, state: "GameState | None" = None) -> bool:
         """True if this ability, on ``source``, currently buffs ``target``."""
         from mtg_bot.game import is_creature_now
 
+        kind = self.scope.kind
         # Creatures only (except the card-type scope, which can name a
         # noncreature type), under the source's controller.
         if not is_creature_now(target):
-            if not self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
+            if kind is not ScopeKind.CARD_TYPE_YOU_CONTROL:
                 return False
         if target.controller_id != source.controller_id:
             return False
@@ -979,54 +1040,45 @@ class StaticAbility:
                 state, source.controller_id, chosen_targets=None,
             ):
                 return False
-        if self.scope == StaticScope.SELF:
+        if kind is ScopeKind.SELF:
             return target.id == source.id
-        if self.scope == StaticScope.OTHER_CREATURES_YOU_CONTROL:
+        if kind is ScopeKind.OTHER_CREATURES_YOU_CONTROL:
             return target.id != source.id
-        if self.scope == StaticScope.CREATURES_YOU_CONTROL:
+        if kind is ScopeKind.CREATURES_YOU_CONTROL:
             return True
-        if self.scope == StaticScope.CREATURES_YOU_CONTROL_WITH_COUNTER:
+        if kind is ScopeKind.CREATURES_YOU_CONTROL_WITH_COUNTER:
             return target.plus_one_counters > 0
-        if self.scope == StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL:
+        if kind is ScopeKind.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL:
             return (
                 target.id != source.id
                 and target.tapped
                 and "Legendary" in target.printing.supertypes
             )
-        if self.scope.startswith(StaticScope.SUBTYPE_PREFIX):
-            # "[Other ]<Subtype>s you control ..." (Magda's Dwarf lord).
-            other, _, subtype = self.scope[len(StaticScope.SUBTYPE_PREFIX):].partition(":")
-            if other == "other" and target.id == source.id:
+        if kind is ScopeKind.SUBTYPE_YOU_CONTROL:
+            # "[Other ]<Subtype>s you control ..." (Magda's Dwarf lord,
+            # Sliver lords). Read effective_subtypes so a creature granted
+            # the subtype by a layer-4 effect (Conspiracy-style) is picked
+            # up; ``state`` is optional in this signature, and without it
+            # we fall back to the printing to keep the static probe usable
+            # in card-list contexts.
+            if self.scope.other and target.id == source.id:
                 return False
             if state is not None:
                 from mtg_bot.game import effective_subtypes
-                return subtype in effective_subtypes(state, target)
-            return subtype in target.printing.subtypes
-        if self.scope.startswith(StaticScope.CARD_TYPE_PREFIX):
-            card_type = self.scope[len(StaticScope.CARD_TYPE_PREFIX):]
+                return self.scope.subtype in effective_subtypes(state, target)
+            return self.scope.subtype in target.printing.subtypes
+        if kind is ScopeKind.CARD_TYPE_YOU_CONTROL:
+            card_type = self.scope.card_type
             if card_type == "Creature":
                 return is_creature_now(target)
             if state is not None:
                 from mtg_bot.game import has_card_type
                 return has_card_type(state, target, card_type)
             return card_type in target.printing.card_types
-        if self.scope == StaticScope.SLIVERS_YOU_CONTROL:
-            # Read effective_subtypes so a creature granted "Sliver"
-            # by a layer-4 add_subtype effect (Conspiracy-style) is
-            # picked up by Sliver lord anthems. ``state`` is optional
-            # in this signature; without it we fall back to printing
-            # to keep the static probe usable in card-list contexts.
-            if state is not None:
-                from mtg_bot.game import effective_subtypes
-                return "Sliver" in effective_subtypes(state, target)
-            return "Sliver" in target.printing.subtypes
-        return False
+        raise AssertionError(f"unhandled scope kind {kind!r}")  # pragma: no cover
 
     def describe(self) -> str:
-        who = {
-            StaticScope.OTHER_CREATURES_YOU_CONTROL: "Other creatures you control",
-            StaticScope.CREATURES_YOU_CONTROL: "Creatures you control",
-        }.get(self.scope, self.scope)
+        who = self.scope.describe()
         parts: list[str] = []
         if self.power_bonus or self.toughness_bonus:
             sign_p = "+" if self.power_bonus >= 0 else ""

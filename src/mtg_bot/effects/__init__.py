@@ -18,6 +18,7 @@ from mtg_bot.effects.base import (
     ActivationCost,
     Effect,
     StaticAbility,
+    ScopeKind,
     StaticScope,
     Target,
     TriggeredAbility,

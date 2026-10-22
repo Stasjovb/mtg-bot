@@ -231,14 +231,15 @@ _STATIC_CONDITION_KWARGS: dict[str, dict[str, object]] = {
 # share the same ``subject`` and ``turn_rider`` groups so the shared
 # parse function reads either match by name.
 
-_ANTHEM_SUBJECT_SCOPES: dict[str, str] = {
+_ANTHEM_SUBJECT_SCOPES: dict[str, StaticScope] = {
     "creatures you control": StaticScope.CREATURES_YOU_CONTROL,
     "other creatures you control": StaticScope.OTHER_CREATURES_YOU_CONTROL,
     # Thrumming Hivepool — ``Slivers you control have double strike and
-    # haste.`` The engine's ``StaticScope.SLIVERS_YOU_CONTROL``
-    # ``applies_to`` walk admits only permanents whose effective subtypes
-    # include ``"Sliver"`` (checked via ``effective_subtypes``), so the
-    # anthem correctly grants keywords through layer-4 subtype grants.
+    # haste.`` ``StaticScope.SLIVERS_YOU_CONTROL`` (a
+    # ``SUBTYPE_YOU_CONTROL`` scope for "Sliver") admits only permanents
+    # whose effective subtypes include ``"Sliver"`` (checked via
+    # ``effective_subtypes``), so the anthem correctly grants keywords
+    # through layer-4 subtype grants.
     "slivers you control": StaticScope.SLIVERS_YOU_CONTROL,
     # Lecture Hall (DSK Room half) prints ``Other permanents you control
     # have hexproof.`` — strictly broader than "Other creatures" (also

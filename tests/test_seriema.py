@@ -139,6 +139,8 @@ def test_seriema_doesnt_grant_to_opponents_legendaries():
 
 
 def test_static_scope_constant_exists():
-    assert StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL == (
-        "other_tapped_legendary_creatures_you_control"
+    from mtg_bot.effects.base import ScopeKind
+
+    assert StaticScope.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL.kind is (
+        ScopeKind.OTHER_TAPPED_LEGENDARY_CREATURES_YOU_CONTROL
     )

@@ -59,6 +59,7 @@ from typing import Optional
 
 from mtg_bot.parity.cross_engine import (
     dynamic_pt_formula_bridge_key,
+    static_scope_bridge_key,
     CardDef,
     DeckSpec,
     build_matched_states,
@@ -12618,7 +12619,7 @@ def _static_ability_is_simple_uncounterable_grant(ability) -> bool:
     """
     from mtg_bot.cards.base import StaticScope
 
-    if ability.scope not in (StaticScope.SELF, "self"):
+    if ability.scope != StaticScope.SELF:
         return False
     if not ability.grants_creature_spells_uncounterable:
         return False
@@ -13127,7 +13128,7 @@ def _static_ability_to_self_conditional_bonus(ability):
     )
     from mtg_bot.effects.object_predicates import IsArtifact
 
-    if ability.scope not in (StaticScope.SELF, "self"):
+    if ability.scope != StaticScope.SELF:
         return None
     if ability.power_bonus or ability.toughness_bonus:
         return None
@@ -14362,7 +14363,7 @@ def _printing_to_card_def(printing) -> CardDef:
             # ``cross_engine._static_anthem_condition_from_tag``.
             cond_tag = "during_your_turn"
             cond_args: tuple[int, ...] = ()
-            scope = ability.scope
+            scope = static_scope_bridge_key(ability.scope)
             payload = ability.continuous_effect.payload
             key = (scope, cond_tag, cond_args)
             if key not in per_entry:
@@ -14431,7 +14432,7 @@ def _printing_to_card_def(printing) -> CardDef:
         per_scope: dict[str, list[str]] = defaultdict(list)
         for ability in printing.static_abilities:
             kw = ability.continuous_effect.payload.keyword
-            per_scope[ability.scope].append(kw)
+            per_scope[static_scope_bridge_key(ability.scope)].append(kw)
         static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
             (scope, tuple(sorted(per_scope[scope])))
             # Sort by scope name for deterministic bridge output.

@@ -119,7 +119,9 @@ def test_warp_guard_declines_static_ability():
     Vocalist is the real-pool analogue, but THIS pins the guard
     directly on a synthetic so it stays meaningful if the pool
     shifts."""
-    sa = StaticAbility(scope="self", power_bonus=1)
+    from mtg_bot.effects.base import StaticScope
+
+    sa = StaticAbility(scope=StaticScope.SELF, power_bonus=1)
     p = _warp_creature(static_abilities=(sa,))
     assert _printing_is_bridge_pure_warp_creature(p) is False
 

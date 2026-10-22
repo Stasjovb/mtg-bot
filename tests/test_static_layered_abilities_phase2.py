@@ -131,11 +131,11 @@ def test_admit_predicate_rejects_other_static_shape():
 def test_static_ability_predicate_rejects_continuous_effect():
     """A static-ability with a continuous_effect set is not the
     Phase-2 uncounterable-grant sentinel shape."""
-    from mtg_bot.cards.base import StaticAbility
+    from mtg_bot.cards.base import StaticAbility, StaticScope
     from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
 
     ability = StaticAbility(
-        scope="self",
+        scope=StaticScope.SELF,
         grants_creature_spells_uncounterable=True,
         continuous_effect=ContinuousModifier(
             layer=6, payload=GrantKeyword("haste"),
@@ -147,11 +147,11 @@ def test_static_ability_predicate_rejects_continuous_effect():
 def test_static_ability_predicate_rejects_condition():
     """A conditional uncounterable grant is honest-stopped to a later
     slice (no Condition substrate this slice)."""
-    from mtg_bot.cards.base import StaticAbility
+    from mtg_bot.cards.base import StaticAbility, StaticScope
     from mtg_bot.effects.conditions import DuringYourTurn
 
     ability = StaticAbility(
-        scope="self",
+        scope=StaticScope.SELF,
         grants_creature_spells_uncounterable=True,
         condition=DuringYourTurn(),
     )
