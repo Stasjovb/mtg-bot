@@ -989,15 +989,16 @@ class CreateEmblemWithAbilities(Effect):
     ``static_abilities`` (anthems -- "Ninjas you control get +1/+1",
     "Lands you control have indestructible") are read by the layered
     static walks, which scan emblems as static sources alongside the
-    battlefield (cube glue bucket). ``printing_fields`` stamps extra
-    printing-level grants onto the emblem (``(field, value)`` pairs,
-    e.g. ``grants_retrace_to`` for "Instant and sorcery cards in your
-    graveyard have retrace.")."""
+    battlefield (cube glue bucket). ``grants_retrace_to`` is the
+    emblem's printing-level retrace grant (a ``CardFilter`` over its
+    controller's graveyard cards: Wrenn and Six's "Instant and sorcery
+    cards in your graveyard have retrace."), stamped onto the emblem's
+    ``CardPrinting.grants_retrace_to``."""
 
     name: str = "emblem"
     triggered_abilities: tuple = ()
     static_abilities: tuple = ()
-    printing_fields: tuple = ()
+    grants_retrace_to: "object | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -1012,8 +1013,8 @@ class CreateEmblemWithAbilities(Effect):
             name=self.name, triggered_abilities=self.triggered_abilities,
             static_abilities=self.static_abilities,
         )
-        if self.printing_fields:
-            printing = _replace(printing, **dict(self.printing_fields))
+        if self.grants_retrace_to is not None:
+            printing = _replace(printing, grants_retrace_to=self.grants_retrace_to)
         emblem = state.new_object(
             printing, owner_id=controller_id, zone=Zone.COMMAND,
         )

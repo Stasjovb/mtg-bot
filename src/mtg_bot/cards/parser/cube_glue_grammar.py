@@ -218,9 +218,7 @@ def parse_glue_emblem(body: str):
         f = parse_card_descriptor(f"an {desc} card")
         if f is None or not f.any_types:
             return None
-        return CreateEmblemWithAbilities(
-            name=name, printing_fields=(("grants_retrace_to", f),),
-        )
+        return CreateEmblemWithAbilities(name=name, grants_retrace_to=f)
     m = _CARD_TYPE_KEYWORD_ANTHEM_RE.match(body)
     if m is not None:
         from mtg_bot.cards.parser.effects import _parse_keyword_grant_body
