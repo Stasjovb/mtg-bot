@@ -231,7 +231,7 @@ class ThenTargetBecomesCreatureIfNot(Effect):
     registry entries sourced by the permanent itself, so they last as
     long as it stays on the battlefield)."""
 
-    inner: Effect = None  # type: ignore[assignment]
+    inner: "Effect | None" = None
     power: int = 0
     toughness: int = 0
     subtype: str = ""

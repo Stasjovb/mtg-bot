@@ -63,7 +63,7 @@ class AddFormulaManaInAnyCombination(AddManaInAnyCombination):
     An ``AddManaInAnyCombination``, so on an activated ability it is a
     mana ability (CR 605)."""
 
-    formula: Formula = None
+    formula: "Formula | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -103,7 +103,7 @@ class DestroyEachThenAddManaPerDestroyed(Effect):
     regenerated one wasn't destroyed), each of a color from ``options``
     chosen with ``Agent.choose_mana_color``."""
 
-    destroy: Effect = None
+    destroy: "Effect | None" = None
     options: tuple = ()
 
     def resolve(
@@ -151,7 +151,7 @@ class ReturnPermanentYouControlToHand(Effect):
     ability resolves (``choose_sacrifice``, the engine's "which of my
     permanents" hook); the source itself may be chosen."""
 
-    permanent_filter: ObjectPredicate = None
+    permanent_filter: "ObjectPredicate | None" = None
     label: str = "permanent"
 
     def resolve(
@@ -321,7 +321,7 @@ class GetXEnergyPayAnyDestroyMVAtMostPaid(Effect):
     this way." (Wrath of the Skies). X is the spell's X; the amount paid
     (any of ALL the controller's energy) is ``choose_x``."""
 
-    destroy: Effect = None
+    destroy: "Effect | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -495,7 +495,7 @@ class ConvergeDrawDamageGainLife(Effect):
     the player (slot 0) and any target (slot 1, from ``damage``'s
     legal targets)."""
 
-    damage: Effect = None
+    damage: "Effect | None" = None
 
     def requires_target(self) -> bool:
         return True
@@ -2317,7 +2317,7 @@ class SacrificeSourceThen(Effect):
     sacrificed if its controller still controls it on the battlefield;
     only then does ``then_effect`` happen (Dark Depths' Marit Lage)."""
 
-    then_effect: Effect = None
+    then_effect: "Effect | None" = None
 
     def resolve(
         self, state: "GameState", controller_id: int,

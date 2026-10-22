@@ -52,8 +52,10 @@ class ObjectPredicate(ABC):
 
 @dataclass(frozen=True)
 class ObjectAnd(ObjectPredicate):
-    left: ObjectPredicate
-    right: ObjectPredicate
+    # Either side may be a ``target_filter.OneOf`` ("creature or
+    # planeswalker" ANDed with a controller filter).
+    left: "ObjectPredicate | OneOf"
+    right: "ObjectPredicate | OneOf"
 
     def test(self, obj, state):
         return self.left.test(obj, state) and self.right.test(obj, state)

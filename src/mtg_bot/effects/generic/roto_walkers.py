@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from mtg_bot.effects.base import Effect, Target
+from mtg_bot.effects.conditions import Condition
 from mtg_bot.effects.generic.cube_creatures_rmc import ExilePlayPermission
 
 if TYPE_CHECKING:
@@ -1402,7 +1403,7 @@ class SearchUpToNDifferentNamesOntoBattlefield(Effect):
 
 
 @dataclass(frozen=True)
-class PerCardTypeInYourGraveyard:
+class PerCardTypeInYourGraveyard(Condition):
     """Variable-amount condition: the number of card types among cards
     in the viewer's graveyard (the shared delirium count,
     ``effects.card_types``). ``matches`` iff at least one; ``multiplier``

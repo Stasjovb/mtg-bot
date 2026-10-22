@@ -478,7 +478,9 @@ class SearchLibrary(Effect):
     "a card" finds one whenever the library is non-empty.
     """
 
-    card_filter: CardFilter = ANY_CARD
+    # A ``CardFilter`` or the same-protocol ``cube_creatures_rmc.
+    # CardTypeOrSubtypeFilter`` ("artifact or Dragon card").
+    card_filter: "CardFilter | CardTypeOrSubtypeFilter" = ANY_CARD
     destination: str = "hand"
     reveal: bool = False
     # "put that card onto the battlefield tapped" (Golos, Tireless

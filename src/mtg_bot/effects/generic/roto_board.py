@@ -1798,7 +1798,7 @@ class ExileThenSourceGainsTrigger(Effect):
     becomes (``roto_board_statics.GRANT_MARK``); a spell no longer on
     the stack gains nothing (CR 400.7)."""
 
-    inner: Effect = None  # type: ignore[assignment]
+    inner: "Effect | None" = None
     ability: object = None
 
     @property

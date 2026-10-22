@@ -839,8 +839,8 @@ class ReflexiveWhenYouDo(Effect):
     ("... that player controls" after "deals combat damage to a
     player")."""
 
-    cost: Effect = None  # type: ignore[assignment]
-    effect: Effect = None  # type: ignore[assignment]
+    cost: "Effect | None" = None
+    effect: "Effect | None" = None
     event_player_controls: bool = False
 
     def resolve(self, state, controller_id, targets=()):
