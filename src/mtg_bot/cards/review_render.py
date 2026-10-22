@@ -200,6 +200,10 @@ def _is_scalar_container(v: Any) -> bool:
 
 
 def format_scalar(v: Any) -> str:
+    if isinstance(v, enum.StrEnum):
+        # Closed string vocabularies (``effects.vocab``, ``ScopeKind``):
+        # show the value the card data spells, as for a plain string.
+        return v.value
     if isinstance(v, enum.Enum):
         return str(v.name).lower().replace("_", " ")
     if isinstance(v, bool):
