@@ -60,9 +60,10 @@ to a ``Sequence`` of generic primitives):
   cards and lose that much life." That creature's controller may
   have this artifact deal 1 damage to it. Activate only as a sorcery.``
   decomposes into ``Sequence(GrantTriggeredAbilityUEOT(ability=
-  TriggeredAbility(trigger="this_dealt_damage", effect=DrawCardsAnd
-  LoseLifeEqualToResolvingDamage())), MayHaveSourceDealDamageToTarget
-  (amount=1))`` via the multi-sentence literal recognizer in
+  TriggeredAbility(event=Event.DEALT_DAMAGE, predicate=IsSelf("obj"),
+  effect=DrawCardsAndLoseLifeEqualToResolvingDamage())),
+  MayHaveSourceDealDamageToTarget(amount=1))`` via the multi-sentence
+  literal recognizer in
   ``effects.py``. The trailing ``Activate only as a sorcery.`` rider
   flips ``sorcery_speed=True`` via the existing inline-rider strip in
   ``activated.py``.
@@ -252,8 +253,9 @@ _INFINITY_PREFIX = "∞ — "
 #   through the inline-sorcery-rider strip in ``activated.py`` plus a
 #   multi-sentence literal recognizer in ``effects.py`` mapping to
 #   ``Sequence(GrantTriggeredAbilityUEOT(ability=TriggeredAbility(
-#   trigger="this_dealt_damage", effect=DrawCardsAndLoseLifeEqualTo
-#   ResolvingDamage())), MayHaveSourceDealDamageToTarget(amount=1))``.
+#   event=Event.DEALT_DAMAGE, predicate=IsSelf("obj"), effect=
+#   DrawCardsAndLoseLifeEqualToResolvingDamage())),
+#   MayHaveSourceDealDamageToTarget(amount=1))``.
 # * Haunted Screen — ``{7}: Put seven +1/+1 counters on this artifact.
 #   It becomes a 0/0 Spirit creature in addition to its other types.
 #   Activate only once.`` claims through the new inline-activate-only-

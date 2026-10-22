@@ -11395,9 +11395,11 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DrawCardsAndLoseLifeEqualToResolvingDamage,
         )
         from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.predicates import Event, IsSelf
         return GrantTriggeredAbilityUEOT(
             ability=TriggeredAbility(
-                trigger="this_dealt_damage",
+                event=Event.DEALT_DAMAGE,
+                predicate=IsSelf("obj"),
                 effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
             ),
         )

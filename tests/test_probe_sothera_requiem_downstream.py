@@ -197,7 +197,7 @@ def test_sothera_bridge_round_trip_sacrifice_self_preserving_exile_link():
 def test_requiem_bridge_round_trip_grant_triggered_ability_ueot():
     """Unit-variant bridge round-trip: the Rust kind reconstructs
     Python's ``GrantTriggeredAbilityUEOT(ability=TriggeredAbility(
-    trigger='this_dealt_damage',
+    event=Event.DEALT_DAMAGE, predicate=IsSelf("obj"),
     effect=DrawCardsAndLoseLifeEqualToResolvingDamage()))`` from the
     fixed Requiem shape."""
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
@@ -213,7 +213,10 @@ def test_requiem_bridge_round_trip_grant_triggered_ability_ueot():
     )
     assert isinstance(bridged, GrantTriggeredAbilityUEOT)
     assert bridged.ability is not None
-    assert bridged.ability.trigger == "this_dealt_damage"
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    assert bridged.ability.event is Event.DEALT_DAMAGE
+    assert bridged.ability.predicate == IsSelf("obj")
     assert isinstance(
         bridged.ability.effect, DrawCardsAndLoseLifeEqualToResolvingDamage
     )

@@ -135,7 +135,7 @@ def test_split_card(printings):
 def test_saga_chapters_and_tokens(printings):
     s, text = _summary(printings, "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki")
     for n in (1, 2, 3):
-        assert f"trigger: chapter_{n}" in text
+        assert f"Chapter reached (n: {n})" in text
     assert "chapter count: 3" in text
     tokens = s.section("Tokens created")
     assert tokens is not None

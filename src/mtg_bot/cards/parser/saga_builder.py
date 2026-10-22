@@ -3,8 +3,9 @@
 A Saga's oracle text is its lore-counter reminder (stripped as reminder
 text) followed by chapter lines ``<numerals> — <effect>``. Each chapter
 numeral becomes a chapter ability: a ``TriggeredAbility`` with
-``trigger == "chapter_<N>"`` whose effect is the body parsed through the
-unified spell-effect grammar. ``chapter_count`` is the final chapter
+``event == Event.SAGA_CHAPTER`` and ``predicate == ChapterReached(N)``
+whose effect is the body parsed through the unified spell-effect
+grammar. ``chapter_count`` is the final chapter
 number. The lore counters, chapter triggers and the final-chapter
 sacrifice are engine mechanics (``mtg_bot.layouts``, ``turn``).
 
@@ -27,8 +28,13 @@ _CHAPTER_LINE = re.compile(
 )
 
 
-def chapter_trigger_key(n: int) -> str:
-    return f"chapter_{n}"
+def chapter_ability(n: int, effect) -> TriggeredAbility:
+    """Chapter ``n``'s triggered ability (CR 714.2b)."""
+    from mtg_bot.effects.predicates import ChapterReached, Event
+
+    return TriggeredAbility(
+        event=Event.SAGA_CHAPTER, predicate=ChapterReached(n), effect=effect,
+    )
 
 
 def _build_saga_printing(card: dict) -> CardPrinting | None:
@@ -53,12 +59,10 @@ def _build_saga_printing(card: dict) -> CardPrinting | None:
             n = _ROMAN.get(numeral)
             if n is None:
                 return None
-            chapters.append(
-                TriggeredAbility(trigger=chapter_trigger_key(n), effect=effect)
-            )
+            chapters.append(chapter_ability(n, effect))
     if not chapters:
         return None
-    chapter_count = max(int(t.trigger.split("_")[1]) for t in chapters)
+    chapter_count = max(t.predicate.n for t in chapters)
     extra: dict = {}
     if "Land" in card_types:
         # A Saga land (Urza's Saga) has no mana ability of its own; it

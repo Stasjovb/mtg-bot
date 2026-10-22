@@ -5,7 +5,7 @@ DealtDamageEffect`` engine classes were retired when the activation
 decomposed into a ``Sequence`` of two generic primitives:
 
   1. ``GrantTriggeredAbilityUEOT(ability=TriggeredAbility(trigger=
-     "this_dealt_damage", effect=DrawCardsAndLoseLifeEqualToResolving
+     Event.DEALT_DAMAGE + IsSelf("obj"), effect=DrawCardsAndLoseLifeEqualToResolving
      Damage()))`` — grants the quoted "Whenever this creature is dealt
      damage, you draw that many cards and lose that much life." trigger
      UEOT to the chosen creature.
@@ -19,6 +19,7 @@ accept-the-ping and decline-the-ping branches and confirm the granted
 trigger persists on the target for the rest of the turn.
 """
 
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
 from mtg_bot.cards.parser.source import OracleParserCardSource
@@ -69,7 +70,8 @@ def _activation_effect():
     return Sequence(effects=(
         GrantTriggeredAbilityUEOT(
             ability=TriggeredAbility(
-                trigger="this_dealt_damage",
+                event=Event.DEALT_DAMAGE,
+                predicate=IsSelf("obj"),
                 effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
             ),
         ),
@@ -99,7 +101,8 @@ def test_accepted_ping_grants_trigger_pings_and_fires_rider():
         if ab not in enemy_bear.printing.triggered_abilities
     ]
     assert len(granted) == 1
-    assert granted[0].trigger == "this_dealt_damage"
+    assert granted[0].event is Event.DEALT_DAMAGE
+    assert granted[0].predicate == IsSelf("obj")
 
 
 def test_declined_ping_grants_trigger_but_no_damage():
@@ -228,7 +231,8 @@ def test_requiem_printing_decomposes_to_sequence():
     grant, ping = eff.effects
     assert isinstance(grant, GrantTriggeredAbilityUEOT)
     assert grant.ability is not None
-    assert grant.ability.trigger == "this_dealt_damage"
+    assert grant.ability.event is Event.DEALT_DAMAGE
+    assert grant.ability.predicate == IsSelf("obj")
     assert isinstance(
         grant.ability.effect, DrawCardsAndLoseLifeEqualToResolvingDamage
     )

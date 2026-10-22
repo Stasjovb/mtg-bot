@@ -1,7 +1,7 @@
 """Cube layouts bucket: Sagas (CR 714) -- Urza's Saga and Fable of the
 Mirror-Breaker // Reflection of Kiki-Jiki.
 
-Parse shape (chapter abilities as ``chapter_<N>`` triggers) and engine
+Parse shape (chapter abilities as ``Event.SAGA_CHAPTER`` triggers) and engine
 behavior: a lore counter on entry and after the draw step, chapter
 triggers, the final-chapter sacrifice held while a chapter ability is on
 the stack, granted abilities, Fable's return transformed.

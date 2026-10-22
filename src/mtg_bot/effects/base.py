@@ -1232,6 +1232,14 @@ class TriggeredAbility:
                     prefix = event_prefix_map.get(
                         self.event.value, self.event.value,
                     )
+            elif self.event.value == "saga_chapter" and hasattr(
+                self.predicate, "n",
+            ):
+                prefix = f"Chapter {self.predicate.n}"
+            elif self.event.value == "class_level_gained" and hasattr(
+                self.predicate, "n",
+            ):
+                prefix = f"When this Class becomes level {self.predicate.n}"
             else:
                 prefix = event_prefix_map.get(
                     self.event.value, self.event.value,

@@ -18,7 +18,8 @@ in the engine, so a face change is a printing swap:
   stack for anywhere but the battlefield is turned back
   (``actions.move_spell_off_stack``).
 * **Sagas** (CR 714): chapter abilities are triggered abilities with
-  ``trigger == "chapter_<N>"``; :func:`add_lore_counters` fires every
+  ``event == Event.SAGA_CHAPTER`` and ``predicate == ChapterReached(N)``;
+  :func:`add_lore_counters` fires every
   chapter whose number the lore count reaches, and the state-based
   sacrifice waits while a chapter ability of the Saga is on the stack.
 * **Classes** (CR 716): each level is its own printing
@@ -250,11 +251,14 @@ _ROMAN = ("", "I", "II", "III", "IV", "V", "VI")
 
 
 def chapter_number(ability) -> int:
-    """The chapter number of a Saga chapter ability (``trigger ==
-    "chapter_<N>"``), else 0."""
-    trigger = getattr(ability, "trigger", "") or ""
-    if trigger.startswith("chapter_"):
-        return int(trigger[len("chapter_"):])
+    """The chapter number of a Saga chapter ability (``event ==
+    Event.SAGA_CHAPTER``, ``predicate == ChapterReached(N)``), else 0."""
+    from mtg_bot.effects.predicates import ChapterReached, Event
+
+    if getattr(ability, "event", None) is Event.SAGA_CHAPTER and isinstance(
+        ability.predicate, ChapterReached,
+    ):
+        return ability.predicate.n
     return 0
 
 
@@ -333,9 +337,11 @@ def gain_class_level(state: "GameState", obj: "GameObject", level: int) -> bool:
         return False
     turn_to_back_face(obj, base.class_levels[idx])
     state.log.append(f"{obj.printing.name} becomes level {level}")
-    key = f"class_level_{level}"
+    from mtg_bot.effects.predicates import Event
+
+    subjects = {"obj": obj, "level": level}
     for i, ab in enumerate(obj.printing.triggered_abilities):
-        if getattr(ab, "trigger", "") == key:
+        if ab.matches_event(Event.CLASS_LEVEL_GAINED, subjects, obj, state):
             push_triggered_ability(
                 state, source=obj, ability=ab, ability_index=i,
                 controller_id=obj.controller_id, label=f"level {level}",

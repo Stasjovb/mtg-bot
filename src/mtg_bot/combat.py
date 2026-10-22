@@ -787,8 +787,9 @@ def _fire_enchanted_dealt_damage_triggers(
     state: GameState, obj: "GameObject", amount: int,
 ) -> None:
     """Fire "whenever enchanted creature is dealt damage" triggers on
-    auras attached to ``obj``, plus any UEOT-granted
-    ``this_dealt_damage`` triggers sitting on layer-6
+    auras attached to ``obj``, plus any UEOT-granted "whenever this
+    creature is dealt damage" triggers (``Event.DEALT_DAMAGE`` +
+    ``IsSelf("obj")``) sitting on layer-6
     ``grant_triggered_ability`` registry entries against ``obj``
     (Requiem Monolith).
 
@@ -805,7 +806,7 @@ def _fire_enchanted_dealt_damage_triggers(
     ``dispatch_event(state, Event.DEALT_DAMAGE, obj=obj, …)`` call
     below: ``IsHost()`` on an attached aura matches when
     ``aura.attached_to == obj.id``. The bespoke granted-ability walk
-    for ``this_dealt_damage`` (Requiem Monolith) stays — it lives on
+    for the granted dealt-damage trigger (Requiem Monolith) stays — it lives on
     layer-6 registry entries rather than ``printing.triggered_abilities``,
     so the dispatcher's battlefield-walk doesn't see it.
     """
@@ -839,7 +840,9 @@ def _fire_enchanted_dealt_damage_triggers(
         if ab not in obj.printing.triggered_abilities
     ]
     for ability in granted_only:
-        if ability.trigger != "this_dealt_damage":
+        # "Whenever this creature is dealt damage" (``Event.DEALT_DAMAGE``
+        # with ``IsSelf("obj")``).
+        if not ability.matches_event(Event.DEALT_DAMAGE, {"obj": obj}, obj, state):
             continue
         state.log.append(
             f"{obj.printing.name}'s granted dealt-damage trigger fires"

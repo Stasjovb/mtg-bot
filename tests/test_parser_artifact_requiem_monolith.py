@@ -10,7 +10,7 @@ Requiem Monolith prints:
 The body decomposes into a ``Sequence`` of two generic primitives:
 
   1. ``GrantTriggeredAbilityUEOT(ability=TriggeredAbility(trigger=
-     "this_dealt_damage", effect=DrawCardsAndLoseLifeEqualToResolving
+     Event.DEALT_DAMAGE + IsSelf("obj"), effect=DrawCardsAndLoseLifeEqualToResolving
      Damage()))`` — the quoted "Whenever this creature is dealt
      damage, you draw that many cards and lose that much life."
      trigger granted UEOT to the target creature.
@@ -25,6 +25,8 @@ strip in ``activated.py``.
 """
 
 from __future__ import annotations
+
+from mtg_bot.effects.predicates import Event, IsSelf
 
 from mtg_bot.cards.base import (
     ActivatedAbility,
@@ -67,7 +69,8 @@ def test_build_artifact_printing_claims_requiem_monolith():
             effect=Sequence(effects=(
                 GrantTriggeredAbilityUEOT(
                     ability=TriggeredAbility(
-                        trigger="this_dealt_damage",
+                        event=Event.DEALT_DAMAGE,
+                        predicate=IsSelf("obj"),
                         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
                     ),
                 ),

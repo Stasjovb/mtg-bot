@@ -4625,7 +4625,8 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
     #   1. ``Until end of turn, target creature gains "Whenever this
     #      creature is dealt damage, you draw that many cards and lose
     #      that much life."`` — the printed quoted ability is itself a
-    #      ``TriggeredAbility(trigger="this_dealt_damage", effect=
+    #      ``TriggeredAbility(event=Event.DEALT_DAMAGE,
+    #      predicate=IsSelf("obj"), effect=
     #      DrawCardsAndLoseLifeEqualToResolvingDamage())`` granted
     #      UEOT to the chosen creature via
     #      ``GrantTriggeredAbilityUEOT``.
@@ -4659,7 +4660,8 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
         return Sequence(effects=(
             GrantTriggeredAbilityUEOT(
                 ability=TriggeredAbility(
-                    trigger="this_dealt_damage",
+                    event=Event.DEALT_DAMAGE,
+                    predicate=IsSelf("obj"),
                     effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
                 ),
             ),

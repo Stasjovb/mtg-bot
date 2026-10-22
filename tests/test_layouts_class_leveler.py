@@ -46,7 +46,11 @@ def test_class_shape():
     assert two.class_level == 2 and three.class_level == 3
     assert [a.effect for a in two.activated_abilities] == [GainClassLevel(level=3)]
     assert three.activated_abilities == ()
-    assert [t.trigger for t in two.triggered_abilities] == ["", "class_level_2"]
+    from mtg_bot.effects.predicates import ClassLevelReached, Event
+
+    assert two.triggered_abilities[-1].event is Event.CLASS_LEVEL_GAINED
+    assert two.triggered_abilities[-1].predicate == ClassLevelReached(2)
+    assert [t.trigger for t in two.triggered_abilities] == ["", ""]
     assert isinstance(three.triggered_abilities[-1].effect, ThenTargetBecomesCreatureIfNot)
 
 

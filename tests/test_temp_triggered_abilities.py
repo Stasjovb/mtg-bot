@@ -19,6 +19,7 @@ from mtg_bot.effects import (
     TriggeredAbility,
 )
 from mtg_bot.effects.base import _apply_damage
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.turn import run_cleanup_step
 
@@ -47,7 +48,8 @@ def test_grant_then_damage_fires_rider_once():
     _stock_library(state, 1, 5)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
-        trigger="this_dealt_damage",
+        event=Event.DEALT_DAMAGE,
+        predicate=IsSelf("obj"),
         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
@@ -72,7 +74,8 @@ def test_granted_trigger_fires_multiple_times_in_one_turn():
     _stock_library(state, 1, 10)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
-        trigger="this_dealt_damage",
+        event=Event.DEALT_DAMAGE,
+        predicate=IsSelf("obj"),
         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
@@ -91,7 +94,8 @@ def test_cleanup_expires_granted_triggered_abilities():
     _stock_library(state, 1, 5)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
-        trigger="this_dealt_damage",
+        event=Event.DEALT_DAMAGE,
+        predicate=IsSelf("obj"),
         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     GrantTriggeredAbilityUEOT(ability=granted).resolve(
@@ -123,7 +127,8 @@ def test_pump_with_granted_trigger_combo():
     _stock_library(state, 1, 5)
     bear = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     granted = TriggeredAbility(
-        trigger="this_dealt_damage",
+        event=Event.DEALT_DAMAGE,
+        predicate=IsSelf("obj"),
         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     PumpTargetCreatureUntilEOT(
@@ -148,7 +153,8 @@ def test_grant_effect_legal_targets_filters_you_control_only():
     theirs = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
-            trigger="this_dealt_damage",
+            event=Event.DEALT_DAMAGE,
+            predicate=IsSelf("obj"),
             effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
         you_control_only=True,
@@ -165,7 +171,8 @@ def test_grant_effect_legal_targets_filters_opponents_only():
     theirs = _put(state, SYNTHETIC_CREATURES["Wild Bear"], owner_id=1)
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
-            trigger="this_dealt_damage",
+            event=Event.DEALT_DAMAGE,
+            predicate=IsSelf("obj"),
             effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
         opponents_only=True,
@@ -196,7 +203,8 @@ def test_grant_effect_no_targets_noop():
     state = _new_state()
     GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
-            trigger="this_dealt_damage",
+            event=Event.DEALT_DAMAGE,
+            predicate=IsSelf("obj"),
             effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
     ).resolve(state, 0, ())
@@ -207,7 +215,8 @@ def test_grant_effect_describe_with_and_without_ability():
     assert "triggered ability" in eff_none.describe()
     eff = GrantTriggeredAbilityUEOT(
         ability=TriggeredAbility(
-            trigger="this_dealt_damage",
+            event=Event.DEALT_DAMAGE,
+            predicate=IsSelf("obj"),
             effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
         ),
     )
@@ -221,7 +230,8 @@ def test_grant_effect_requires_target_true():
 
 def test_pump_effect_describe_includes_granted_trigger():
     granted = TriggeredAbility(
-        trigger="this_dealt_damage",
+        event=Event.DEALT_DAMAGE,
+        predicate=IsSelf("obj"),
         effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
     )
     eff = PumpTargetCreatureUntilEOT(

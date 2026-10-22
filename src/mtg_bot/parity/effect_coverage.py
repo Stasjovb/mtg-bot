@@ -278,7 +278,7 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     # ``state.rs:299``). The Python class is the general
     # ``GrantTriggeredAbilityUEOT`` (``effects/generic/grant_keywords
     # .py:189-251``); the bridge arm reconstructs it from the fixed
-    # Requiem shape (trigger=this_dealt_damage,
+    # Requiem shape (event=DEALT_DAMAGE, predicate=IsSelf("obj"),
     # effect=DrawCardsAndLoseLifeEqualToResolvingDamage()). The Real
     # Requiem Monolith printing parses to a Sequence whose first child
     # IS ``GrantTriggeredAbilityUEOT(ability=...)`` -- verified

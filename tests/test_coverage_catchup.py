@@ -3,6 +3,7 @@ combat.py, and turn.py that the happy-path suites miss. Focus is on
 branches introduced during recent card-restoration pushes where the
 wiring changed but the fizzle side wasn't exercised."""
 
+from mtg_bot.effects.predicates import Event, IsSelf
 from mtg_bot import legal_moves
 from mtg_bot.actions import (
     CastSpell, PlayLand, apply_action,
@@ -448,7 +449,8 @@ def test_requiem_missing_target_creature_noop():
     Sequence(effects=(
         GrantTriggeredAbilityUEOT(
             ability=TriggeredAbility(
-                trigger="this_dealt_damage",
+                event=Event.DEALT_DAMAGE,
+                predicate=IsSelf("obj"),
                 effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
             ),
         ),

@@ -7,7 +7,8 @@ Each level becomes its own printing (``CardPrinting.class_levels``,
 level-N printing also carries the "Level N+1" activated ability, so it
 can be activated only while the Class is exactly level N (CR 716.2a).
 "When this Class becomes level N, ..." is a triggered ability with
-``trigger == "class_level_<N>"`` fired by ``layouts.gain_class_level``.
+``event == Event.CLASS_LEVEL_GAINED`` and ``predicate ==
+ClassLevelReached(N)``, fired by ``layouts.gain_class_level``.
 
 Ability lines parse through the unified clause grammar with "this
 Class" read as "this enchantment"; any unparsed line rejects the card.
@@ -34,8 +35,14 @@ _BECOMES_LEVEL_LINE = re.compile(
 )
 
 
-def class_level_trigger_key(n: int) -> str:
-    return f"class_level_{n}"
+def class_level_ability(n: int, effect) -> TriggeredAbility:
+    """"When this Class becomes level ``n``, <effect>." (CR 716.2a)."""
+    from mtg_bot.effects.predicates import ClassLevelReached, Event
+
+    return TriggeredAbility(
+        event=Event.CLASS_LEVEL_GAINED, predicate=ClassLevelReached(n),
+        effect=effect,
+    )
 
 
 def _parse_section(lines: list[str], name: str):
@@ -54,10 +61,7 @@ def _parse_section(lines: list[str], name: str):
             effect = _parse_spell_effect_phrase(m.group("body"), name)
             if effect is None:
                 return None
-            triggers.append(TriggeredAbility(
-                trigger=class_level_trigger_key(int(m.group("n"))),
-                effect=effect,
-            ))
+            triggers.append(class_level_ability(int(m.group("n")), effect))
             continue
         parsed = _parse_clause(
             line.replace("this Class", "this enchantment"), name=name,

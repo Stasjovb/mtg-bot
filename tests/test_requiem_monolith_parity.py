@@ -12,7 +12,7 @@ Parser-emitted shape:
     * activated_ability[0].effect = ``Sequence(effects=(
         GrantTriggeredAbilityUEOT(
           ability=TriggeredAbility(
-            trigger='this_dealt_damage',
+            event=Event.DEALT_DAMAGE, predicate=IsSelf("obj"),
             effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
           ),
           you_control_only=False, opponents_only=False,
@@ -64,6 +64,7 @@ from mtg_bot.effects.generic.damage import (
     MayHaveSourceDealDamageToTarget,
 )
 from mtg_bot.effects.generic.grant_keywords import GrantTriggeredAbilityUEOT
+from mtg_bot.effects.predicates import Event, IsSelf
 
 
 _PRINTINGS = get_active_source().get_printings()
@@ -108,7 +109,8 @@ def test_requiem_monolith_activated_ability_shape():
     assert len(seq.effects) == 2
     grant, ping = seq.effects
     assert isinstance(grant, GrantTriggeredAbilityUEOT)
-    assert grant.ability.trigger == "this_dealt_damage"
+    assert grant.ability.event is Event.DEALT_DAMAGE
+    assert grant.ability.predicate == IsSelf("obj")
     assert isinstance(
         grant.ability.effect, DrawCardsAndLoseLifeEqualToResolvingDamage
     )

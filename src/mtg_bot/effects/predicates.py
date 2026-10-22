@@ -305,6 +305,19 @@ class Event(str, Enum):
     # "Whenever <source> deals damage to a player" (combat or not; roto
     # P6, ``effects.generic.roto_keywords.after_damage_to_player``).
     DEALS_DAMAGE_TO_PLAYER = "deals_damage_to_player"
+    # A Saga's lore-counter count just went up (CR 714.2b: chapter N
+    # triggers when the count becomes N or more). Subjects: the Saga
+    # (``"obj"``) and the counts before / after (``"lore_before"`` /
+    # ``"lore_after"``). A chapter ability is ``event=SAGA_CHAPTER,
+    # predicate=ChapterReached(n)``; ``layouts.add_lore_counters`` pushes
+    # the reached chapters in chapter order (not ``dispatch_event``).
+    SAGA_CHAPTER = "saga_chapter"
+    # A Class just became level N (CR 716.2a "When this Class becomes
+    # level N, ..."). Subjects: the Class (``"obj"``) and the new level
+    # (``"level"``). ``event=CLASS_LEVEL_GAINED,
+    # predicate=ClassLevelReached(n)``; fired by
+    # ``layouts.gain_class_level``.
+    CLASS_LEVEL_GAINED = "class_level_gained"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -358,6 +371,8 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DEALS_DAMAGE: ("source",),
     Event.ACTIVATES_ABILITY: ("source", "controller"),
     Event.DEALS_DAMAGE_TO_PLAYER: ("source", "player"),
+    Event.SAGA_CHAPTER: ("obj", "lore_before", "lore_after"),
+    Event.CLASS_LEVEL_GAINED: ("obj", "level"),
 }
 
 
@@ -554,6 +569,33 @@ class FirstAttackThisTurn(TriggerPredicate):
             if obj.id == source.id:
                 n += 1
         return n == 1
+
+
+@dataclass(frozen=True)
+class ChapterReached(TriggerPredicate):
+    """Saga chapter ``n`` (CR 714.2b): the source Saga's lore-counter
+    count went from below ``n`` to ``n`` or more (``Event.SAGA_CHAPTER``
+    subjects ``lore_before`` / ``lore_after``)."""
+
+    n: int
+
+    def matches(self, state, subjects, source):
+        return (
+            subjects.get("obj") is source
+            and subjects.get("lore_before", 0) < self.n
+            <= subjects.get("lore_after", 0)
+        )
+
+
+@dataclass(frozen=True)
+class ClassLevelReached(TriggerPredicate):
+    """"When this Class becomes level ``n``" (CR 716.2a;
+    ``Event.CLASS_LEVEL_GAINED`` subject ``level``)."""
+
+    n: int
+
+    def matches(self, state, subjects, source):
+        return subjects.get("obj") is source and subjects.get("level") == self.n
 
 
 @dataclass(frozen=True)
