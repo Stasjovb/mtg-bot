@@ -29,7 +29,7 @@ class Zone(Enum):
     # command-zone object kind the engine models today is the emblem;
     # an emblem is a synthetic ``GameObject`` carrying a synthetic
     # ``CardPrinting`` whose sole content is the emblem's ability set,
-    # held in ``GameState.emblems`` (see the ``CreateEmblem`` effect +
+    # held in ``GameState.emblems`` (see the ``CreateEmblemWithAbilities`` effect +
     # the emblem-sourced begin-combat trigger dispatch).
     COMMAND = "command"
 
@@ -3737,7 +3737,7 @@ class GameState:
     # CR 114.3) and whose ``controller_id`` / ``owner_id`` is the player
     # who "gets" the emblem. Emblems never leave the command zone and
     # can't be removed (CR 114.5), so there is no zone-transition
-    # plumbing — they are created by the ``CreateEmblem`` effect, cloned
+    # plumbing — they are created by the ``CreateEmblemWithAbilities`` effect, cloned
     # in ``clone()``, surfaced via ``emblems_snapshot``, and scanned as
     # an additional trigger SOURCE by ``dispatch_event`` for the
     # begin-combat (and any future emblem-sourced) event. Empty by

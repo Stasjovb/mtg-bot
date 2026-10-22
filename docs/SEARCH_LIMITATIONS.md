@@ -18475,6 +18475,11 @@ What LANDED (byte-equal cross-engine):
    parser (`planeswalker_builder.py`) now un-strips the −7 line and
    emits `CreateEmblem`. Bridge: `create_emblem` arm
    (`parity/cross_engine.py`) with a string `emblem_kind` discriminant.
+   **2026-10-21 (card IR v1):** Python no longer has `CreateEmblem`;
+   the −7 emits `CreateEmblemWithAbilities` carrying the emblem's
+   begin-combat trigger inline (`emblem.tezzeret_cruel_captain_emblem`),
+   and the bridge arm maps the old crate's `emblem_kind` to it. The
+   honest-stop below is unchanged.
 3. **Emblem-sourced begin-combat trigger.** Both engines' trigger
    dispatchers (`dispatch_event` Python `actions.py` / Rust
    `state_ops_resolve.rs`) extended to scan `state.emblems` as an

@@ -68,6 +68,10 @@ PARITY_POOL = "eoe"
 # Rust variant intentionally maps to a Python class with a different
 # spelling.
 RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
+    # The old crate's ``CreateEmblem { emblem_kind }`` names Tezzeret,
+    # Cruel Captain's emblem by a string key; Python carries that emblem's
+    # ability inline in a ``CreateEmblemWithAbilities``.
+    "CreateEmblem": "CreateEmblemWithAbilities",
     # The Rust bridge's generic ``DealDamage`` is the family-head
     # primitive; Python doesn't instantiate the bare ``DealDamage``
     # base class on any card — only its subclasses appear. The

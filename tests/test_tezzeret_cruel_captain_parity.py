@@ -140,7 +140,8 @@ def test_tezzeret_loyalty_gain_trigger_shape():
 def test_tezzeret_loyalty_activated_abilities_shape():
     """The parsed printing now models ALL THREE of Tezzeret's loyalty
     abilities — 0 / −3 / −7. The −7 emblem is now modeled (the emblem
-    substrate landed): it emits a ``CreateEmblem`` effect. The emblem's
+    substrate landed): it emits a ``CreateEmblemWithAbilities`` carrying
+    the emblem's begin-combat trigger inline. The emblem's
     begin-combat 3-counter body is byte-equal cross-engine; only the
     "becomes a 0/0 Robot artifact creature" permanent-animate half is
     honest-stopped (see docs/SEARCH_LIMITATIONS.md + emblem.py).
@@ -150,10 +151,12 @@ def test_tezzeret_loyalty_activated_abilities_shape():
     printed ``0:`` stamps ``loyalty=0``; a printed ``−3:`` stamps
     ``loyalty=3`` (pay-loyalty); a printed ``−7:`` stamps
     ``loyalty=7``."""
+    from mtg_bot.effects.generic.cube_walkers import CreateEmblemWithAbilities
     from mtg_bot.effects.generic.emblem import (
-        TEZZERET_CRUEL_CAPTAIN_EMBLEM,
-        CreateEmblem,
+        TEZZERET_CRUEL_CAPTAIN_EMBLEM_NAME,
+        TezzeretEmblemBeginCombat,
     )
+    from mtg_bot.effects.predicates import YOU, Controlled, Event
     from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import (
         UntapTargetArtifactOrCreatureConditionalCounter,
@@ -188,13 +191,18 @@ def test_tezzeret_loyalty_activated_abilities_shape():
     assert minus3.effect.filter_name == "artifact_small"
     assert minus3.effect.max_mv == 1
 
-    # The −7 ability — loyalty cost +7 (pay-loyalty), CreateEmblem.
+    # The −7 ability — loyalty cost +7 (pay-loyalty), an emblem whose
+    # begin-combat trigger is inline data.
     minus7 = next(aa for aa in aas if aa.cost.loyalty == 7)
-    assert isinstance(minus7.effect, CreateEmblem), (
-        f"−7 ability effect must be CreateEmblem; got "
+    assert isinstance(minus7.effect, CreateEmblemWithAbilities), (
+        f"−7 ability effect must be CreateEmblemWithAbilities; got "
         f"{type(minus7.effect).__name__}"
     )
-    assert minus7.effect.emblem_kind == TEZZERET_CRUEL_CAPTAIN_EMBLEM
+    assert minus7.effect.name == TEZZERET_CRUEL_CAPTAIN_EMBLEM_NAME
+    (trigger,) = minus7.effect.triggered_abilities
+    assert trigger.event is Event.BEGINNING_OF_COMBAT
+    assert trigger.predicate == Controlled(by=YOU)
+    assert trigger.effect == TezzeretEmblemBeginCombat()
 
 
 # ---------------------------------------------------------------------------
@@ -861,7 +869,7 @@ def test_cross_engine_tezzeret_minus3_search_artifact_parity():
 
 # ---------------------------------------------------------------------------
 # (6) EMBLEM substrate (CR 114) — Tezzeret's −7 emblem. The command-zone
-# emblem object + CreateEmblem effect + the emblem-sourced begin-combat
+# emblem object + CreateEmblemWithAbilities effect + the emblem-sourced begin-combat
 # trigger + the 3-counter body are byte-equal cross-engine. The
 # becomes-0/0-Robot permanent animate is HONEST-STOPPED (no permanent
 # layer-4 type-set + layer-7b P/T-set animate substrate — see
@@ -873,20 +881,21 @@ def test_tezzeret_emblem_effect_bridge_round_trip():
     """The bridge arms ``create_emblem`` / ``tezzeret_emblem_begin_combat``
     translate the Rust effect dicts to the matching Python effects, and
     the parsed real-EoE −7 ability's emitted Effect is byte-equal to the
-    bridged ``CreateEmblem``."""
+    bridged emblem (Python carries the emblem's ability inline in a
+    ``CreateEmblemWithAbilities``)."""
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.generic.cube_walkers import CreateEmblemWithAbilities
     from mtg_bot.effects.generic.emblem import (
-        TEZZERET_CRUEL_CAPTAIN_EMBLEM,
-        CreateEmblem,
         TezzeretEmblemBeginCombat,
+        tezzeret_cruel_captain_emblem,
     )
 
     bridged = _ta_dict_to_python_effect(
         {"kind": "create_emblem",
-         "emblem_kind": TEZZERET_CRUEL_CAPTAIN_EMBLEM}
+         "emblem_kind": "tezzeret_cruel_captain"}
     )
-    assert isinstance(bridged, CreateEmblem)
-    assert bridged.emblem_kind == TEZZERET_CRUEL_CAPTAIN_EMBLEM
+    assert isinstance(bridged, CreateEmblemWithAbilities)
+    assert bridged == tezzeret_cruel_captain_emblem()
 
     # Unknown emblem kind raises on the bridge (mirrors Rust's contract).
     with pytest.raises(ValueError, match=r"unknown emblem kind"):
@@ -909,7 +918,7 @@ def test_tezzeret_emblem_effect_bridge_round_trip():
             {"kind": "tezzeret_emblem_begin_combat", "amount": -1}
         )
 
-    # The parsed real-EoE −7 ability emits a CreateEmblem byte-equal to
+    # The parsed real-EoE −7 ability emits an emblem byte-equal to
     # the bridged one.
     p = _PRINTINGS["Tezzeret, Cruel Captain"]
     minus7 = next(
@@ -917,7 +926,7 @@ def test_tezzeret_emblem_effect_bridge_round_trip():
     )
     assert minus7.effect == bridged, (
         "Tezzeret's parsed −7 Effect must be byte-equal to the bridged "
-        "CreateEmblem"
+        "emblem"
     )
 
 
@@ -960,7 +969,7 @@ def test_cross_engine_tezzeret_minus7_emblem_begin_combat_parity():
     )
     from mtg_bot.cards.base import make_artifact
     from mtg_bot.cards.source import get_active_source
-    from mtg_bot.effects.generic.emblem import CreateEmblem
+    from mtg_bot.effects.generic.cube_walkers import CreateEmblemWithAbilities
     from mtg_bot.effects.predicates import Event as _Ev
     from mtg_bot.game import Zone
 
@@ -970,7 +979,7 @@ def test_cross_engine_tezzeret_minus7_emblem_begin_combat_parity():
         if aa.cost.loyalty == 7
     )
     assert isinstance(
-        tezz.activated_abilities[minus7_idx].effect, CreateEmblem
+        tezz.activated_abilities[minus7_idx].effect, CreateEmblemWithAbilities
     )
 
     # ---- PYTHON ----

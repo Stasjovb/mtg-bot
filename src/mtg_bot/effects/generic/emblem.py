@@ -1,5 +1,5 @@
-"""Emblem substrate (CR 114) — the ``CreateEmblem`` effect + the
-Tezzeret, Cruel Captain emblem's begin-combat trigger body.
+"""Emblem substrate (CR 114) — the Tezzeret, Cruel Captain emblem's
+begin-combat trigger body and the emblem that carries it.
 
 An emblem is a command-zone object (``GameState.emblems``) created by a
 "You get an emblem with '<abilities>'" effect (CR 113.1g / 114). It has
@@ -11,10 +11,12 @@ machinery (extended to scan ``state.emblems`` as a source) and the
 existing ``resolve_top_of_stack`` path then fire + resolve the emblem's
 abilities exactly like a permanent's.
 
-This module ships the ONE emblem in the EoE pool — Tezzeret, Cruel
-Captain's −7 emblem: "At the beginning of combat on your turn, put
-three +1/+1 counters on target artifact you control. If it's not a
-creature, it becomes a 0/0 Robot artifact creature."
+Emblems are created by ``cube_walkers.CreateEmblemWithAbilities``, which
+carries the emblem's abilities inline. This module ships the body of the
+one emblem the unified grammar can't parse -- Tezzeret, Cruel Captain's
+−7 emblem: "At the beginning of combat on your turn, put three +1/+1
+counters on target artifact you control. If it's not a creature, it
+becomes a 0/0 Robot artifact creature." (:func:`tezzeret_cruel_captain_emblem`).
 
 **Honest-stop (documented in docs/SEARCH_LIMITATIONS.md).** The
 "becomes a 0/0 Robot artifact creature" half is a PERMANENT layer-4
@@ -26,84 +28,34 @@ on the target artifact (byte-equal cross-engine) and stops. See the
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from mtg_bot.effects.base import Effect, Target, TriggeredAbility
 
 
-# String key for the only emblem the engine models today. The
-# ``CreateEmblem`` effect carries this kind; ``_emblem_abilities_for``
-# resolves it to the emblem's triggered-ability set. Mirrors Rust's
-# ``CreateEmblem { emblem_kind }`` string discriminant — keeping the
-# cross-engine bridge a single string avoids serializing the nested
-# ability tree across the FFI boundary.
-TEZZERET_CRUEL_CAPTAIN_EMBLEM = "tezzeret_cruel_captain"
+TEZZERET_CRUEL_CAPTAIN_EMBLEM_NAME = "Tezzeret, Cruel Captain emblem"
 
 
-def _emblem_printing_for(emblem_kind: str):
-    """Build the synthetic ``CardPrinting`` for a known emblem kind.
-
-    Raises ``ValueError`` for an unknown kind (loud-fail per
-    feedback_silent_noop_pipelines — an unrecognized emblem must NOT
-    silently create a do-nothing object)."""
-    from mtg_bot.cards.base import make_emblem
+def tezzeret_cruel_captain_emblem():
+    """The ``CreateEmblemWithAbilities`` of Tezzeret, Cruel Captain's −7:
+    an emblem with "At the beginning of combat on your turn, put three
+    +1/+1 counters on target artifact you control. If it's not a
+    creature, it becomes a 0/0 Robot artifact creature." The emblem's
+    ability is inline data (no per-card emblem key); its body is
+    :class:`TezzeretEmblemBeginCombat`."""
+    from mtg_bot.effects.generic.cube_walkers import CreateEmblemWithAbilities
     from mtg_bot.effects.predicates import YOU, Controlled, Event
 
-    if emblem_kind == TEZZERET_CRUEL_CAPTAIN_EMBLEM:
-        return make_emblem(
-            name="Tezzeret, Cruel Captain emblem",
-            triggered_abilities=(
-                TriggeredAbility(
-                    event=Event.BEGINNING_OF_COMBAT,
-                    predicate=Controlled(by=YOU),
-                    effect=TezzeretEmblemBeginCombat(),
-                ),
+    return CreateEmblemWithAbilities(
+        name=TEZZERET_CRUEL_CAPTAIN_EMBLEM_NAME,
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.BEGINNING_OF_COMBAT,
+                predicate=Controlled(by=YOU),
+                effect=TezzeretEmblemBeginCombat(),
             ),
-        )
-    raise ValueError(f"unknown emblem kind: {emblem_kind!r}")
-
-
-@dataclass(frozen=True)
-class CreateEmblem(Effect):
-    """"You get an emblem with '<abilities>'." — the −7 effect body.
-
-    Pushes a synthetic emblem ``GameObject`` (``zone == Zone.COMMAND``)
-    into ``state.emblems``, owned + controlled by the ability's
-    controller. ``emblem_kind`` is a string discriminant resolved to the
-    emblem's synthetic printing by ``_emblem_printing_for`` (so the
-    cross-engine bridge is a single string, mirroring Rust's
-    ``Effect::CreateEmblem { emblem_kind }``).
-
-    The emblem's abilities then fire through the normal trigger-dispatch
-    + resolve machinery (``dispatch_event`` is extended to scan
-    ``state.emblems`` as a trigger source).
-    """
-
-    emblem_kind: str = TEZZERET_CRUEL_CAPTAIN_EMBLEM
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        printing = _emblem_printing_for(self.emblem_kind)
-        emblem = state.new_object(
-            printing, owner_id=controller_id, zone=Zone.COMMAND
-        )
-        # Stamp an etb_timestamp so the emblem has a deterministic
-        # ordering position relative to other command-zone objects
-        # (mirrors the battlefield-object timestamp ordering the
-        # fingerprint relies on).
-        emblem.etb_timestamp = state.next_timestamp
-        state.next_timestamp += 1
-        state.emblems.append(emblem)
-        state.log.append(
-            f"P{controller_id} gets an emblem ({printing.name})"
-        )
-
-    def describe(self) -> str:
-        return "you get an emblem"
+        ),
+    )
 
 
 @dataclass(frozen=True)

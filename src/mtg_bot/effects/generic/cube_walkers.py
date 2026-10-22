@@ -978,8 +978,8 @@ class CreateEmblemWithAbilities(Effect):
     """"You get an emblem with '<ability>'." for an emblem whose quoted
     ability parses through the unified grammar (CR 114).
 
-    The generic sibling of ``CreateEmblem`` (whose string ``emblem_kind``
-    is the cross-engine bridge for Tezzeret, Cruel Captain's emblem):
+    Every emblem the engine creates goes through this effect (Tezzeret,
+    Cruel Captain's included -- ``emblem.tezzeret_cruel_captain_emblem``):
     the emblem's triggered abilities are carried on the effect itself
     and stamped onto a ``make_emblem`` printing at resolution, so any
     parseable quoted trigger claims without a per-card emblem kind. The

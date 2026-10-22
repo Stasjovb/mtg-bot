@@ -56,10 +56,7 @@ from mtg_bot.cards.parser.printing_keywords import _parse_token_doubler_line
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.cards.parser.type_line import _parse_type_line
-from mtg_bot.effects.generic.emblem import (
-    TEZZERET_CRUEL_CAPTAIN_EMBLEM,
-    CreateEmblem,
-)
+from mtg_bot.effects.generic.emblem import tezzeret_cruel_captain_emblem
 from mtg_bot.effects.generic.search import SearchLibraryForCard
 from mtg_bot.effects.generic.tap import (
     UntapTargetArtifactOrCreatureConditionalCounter,
@@ -104,7 +101,8 @@ def _printed_loyalty_to_signed_cost(printed: str) -> int:
 # bespoke-shaped engine classes that the cross-engine parity suite pins
 # (tests/test_tezzeret_cruel_captain_parity.py); they stay literal until
 # a second card with the same untap-conditional-counter / small-artifact
-# tutor / emblem surface lands. The -7 maps to CreateEmblem (the emblem
+# tutor / emblem surface lands. The -7 maps to a CreateEmblemWithAbilities
+# carrying the emblem's begin-combat trigger inline (the emblem
 # substrate — see effects/generic/emblem.py + docs/SEARCH_LIMITATIONS.md;
 # the emblem's becomes-0/0-Robot permanent animate is honest-stopped
 # there).
@@ -125,7 +123,7 @@ _LOYALTY_ABILITY_EFFECTS: dict[str, object] = {
     'You get an emblem with "At the beginning of combat on your turn, '
     "put three +1/+1 counters on target artifact you control. If it's "
     'not a creature, it becomes a 0/0 Robot artifact creature."':
-        CreateEmblem(emblem_kind=TEZZERET_CRUEL_CAPTAIN_EMBLEM),
+        tezzeret_cruel_captain_emblem(),
 }
 
 

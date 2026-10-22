@@ -5981,7 +5981,7 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # **Tezzeret, Cruel Captain -7 emblem (CR 114).** Rust substrate
         # ``Effect::CreateEmblem { emblem_kind: String }`` (cards.rs
         # parse_effect ``create_emblem`` arm + resolve in
-        # state_ops_resolve.rs) mirrors Python's ``CreateEmblem``. The
+        # state_ops_resolve.rs) mirrors Python's Tezzeret emblem. The
         # ``emblem_kind`` string discriminant names the known emblem
         # (today only ``"tezzeret_cruel_captain"``); the bridge keeps it
         # a single string so the nested emblem-ability tree doesn't cross
@@ -5990,22 +5990,20 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # +1/+1 counters on a target artifact you control (byte-equal);
         # the becomes-0/0-Robot permanent animate is honest-stopped on
         # both sides. Bridge dict: ``{"kind": "create_emblem",
-        # "emblem_kind": "tezzeret_cruel_captain"}``.
+        # "emblem_kind": "tezzeret_cruel_captain"}``. Python carries the
+        # emblem's ability inline (``CreateEmblemWithAbilities``); the old
+        # crate's ``emblem_kind`` string maps to that inline emblem here.
         from mtg_bot.effects.generic.emblem import (
-            TEZZERET_CRUEL_CAPTAIN_EMBLEM,
-            CreateEmblem,
+            tezzeret_cruel_captain_emblem,
         )
-        emblem_kind = eff_dict.get(
-            "emblem_kind", TEZZERET_CRUEL_CAPTAIN_EMBLEM
-        )
-        if emblem_kind != TEZZERET_CRUEL_CAPTAIN_EMBLEM:
+        emblem_kind = eff_dict.get("emblem_kind", "tezzeret_cruel_captain")
+        if emblem_kind != "tezzeret_cruel_captain":
             raise ValueError(
                 "create_emblem bridge arm: unknown emblem kind "
-                f"{emblem_kind!r} (only "
-                f"{TEZZERET_CRUEL_CAPTAIN_EMBLEM!r} is modeled; mirrors "
-                "Rust parse_effect contract)"
+                f"{emblem_kind!r} (only 'tezzeret_cruel_captain' is "
+                "modeled; mirrors Rust parse_effect contract)"
             )
-        return CreateEmblem(emblem_kind=emblem_kind)
+        return tezzeret_cruel_captain_emblem()
     if kind == "tezzeret_emblem_begin_combat":
         # **The Tezzeret emblem's begin-combat trigger body.** Rust
         # substrate ``Effect::TezzeretEmblemBeginCombat { amount: i32 }``
