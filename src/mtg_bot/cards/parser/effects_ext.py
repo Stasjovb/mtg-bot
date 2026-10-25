@@ -337,12 +337,12 @@ _SORCERIES_AS_FLASH = re.compile(
 )
 _CREATE_STAT_TOKEN = re.compile(
     rf"^create (?P<count>{_COUNT}) (?P<tapped>tapped )?(?P<p>\d+)/(?P<t>\d+) "
-    rf"(?:{_COLOR}) (?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
+    rf"(?P<color>{_COLOR}) (?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
     r"(?P<artifact>artifact )?creature tokens?(?: with (?P<kw>.+))?$"
 )
 _CREATE_NAMED_TOKEN = re.compile(
     r"^create (?P<name>[A-Z][A-Za-z' ]*), an? (?P<legendary>legendary )?"
-    rf"(?P<p>\d+)/(?P<t>\d+) (?:{_COLOR}) "
+    rf"(?P<p>\d+)/(?P<t>\d+) (?P<color>{_COLOR}) "
     r"(?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
     r"(?P<artifact>artifact )?creature token(?: with (?P<kw>.+))?$"
 )
@@ -406,7 +406,7 @@ _TARGET_BECOMES_COPY_OF_ANOTHER_TARGET_UEOT = re.compile(
 # Stat token whose only rider is a quoted self-anthem scaling with a
 # count: 'with "This token gets +N/+M for each <noun> you control."'
 _CREATE_TOKEN_WITH_PER_COUNT_ANTHEM = re.compile(
-    rf"^create (?P<count>{_COUNT}) (?P<p>\d+)/(?P<t>\d+) (?:{_COLOR}) "
+    rf"^create (?P<count>{_COUNT}) (?P<p>\d+)/(?P<t>\d+) (?P<color>{_COLOR}) "
     r"(?P<sub>[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)*) "
     r"(?P<artifact>artifact )?creature tokens? with \"This token gets "
     r"\+(?P<pb>\d+)/\+(?P<tb>\d+) for each (?P<each>[a-z]+) you control"
@@ -446,13 +446,20 @@ def _target_spec(noun: str, up_to_one: bool):
     return TargetSpec(filter=pred, count_min=0 if up_to_one else 1)
 
 
+# A token's colour word -> its colour indicator ("colorless": none).
+_COLOR_LETTERS = {
+    "white": "W", "blue": "U", "black": "B", "red": "R", "green": "G",
+}
+
+
 def _token_printing(
     name: str, power: str, toughness: str, subtypes: str,
     artifact: bool, keywords: frozenset[str], legendary: bool = False,
-    static_abilities: tuple = (),
+    static_abilities: tuple = (), color: str = "colorless",
 ):
     from mtg_bot.cards.base import make_token_creature
 
+    letter = _COLOR_LETTERS.get(color)
     return make_token_creature(
         name=name,
         power=int(power),
@@ -462,6 +469,7 @@ def _token_printing(
         artifact=artifact,
         legendary=legendary,
         static_abilities=static_abilities,
+        colors=(letter,) if letter else (),
     )
 
 
@@ -582,6 +590,7 @@ def parse_ext_effect(phrase: str) -> Effect | None:
                 token_printing=_token_printing(
                     m.group("sub"), m.group("p"), m.group("t"),
                     m.group("sub"), bool(m.group("artifact")), kws,
+                    color=m.group("color"),
                 ),
                 count=_count(m.group("count")),
                 tapped=bool(m.group("tapped")),
@@ -598,6 +607,7 @@ def parse_ext_effect(phrase: str) -> Effect | None:
                     m.group("name"), m.group("p"), m.group("t"),
                     m.group("sub"), bool(m.group("artifact")), kws,
                     legendary=bool(m.group("legendary")),
+                    color=m.group("color"),
                 ),
             )
 
@@ -693,7 +703,7 @@ def parse_ext_effect(phrase: str) -> Effect | None:
                 token_printing=_token_printing(
                     m.group("sub"), m.group("p"), m.group("t"),
                     m.group("sub"), bool(m.group("artifact")), frozenset(),
-                    static_abilities=(anthem,),
+                    static_abilities=(anthem,), color=m.group("color"),
                 ),
                 count=_count(m.group("count")),
             )

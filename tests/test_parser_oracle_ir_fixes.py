@@ -139,3 +139,44 @@ def test_animated_colonnade_is_white_blue_elemental_until_end_of_turn():
     run_cleanup_step(state)
     assert effective_colors(state, land) == frozenset()
     assert "Elemental" not in effective_subtypes(state, land)
+
+
+# ---------------------------------------------------------------------------
+# 12. Minsc & Boo: Boo is red
+# ---------------------------------------------------------------------------
+
+
+def test_boo_token_is_red():
+    p = cube("Minsc & Boo, Timeless Heroes")
+    tokens = [
+        ta.effect.inner.token_printing if hasattr(ta.effect, "inner")
+        else ta.effect.token_printing
+        for ta in p.triggered_abilities
+    ]
+    assert len(tokens) == 2
+    for tok in tokens:
+        assert tok.name == "Boo"
+        assert tok.color_indicator == frozenset({"R"})
+        assert "Legendary" in tok.supertypes and "Hamster" in tok.subtypes
+
+
+def test_stat_and_named_token_phrases_carry_their_colour():
+    from mtg_bot.cards.parser.effects_ext import parse_ext_effect
+
+    named = parse_ext_effect(
+        "create Boo, a legendary 1/1 red Hamster creature token with "
+        "trample and haste"
+    )
+    assert named.token_printing.color_indicator == frozenset({"R"})
+    marit = parse_ext_effect(
+        "create Marit Lage, a legendary 0/0 black Avatar creature token "
+        "with flying and indestructible"
+    )
+    assert marit.token_printing.color_indicator == frozenset({"B"})
+    stat = parse_ext_effect("create a 1/1 green Squirrelfolk creature token")
+    assert isinstance(stat, CreateToken)
+    assert stat.token_printing.color_indicator == frozenset({"G"})
+    colorless = parse_ext_effect(
+        "create a 2/2 colorless Squirrelfolk artifact creature token"
+    )
+    assert colorless.token_printing.color_indicator == frozenset()
