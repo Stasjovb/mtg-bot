@@ -5537,7 +5537,7 @@ def _resolve_top_of_stack_item(state: GameState) -> None:
                 return
             # Non-permanent spells go to their owner's graveyard —
             # unless a zone-change replacement routes them elsewhere
-            # (Nexus of Fate + Green Sun's Zenith shuffle back in),
+            # (Nexus of Fate shuffles back in),
             # buyback returns them to hand, or flashback exiles them.
             move_spell_off_stack(
                 state, card,

@@ -4,7 +4,7 @@ This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
 ``parser.spell_builder`` by introducing five grammar extensions:
 
 1. **Self-shuffle rider dropper** (``_is_self_shuffle_clause``) — recognizes
-   the two printed self-shuffle surface forms and drops them from the
+   the printed self-shuffle replacement and drops it from the
    effect-clause stream.  The behavior is wired via a SELF-scope
    StaticAbility on the spell printing carrying a
    ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
@@ -12,11 +12,12 @@ This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    ``_detect_shuffle_self_statics``); dropping the clause lets the
    remaining effect clause parse cleanly through the unified grammar.
 
-   Two shapes recognized:
-     - ``Shuffle <Name> into its owner's library.`` (GSZ form)
-     - ``If <Name> would be put into a graveyard from anywhere, reveal
-       <Name> and shuffle it into its owner's library instead.``
-       (Nexus of Fate form)
+   One shape recognized: ``If <Name> would be put into a graveyard from
+   anywhere, reveal <Name> and shuffle it into its owner's library
+   instead.`` (Nexus of Fate form). Green Sun's Zenith's ``Shuffle
+   <Name> into its owner's library.`` is the last instruction of its
+   effect (``ShuffleThisSpellIntoOwnersLibrary``, 2026-10-24), not
+   dropped.
 
 2. **``_TAKE_EXTRA_TURN_AFTER_THIS_ONE`` recognizer** (effects.py) — maps
    "take an extra turn after this one" to ``TakeExtraTurnAfterThisOne()``.
@@ -26,7 +27,8 @@ This batch migrates four entries out of ``_WHOLE_SPELL_EXACT_TEXT`` in
    (effects.py) — maps "search your library for a green creature card with
    mana value X or less, put it onto the battlefield, then shuffle" to
    ``SearchLibraryForGreenCreatureWithMVAtMostX()``.
-   Migrates: **Green Sun's Zenith** (main clause; GSZ rider dropped by #1).
+   Migrates: **Green Sun's Zenith** (main clause; its self-shuffle
+   sentence is the ``Sequence``'s second step).
 
 4. **``_SURVEIL_X_ARTIFACT_COUNT`` recognizer** (effects.py) — maps "surveil
    X, where X is the number of artifacts you control" to
@@ -73,7 +75,8 @@ from mtg_bot.cards.parser.effects import (
     _PUMP_LEADING_UEOT_KEYWORDS_BECOMES_TYPE,
 )
 from mtg_bot.cards.parser.source import OracleParserCardSource
-from mtg_bot.cards.parser.spell_builder import _is_self_shuffle_clause, _SELF_SHUFFLE_GSZ_RE, _SELF_SHUFFLE_NEXUS_RE, _parse_spell_oracle_text
+from mtg_bot.cards.parser.spell_builder import _is_self_shuffle_clause, _SELF_SHUFFLE_NEXUS_RE, _parse_spell_oracle_text
+from mtg_bot.effects.generic.card_flow import ShuffleThisSpellIntoOwnersLibrary
 
 
 def _claimed_names() -> frozenset[str]:
@@ -86,30 +89,6 @@ def _claimed_names() -> frozenset[str]:
 # ------------------------------------------------------------------ #
 # Self-shuffle clause regexes                                         #
 # ------------------------------------------------------------------ #
-
-def test_self_shuffle_gsz_re_matches_gsz_form():
-    assert _SELF_SHUFFLE_GSZ_RE.match(
-        "Shuffle Green Sun's Zenith into its owner's library."
-    ) is not None
-
-
-def test_self_shuffle_gsz_re_matches_generic_name():
-    # Any card name between Shuffle and into should match — future
-    # cards with the same mechanic claim automatically.
-    assert _SELF_SHUFFLE_GSZ_RE.match(
-        "Shuffle Some Other Card into its owner's library."
-    ) is not None
-
-
-def test_self_shuffle_gsz_re_no_false_positive_on_nexus_form():
-    # The Nexus form starts with "If", not "Shuffle" — must not match
-    # the GSZ regex.
-    assert _SELF_SHUFFLE_GSZ_RE.match(
-        "If Nexus of Fate would be put into a graveyard from anywhere, "
-        "reveal Nexus of Fate and shuffle it into its owner's library "
-        "instead."
-    ) is None
-
 
 def test_self_shuffle_nexus_re_matches_nexus_form():
     assert _SELF_SHUFFLE_NEXUS_RE.match(
@@ -139,8 +118,11 @@ def test_self_shuffle_nexus_re_no_false_positive_on_gsz_form():
 # _is_self_shuffle_clause                                             #
 # ------------------------------------------------------------------ #
 
-def test_is_self_shuffle_clause_gsz_form():
-    assert _is_self_shuffle_clause(
+def test_is_self_shuffle_clause_keeps_the_gsz_instruction():
+    # "Shuffle <Name> into its owner's library." is an instruction of
+    # the spell's effect (done only as it resolves), not a replacement:
+    # it stays in the clause stream.
+    assert not _is_self_shuffle_clause(
         "Shuffle Green Sun's Zenith into its owner's library."
     )
 
@@ -157,7 +139,9 @@ def test_is_self_shuffle_clause_strips_whitespace():
     # The helper must tolerate leading/trailing whitespace (mirrors the
     # other _is_* helpers in spell_builder).
     assert _is_self_shuffle_clause(
-        "  Shuffle Green Sun's Zenith into its owner's library.  "
+        "  If Nexus of Fate would be put into a graveyard from anywhere, "
+        "reveal Nexus of Fate and shuffle it into its owner's library "
+        "instead.  "
     )
 
 
@@ -306,24 +290,19 @@ def test_green_suns_zenith_claimed_by_parser():
 def test_green_suns_zenith_engine_class():
     parser = OracleParserCardSource()
     p = parser.get_printings()["Green Sun's Zenith"]
-    assert p.spell_effect == SearchLibraryForGreenCreatureWithMVAtMostX()
+    assert p.spell_effect == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
 
 
-def test_green_suns_zenith_shuffles_static():
-    from mtg_bot.effects.modifiers import (
-        EventPattern, Replace, ReplacementEffect,
-    )
-    from mtg_bot.effects.predicates import Event
-
+def test_green_suns_zenith_has_no_shuffle_replacement_static():
+    # "Shuffle Green Sun's Zenith into its owner's library." is done
+    # only as the spell resolves (its effect's last step), not "if it
+    # would be put into a graveyard from anywhere" (Nexus of Fate).
     parser = OracleParserCardSource()
     p = parser.get_printings()["Green Sun's Zenith"]
-    expected = ReplacementEffect(
-        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
-        transform=Replace(new_destination="library"),
-    )
-    assert any(
-        s.replacement_effect == expected for s in p.static_abilities
-    )
+    assert p.static_abilities == ()
 
 
 def test_green_suns_zenith_parses_via_per_clause_grammar():
@@ -333,7 +312,10 @@ def test_green_suns_zenith_parses_via_per_clause_grammar():
         "Shuffle Green Sun's Zenith into its owner's library.",
         "Green Sun's Zenith",
     )
-    assert eff == SearchLibraryForGreenCreatureWithMVAtMostX()
+    assert eff == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
 
 
 # ------------------------------------------------------------------ #

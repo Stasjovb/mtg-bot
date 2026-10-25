@@ -1,5 +1,19 @@
 """Cross-engine parity probes for Green Sun's Zenith.
 
+**2026-10-24 (card-IR fixes for mtg-zero).** The parser now states the
+Oracle text's last sentence, "Shuffle Green Sun's Zenith into its
+owner's library.", as the last step of the spell's effect
+(``Sequence(SearchLibraryForGreenCreatureWithMVAtMostX(),
+ShuffleThisSpellIntoOwnersLibrary())``, done only as the spell
+resolves, CR 608.2c) instead of Nexus of Fate's "if it would be put
+into a graveyard from anywhere" replacement static (which also sent a
+countered GSZ to the library). ``ShuffleThisSpellIntoOwnersLibrary``
+has no Rust mirror, so the real printing no longer admits at the
+spell-card-bridge gate (pinned below); the Rust carrier's
+``would_go_to_graveyard -> library`` redirect static still matches the
+Python resolution byte-equal (the real-printing probe below), and the
+Rust-side unit pins are unchanged. The history below predates this.
+
 **Green-creature X-tutor Effect substrate (2026-05-31; substrate-only
 honest-stop).** Green Sun's Zenith `{X}{G}` Sorcery (Special Guests
 reprint in the EoE pool): "Search your library for a green creature
@@ -70,37 +84,31 @@ import pytest
 
 def test_real_gsz_spell_effect_and_x_cost():
     """**Verify-first.** The live parser maps Green Sun's Zenith to a
-    ``SearchLibraryForGreenCreatureWithMVAtMostX`` spell_effect with
-    ``mana_cost.x_pips == 1`` ({X}{G}) and carries the shuffle-self
-    ``WOULD_GO_TO_GRAVEYARD -> library`` ReplacementEffect static.
+    ``Sequence(SearchLibraryForGreenCreatureWithMVAtMostX(),
+    ShuffleThisSpellIntoOwnersLibrary())`` spell_effect with
+    ``mana_cost.x_pips == 1`` ({X}{G}) and no replacement static (the
+    self-shuffle is an instruction of the effect, not a replacement).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects import SearchLibraryForGreenCreatureWithMVAtMostX
-    from mtg_bot.effects.modifiers import (
-        EventPattern, Replace, ReplacementEffect,
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.card_flow import (
+        ShuffleThisSpellIntoOwnersLibrary,
     )
-    from mtg_bot.effects.predicates import Event
 
     p = get_active_source().get_printings().get("Green Sun's Zenith")
     if p is None:
         pytest.skip("Green Sun's Zenith absent from active CardSource")
     assert "Sorcery" in p.card_types
-    assert isinstance(
-        p.spell_effect, SearchLibraryForGreenCreatureWithMVAtMostX
-    )
+    assert p.spell_effect == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
     assert p.mana_cost.x_pips == 1, (
         f"GSZ mana_cost.x_pips must be 1 ({{X}}{{G}}); "
         f"got {p.mana_cost.x_pips}"
     )
-    # The shuffle-self static is the load-bearing honest-stop wall.
-    expected_static = ReplacementEffect(
-        event_pattern=EventPattern(event=Event.WOULD_GO_TO_GRAVEYARD),
-        transform=Replace(new_destination="library"),
-    )
-    assert any(
-        s.replacement_effect == expected_static
-        for s in p.static_abilities
-    ), "GSZ must carry the shuffle-self WOULD_GO_TO_GRAVEYARD->library static"
+    assert p.static_abilities == ()
 
 
 # -------------------------------------------------------------------
@@ -135,49 +143,34 @@ def test_gsz_serializer_round_trip():
     assert isinstance(rebuilt, SearchLibraryForGreenCreatureWithMVAtMostX)
 
 
-def test_gsz_admits_at_bridge_gate_after_redirect_widen():
-    """**The flip pin (was the honest-stop pin).** With the
-    ``would_go_to_graveyard -> library`` StaticReplacement
-    destination-redirect now bridged (the Rust
-    ``move_source_post_resolve`` hook reroutes the resolving spell to
-    its owner's library + shuffles, mirroring Python's
-    ``_send_to_graveyard_or_library``), Green Sun's Zenith ADMITS at
-    the spell-card-bridge gate — its shuffle-self static is no longer a
-    decline reason and its ``SearchLibraryForGreenCreatureWithMVAtMostX``
-    spell_effect is covered+bridged.
-
-    This is the inverse of the prior honest-stop pin: the card is now
-    genuinely probe-able (see the real-EoE byte-equal probe below).
-    Nexus of Fate / Quantum Riddler MUST stay declined — verified in
-    ``test_gsz_redirect_widen_keeps_nexus_and_quantum_riddler_declined``.
-    """
+def test_gsz_declines_at_bridge_gate_without_a_rust_shuffle_this_spell():
+    """**Decline pin (2026-10-24).** Green Sun's Zenith's printing ends
+    its effect with ``ShuffleThisSpellIntoOwnersLibrary`` (the Oracle
+    text's last instruction), which has no Rust ``Effect`` variant: the
+    spell_effect is no longer covered+bridged, so the card DECLINES at
+    the spell-card-bridge gate. It carries no replacement static any
+    more (the redirect guard has nothing to decline), and its tutor
+    class stays covered (``test_gsz_effect_class_covered``)."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
+    from mtg_bot.parity.effect_coverage import (
+        card_effect_classes,
+        covered_python_class_set,
+    )
 
     p = get_active_source().get_printings().get("Green Sun's Zenith")
     if p is None:
         pytest.skip("Green Sun's Zenith absent from active CardSource")
-    # The spell_effect side is covered+bridged (the prior substrate).
-    assert trajectory._spell_effect_is_covered_and_bridged(p) is True
-    assert (
-        trajectory._python_spell_effect_to_dict(p.spell_effect)
-        is not None
-    )
-    # The shuffle-self redirect static is now BRIDGEABLE — the guard no
-    # longer declines it.
+    uncovered = card_effect_classes(p) - covered_python_class_set()
+    assert uncovered == {"ShuffleThisSpellIntoOwnersLibrary"}
+    assert trajectory._spell_effect_is_covered_and_bridged(p) is False
+    assert trajectory._python_spell_effect_to_dict(p.spell_effect) is None
     assert (
         trajectory._printing_has_unbridgeable_replacement_static(p)
         is False
-    ), "GSZ's graveyard->library redirect is now bridgeable"
-    # And the card admits at the spell-card-bridge gate.
-    assert trajectory._printing_is_bridge_simple_spell(p) is True, (
-        "Green Sun's Zenith must ADMIT post-redirect-widen"
     )
-    # The replacement quad the bridge threads through to the CardDef:
-    reps = trajectory._static_replacements_from_printing(p)
-    assert reps == (
-        ("would_go_to_graveyard", "replace", 0, "library"),
-    ), f"GSZ redirect must round-trip as the replace quad; got {reps}"
+    assert trajectory._static_replacements_from_printing(p) is None
+    assert trajectory._printing_is_bridge_simple_spell(p) is False
 
 
 def test_gsz_redirect_widen_keeps_quantum_riddler_declined():
@@ -463,10 +456,12 @@ def test_cross_engine_real_eoe_green_suns_zenith_shuffle_self_parity():
     Drives the **ACTUAL parsed Green Sun's Zenith printing** on the
     Python side: ``get_active_source().get_printings()["Green Sun's
     Zenith"]`` — which the live parser maps to a ``spell_effect`` of
-    ``SearchLibraryForGreenCreatureWithMVAtMostX()`` (verified above)
-    with ``mana_cost.x_pips == 1`` AND the shuffle-self
-    ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
-    ``StaticReplacement`` static.
+    ``Sequence(SearchLibraryForGreenCreatureWithMVAtMostX(),
+    ShuffleThisSpellIntoOwnersLibrary())`` (verified above) with
+    ``mana_cost.x_pips == 1``. (Before 2026-10-24 the self-shuffle was
+    the ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
+    static; the Rust carrier below still models it so, which agrees
+    with the Python effect step on resolution.)
 
     Oracle (``data/edge_of_eternities.json``): "[Sorcery] {X}{G} —
     Search your library for a green creature card with mana value X or
@@ -510,10 +505,16 @@ def test_cross_engine_real_eoe_green_suns_zenith_shuffle_self_parity():
     real = get_active_source().get_printings().get("Green Sun's Zenith")
     if real is None:
         pytest.skip("Green Sun's Zenith absent from active CardSource")
-    assert "Sorcery" in real.card_types
-    assert isinstance(
-        real.spell_effect, SearchLibraryForGreenCreatureWithMVAtMostX
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.card_flow import (
+        ShuffleThisSpellIntoOwnersLibrary,
     )
+
+    assert "Sorcery" in real.card_types
+    assert real.spell_effect == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
 
     spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
     py = build_python_state(spec)

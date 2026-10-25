@@ -29,6 +29,7 @@ from mtg_bot.effects.generic.card_flow import (
     EachPlayerDiscardsHand,
     EachPlayerShufflesZonesIntoLibrary,
     ExileThisSpell,
+    ShuffleThisSpellIntoOwnersLibrary,
     LookAtTargetPlayersHand,
     LookAtTopCardsPutIntoHand,
     ReorderTopCards,
@@ -281,6 +282,9 @@ _RETURN_TARGET_SPELL_TO_HAND_RE = re.compile(
 )
 _SCRY_N_RE = re.compile(r"^scry (?P<n>\d+)$")
 _EXILE_THIS_SPELL_RE = re.compile(r"^exile this spell$")
+_SHUFFLE_THIS_SPELL_RE = re.compile(
+    r"^shuffle this spell into its owner's library$"
+)
 _LOOK_AT_TARGET_PLAYERS_HAND_RE = re.compile(r"^look at target player's hand$")
 # ``add {B}{B}{B}`` / ``add {U}{R}`` — any run of three or more colored
 # (or colorless) pips. One- and two-pip forms are claimed earlier by the
@@ -762,6 +766,8 @@ def parse_card_flow_effect(phrase: str) -> Effect | None:
         return Scry(amount=int(m.group("n")), bottom_choice=True)
     if _EXILE_THIS_SPELL_RE.match(phrase) is not None:
         return ExileThisSpell()
+    if _SHUFFLE_THIS_SPELL_RE.match(phrase) is not None:
+        return ShuffleThisSpellIntoOwnersLibrary()
     if _LOOK_AT_TARGET_PLAYERS_HAND_RE.match(phrase) is not None:
         return LookAtTargetPlayersHand()
     m = _ADD_MANA_PIPS_RE.match(phrase)

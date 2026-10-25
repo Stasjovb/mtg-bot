@@ -1,10 +1,12 @@
 """Tests for Nexus of Fate + Green Sun's Zenith.
 
-Both Special Guests spells share a SELF-scope StaticAbility that
-carries a ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
-Replace(new_destination="library")); this file covers both the shared
-redirect plumbing and each card's unique effect (extra-turn queueing,
-green-creature tutor).
+Nexus of Fate carries a SELF-scope StaticAbility with a
+ReplacementEffect(WOULD_GO_TO_GRAVEYARD, Replace(new_destination=
+"library")) ("if it would be put into a graveyard from anywhere");
+Green Sun's Zenith shuffles itself into its library as the last step
+of its effect (ShuffleThisSpellIntoOwnersLibrary), only as it
+resolves. This file covers the redirect plumbing and each card's
+unique effect (extra-turn queueing, green-creature tutor).
 """
 
 import random
@@ -204,13 +206,19 @@ def test_extra_turn_queue_skips_dead_player():
 # ---- Green Sun's Zenith ----------------------------------------------
 
 def test_gsz_is_wired_up():
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.card_flow import (
+        ShuffleThisSpellIntoOwnersLibrary,
+    )
+
     g = _PRINTINGS["Green Sun's Zenith"]
     assert g.is_sorcery
     assert g.mana_cost_str == "{X}{G}"
-    assert isinstance(
-        g.spell_effect, SearchLibraryForGreenCreatureWithMVAtMostX
-    )
-    assert _has_shuffle_self_static(g)
+    assert g.spell_effect == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
+    assert not _has_shuffle_self_static(g)
 
 
 _GREEN_2 = make_creature("Grizzly Bears", "{1}{G}", 2, 2)  # MV 2
@@ -272,8 +280,8 @@ def test_gsz_agent_declining_still_shuffles():
 
 
 def test_gsz_shuffles_self_into_library_on_resolve():
-    """End-to-end via resolve_top_of_stack: GSZ's own card returns to
-    library instead of graveyard."""
+    """End-to-end via resolve_top_of_stack: GSZ's own card is shuffled
+    into the library by its last instruction (not the graveyard)."""
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.game import StackItem
 

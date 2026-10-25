@@ -29,7 +29,7 @@ object (types included) and that re-encoding is a fixpoint; it exits 1
 on any difference.
 
 For the PowerLSV cube (546 printings) the document is about 400 KB of
-JSON (about 62 KB gzipped) over 506 classes.
+JSON (about 62 KB gzipped) over 508 classes.
 
 ## Document
 

@@ -798,6 +798,45 @@ class ExileThisSpell(Effect):
         return "exile this spell"
 
 
+@dataclass(frozen=True)
+class ShuffleThisSpellIntoOwnersLibrary(Effect):
+    """"Shuffle <this spell's name> into its owner's library." as the
+    last instruction of a spell's own resolution (Green Sun's Zenith;
+    CR 608.2c). Moves ``state.resolving_spell`` from the stack into its
+    owner's library and shuffles it; ``resolve_top_of_stack`` sees the
+    zone change and skips the usual graveyard routing. Only as the spell
+    resolves: countered, discarded or milled, the card goes to the
+    graveyard as usual (unlike Nexus of Fate's "if it would be put into
+    a graveyard from anywhere" replacement). A spell cast with flashback
+    is exiled instead (CR 702.34a); a copy ceases to exist as it leaves
+    the stack (CR 707.10a), so it is left to the usual routing."""
+
+    def resolve(self, state, controller_id, targets=()):
+        from mtg_bot.game import Zone, shuffle_library
+        from mtg_bot.turn import note_cards_put_into_library
+
+        card = state.resolving_spell
+        if card is None or card.zone is not Zone.STACK or card.is_spell_copy:
+            return
+        owner = state.player_by_id(card.owner_id)
+        if card.cast_via_flashback:
+            card.cast_via_flashback = False
+            card.zone = Zone.EXILE
+            owner.exile.append(card)
+            state.log.append(f"{card.printing.name} is exiled (flashback)")
+            return
+        card.zone = Zone.LIBRARY
+        owner.library.append(card)
+        shuffle_library(state, owner.id)
+        note_cards_put_into_library(state, owner.id)
+        state.log.append(
+            f"{card.printing.name} is shuffled into P{owner.id}'s library"
+        )
+
+    def describe(self) -> str:
+        return "shuffle this spell into its owner's library"
+
+
 # ---------------------------------------------------------------------
 # Wheels / mass zone moves
 # ---------------------------------------------------------------------

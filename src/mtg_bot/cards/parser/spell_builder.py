@@ -428,38 +428,33 @@ def _is_unimplemented_secondary_rider(clause: str) -> bool:
     )
 
 
-# Self-shuffle rider clauses — recognizers for the two Scryfall-printed
-# self-shuffle surface forms that a spell's oracle text may carry as a
-# trailing sentence or a separate oracle line. Both are handled by a
-# SELF-scope ``StaticAbility`` carrying a ``ReplacementEffect(
-# WOULD_GO_TO_GRAVEYARD, Replace(new_destination="library"))`` on
-# the spell printing (wired via ``_detect_shuffle_self_statics``), so
-# they contribute no ``Effect`` and must be dropped from the effect-
-# clause stream before the combinator dispatch runs.
+# Self-shuffle rider clause — the recognizer for the Scryfall-printed
+# self-shuffle replacement a spell's oracle text may carry as a separate
+# oracle line: **Nexus form** — ``If <Name> would be put into a graveyard
+# from anywhere, reveal <Name> and shuffle it into its owner's library
+# instead.`` (Nexus of Fate). It is handled by a SELF-scope
+# ``StaticAbility`` carrying a ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
+# Replace(new_destination="library"))`` on the spell printing (wired via
+# ``_detect_shuffle_self_statics``), so it contributes no ``Effect`` and
+# must be dropped from the effect-clause stream before the combinator
+# dispatch runs.
 #
-# Two shapes exist in the EoE pool:
+# Green Sun's Zenith's ``Shuffle <Name> into its owner's library.`` is
+# NOT a replacement: it is the last instruction of the spell's effect,
+# done only as the spell resolves (CR 608.2c; countered, discarded or
+# milled, the card goes to the graveyard). It stays in the clause stream
+# and parses to ``ShuffleThisSpellIntoOwnersLibrary`` (the name is
+# normalized to "this spell" by ``_normalize_spell_effect_phrase``,
+# as Time Spiral's "Exile <Name>.").
 #
-#   1. **GSZ form** — ``Shuffle <Name> into its owner's library.``
-#      (Green Sun's Zenith). Appears as the trailing sentence on the
-#      spell's single oracle line, split off by ``_split_sentences``.
-#
-#   2. **Nexus form** — ``If <Name> would be put into a graveyard from
-#      anywhere, reveal <Name> and shuffle it into its owner's library
-#      instead.`` (Nexus of Fate). Appears as the spell's second oracle
-#      line (a separate ``\n``-separated clause).
-#
-# Both shapes are matched with generic regexes that accept any card name
-# (an arbitrary non-empty word sequence between the anchors), so a future
-# card with the same self-shuffle mechanic claims automatically without
-# adding a new literal key. The ``_detect_shuffle_self_statics`` helper
-# uses a name-interpolated ``re.search`` against the FULL oracle text,
-# which fires correctly regardless of whether the self-shuffle line is
-# dropped here — the dropping only affects the effect-clause stream, not
-# the StaticAbility
+# The regex accepts any card name (an arbitrary non-empty word sequence
+# between the anchors), so a future card with the same mechanic claims
+# automatically without adding a new literal key. The
+# ``_detect_shuffle_self_statics`` helper uses a name-interpolated
+# ``re.search`` against the FULL oracle text, which fires correctly
+# regardless of whether the self-shuffle line is dropped here — the
+# dropping only affects the effect-clause stream, not the StaticAbility
 # detection.
-_SELF_SHUFFLE_GSZ_RE = re.compile(
-    r"^Shuffle .+ into its owner's library\.$"
-)
 _SELF_SHUFFLE_NEXUS_RE = re.compile(
     r"^If .+ would be put into a graveyard from anywhere, "
     r"reveal .+ and shuffle it into its owner's library instead\.$"
@@ -470,27 +465,22 @@ def _is_self_shuffle_clause(clause: str) -> bool:
     """Return ``True`` if ``clause`` is a recognized self-shuffle rider
     that the parser drops from the effect-clause stream.
 
-    Two shapes are recognized (after reminder-text stripping):
-      - ``Shuffle <Name> into its owner's library.`` (GSZ form)
-      - ``If <Name> would be put into a graveyard from anywhere, reveal
-        <Name> and shuffle it into its owner's library instead.``
-        (Nexus of Fate form)
+    One shape is recognized (after reminder-text stripping): ``If <Name>
+    would be put into a graveyard from anywhere, reveal <Name> and
+    shuffle it into its owner's library instead.`` (Nexus of Fate form).
 
-    Both shapes are modeled by the SELF-scope StaticAbility carrying a
+    It is modeled by the SELF-scope StaticAbility carrying a
     ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
     Replace(new_destination="library"))`` on the spell printing (wired
-    via ``_detect_shuffle_self_statics``), so they contribute no
+    via ``_detect_shuffle_self_statics``), so it contributes no
     ``Effect`` and should be excluded from the effect-clause stream.
     Dropping here lets the remaining clause(s) parse through the
     unified per-clause grammar rather than failing the whole spell
-    because the self-shuffle rider can't parse as a standalone
-    ``Effect``.
+    because the replacement can't parse as a standalone ``Effect``.
+    Green Sun's Zenith's "Shuffle <Name> into its owner's library." is
+    an instruction of the effect and is not dropped.
     """
-    c = clause.strip()
-    return (
-        _SELF_SHUFFLE_GSZ_RE.match(c) is not None
-        or _SELF_SHUFFLE_NEXUS_RE.match(c) is not None
-    )
+    return _SELF_SHUFFLE_NEXUS_RE.match(clause.strip()) is not None
 
 
 # Sentence-boundary splitter for multi-sentence oracle-text lines.
@@ -1305,15 +1295,14 @@ def _parse_spell_oracle_text_body(text: str, name: str) -> Effect | None:
     # StaticAbility carrying the
     # ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
     # Replace(new_destination="library"))`` wired by
-    # ``_detect_shuffle_self_statics``). Two shapes are recognized:
-    #   - ``Shuffle <Name> into its owner's library.`` (Green Sun's Zenith)
-    #   - ``If <Name> would be put into a graveyard from anywhere, reveal
-    #     <Name> and shuffle it into its owner's library instead.``
-    #     (Nexus of Fate)
-    # Dropping happens AFTER the sentence-splitting pass so a single-oracle-
-    # line spell like Green Sun's Zenith (whose GSZ self-shuffle sentence
-    # was split off by ``_split_sentences``) has its rider clause visible
-    # here for dropping. Must also happen BEFORE the ``len(clauses) == 1``
+    # ``_detect_shuffle_self_statics``): ``If <Name> would be put into a
+    # graveyard from anywhere, reveal <Name> and shuffle it into its
+    # owner's library instead.`` (Nexus of Fate). Green Sun's Zenith's
+    # ``Shuffle <Name> into its owner's library.`` is an instruction of
+    # its effect and stays (``ShuffleThisSpellIntoOwnersLibrary``).
+    # Dropping happens AFTER the sentence-splitting pass so a rider split
+    # off a single oracle line by ``_split_sentences`` is visible here
+    # for dropping. Must also happen BEFORE the ``len(clauses) == 1``
     # short-circuit so spells whose only surviving clause after dropping is
     # the main effect (Nexus of Fate: take-extra-turn) return that effect
     # cleanly via the single-clause path rather than trying to Sequence it
@@ -1490,27 +1479,23 @@ def _detect_additional_cost_flags(text: str) -> dict:
     return flags
 
 
-# Self-shuffle riders: a clause of the form "Shuffle <Name> into its
-# owner's library." (Green Sun's Zenith) or "If <Name> would be put
-# into a graveyard from anywhere, reveal <Name> and shuffle it into
-# its owner's library instead." (Nexus of Fate). The parser models
-# both as a SELF-scope ``StaticAbility(replacement_effect=
-# ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
-# Replace(new_destination="library")))`` on the spell printing — so
-# detecting either rider in a spell's oracle text threads the
-# StaticAbility onto the resulting ``CardPrinting`` without
-# contributing an ``Effect``. The rider's text remains in the oracle
-# text and is matched verbatim by the whole-spell exact-text
-# dispatcher; there is no clause-stripping pass needed for these
-# riders, since the dispatch key already includes the rider.
+# Self-shuffle replacement: a clause of the form "If <Name> would be put
+# into a graveyard from anywhere, reveal <Name> and shuffle it into its
+# owner's library instead." (Nexus of Fate; Blightsteel Colossus on a
+# permanent). The parser models it as a SELF-scope
+# ``StaticAbility(replacement_effect=ReplacementEffect(
+# WOULD_GO_TO_GRAVEYARD, Replace(new_destination="library")))`` on the
+# printing — so detecting the rider in a card's oracle text threads the
+# StaticAbility onto the resulting ``CardPrinting`` without contributing
+# an ``Effect``. Green Sun's Zenith's "Shuffle <Name> into its owner's
+# library." is not a replacement (it is done only as the spell
+# resolves): it is the ``ShuffleThisSpellIntoOwnersLibrary`` step of the
+# spell's effect.
 #
-# Both shapes interpolate the card's own name and are matched after
+# The shape interpolates the card's own name and is matched after
 # escaping the name. Non-matching cards (no shuffle rider in their
 # text) round-trip through ``_detect_shuffle_self_statics`` with an
 # empty tuple.
-_SHUFFLE_SELF_GSZ_RE_TEMPLATE = (
-    r"Shuffle {name} into its owner's library\."
-)
 _SHUFFLE_SELF_NEXUS_RE_TEMPLATE = (
     r"If {name} would be put into a graveyard from anywhere, "
     r"reveal {name} and shuffle it into its owner's library instead\."
@@ -1523,17 +1508,13 @@ def _detect_shuffle_self_statics(
     """Return a one-element tuple containing a SELF-scope
     ``StaticAbility`` carrying a ``ReplacementEffect(WOULD_GO_TO_
     GRAVEYARD, Replace(new_destination="library"))`` if ``text``
-    contains a recognized self-shuffle rider for ``name``; an empty
-    tuple otherwise.
+    contains a recognized self-shuffle replacement for ``name``; an
+    empty tuple otherwise.
 
-    Two shapes are recognized:
-      - ``Shuffle <Name> into its owner's library.`` (Green Sun's
-        Zenith). Appears as the trailing sentence of the spell's
-        single oracle line.
-      - ``If <Name> would be put into a graveyard from anywhere,
-        reveal <Name> and shuffle it into its owner's library
-        instead.`` (Nexus of Fate). Appears as the spell's second
-        oracle line.
+    One shape is recognized: ``If <Name> would be put into a graveyard
+    from anywhere, reveal <Name> and shuffle it into its owner's library
+    instead.`` (Nexus of Fate). Appears as the spell's second oracle
+    line.
 
     The matcher uses ``re.search`` (not ``re.match``) so it finds the
     rider regardless of where in the spell text it appears. Each
@@ -1551,10 +1532,7 @@ def _detect_shuffle_self_statics(
     on the spell's owner.
     """
     name_re = re.escape(name)
-    patterns = (
-        _SHUFFLE_SELF_GSZ_RE_TEMPLATE.format(name=name_re),
-        _SHUFFLE_SELF_NEXUS_RE_TEMPLATE.format(name=name_re),
-    )
+    patterns = (_SHUFFLE_SELF_NEXUS_RE_TEMPLATE.format(name=name_re),)
     for p in patterns:
         if re.search(p, text) is not None:
             return (StaticAbility(

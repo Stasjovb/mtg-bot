@@ -298,3 +298,70 @@ def test_forth_eorlingas_triggers_once_per_combat_damage_not_once_per_turn():
     drain_stack(state)
     assert state.players[0].is_monarch
     assert state.players[1].life == 20 - 8
+
+
+# ---------------------------------------------------------------------------
+# 17. Green Sun's Zenith: the shuffle is an instruction, not a replacement
+# ---------------------------------------------------------------------------
+
+from mtg_bot.effects.generic.card_flow import (  # noqa: E402
+    ShuffleThisSpellIntoOwnersLibrary,
+)
+
+
+def test_green_suns_zenith_shuffles_itself_as_its_last_instruction():
+    p = cube("Green Sun's Zenith")
+    assert p.static_abilities == ()
+    assert p.spell_effect == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
+
+
+def test_green_suns_zenith_resolving_goes_to_the_library():
+    state = new_game()
+    gsz = state.new_object(cube("Green Sun's Zenith"), 0, Zone.STACK)
+    state.stack.append(StackItem(source=gsz, controller_id=0, x_value=0))
+    resolve_top_of_stack(state)
+    p = state.players[0]
+    assert gsz in p.library and gsz.zone is Zone.LIBRARY
+    assert gsz not in p.graveyard
+
+
+def test_green_suns_zenith_countered_goes_to_the_graveyard():
+    state = new_game()
+    gsz = state.new_object(cube("Green Sun's Zenith"), 0, Zone.STACK)
+    state.stack.append(StackItem(source=gsz, controller_id=0, countered=True))
+    resolve_top_of_stack(state)
+    p = state.players[0]
+    assert gsz in p.graveyard
+    assert gsz not in p.library
+
+
+def test_shuffle_this_spell_outside_a_resolving_spell_does_nothing():
+    state = new_game()
+    eff = ShuffleThisSpellIntoOwnersLibrary()
+    eff.resolve(state, 0, ())
+    assert state.players[0].library == []
+    assert "shuffle this spell" in eff.describe()
+
+
+def test_shuffle_this_spell_of_a_flashback_cast_exiles_it():
+    state = new_game()
+    gsz = state.new_object(cube("Green Sun's Zenith"), 0, Zone.STACK)
+    gsz.cast_via_flashback = True
+    state.resolving_spell = gsz
+    ShuffleThisSpellIntoOwnersLibrary().resolve(state, 0, ())
+    assert gsz in state.players[0].exile and gsz.zone is Zone.EXILE
+
+
+def test_nexus_form_stays_a_replacement():
+    from mtg_bot.cards.parser.spell_builder import _detect_shuffle_self_statics
+
+    nexus = (
+        "If Nexus of Fate would be put into a graveyard from anywhere, "
+        "reveal Nexus of Fate and shuffle it into its owner's library instead."
+    )
+    assert len(_detect_shuffle_self_statics(nexus, "Nexus of Fate")) == 1
+    gsz = "Shuffle Green Sun's Zenith into its owner's library."
+    assert _detect_shuffle_self_statics(gsz, "Green Sun's Zenith") == ()

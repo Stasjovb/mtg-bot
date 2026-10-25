@@ -1008,15 +1008,10 @@ _TAKE_EXTRA_TURN_AFTER_THIS_ONE = re.compile(
 # main tutor clause. Maps to the parameterless
 # ``SearchLibraryForGreenCreatureWithMVAtMostX`` engine class which reads
 # ``state.resolving_x_value`` at resolve time to derive the mana-value cap
-# and puts the found creature directly onto the battlefield. The
-# accompanying GSZ self-shuffle rider ("Shuffle Green Sun's Zenith into
-# its owner's library.") is detected separately by
-# ``_detect_shuffle_self_statics`` and wired as a SELF-scope
-# StaticAbility carrying a ``ReplacementEffect(WOULD_GO_TO_GRAVEYARD,
-# Replace(new_destination="library"))`` on the spell printing; the
-# self-shuffle clause is dropped from the effect-clause stream by
-# ``_is_self_shuffle_clause`` before the Sequence combinator runs, so
-# this single-sentence recognizer claims the whole spell.
+# and puts the found creature directly onto the battlefield. The spell's
+# second sentence ("Shuffle Green Sun's Zenith into its owner's
+# library.") is the next step of its ``Sequence``,
+# ``ShuffleThisSpellIntoOwnersLibrary`` (``card_flow_grammar``).
 # Currently only Green Sun's Zenith in the EoE pool prints this exact
 # X-cost battlefield-tutor surface today; the recognizer is a
 # parameterless literal per parser CLAUDE.md (one card, no second example
@@ -5435,8 +5430,8 @@ def _parse_effect_legacy(phrase: str) -> Effect | None:
     # ``SearchLibraryForGreenCreatureWithMVAtMostX`` engine class which
     # reads ``state.resolving_x_value`` at resolve time to derive the MV
     # cap and puts the found creature directly onto the battlefield. The
-    # accompanying GSZ self-shuffle rider is handled separately (see the
-    # regex comment for details). Tried BEFORE the hand-tutor family below
+    # spell's self-shuffle sentence is its own step (see the regex
+    # comment for details). Tried BEFORE the hand-tutor family below
     # because the surface form overlaps on the ``search your library for``
     # prefix; the ``put it onto the battlefield`` reward tail is the
     # distinguishing discriminator and the hand-tutor regex's ``reveal it,
@@ -7109,6 +7104,10 @@ def _normalize_spell_effect_phrase(phrase: str, name: str) -> str:
     # the name-agnostic ``exile this spell`` surface.
     if phrase == "exile " + name:
         phrase = "exile this spell"
+    # ``Shuffle <Name> into its owner's library.`` -- the same, the last
+    # instruction of Green Sun's Zenith.
+    if phrase == f"shuffle {name} into its owner's library":
+        phrase = "shuffle this spell into its owner's library"
     return phrase
 
 

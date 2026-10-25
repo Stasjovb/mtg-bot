@@ -18,9 +18,11 @@ grammar:
     (second oracle line) is dropped by ``_is_self_shuffle_clause``.
   - Green Sun's Zenith: the new ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD``
     recognizer claims the tutor sentence as
-    ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the GSZ self-shuffle
-    rider (second sentence on the same line) is split off by
-    ``_split_sentences`` and dropped by ``_is_self_shuffle_clause``.
+    ``SearchLibraryForGreenCreatureWithMVAtMostX()``; the self-shuffle
+    sentence (second sentence on the same line, split off by
+    ``_split_sentences``) is the next step of the spell's ``Sequence``,
+    ``ShuffleThisSpellIntoOwnersLibrary()`` (2026-10-24; it was dropped
+    and wired as Nexus of Fate's replacement static before).
 
 Darkness remains in the whole-spell dispatcher (its
 ``PreventAllCombatDamageThisTurn`` primitive lives in the per-clause
@@ -97,8 +99,8 @@ def test_green_suns_zenith_claimed_by_parser():
     # green creature plus a self-shuffle rider. Migrated to per-clause
     # grammar in bespoke-spells2; the new
     # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD`` recognizer
-    # claims the tutor clause and ``_is_self_shuffle_clause`` drops the
-    # GSZ rider.
+    # claims the tutor clause and the self-shuffle sentence is
+    # ``ShuffleThisSpellIntoOwnersLibrary``.
     assert "Green Sun's Zenith" in _claimed_names()
 
 
@@ -135,19 +137,25 @@ def test_nexus_of_fate_parses_via_per_clause_grammar():
 
 def test_green_suns_zenith_parses_via_per_clause_grammar():
     # The per-clause grammar produces SearchLibraryForGreenCreatureWithMVAtMostX()
-    # for Green Sun's Zenith's printed oracle text.  The GSZ self-shuffle
-    # rider (second sentence on the same line, split off by
-    # ``_split_sentences``) is dropped by ``_is_self_shuffle_clause``; the
-    # first sentence is claimed by
-    # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD``.
+    # for Green Sun's Zenith's tutor sentence (claimed by
+    # ``_SEARCH_LIBRARY_GREEN_CREATURE_X_TO_BATTLEFIELD``), then
+    # ShuffleThisSpellIntoOwnersLibrary() for its self-shuffle sentence
+    # (split off by ``_split_sentences``; the name normalizes to "this
+    # spell").
     from mtg_bot.cards.parser.spell_builder import _parse_spell_oracle_text
+    from mtg_bot.effects.generic.card_flow import (
+        ShuffleThisSpellIntoOwnersLibrary,
+    )
     eff = _parse_spell_oracle_text(
         "Search your library for a green creature card with mana "
         "value X or less, put it onto the battlefield, then shuffle. "
         "Shuffle Green Sun's Zenith into its owner's library.",
         "Green Sun's Zenith",
     )
-    assert eff == SearchLibraryForGreenCreatureWithMVAtMostX()
+    assert eff == Sequence(effects=(
+        SearchLibraryForGreenCreatureWithMVAtMostX(),
+        ShuffleThisSpellIntoOwnersLibrary(),
+    ))
 
 
 # ---------- self-shuffle rider detector ----------
@@ -166,17 +174,16 @@ def test_detect_shuffle_self_statics_nexus_shape():
     assert statics == (_SHUFFLE_SELF_STATIC,)
 
 
-def test_detect_shuffle_self_statics_gsz_shape():
-    # GSZ-style rider: ``Shuffle <Name> into its owner's library.`` —
-    # appears as the trailing sentence of the spell's single oracle
-    # line.
+def test_detect_shuffle_self_statics_gsz_shape_is_not_a_replacement():
+    # GSZ's ``Shuffle <Name> into its owner's library.`` is the last
+    # instruction of the spell's effect, done only as it resolves —
+    # not a replacement static.
     text = (
         "Search your library for a green creature card with mana "
         "value X or less, put it onto the battlefield, then shuffle. "
         "Shuffle Green Sun's Zenith into its owner's library."
     )
-    statics = _detect_shuffle_self_statics(text, "Green Sun's Zenith")
-    assert statics == (_SHUFFLE_SELF_STATIC,)
+    assert _detect_shuffle_self_statics(text, "Green Sun's Zenith") == ()
 
 
 def test_detect_shuffle_self_statics_no_rider():
@@ -187,15 +194,16 @@ def test_detect_shuffle_self_statics_no_rider():
 
 
 def test_detect_shuffle_self_statics_name_with_apostrophe():
-    # ``Green Sun's Zenith`` carries an apostrophe; the helper
-    # ``re.escape``-s the name so the rider matches verbatim. Sanity-
-    # check that this works (regression for a future card with
-    # similar punctuation).
+    # A name with an apostrophe; the helper ``re.escape``-s the name so
+    # the rider matches verbatim. Sanity-check that this works
+    # (regression for a future card with similar punctuation).
     text = (
-        "Do something. "
-        "Shuffle Green Sun's Zenith into its owner's library."
+        "Do something.\n"
+        "If Urza's Zenith would be put into a graveyard from anywhere, "
+        "reveal Urza's Zenith and shuffle it into its owner's library "
+        "instead."
     )
-    statics = _detect_shuffle_self_statics(text, "Green Sun's Zenith")
+    statics = _detect_shuffle_self_statics(text, "Urza's Zenith")
     assert statics == (_SHUFFLE_SELF_STATIC,)
 
 
