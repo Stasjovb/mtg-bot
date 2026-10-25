@@ -65,7 +65,7 @@ def test_nutrient_block_activation_gains_life_and_sacs():
 
 
 def test_nutrient_block_draws_on_leave_battlefield():
-    """Sacrifice (or destroy) triggers leaves_battlefield → draw."""
+    """Sacrificed (put into a graveyard from the battlefield) → draw."""
     state = _new_state()
     p = state.players[0]
     nb = state.new_object(

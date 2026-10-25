@@ -219,3 +219,34 @@ def test_do_then_reflexive_resolves_first_then_reflexive_effect():
     eff.resolve(state, 0, ())
     assert state.players[0].life == 22
     assert len(state.players[0].hand) == 1
+
+
+# ---------------------------------------------------------------------------
+# 15 / 18. Chromatic Star, Wizard's Rockets: put into a graveyard from the
+# battlefield is "dies", not "leaves the battlefield"
+# ---------------------------------------------------------------------------
+
+
+def test_graveyard_from_battlefield_trigger_is_dies():
+    for name in ("Chromatic Star", "Wizard's Rockets"):
+        (ta,) = cube(name).triggered_abilities
+        assert ta.event is Event.DIES, name
+        assert ta.predicate == IsSelf(), name
+
+
+def test_chromatic_star_draws_when_sacrificed_but_not_when_exiled():
+    state = new_game()
+    for _ in range(3):
+        to_library(state, "Island")
+    star = put(state, "Chromatic Star")
+    sacrifice(state, star)
+    drain_stack(state)
+    assert len(state.players[0].hand) == 1
+    star2 = put(state, "Chromatic Star")
+    move_off_battlefield(state, star2, destination="exile")
+    drain_stack(state)
+    assert len(state.players[0].hand) == 1
+    star3 = put(state, "Chromatic Star")
+    move_off_battlefield(state, star3, destination="hand")
+    drain_stack(state)
+    assert len(state.players[0].hand) == 2  # Star 3 itself, no draw

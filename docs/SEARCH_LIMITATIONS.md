@@ -19008,9 +19008,9 @@ the new mechanics; none changes EoE-pool behavior.
     through `choose_card_from_library` picks instead of a dedicated
     ordering hook.
 12. **Wizard's Rockets' "put into a graveyard from the battlefield"**
-    uses the parser's existing LEAVES_BATTLEFIELD mapping for that
-    phrase (also fires if exiled) — pre-existing simplification shared
-    with Chromatic Star / Nutrient Block.
+    is the DIES event with ``IsSelf`` (2026-10-24, shared with Chromatic
+    Star / Nutrient Block; it was LEAVES_BATTLEFIELD before, which also
+    fired on exile / bounce). No shortcut left.
 13. **Creature tokens are synthesized by the keyword substrate's
     `keyword_actions._synthesize_creature_token_effect`** (carries
     colors). The artifact bucket only adds the Pilot token's quoted

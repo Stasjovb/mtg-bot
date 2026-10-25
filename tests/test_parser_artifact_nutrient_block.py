@@ -9,13 +9,12 @@ Nutrient Block prints:
     draw a card.
 
 The new grammar atom is the trigger phrase ``"this artifact is put
-into a graveyard from the battlefield"``. Per CR 700-series the
-graveyard-from-battlefield zone change is a strict subset of
-LEAVES_BATTLEFIELD (the latter also fires on exile / hand / library
-returns). The static-registry ``Nutrient Block`` entry already
-simplifies the printed graveyard-zone trigger to LEAVES_BATTLEFIELD
-with a documented "slightly looser — also fires if exiled" caveat;
-the parser mirrors that simplification so per-card parity holds.
+into a graveyard from the battlefield"``: the ``Event.DIES`` zone
+change (graveyard from the battlefield, any permanent type), not
+LEAVES_BATTLEFIELD (which also fires on exile / hand / library
+moves). It was LEAVES_BATTLEFIELD until 2026-10-24, mirroring a
+static-registry simplification ("slightly looser — also fires if
+exiled").
 
 Other lines (Indestructible keyword, ``{2}, {T}, Sacrifice this
 artifact: You gain 3 life.`` activated ability) all already parse via
@@ -46,9 +45,8 @@ from mtg_bot.effects.predicates import (
 def test_artifact_grave_from_battlefield_trigger_parses():
     """``When this artifact is put into a graveyard from the
     battlefield, draw a card.`` parses to a single
-    ``TriggeredAbility(event=LEAVES_BATTLEFIELD, predicate=IsSelf(),
-    effect=DrawCards(amount=1))`` — same shape the static registry
-    produces for Nutrient Block."""
+    ``TriggeredAbility(event=DIES, predicate=IsSelf(),
+    effect=DrawCards(amount=1))``."""
     line = (
         "When this artifact is put into a graveyard from the "
         "battlefield, draw a card."
@@ -57,7 +55,7 @@ def test_artifact_grave_from_battlefield_trigger_parses():
     assert clause is not None
     assert clause.triggers == (
         TriggeredAbility(
-            event=Event.LEAVES_BATTLEFIELD,
+            event=Event.DIES,
             predicate=IsSelf(),
             effect=DrawCards(amount=1),
         ),
@@ -82,17 +80,16 @@ _NUTRIENT_BLOCK_CARD = {
 
 def test_build_artifact_printing_claims_nutrient_block():
     """The Scryfall-shaped Nutrient Block record builds an Artifact
-    with the indestructible keyword, the LEAVES_BATTLEFIELD trigger
-    drawing a card, and the ``{2}, {T}, Sacrifice this artifact: You
-    gain 3 life.`` activated ability — same shape as the static
-    registry's ``make_artifact(...)``."""
+    with the indestructible keyword, the DIES (put into a graveyard
+    from the battlefield) trigger drawing a card, and the ``{2}, {T},
+    Sacrifice this artifact: You gain 3 life.`` activated ability."""
     printing = _build_artifact_printing(_NUTRIENT_BLOCK_CARD)
     assert printing is not None
     assert printing.name == "Nutrient Block"
     assert printing.keywords == frozenset({"indestructible"})
     assert printing.triggered_abilities == (
         TriggeredAbility(
-            event=Event.LEAVES_BATTLEFIELD,
+            event=Event.DIES,
             predicate=IsSelf(),
             effect=DrawCards(amount=1),
         ),
