@@ -118,6 +118,7 @@ from mtg_bot.effects.state_predicates import (
     VoidActive,
 )
 from mtg_bot.effects.state_predicates import LandsPlayedThisTurnAtLeast
+from mtg_bot.effects.generic.cube_creatures_rmc import OneOrMoreBatch
 from mtg_bot.effects.predicates import (
     OPPONENT,
     YOU,
@@ -1043,14 +1044,18 @@ _PREDICATE_TRIGGER_PHRASES: dict[
         True,
     ),
     # ``... deal combat damage to one or more players`` (Forth
-    # Eorlingas!'s this-turn trigger): the same aggregated observer —
-    # with one combat per turn, once per turn is once per combat.
+    # Eorlingas!'s this-turn trigger): one trigger per combat damage
+    # event, however many creatures connect ("one or more", CR 603.2c),
+    # and again in a later combat damage step the same turn: the
+    # per-source dispatch is batched by ``OneOrMoreBatch`` (no second
+    # instance while one from the same source waits on the stack), not
+    # capped with ``once_per_turn``.
     "one or more creatures you control deal combat damage to one or more players": (
         Event.DEALS_COMBAT_DAMAGE,
         Subject("source", IsCreature())
         & Controlled(YOU, subject="source")
-        & Subject("target", IsPlayer()),
-        True,
+        & Subject("target", IsPlayer())
+        & OneOrMoreBatch(),
     ),
     # ``Whenever a nontoken creature you control with a +1/+1
     # counter on it dies`` (Rayblade Trooper). Batch 9. Stricter

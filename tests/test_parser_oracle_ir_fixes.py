@@ -250,3 +250,51 @@ def test_chromatic_star_draws_when_sacrificed_but_not_when_exiled():
     move_off_battlefield(state, star3, destination="hand")
     drain_stack(state)
     assert len(state.players[0].hand) == 2  # Star 3 itself, no draw
+
+
+# ---------------------------------------------------------------------------
+# 16. Forth Eorlingas!: "one or more ... deal combat damage" per combat
+# damage, not once per turn
+# ---------------------------------------------------------------------------
+
+
+def _monarch_trigger(printing):
+    eff = printing.spell_effect
+    assert isinstance(eff, Sequence)
+    this_turn = next(
+        e for e in eff.effects if isinstance(e, CreateThisTurnTriggeredAbility)
+    )
+    (ta,) = this_turn.triggered_abilities
+    return ta
+
+
+def test_forth_eorlingas_trigger_is_one_or_more_not_once_per_turn():
+    ta = _monarch_trigger(cube("Forth Eorlingas!"))
+    assert ta.event is Event.DEALS_COMBAT_DAMAGE
+    assert not ta.once_per_turn
+    assert any(isinstance(c, OneOrMoreBatch) for c in _conjuncts(ta.predicate))
+
+
+def test_forth_eorlingas_triggers_once_per_combat_damage_not_once_per_turn():
+    state = new_game(ScriptedAgent(x=2))
+    lands(state, 0, "Mountain", 2)
+    lands(state, 0, "Plains", 2)
+    cast_and_resolve(state, 0, to_hand(state, "Forth Eorlingas!"))
+    knights = [o for o in state.battlefield if o.printing.name == "Human Knight"]
+    assert len(knights) == 2
+    for k in knights:
+        k.attacking = True
+    resolve_combat_damage(state, 1)
+    # Two creatures connected: one trigger ("one or more").
+    assert len(state.stack) == 1
+    drain_stack(state)
+    assert state.players[0].is_monarch
+    # The monarchy taken away, then combat damage again this turn (an
+    # additional combat): the ability triggers again.
+    state.players[0].is_monarch = False
+    state.players[1].is_monarch = True
+    resolve_combat_damage(state, 1)
+    assert len(state.stack) == 1
+    drain_stack(state)
+    assert state.players[0].is_monarch
+    assert state.players[1].life == 20 - 8
