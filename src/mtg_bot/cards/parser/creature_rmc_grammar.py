@@ -281,8 +281,11 @@ def _permission_kwargs(sentence: str) -> dict | None:
     key = sentence[0].lower() + sentence[1:] if sentence else sentence
     m = _ATTACKED_WITH_SUBTYPE_PERMISSION.match(key)
     if m is not None:
+        # "During any turn you attacked with a <Subtype>": not limited
+        # to this turn -- for as long as the card stays exiled.
         return {
             "cast_only": True,
+            "duration": "while_exiled",
             "requires_attacked_with_subtype": m.group("sub"),
             "any_color_mana": bool(m.group("any")),
         }

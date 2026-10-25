@@ -365,3 +365,18 @@ def test_nexus_form_stays_a_replacement():
     assert len(_detect_shuffle_self_statics(nexus, "Nexus of Fate")) == 1
     gsz = "Shuffle Green Sun's Zenith into its owner's library."
     assert _detect_shuffle_self_statics(gsz, "Green Sun's Zenith") == ()
+
+
+# ---------------------------------------------------------------------------
+# 4. Robber of the Rich: the permission lasts while the card is exiled
+# ---------------------------------------------------------------------------
+
+
+def test_robber_of_the_rich_permission_lasts_while_exiled():
+    p = cube("Robber of the Rich")
+    (ta,) = p.triggered_abilities
+    eff = ta.effect
+    while not hasattr(eff, "requires_attacked_with_subtype"):
+        eff = getattr(eff, "then", None) or getattr(eff, "inner")
+    assert eff.requires_attacked_with_subtype == "Rogue"
+    assert eff.duration is ExilePlayDuration.WHILE_EXILED
