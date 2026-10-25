@@ -143,12 +143,13 @@ def parse_face_effect(phrase: str) -> Effect | None:
         then = _parse_effect(m.group("then"))
         if first is None or then is None or first.target_count_range()[1] > 0:
             return None
-        from mtg_bot.effects.combinators import Sequence
+        from mtg_bot.effects.generic.cube_creatures_rmc import DoThenReflexive
 
-        # The reflexive ability's targets are chosen with the enclosing
-        # ability (the MayDoThenReflexive precedent; see
+        # A reflexive triggered ability (CR 603.12) after ``first``. The
+        # Python engine chooses its targets with the enclosing ability
+        # (the MayDoThenReflexive precedent; see
         # docs/SEARCH_LIMITATIONS.md).
-        return Sequence(effects=(first, then))
+        return DoThenReflexive(first=first, then=then)
     stripped = _strip_pronoun_subject(phrase)
     m = _DAMAGE_EQUAL_COUNT_YOU_CONTROL.match(stripped)
     if m is not None:

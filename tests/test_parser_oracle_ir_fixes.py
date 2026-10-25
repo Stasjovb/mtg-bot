@@ -180,3 +180,42 @@ def test_stat_and_named_token_phrases_carry_their_colour():
         "create a 2/2 colorless Squirrelfolk artifact creature token"
     )
     assert colorless.token_printing.color_indicator == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# 13. Ajani, Nacatl Avenger's 0: a reflexive trigger, not a Sequence
+# ---------------------------------------------------------------------------
+
+from mtg_bot.effects.generic.cube_creatures_rmc import DoThenReflexive  # noqa: E402
+
+
+def test_ajani_zero_is_a_reflexive_trigger():
+    back = cube("Ajani, Nacatl Pariah // Ajani, Nacatl Avenger").transform_back_face
+    zero = next(
+        aa for aa in back.activated_abilities if aa.cost.loyalty == 0
+    )
+    eff = zero.effect
+    assert isinstance(eff, DoThenReflexive)
+    assert isinstance(eff.first, CreateToken)
+    assert eff.first.token_printing.name == "Cat Warrior"
+    assert isinstance(eff.then, IfCondition)
+    assert eff.then.condition == ControlOtherPermanentOfColor(color="R")
+    # The Python engine chooses the reflexive target with the ability
+    # (docs/SEARCH_LIMITATIONS.md): its target range is the damage's.
+    assert eff.target_count_range() == eff.then.target_count_range() == (1, 1)
+    assert "when you do" in eff.describe()
+
+
+def test_do_then_reflexive_resolves_first_then_reflexive_effect():
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+
+    state = new_game()
+    to_library(state, "Island")
+    eff = DoThenReflexive(first=GainLife(amount=2), then=DrawCards(amount=1))
+    assert not eff.requires_target()
+    assert eff.target_slot_kinds() == ()
+    assert eff.legal_targets(state, 0) == []
+    eff.resolve(state, 0, ())
+    assert state.players[0].life == 22
+    assert len(state.players[0].hand) == 1

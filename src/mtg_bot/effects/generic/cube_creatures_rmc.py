@@ -1340,6 +1340,40 @@ class MayDoThenReflexive(Effect):
 
 
 @dataclass(frozen=True)
+class DoThenReflexive(Effect):
+    """"<first>. When you do, <then>." — ``first`` is done, then a
+    reflexive triggered ability (CR 603.12) whose effect is ``then``
+    triggers (Ajani, Nacatl Avenger's 0). An intervening "if" of the
+    reflexive ability ("When you do, if you control ...") is ``then``'s
+    ``IfCondition``. The non-optional twin of :class:`MayDoThenReflexive`,
+    with the same engine shortcut: ``then``'s targets are chosen with
+    the enclosing ability and it resolves right after ``first``
+    (docs/SEARCH_LIMITATIONS.md)."""
+
+    first: object = None
+    then: object = None
+
+    def requires_target(self) -> bool:
+        return self.then.requires_target()
+
+    def target_count_range(self):
+        return self.then.target_count_range()
+
+    def target_slot_kinds(self):
+        return self.then.target_slot_kinds()
+
+    def legal_targets(self, state, controller_id):
+        return self.then.legal_targets(state, controller_id)
+
+    def resolve(self, state, controller_id, targets=()):
+        self.first.resolve(state, controller_id, ())
+        self.then.resolve(state, controller_id, targets)
+
+    def describe(self) -> str:
+        return f"{self.first.describe()}; when you do, {self.then.describe()}"
+
+
+@dataclass(frozen=True)
 class PumpTargetCreatureByFormulaUEOT(Effect):
     """"Target creature gets <±X>/<±X> until end of turn, where X is
     <formula>." ``power_sign`` / ``toughness_sign`` are -1/0/+1."""

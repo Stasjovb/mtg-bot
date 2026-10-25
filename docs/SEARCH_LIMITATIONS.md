@@ -19557,7 +19557,7 @@ The glue bucket added a precombat-main hook to BOTH turn loops (`simulate.run_st
 
 **Where:** `layout_face_grammar` `_WHEN_YOU_DO` (Ajani, Nacatl Avenger's 0).
 
-**What the shortcut is.** "Create a Cat token. When you do, if you control a red permanent other than Ajani, he deals damage ... to any target": the reflexive trigger's target is picked when the loyalty ability is activated (the `MayDoThenReflexive` precedent), and the intervening-if is checked on resolution.
+**What the shortcut is.** "Create a Cat token. When you do, if you control a red permanent other than Ajani, he deals damage ... to any target": the reflexive trigger's target is picked when the loyalty ability is activated (the `MayDoThenReflexive` precedent), and the intervening-if is checked on resolution. The printing states the reflexive trigger as data (`cube_creatures_rmc.DoThenReflexive(first, then)`, `then` = the `IfCondition`; since 2026-10-24, a flat `Sequence` before), so another engine reading the card IR can put it on the stack after the token (CR 603.12); only `DoThenReflexive.resolve` takes the shortcut.
 
 ### Two-player readings of attack / defending-player text
 
