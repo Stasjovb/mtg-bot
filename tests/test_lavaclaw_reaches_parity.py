@@ -15,7 +15,7 @@ Parser-emitted shape:
     * AA[0] (mana={1}{B}{R}, no tap) ->
       ``BecomeLandCreatureUEOT(power=2, toughness=2,
       granted_keywords=frozenset(), unblockable=False,
-      granted_subtype=None,
+      granted_subtype='Elemental', set_colors=frozenset({'B', 'R'}),
       granted_activated_abilities=(
           ActivatedAbility(cost={X}, effect=PumpSelfXPowerUEOT()),
       ),
@@ -114,7 +114,8 @@ def test_lavaclaw_reaches_activate_ability_shape():
     )
     assert animate_aa.effect.power == 2
     assert animate_aa.effect.toughness == 2
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"B", "R"})
     # The nested granted activated ability carries PumpSelfXPowerUEOT.
     granted = animate_aa.effect.granted_activated_abilities
     assert len(granted) == 1, (

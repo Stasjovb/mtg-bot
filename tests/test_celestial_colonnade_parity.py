@@ -13,7 +13,8 @@ Parser-emitted shape:
     * AA[0] (mana={3}{W}{U}, no tap) ->
       ``BecomeLandCreatureUEOT(power=4, toughness=4,
       granted_keywords={'flying', 'vigilance'}, unblockable=False,
-      granted_subtype=None, granted_activated_abilities=(),
+      granted_subtype='Elemental', set_colors=frozenset({'W', 'U'}),
+      granted_activated_abilities=(),
       granted_triggered_abilities=())``
 
 This probe pins the Celestial Colonnade slug via the JJJJ idiom (parse
@@ -101,7 +102,8 @@ def test_celestial_colonnade_activated_ability_shape():
     assert "flying" in animate_aa.effect.granted_keywords
     assert "vigilance" in animate_aa.effect.granted_keywords
     assert animate_aa.effect.unblockable is False
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"W", "U"})
     assert animate_aa.effect.granted_activated_abilities == ()
     assert animate_aa.effect.granted_triggered_abilities == ()
 

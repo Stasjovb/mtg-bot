@@ -13,7 +13,8 @@ Parser-emitted shape:
     * AA[0] (mana={2}{R}{W}, no tap) ->
       ``BecomeLandCreatureUEOT(power=2, toughness=1,
       granted_keywords={'double strike'}, unblockable=False,
-      granted_subtype=None, granted_activated_abilities=(),
+      granted_subtype='Elemental', set_colors=frozenset({'R', 'W'}),
+      granted_activated_abilities=(),
       granted_triggered_abilities=())``
 
 This probe pins the Needle Spires slug via the JJJJ idiom (parse +
@@ -97,7 +98,8 @@ def test_needle_spires_activated_ability_shape():
     assert animate_aa.effect.toughness == 1
     assert "double strike" in animate_aa.effect.granted_keywords
     assert animate_aa.effect.unblockable is False
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"R", "W"})
     assert animate_aa.effect.granted_activated_abilities == ()
     assert animate_aa.effect.granted_triggered_abilities == ()
 

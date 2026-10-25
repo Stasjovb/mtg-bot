@@ -14,7 +14,7 @@ Parser-emitted shape:
     * AA[0] (mana={2}{U}{R}, no tap) ->
       ``BecomeLandCreatureUEOT(power=1, toughness=4,
       granted_keywords=frozenset(), unblockable=False,
-      granted_subtype=None,
+      granted_subtype='Elemental', set_colors=frozenset({'U', 'R'}),
       granted_activated_abilities=(
           ActivatedAbility(cost={0}, effect=SwitchSourcePowerToughnessUEOT()),
       ),
@@ -127,7 +127,8 @@ def test_wandering_fumarole_activate_ability_shape():
     )
     assert animate_aa.effect.power == 1
     assert animate_aa.effect.toughness == 4
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"U", "R"})
     # The nested granted activated ability carries
     # SwitchSourcePowerToughnessUEOT.
     granted = animate_aa.effect.granted_activated_abilities

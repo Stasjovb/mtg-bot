@@ -332,6 +332,9 @@ def test_simple_manland_builder_returns_make_utility_land_shape():
                     power=2,
                     toughness=3,
                     granted_keywords=frozenset({"lifelink"}),
+                    # "a 2/3 white and black Elemental creature"
+                    granted_subtype="Elemental",
+                    set_colors=frozenset({"W", "B"}),
                 ),
             ),
         ),

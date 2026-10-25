@@ -13,7 +13,8 @@ Parser-emitted shape:
     * AA[0] (mana={1}{U}{B}, no tap) ->
       ``BecomeLandCreatureUEOT(power=3, toughness=2,
       granted_keywords=frozenset(), unblockable=True,
-      granted_subtype=None, granted_activated_abilities=(),
+      granted_subtype='Elemental', set_colors=frozenset({'U', 'B'}),
+      granted_activated_abilities=(),
       granted_triggered_abilities=())``
 
 This probe pins the Creeping Tar Pit slug via the JJJJ idiom (parse +
@@ -106,7 +107,8 @@ def test_creeping_tar_pit_activated_ability_shape():
     assert animate_aa.effect.unblockable is True, (
         "Creeping Tar Pit's load-bearing characteristic: unblockable=True"
     )
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"U", "B"})
     assert animate_aa.effect.granted_activated_abilities == ()
     assert animate_aa.effect.granted_triggered_abilities == ()
 

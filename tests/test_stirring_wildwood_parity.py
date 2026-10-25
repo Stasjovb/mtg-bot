@@ -13,7 +13,8 @@ Parser-emitted shape:
     * AA[0] (mana={1}{G}{W}, no tap) ->
       ``BecomeLandCreatureUEOT(power=3, toughness=4,
       granted_keywords={'reach'}, unblockable=False,
-      granted_subtype=None, granted_activated_abilities=(),
+      granted_subtype='Elemental', set_colors=frozenset({'G', 'W'}),
+      granted_activated_abilities=(),
       granted_triggered_abilities=())``
 
 This probe pins the Stirring Wildwood slug via the JJJJ idiom (parse +
@@ -95,7 +96,8 @@ def test_stirring_wildwood_activated_ability_shape():
     assert animate_aa.effect.toughness == 4
     assert "reach" in animate_aa.effect.granted_keywords
     assert animate_aa.effect.unblockable is False
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"G", "W"})
     assert animate_aa.effect.granted_activated_abilities == ()
     assert animate_aa.effect.granted_triggered_abilities == ()
 

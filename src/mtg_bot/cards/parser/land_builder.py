@@ -116,9 +116,10 @@ _COLOR_WORD_TO_LETTER: dict[str, str] = {
 #   3. "<COST>: Until end of turn, this land becomes a <P>/<T>
 #      <c1word> and <c2word> Elemental creature with <KEYWORDS>.
 #      It's still a land."
-# The "Elemental" type-grant on the animated creature isn't modeled
-# (matches the static side, which only passes power/toughness and
-# granted_keywords to BecomeLandCreatureUEOT). Variants without the
+# The animated land becomes the two named colours and an Elemental
+# (``set_colors`` / ``granted_subtype`` on BecomeLandCreatureUEOT, as
+# the generic "this land becomes" recognizer builds them for Restless
+# Vinestalk). Variants without the
 # trailing ``with <KEYWORDS>`` clause (Creeping Tar Pit's "It can't
 # be blocked this turn." rider) are handled separately and don't
 # match this pattern.
@@ -1092,8 +1093,10 @@ def _try_build_manland(
                     toughness=int(animate_match.group("toughness")),
                     granted_keywords=keywords,
                     unblockable=unblockable,
+                    granted_subtype="Elemental",
                     granted_activated_abilities=granted_activated,
                     granted_triggered_abilities=granted_triggered,
+                    set_colors=frozenset({c1_animate, c2_animate}),
                 ),
             ),
         ),
@@ -1112,9 +1115,16 @@ def _try_build_manland(
 # Bodies / costs outside the table fall through silently.
 #
 # Built on the same ``make_utility_land`` factory as the manland
-# branch — single activated ability, the cost flags carry the sac
-# semantics, the effect comes from the dispatch.
+# branch — the {C} mana ability as ``produces``, a single activated
+# ability whose cost flags carry the sac semantics, the effect from the
+# dispatch.
 _TAP_FOR_C_LINE = "{T}: Add {C}."
+# The first line, "{T}: Add {C}.", is the land's mana ability: folded
+# into ``produces`` (the line-composed land grammar's form for a plain
+# tap-for-one-mana ability, ``land_lines``) with
+# ``mana_only_from_produces`` so the land pays exactly {C}, not through
+# the legacy "any land pays one generic" fallback.
+_TAP_FOR_C_PRODUCES = frozenset({"C"})
 _TAP_AND_SAC_SELF_RE = re.compile(
     r"^\{T\}, Sacrifice this land: (?P<body>.+)\.$"
 )
@@ -1201,6 +1211,8 @@ def _try_build_tap_sac_utility_land(
             return None
         return make_utility_land(
             card["name"],
+            produces=_TAP_FOR_C_PRODUCES,
+            mana_only_from_produces=True,
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
@@ -1220,6 +1232,8 @@ def _try_build_tap_sac_utility_land(
         cost_str = sac_land.group("cost")
         return make_utility_land(
             card["name"],
+            produces=_TAP_FOR_C_PRODUCES,
+            mana_only_from_produces=True,
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
@@ -1241,6 +1255,8 @@ def _try_build_tap_sac_utility_land(
             return None
         return make_utility_land(
             card["name"],
+            produces=_TAP_FOR_C_PRODUCES,
+            mana_only_from_produces=True,
             activated_abilities=(
                 ActivatedAbility(
                     cost=ActivationCost(
@@ -1261,6 +1277,8 @@ def _try_build_tap_sac_utility_land(
         cost_str = sac_desert.group("cost")
         return make_utility_land(
             card["name"],
+            produces=_TAP_FOR_C_PRODUCES,
+            mana_only_from_produces=True,
             subtypes_str="Desert",
             activated_abilities=(
                 ActivatedAbility(

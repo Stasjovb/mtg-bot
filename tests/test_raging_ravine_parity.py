@@ -13,7 +13,8 @@ Parser-emitted shape:
     * AA[0] (mana={2}{R}{G}, no tap) ->
       ``BecomeLandCreatureUEOT(power=3, toughness=3,
       granted_keywords=frozenset(), unblockable=False,
-      granted_subtype=None, granted_activated_abilities=(),
+      granted_subtype='Elemental', set_colors=frozenset({'R', 'G'}),
+      granted_activated_abilities=(),
       granted_triggered_abilities=(TriggeredAbility(event=ATTACKS,
       effect=PutPlusOneCounterOnSelf(amount=1), ...),))``
 
@@ -113,7 +114,8 @@ def test_raging_ravine_activated_ability_shape():
         "is granted_triggered_abilities)"
     )
     assert animate_aa.effect.unblockable is False
-    assert animate_aa.effect.granted_subtype is None
+    assert animate_aa.effect.granted_subtype == "Elemental"
+    assert animate_aa.effect.set_colors == frozenset({"R", "G"})
     assert animate_aa.effect.granted_activated_abilities == ()
     # The +1/+1-on-attack rider is the load-bearing characteristic.
     assert len(animate_aa.effect.granted_triggered_abilities) == 1
