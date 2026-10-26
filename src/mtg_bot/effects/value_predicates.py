@@ -118,7 +118,7 @@ class HasCardType(ObjectPredicate):
 
 @dataclass(frozen=True)
 class IsPermanentCard(ObjectPredicate):
-    """"permanent card" (CR 110.4b): its printing has a permanent card type
+    """"permanent card" (CR 110.4a): its printing has a permanent card type
     (artifact, battle, creature, enchantment, land, planeswalker). Unlike
     :class:`IsPermanent` (a target filter on the battlefield, where
     anything with a printing is a permanent), it rejects instants and
