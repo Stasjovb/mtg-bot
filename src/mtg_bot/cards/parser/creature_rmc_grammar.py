@@ -1124,8 +1124,15 @@ def parse_rmc_creature_line_post(line: str, name: str) -> RmcLine | None:
     kw_line = _parse_extended_keyword_line(line)
     if kw_line is not None:
         return kw_line
+    companion = parse_companion_line(line)
+    if companion is not None:
+        # Companion (CR 702.139): data for the card IR; this engine
+        # doesn't play companions (SEARCH_LIMITATIONS, cube creatures
+        # bucket).
+        return RmcLine(printing_fields={"companion": companion})
     if _OUTSIDE_THE_GAME_LINE.match(line):
-        # Companion (CR 702.139) / "Choose a Background" (commander
+        # A companion clause with a condition not modeled yet (see
+        # ``parse_companion_line``) / "Choose a Background" (commander
         # deck construction) / Conspiracy draft abilities (CR 905): they
         # work only outside a game — in a deck this engine plays they do
         # nothing (see SEARCH_LIMITATIONS, cube creatures bucket).
@@ -1333,6 +1340,58 @@ _STATIC_CONDITIONS = {
     "you have one or fewer cards in hand": _hand_at_most_one,
     "there are four or more card types among cards in your graveyard": _delirium,
 }
+# "Companion — <condition>" (CR 702.139a): the deck conditions modeled
+# (``effects.deck_conditions``). "Each <noun> card in your starting deck
+# <requirement>."
+_COMPANION_EACH = re.compile(
+    r"^Companion — Each (?P<noun>permanent|nonland|creature) card in your "
+    r"starting deck (?P<req>.+)\.$"
+)
+_COMPANION_MV_AT_MOST = re.compile(r"^has mana value (?P<n>\d+) or less$")
+
+
+def _companion_noun(noun: str):
+    from mtg_bot.effects.object_predicates import IsCreature, IsLand
+    from mtg_bot.effects.value_predicates import IsPermanentCard
+
+    if noun == "permanent":
+        return IsPermanentCard()
+    if noun == "nonland":
+        return ~IsLand()
+    return IsCreature()
+
+
+def parse_companion_line(line: str):
+    """The :class:`~mtg_bot.effects.deck_conditions.Companion` a
+    "Companion — <condition>" line spells (CR 702.139a), or ``None`` for
+    another line or a condition not modeled yet: "Each <permanent /
+    nonland / creature> card in your starting deck has mana value N or
+    less" (Lurrus), "has an activated ability" (Zirda), "has a different
+    name" (Lutri)."""
+    from mtg_bot.effects.deck_conditions import (
+        Companion, EachCardInStartingDeck, StartingDeckDifferentNames,
+    )
+    from mtg_bot.effects.value_predicates import (
+        HasActivatedAbility, HasManaValueAtMost,
+    )
+
+    m = _COMPANION_EACH.match(line)
+    if m is None:
+        return None
+    cards = _companion_noun(m.group("noun"))
+    req = m.group("req")
+    if req == "has a different name":
+        return Companion(StartingDeckDifferentNames(cards=cards))
+    if req == "has an activated ability":
+        return Companion(EachCardInStartingDeck(cards=cards, must=HasActivatedAbility()))
+    mv = _COMPANION_MV_AT_MOST.match(req)
+    if mv is not None:
+        return Companion(EachCardInStartingDeck(
+            cards=cards, must=HasManaValueAtMost(int(mv.group("n"))),
+        ))
+    return None
+
+
 _OUTSIDE_THE_GAME_LINE = re.compile(
     r"^(?:Companion — .+|Choose a Background|Draft this card face up\.|"
     r"As you draft a card, you may draft an additional card from that "

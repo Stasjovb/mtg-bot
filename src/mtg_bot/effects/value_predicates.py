@@ -117,6 +117,53 @@ class HasCardType(ObjectPredicate):
 
 
 @dataclass(frozen=True)
+class IsPermanentCard(ObjectPredicate):
+    """"permanent card" (CR 110.4b): its printing has a permanent card type
+    (artifact, battle, creature, enchantment, land, planeswalker). Unlike
+    :class:`IsPermanent` (a target filter on the battlefield, where
+    anything with a printing is a permanent), it rejects instants and
+    sorceries wherever the card is: a companion's deck condition reads it
+    over cards in a library (``effects.deck_conditions``)."""
+
+    def test(self, obj, state):
+        p = getattr(obj, "printing", None)
+        if p is None:
+            return False
+        return any(t in _PERMANENT_CARD_TYPES for t in p.card_types)
+
+
+_PERMANENT_CARD_TYPES = frozenset(
+    {"Artifact", "Battle", "Creature", "Enchantment", "Land", "Planeswalker"}
+)
+
+
+@dataclass(frozen=True)
+class HasActivatedAbility(ObjectPredicate):
+    """"has an activated ability" (CR 602; Zirda, the Dawnwaker's companion
+    condition): its printing has one - mana abilities (a land's ``produces``,
+    CR 605.1a, including basic lands' intrinsic ones, 305.6), loyalty
+    abilities (606.2) and keyword abilities that are activated (equip,
+    cycling and landcycling, reconfigure, Class levels) included. Read from
+    the printing, so abilities an effect grants or removes on the
+    battlefield are not seen: its one use is a deck condition, over cards
+    outside the battlefield (``effects.deck_conditions``)."""
+
+    def test(self, obj, state):
+        p = getattr(obj, "printing", None)
+        if p is None:
+            return False
+        return bool(
+            p.activated_abilities
+            or p.hand_activated_abilities
+            or p.graveyard_activated_abilities
+            or p.produces
+            or p.landcycling
+            or p.reconfigure_cost is not None
+            or p.class_levels
+        )
+
+
+@dataclass(frozen=True)
 class HasManaValueAtMostColorsSpent(ObjectPredicate):
     """Converge: "if its mana value is less than or equal to the number
     of colors of mana spent to cast this spell" — compares against the
@@ -131,11 +178,13 @@ class HasManaValueAtMostColorsSpent(ObjectPredicate):
 
 
 __all__ = [
+    "HasActivatedAbility",
     "HasCardType",
     "HasManaValueAtMostColorsSpent",
     "HasColor",
     "HasManaValueAtMost",
     "HasTotalPowerAndToughnessAtMost",
     "IsPermanent",
+    "IsPermanentCard",
     "mana_value_of",
 ]

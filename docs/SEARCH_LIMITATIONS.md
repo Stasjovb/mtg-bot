@@ -19276,11 +19276,15 @@ repeated here.
     single instruction. A second, separate discard made while the first
     trigger is still waiting doesn't trigger again. *Impact:* Inti can
     under-trigger in response chains.
-12. **Outside-the-game lines are inert.** Companion, "Choose a
-    Background" and draft-matters lines (Lurrus's companion clause,
-    Cogwork Librarian) parse to nothing: the engine has no sideboard,
-    companion zone or draft. Those cards are claimed for their in-game
-    abilities only.
+12. **Outside-the-game lines are inert.** "Choose a Background" and
+    draft-matters lines (Cogwork Librarian) parse to nothing, and a
+    companion clause (CR 702.139) parses to `CardPrinting.companion` (a
+    `deck_conditions.Companion` with its deck condition: Lurrus, Lutri,
+    Zirda; other conditions still parse to nothing) that no game code
+    reads: the engine has no sideboard, companion reveal, companion
+    special action or draft. The field exists for the card IR (the
+    mtg-zero Rust engine plays companions). Those cards are claimed for
+    their in-game abilities only.
 13. **Zirda's activation reduction** (`rmc.activation_cost_reduction`)
     reduces generic mana only and keeps the total at one mana or more,
     which covers every printed activation cost in the pool.

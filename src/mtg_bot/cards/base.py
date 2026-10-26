@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mtg_bot.effects.conditions import Condition
 
 from mtg_bot.keyword_vocab import KeywordSpelling, validate_keywords
+from mtg_bot.effects.deck_conditions import Companion  # noqa: F401  (CardPrinting.companion)
 from mtg_bot.effects import (
     ActivatedAbility,
     ActivationCost,
@@ -1742,6 +1743,11 @@ class CardPrinting:
     # ``roto_keywords.FewerMinusOneCountersOnYourCreatures`` (Vizier of
     # Remedies, read by ``game.add_minus_one_counters``).
     replacement_statics: tuple = ()
+    # Companion (CR 702.139): "Companion — <condition>", a keyword
+    # ability that functions outside the game, with its deck condition
+    # (``effects.deck_conditions``). Data for the card IR only: this
+    # engine doesn't play companions (no game code reads it).
+    companion: "Companion | None" = None
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

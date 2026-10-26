@@ -178,6 +178,15 @@ survey found (mtg-zero `docs/research/card_ir_survey.md` section 2.3):
   engine comparisons are unchanged; values copied into runtime game
   state are stored as plain strings (`vocab.plain`).
 
+* Companion (CR 702.139): `CardPrinting.companion` is a `Companion`
+  record (category `Companion`) holding its deck condition, a
+  `DeckCondition` (`effects/deck_conditions.py`):
+  `EachCardInStartingDeck { cards, must }` (two object predicates: Lurrus
+  `IsPermanentCard` / `HasManaValueAtMost(2)`, Zirda `IsPermanentCard` /
+  `HasActivatedAbility`) or `StartingDeckDifferentNames { cards }` (Lutri:
+  `ObjectNot(IsLand)`). The {3} of the special action (CR 116.2g) is a
+  rule, not data. Other companion conditions still parse to nothing.
+
 Strings that remain open by design: counter names (`"charge"`,
 `"corpse"`), subtypes and card names, display labels, mana-cost strings
 next to their parsed costs, and target-kind tags (`"graveyard_creature"`,
