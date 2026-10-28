@@ -15,7 +15,7 @@ from mtg_bot.cards.base import make_creature
 from mtg_bot.effects.base import StaticAbility, StaticScope, TriggeredAbility
 from mtg_bot.effects.generic.draw_mill import DrawCards
 
-POOLS = ("cube", "roto", "eoe", "all")
+POOLS = ("cube", "roto", "eoe", "all", "legacy")
 
 
 @pytest.fixture(scope="module", params=POOLS)

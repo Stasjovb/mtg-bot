@@ -319,6 +319,16 @@ class Event(str, Enum):
     # predicate=ClassLevelReached(n)``; fired by
     # ``layouts.gain_class_level``.
     CLASS_LEVEL_GAINED = "class_level_gained"
+    # A card left a graveyard (to any other zone: exile, a hand, a library,
+    # the stack, the battlefield). Subjects: the graveyard's owner
+    # (``"player"``) and the card as it was in the graveyard (``"card"``;
+    # CR 603.10a: a trigger on a card leaving a graveyard looks back in
+    # time). "Whenever an instant or sorcery card leaves your graveyard"
+    # (Murktide Regent) is ``Subject("card", <instant or sorcery>) &
+    # Controlled(subject="player")``. Data for the card IR (the mtg-zero
+    # Rust engine): no dispatch site fires it here (SEARCH_LIMITATIONS
+    # cube creatures 14).
+    LEAVES_GRAVEYARD = "leaves_graveyard"
 
 
 # Subject-slot names per event. Used by the engine to validate that a
@@ -374,6 +384,7 @@ EVENT_SUBJECTS: dict[Event, tuple[str, ...]] = {
     Event.DEALS_DAMAGE_TO_PLAYER: ("source", "player"),
     Event.SAGA_CHAPTER: ("obj", "lore_before", "lore_after"),
     Event.CLASS_LEVEL_GAINED: ("obj", "level"),
+    Event.LEAVES_GRAVEYARD: ("player", "card"),
 }
 
 

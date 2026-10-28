@@ -3,11 +3,15 @@
 Actions::
 
     mtg_bot cards export-ir --pool cube --out DIR [--name powerlsv]
+    mtg_bot cards export-ir --pool cube legacy --out DIR
     mtg_bot cards roundtrip --pool cube roto eoe all
 
 ``export-ir`` writes the pool's card IR (``<name>.ir.json``) and the
 schema it was encoded with (``<name>.schema.json``); see
-``docs/CARD_IR.md``. ``roundtrip`` checks that every printing of each
+``docs/CARD_IR.md``. Several pools are encoded with ONE schema, built over
+all their printings (so one generated consumer, mtg-zero's ``card_ir``
+crate, reads every document): each pool's ``<stem>.ir.json``, and the
+schema once, as ``<first stem>.schema.json``. ``roundtrip`` checks that every printing of each
 pool decodes back to an identical object (types included) and that
 re-encoding is a fixpoint; it exits 1 on any difference.
 """
@@ -33,44 +37,64 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="action", required=True)
     exp = sub.add_parser("export-ir", help="Write a pool's card IR + schema.")
-    exp.add_argument("--pool", default="cube", help="cube | roto | eoe | all (default cube)")
+    exp.add_argument(
+        "--pool", nargs="+", default=["cube"],
+        help="cube | roto | eoe | legacy | all (default cube); several pools share one schema",
+    )
     exp.add_argument("--out", type=Path, default=Path("."), help="Output directory.")
     exp.add_argument(
         "--name", default=None,
-        help="File stem (default: powerlsv for cube, vintage_roto for roto, else the pool).",
+        help="File stem (default: powerlsv for cube, vintage_roto for roto, else the pool); one pool only.",
     )
     rt = sub.add_parser("roundtrip", help="Check decode(encode(p)) == p for pools.")
     rt.add_argument("--pool", nargs="+", default=["cube", "roto", "eoe", "all"])
     return parser
 
 
-def export_ir(pool: str, out: Path, name: str | None = None) -> dict:
+def export_ir(pool: str | Sequence[str], out: Path, name: str | None = None) -> dict:
     """Write ``<name>.ir.json`` and ``<name>.schema.json`` into ``out``;
-    returns a summary."""
+    returns a summary. Several pools: one schema over all their printings,
+    each pool's document, the schema written once under the first stem."""
     from mtg_bot.cards import ir
 
-    doc, schema = ir.build_document(pool)
-    stem = name or POOL_FILE_NAMES.get(pool, pool)
+    pools = [pool] if isinstance(pool, str) else list(pool)
+    if not pools or len(set(pools)) != len(pools):
+        raise ValueError(f"export-ir: pools must be distinct and non-empty: {pools}")
+    if name is not None and len(pools) > 1:
+        raise ValueError("export-ir: --name names one pool's files")
+    printings = {p: ir.pool_printings(p) for p in pools}
+    schema = None
+    if len(pools) > 1:
+        both = [pr[n] for p in pools for pr in [printings[p]] for n in sorted(pr)]
+        schema = ir.build_schema(both)
     out.mkdir(parents=True, exist_ok=True)
-    ir_path = out / f"{stem}.ir.json"
-    schema_path = out / f"{stem}.schema.json"
-    text = ir.dumps(doc)
-    ir_path.write_text(text, encoding="utf-8", newline="\n")
-    schema_path.write_text(
-        json.dumps(schema.to_json(), sort_keys=True, indent=1, ensure_ascii=False) + "\n",
-        encoding="utf-8", newline="\n",
-    )
-    data = text.encode("utf-8")
-    return {
-        "pool": pool,
-        "cards": len(doc["cards"]),
-        "classes": len(schema.classes),
-        "ir_bytes": len(data),
-        "ir_gzip_bytes": len(gzip.compress(data, mtime=0)),
-        "schema_sha256": doc["schema_sha256"],
-        "ir_path": str(ir_path),
-        "schema_path": str(schema_path),
-    }
+    docs = []
+    for i, p in enumerate(pools):
+        doc, sch = ir.build_document(p, printings[p], schema)
+        stem = name or POOL_FILE_NAMES.get(p, p)
+        ir_path = out / f"{stem}.ir.json"
+        text = ir.dumps(doc)
+        ir_path.write_text(text, encoding="utf-8", newline="\n")
+        data = text.encode("utf-8")
+        entry = {
+            "pool": p,
+            "cards": len(doc["cards"]),
+            "ir_bytes": len(data),
+            "ir_gzip_bytes": len(gzip.compress(data, mtime=0)),
+            "ir_path": str(ir_path),
+        }
+        if i == 0:
+            schema_path = out / f"{stem}.schema.json"
+            schema_path.write_text(
+                json.dumps(sch.to_json(), sort_keys=True, indent=1, ensure_ascii=False) + "\n",
+                encoding="utf-8", newline="\n",
+            )
+            summary = {"classes": len(sch.classes), "schema_sha256": doc["schema_sha256"],
+                       "schema_path": str(schema_path)}
+        docs.append(entry)
+    if len(pools) == 1:
+        return {**docs[0], **summary}
+    return {**summary, "documents": docs}
 
 
 def roundtrip(pools: Sequence[str]) -> list[str]:

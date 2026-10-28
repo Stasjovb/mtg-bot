@@ -5987,6 +5987,17 @@ def put_into_battlefield(
     # "Enters with +1/+1 counters equal to X" replacement effects. Applied
     # before triggered abilities so any ETB that reads the creature's
     # state sees the counters already in place.
+    # Murktide Regent's two abilities are card-IR data only (the mtg-zero
+    # Rust engine plays them; SEARCH_LIMITATIONS, "Legacy pool" 1): fail
+    # loudly rather than enter without its counters or its trigger.
+    if obj.printing.enters_with_counter_per_card_exiled_with_it is not None or any(
+        getattr(t, "event", None) is not None and t.event.value == "leaves_graveyard"
+        for t in obj.printing.triggered_abilities
+    ):
+        raise NotImplementedError(
+            f"{obj.printing.name}: 'enters with a counter for each card exiled with it' "
+            "and 'leaves your graveyard' triggers are card-IR data only (not played here)"
+        )
     if obj.printing.enters_with_counter_per_kick and obj.kick_count > 0:
         from mtg_bot.game import add_plus_one_counters
         add_plus_one_counters(state, obj, obj.kick_count)

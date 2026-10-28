@@ -61,12 +61,16 @@ def test_active_pool_name_reads_env(monkeypatch):
 def test_registry_shape():
     assert pools.TARGET_POOL == "cube"
     assert pools.DEFAULT_POOL == "all"
-    assert set(pools.POOLS) == {"all", "cube", "eoe", "roto"}
+    assert set(pools.POOLS) == {"all", "cube", "eoe", "roto", "legacy"}
     assert pools.POOLS["all"] == (
         pools.EOE_POOL_FILES + pools.CUBE_POOL_FILES + pools.ROTO_POOL_FILES
     )
     assert pools.POOLS["cube"] == pools.CUBE_POOL_FILES
     assert pools.POOLS["roto"] == pools.ROTO_POOL_FILES
+    # The Delver mirror's maindeck cards outside the cube (mtg-zero's card
+    # IR); in no other pool.
+    assert pools.POOLS["legacy"] == pools.LEGACY_POOL_FILES == ("legacy_delver.json",)
+    assert all("legacy_delver.json" not in files for name, files in pools.POOLS.items() if name != "legacy")
 
 
 def test_roto_pool_is_part_of_the_default():

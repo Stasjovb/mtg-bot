@@ -383,7 +383,8 @@ def _main_name_list(args) -> int:
     names, custom = load_name_list(entries)
     print(f"Resolving {len(names)} names from {args.names} on Scryfall "
           f"({len(custom)} custom cards without a Scryfall record)...")
-    pool = build_pool_from_names(names)
+    basics = () if args.no_basics else NAME_LIST_BASIC_LAND_NAMES
+    pool = build_pool_from_names(names, basics=basics)
     comparison = None
     if args.compare_cube:
         print(f"Comparing against CubeCobra cube {args.compare_cube!r}...")
@@ -398,6 +399,7 @@ def _main_name_list(args) -> int:
         n_list_entries=len(entries), scryfall_names=names, custom=custom,
         n_cards=len(pool), comparison=comparison,
     )
+    meta["includes_basic_lands"] = list(basics)
     _write_pool(args.out, pool, meta)
     return 0
 
@@ -421,6 +423,9 @@ def main(argv: list[str] | None = None) -> int:
                              "from it instead of from --cube")
     parser.add_argument("--cube-name", default=None,
                         help="display name recorded in the --names sidecar")
+    parser.add_argument("--no-basics", action="store_true",
+                        help="with --names: no basic lands added (a pool of "
+                             "extra cards, e.g. data/legacy_delver.json)")
     parser.add_argument("--compare-cube", default=None,
                         help="with --names: CubeCobra cube id to diff the "
                              "list against (recorded in the sidecar)")
