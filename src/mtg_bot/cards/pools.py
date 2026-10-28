@@ -53,6 +53,12 @@ CUBE_POOL_FILES: tuple[str, ...] = ("cube_power_lsv.json",)
 # written by a fetch script.
 CUSTOM_CARD_FILES: tuple[str, ...] = ("cube_roto_custom.json",)
 ROTO_POOL_FILES: tuple[str, ...] = ("cube_roto.json",) + CUSTOM_CARD_FILES
+# The cards of the Legacy Izzet Delver 75's maindeck (mtg-zero's Delver
+# mirror) that are not in the cube: Murktide Regent, Prismari Charm; Scryfall
+# records, no basic lands (regenerate via ``scripts/fetch_cube.py --names
+# data/legacy_delver.sheet.json --no-basics --cube-name "Legacy Izzet Delver
+# (mtg-zero)" --out data/legacy_delver.json``). In no other pool.
+LEGACY_POOL_FILES: tuple[str, ...] = ("legacy_delver.json",)
 EOE_POOL_FILES: tuple[str, ...] = (
     "edge_of_eternities.json",
     "stellar_sights.json",
@@ -64,6 +70,7 @@ POOLS: dict[str, tuple[str, ...]] = {
     "cube": CUBE_POOL_FILES,
     "eoe": EOE_POOL_FILES,
     "roto": ROTO_POOL_FILES,
+    "legacy": LEGACY_POOL_FILES,
 }
 DEFAULT_POOL = "all"
 # The pool the modeling campaign, deck pool, and self-play target.

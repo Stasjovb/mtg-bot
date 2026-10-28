@@ -883,6 +883,18 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
         # U/B cube-creature grammar (``parser.cube_creatures_ub``):
         # draw replacements, Ninjutsu, ... Tried before the generic
         # clause dispatch; contributes abilities and printing fields.
+        # Legacy creatures outside the cube (Murktide Regent: delve, "enters
+        # with a +1/+1 counter for each ... card exiled with it", a card
+        # leaving your graveyard; ``legacy_creatures``).
+        from mtg_bot.cards.parser.legacy_creatures import (
+            parse_legacy_creature_line,
+        )
+
+        legacy_line = parse_legacy_creature_line(line, card["name"])
+        if legacy_line is not None:
+            triggers.extend(legacy_line.triggers)
+            ub_fields.update(legacy_line.fields)
+            continue
         ub_line = parse_ub_creature_line(
             _substitute_self_name(line, card["name"]), card["name"],
         )

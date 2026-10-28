@@ -187,6 +187,22 @@ survey found (mtg-zero `docs/research/card_ir_survey.md` section 2.3):
   `ObjectNot(IsLand)`). The {3} of the special action (CR 116.2g) is a
   rule, not data. Other companion conditions still parse to nothing.
 
+* Murktide Regent (pool `legacy`, the mtg-zero Delver mirror's maindeck
+  cards outside the cube): `CardPrinting.enters_with_counter_per_card_exiled_with_it`
+  (an object predicate: a +1/+1 counter for each matching card exiled to
+  pay the cost of the spell that became the permanent, CR 607.2q, 614.1c)
+  and `Event.LEAVES_GRAVEYARD` (subjects `player`, the graveyard's owner,
+  and `card`, the card as it was there; CR 603.10a). Prismari Charm's
+  "deals 1 damage to each of one or two targets" is the effect
+  `DealDamageToEachTarget`. Data for mtg-zero; the Python engine refuses to
+  play the two Murktide abilities (SEARCH_LIMITATIONS, "Legacy pool" 1).
+
+* Several pools, one schema: `mtg_bot cards export-ir --pool cube legacy`
+  builds the schema over both pools' printings and writes `powerlsv.ir.json`,
+  `legacy.ir.json` and `powerlsv.schema.json` (one generated consumer reads
+  both documents). The cube's cards encode exactly as in a cube-only export;
+  only `schema_sha256` differs.
+
 Strings that remain open by design: counter names (`"charge"`,
 `"corpse"`), subtypes and card names, display labels, mana-cost strings
 next to their parsed costs, and target-kind tags (`"graveyard_creature"`,

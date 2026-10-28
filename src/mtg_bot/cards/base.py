@@ -1748,6 +1748,14 @@ class CardPrinting:
     # (``effects.deck_conditions``). Data for the card IR only: this
     # engine doesn't play companions (no game code reads it).
     companion: "Companion | None" = None
+    # "This creature enters with a +1/+1 counter on it for each instant and
+    # sorcery card exiled with it." (Murktide Regent): an ObjectPredicate
+    # over the cards exiled to pay the cost of the spell that became this
+    # permanent (its delve; CR 607.2q links the two abilities, 614.1c: it
+    # enters with them). Not cast, or no matching card exiled: no counter.
+    # Data for the card IR only: this engine doesn't play it (entering
+    # with it raises; SEARCH_LIMITATIONS, "Legacy pool" 1).
+    enters_with_counter_per_card_exiled_with_it: "object | None" = None
 
     def __post_init__(self) -> None:
         # Runs for every construction path, including

@@ -20312,3 +20312,25 @@ Design note: `docs/EFFECTIVE_CHARACTERISTICS_DESIGN.md` (inventory, design, rout
 - **Wastes**: Magnum Opus's deck plays ten, but the roto pool data only adds the five basic land types (`scripts/fetch_cube.py` `BASIC_LAND_NAMES`), so the deck can't be loaded as drafted (the smoke tests substitute Islands). Adding Wastes is a card-data change outside this branch (a Scryfall record for the pool plus its colorless mana ability).
 
 **Pinned by:** `tests/test_effective_characteristics.py`, `tests/test_roto_karn_lattice.py` (including the Karn + Lattice lock and smoke games with Magnum Opus's deck).
+
+## Legacy pool (mtg-zero's Izzet Delver mirror) — card-IR-only abilities (2026-10-28, `feature/legacy-delver-ir`)
+
+The pool `legacy` (`data/legacy_delver.json`: the Legacy Izzet Delver 75's
+maindeck cards outside the cube, Murktide Regent and Prismari Charm; parser:
+`cards/parser/legacy_creatures.py`) exists for the card IR the mtg-zero Rust
+engine plays (`mtg_bot cards export-ir --pool cube legacy`: both documents
+share one schema). It is in no other pool (`all` is unchanged).
+
+1. **Murktide Regent's two abilities are data only.**
+   `CardPrinting.enters_with_counter_per_card_exiled_with_it` ("enters with
+   a +1/+1 counter on it for each instant and sorcery card exiled with it",
+   CR 607.2q, 614.1c) and `Event.LEAVES_GRAVEYARD` ("whenever an instant or
+   sorcery card leaves your graveyard", CR 603.10a) have no game code here:
+   no dispatch site fires the event and the cast path doesn't record the
+   cards delve exiled. *Failure mode:* none silent: a permanent with either
+   ability entering the battlefield raises `NotImplementedError`
+   (`actions.py`, the ETB counters block). *Fix scope:* record delve's exiled
+   cards on the stack item and the permanent, dispatch `LEAVES_GRAVEYARD`
+   from every zone move out of a graveyard (~1 day). *Impact:* none on the
+   cube, roto or EoE pools (the parser change claims no card there; their
+   IR is byte-identical).

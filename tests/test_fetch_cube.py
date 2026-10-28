@@ -386,3 +386,29 @@ def test_committed_roto_pool_matches_meta(fc):
     cmp = meta["cubecobra_comparison"]
     assert cmp["only_in_list"] == ["Smokestack"]
     assert cmp["only_in_cube"] == []
+
+
+def test_main_names_mode_without_basics(fc, tmp_path, monkeypatch):
+    # ``--no-basics``: a pool of extra cards only (the legacy pool).
+    names_path = tmp_path / "list.json"
+    names_path.write_text(json.dumps([{"name": "Card a", "scryfall_name": "Card a"}]), encoding="utf-8")
+    monkeypatch.setattr(fc, "post_json", _collection_by_front_face({"Card a": {"name": "Card a"}}))
+    monkeypatch.setattr(fc, "get_json", lambda url: pytest.fail("no other call"))
+    monkeypatch.setattr(fc.time, "sleep", lambda s: None)
+    out = tmp_path / "extra.json"
+    assert fc.main(["--names", str(names_path), "--no-basics", "--out", str(out)]) == 0
+    assert [c["name"] for c in json.loads(out.read_text(encoding="utf-8"))] == ["Card a"]
+    meta = json.loads((tmp_path / "extra.meta.json").read_text(encoding="utf-8"))
+    assert meta["includes_basic_lands"] == [] and meta["pool_card_count"] == 1
+
+
+def test_committed_legacy_pool_matches_meta(fc):
+    """The committed legacy pool (mtg-zero's Delver mirror cards outside the
+    cube) is its sheet's cards, no basic lands, as its sidecar says."""
+    root = fc.REPO_ROOT / "data"
+    cards = json.loads((root / "legacy_delver.json").read_text(encoding="utf-8"))
+    meta = json.loads((root / "legacy_delver.meta.json").read_text(encoding="utf-8"))
+    sheet = json.loads((root / "legacy_delver.sheet.json").read_text(encoding="utf-8"))
+    names, custom = fc.load_name_list(sheet)
+    assert [c["name"] for c in cards] == names == ["Murktide Regent", "Prismari Charm"]
+    assert not custom and meta["includes_basic_lands"] == [] and meta["pool_card_count"] == 2
