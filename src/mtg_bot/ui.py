@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import argparse
 import subprocess
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -28,6 +29,11 @@ from mtg_bot.art import (
     http_fetcher,
 )
 from mtg_bot.cards import COLORS
+from mtg_bot.cards.pools import load_pool_cards
+from mtg_bot.cards.source import get_active_source
+from mtg_bot.formats import STANDARD, GameFormat, get_format
+from mtg_bot.formats.decklist import decklist_names, tutor_names
+from mtg_bot.formats.forgetful_fish import default_decklist_text
 from mtg_bot.game import GameState
 from mtg_bot.interactive import create_session, get_session
 from mtg_bot.recommend import recommend_from_snapshot, recommend_from_state
@@ -125,6 +131,61 @@ def _validate_play_args() -> tuple[int, int, str, str]:
     return seed, max_turns, c1, c2
 
 
+def _parse_format(name: Optional[str]) -> GameFormat:
+    try:
+        return get_format(name or STANDARD.name)
+    except ValueError as exc:
+        abort(400, description=str(exc))
+
+
+@lru_cache(maxsize=1)
+def _pool_tutor_names() -> frozenset[str]:
+    """Every card of the pool whose rules text searches a library (the
+    pool's Scryfall dumps are read once)."""
+    cards = load_pool_cards()
+    return frozenset(tutor_names([c["name"] for c in cards], cards))
+
+
+def decklist_report(text: str) -> dict[str, Any]:
+    """What the UI shows about a pasted Forgetful Fish shared library."""
+    names, unknown, unreadable = decklist_names(
+        text, get_active_source().get_printings(),
+    )
+    tutors = _pool_tutor_names()
+    return {
+        "total": len(names),
+        "counts": dict(Counter(names)),
+        "unknown": unknown,
+        "unreadable": list(unreadable),
+        "tutors": [n for n in dict.fromkeys(names) if n in tutors],
+    }
+
+
+def _fish_library(text: Optional[str]) -> list[str]:
+    """The shared library of a Fish game: ``text`` (a pasted list), or the
+    saved list when it's empty. A list with unknown cards, unreadable lines
+    or tutors (the user's Fish lists are tutor-free) is a 400."""
+    if not text or not text.strip():
+        text = default_decklist_text()
+    report = decklist_report(text)
+    problems = []
+    if report["unknown"]:
+        problems.append("unknown cards: " + ", ".join(report["unknown"]))
+    if report["unreadable"]:
+        problems.append(
+            "unreadable lines: " + ", ".join(report["unreadable"]),
+        )
+    if report["tutors"]:
+        problems.append(
+            "tutors are not allowed: " + ", ".join(report["tutors"]),
+        )
+    if report["total"] == 0:
+        problems.append("the list is empty")
+    if problems:
+        abort(400, description="; ".join(problems))
+    return [n for n, k in report["counts"].items() for _ in range(k)]
+
+
 def _enrich_snapshot(snap: dict[str, Any], name_to_id: dict[str, str]) -> dict[str, Any]:
     """Annotate every card dict in the snapshot with its Scryfall id so the
     client can build /card_image URLs without an extra round-trip. Unknown
@@ -183,6 +244,12 @@ def create_app(
     @app.route("/api/play")
     def api_play():
         seed, max_turns, c1, c2 = _validate_play_args()
+        game_format = _parse_format(request.args.get("format"))
+        # Forgetful Fish plays the saved shared library (the pasted-list
+        # box belongs to interactive games).
+        decks = (
+            [_fish_library(None)] if game_format.shared_library else None
+        )
         granularity = request.args.get("granularity", "step")
         if granularity not in ("step", "priority"):
             abort(400, description="granularity must be 'step' or 'priority'")
@@ -224,7 +291,9 @@ def create_app(
             engine_states.append(state.clone())
 
         state = simulate_game(
-            colors=[c1, c2], seed=seed, max_turns=max_turns,
+            colors=[c1, c2] if decks is None else None,
+            decks=decks, game_format=game_format,
+            seed=seed, max_turns=max_turns,
             on_snapshot=capture,
             snapshot_granularity=granularity,
         )
@@ -238,9 +307,30 @@ def create_app(
             "is_draw": state.is_draw,
             "seed": seed,
             "colors": [c1, c2],
+            "format": game_format.name,
             "granularity": granularity,
             "reveal": reveal,
         })
+
+    @app.route("/api/decklist/check", methods=["POST"])
+    def api_decklist_check():
+        """Check a pasted Forgetful Fish shared library.
+
+        Body ``{"decklist": "<text>"}``; an empty / missing list checks
+        the saved list and returns its text (``"text"``) so the page can
+        fill its box. Returns the total, per-card counts, unknown names,
+        unreadable lines and tutors (cards that search a library).
+        """
+        body = request.get_json(force=True, silent=True) or {}
+        text = body.get("decklist") or ""
+        is_default = not text.strip()
+        if is_default:
+            text = default_decklist_text()
+        report = decklist_report(text)
+        report["is_default"] = is_default
+        if is_default:
+            report["text"] = text
+        return jsonify(report)
 
     @app.route("/api/snapshot/<game_id>/<int:idx>")
     def api_snapshot(game_id: str, idx: int):
@@ -411,10 +501,22 @@ def create_app(
                 "c1": "G",     // color for Player 0
                 "c2": "R",     // color for Player 1
                 "human_player": 0,   // 0 or 1
-                "max_turns": 300
+                "max_turns": 300,
+                "format": "standard",  // or "forgetful_fish"
+                "decklist": "...",     // Fish: the shared library
+                                       // (empty = the saved list)
+                "show_bot_hand": false // reveal the bot's hand
             }
+
+        A Forgetful Fish game ignores ``c1`` / ``c2``: both players draw
+        from the one shared library.
         """
         body = request.get_json(force=True, silent=True) or {}
+        game_format = _parse_format(body.get("format"))
+        decks = (
+            [_fish_library(body.get("decklist"))]
+            if game_format.shared_library else None
+        )
         seed = int(body.get("seed", 0))
         c1 = body.get("c1", "G")
         c2 = body.get("c2", "R")
@@ -429,8 +531,16 @@ def create_app(
         if max_turns < 1:
             abort(400, description="max_turns must be >= 1")
 
+        show_bot_hand = bool(body.get("show_bot_hand", False))
+
         def enrich(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
+            if not show_bot_hand:
+                # The bot's hand is hidden information; hand_size stays
+                # so the page draws face-down cards.
+                for p in snap["players"]:
+                    if p["id"] != human_player:
+                        p["hand"] = []
             return snap
 
         session = create_session(
@@ -440,12 +550,15 @@ def create_app(
             n2id=name_to_id,
             enrich_fn=enrich,
             max_turns=max_turns,
+            decks=decks,
+            game_format=game_format,
         )
         return jsonify({
             "session_id": session.session_id,
             "human_player_id": human_player,
             "colors": [c1, c2],
             "seed": seed,
+            "format": game_format.name,
         })
 
     @app.route("/api/interactive/state/<session_id>")

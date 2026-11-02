@@ -22,6 +22,12 @@
   <form id="play-form" class="play-form mode-panel" role="tabpanel"
         aria-labelledby="tab-watch" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
+    <label>Format
+      <select name="format">
+        <option value="standard" selected>Standard (colors)</option>
+        <option value="forgetful_fish">Forgetful Fish (saved list)</option>
+      </select>
+    </label>
     <label>P0 color
       <select name="c1">
         <option value="W">White</option>
@@ -62,7 +68,13 @@
   <form id="iplay-form" class="play-form mode-panel hidden" role="tabpanel"
         aria-labelledby="tab-play" autocomplete="off">
     <label>Seed <input type="number" id="iplay-seed" value="0"></label>
-    <label>Your color
+    <label>Format
+      <select id="iplay-format">
+        <option value="standard" selected>Standard (colors)</option>
+        <option value="forgetful_fish">Forgetful Fish (shared library)</option>
+      </select>
+    </label>
+    <label class="standard-only">Your color
       <select id="iplay-my-color">
         <option value="W">White</option>
         <option value="U">Blue</option>
@@ -71,7 +83,7 @@
         <option value="G">Green</option>
       </select>
     </label>
-    <label>Bot color
+    <label class="standard-only">Bot color
       <select id="iplay-bot-color">
         <option value="W">White</option>
         <option value="U">Blue</option>
@@ -87,7 +99,24 @@
       </select>
     </label>
     <label>Max turns <input type="number" id="iplay-max-turns" value="300" min="1"></label>
+    <label>Bot's hand
+      <select id="iplay-bot-hand">
+        <option value="hidden" selected>hidden</option>
+        <option value="shown">shown</option>
+      </select>
+    </label>
     <button type="submit">Start game</button>
+    <div id="iplay-fish" class="fish-panel hidden">
+      <label class="fish-decklist">Shared library (paste a list, or leave empty for the saved list)
+        <textarea id="iplay-decklist" rows="8" spellcheck="false"
+                  placeholder="10 Dandân&#10;4 Brainstorm&#10;30 Island&#10;..."></textarea>
+      </label>
+      <div class="fish-actions">
+        <button type="button" id="iplay-check-decklist">Check list</button>
+        <button type="button" id="iplay-load-saved">Load saved list</button>
+      </div>
+      <div id="iplay-decklist-report" class="decklist-report muted"></div>
+    </div>
   </form>
 
   <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>

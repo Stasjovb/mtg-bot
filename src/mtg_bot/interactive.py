@@ -30,6 +30,7 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.agents import Agent, RandomAgent
+from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
@@ -330,6 +331,61 @@ class InteractiveAgent(Agent):
             return None
         return int(resp["id"])
 
+    def choose_card_from_hand(self, state, player_id, option_ids):
+        if not option_ids:
+            return None
+        cards = [_card_opt(state, cid, self._n2id) for cid in option_ids]
+        source = state.resolving_spell or state.resolving_source
+        prompt = "Choose a card from your hand"
+        if source is not None:
+            prompt = f"{source.printing.name}: {prompt[0].lower()}{prompt[1:]}"
+        resp = self._ask(state, {
+            "type": "choose_card",
+            "prompt": prompt,
+            "cards": cards,
+            "can_decline": True,
+        })
+        if resp.get("decline"):
+            return None
+        return int(resp["id"])
+
+    def choose_mulligan(self, state, player_id, hand, mulls_taken):
+        lands = sum(1 for c in hand if c.printing.is_land)
+        free = state.game_format.is_free_mulligan(hand)
+        cost = (
+            "free" if free
+            else f"you would put {mulls_taken + 1} card(s) on the bottom"
+        )
+        names = ", ".join(c.printing.name for c in hand)
+        resp = self._ask(state, {
+            "type": "choose_yes_no",
+            "prompt": (
+                f"Mulligan this hand ({lands} lands; {cost})? {names}"
+            ),
+        })
+        return bool(resp.get("yes", False))
+
+    def choose_bottom(self, state, player_id, hand, n):
+        cards = [_card_opt(state, c.id, self._n2id) for c in hand]
+        resp = self._ask(state, {
+            "type": "choose_multi_ids",
+            "prompt": f"Choose {n} card(s) to put on the bottom of the library",
+            "objects": cards,
+            "can_decline": False,
+        })
+        hand_ids = [c.id for c in hand]
+        picked = [
+            i for i in dict.fromkeys(int(x) for x in resp.get("ids", []))
+            if i in hand_ids
+        ][:n]
+        # Too few picks: fill from the end of the hand so setup can go on.
+        for cid in reversed(hand_ids):
+            if len(picked) >= n:
+                break
+            if cid not in picked:
+                picked.append(cid)
+        return picked
+
     def choose_x(self, state, player_id, card_name, upper_bound):
         resp = self._ask(state, {
             "type": "choose_x",
@@ -457,8 +513,13 @@ def create_session(
     n2id: dict[str, str],
     enrich_fn,
     max_turns: int = 300,
+    decks: Optional[list[list[str]]] = None,
+    game_format: GameFormat = STANDARD,
 ) -> InteractiveSession:
     """Build a session, start the game thread, register it, and return it.
+
+    ``decks`` (explicit decklists) replaces ``colors``' generated decks;
+    a shared-library ``game_format`` (Forgetful Fish) takes one list.
 
     ``enrich_fn(snap_dict) -> dict`` is called for each snapshot to
     annotate card dicts with scryfall_ids (closure from create_app that
@@ -497,7 +558,9 @@ def create_session(
         try:
             state = simulate_game(
                 agents=agents,
-                colors=colors,
+                colors=colors if decks is None else None,
+                decks=decks,
+                game_format=game_format,
                 seed=seed,
                 max_turns=max_turns,
                 on_snapshot=lambda s: session.update_snapshot(enrich_fn(s)),

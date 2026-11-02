@@ -160,6 +160,11 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
         "void_active": is_void_active(state),
         "permanent_left_battlefield_this_turn": state.permanent_left_battlefield_this_turn,
         "spell_warped_this_turn": state.spell_warped_this_turn,
+        # Forgetful Fish: every player's library / graveyard entry above
+        # is the same shared zone; the UI shows it once.
+        "game_format": state.game_format.name,
+        "shared_library": state.game_format.shared_library,
+        "shared_graveyard": state.game_format.shared_graveyard,
         "players": players,
         "stack": [
             {

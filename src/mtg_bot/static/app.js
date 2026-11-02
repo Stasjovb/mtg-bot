@@ -984,12 +984,18 @@ function sidePanel(p, snap) {
   zones.className = 'zones';
   // Library is hidden info — don't make it clickable. Graveyard is public,
   // and Exile is public; both open a modal listing the actual cards.
+  // Forgetful Fish: both players' library / graveyard are one shared
+  // zone (the snapshot repeats it per player), so label it as shared.
+  const libLabel = snap && snap.shared_library ? 'Shared library' : 'Library';
+  const gyShared = Boolean(snap && snap.shared_graveyard);
   zones.append(
     zoneBox('Hand', p.hand_size),
-    zoneBox('Library', p.library_size),
-    zoneBox('Graveyard', p.graveyard_size,
+    zoneBox(libLabel, p.library_size),
+    zoneBox(gyShared ? 'Shared graveyard' : 'Graveyard', p.graveyard_size,
             p.graveyard_size > 0
-              ? () => openZoneModal(`Player ${p.id} — Graveyard`, p.graveyard)
+              ? () => openZoneModal(
+                  gyShared ? 'Shared graveyard' : `Player ${p.id} — Graveyard`,
+                  p.graveyard)
               : null),
   );
   side.appendChild(zones);
@@ -1598,6 +1604,13 @@ const elsI = {
   botColor:      document.getElementById('iplay-bot-color'),
   playerId:      document.getElementById('iplay-player-id'),
   maxTurns:      document.getElementById('iplay-max-turns'),
+  format:        document.getElementById('iplay-format'),
+  botHand:       document.getElementById('iplay-bot-hand'),
+  fishPanel:     document.getElementById('iplay-fish'),
+  decklist:      document.getElementById('iplay-decklist'),
+  checkDeck:     document.getElementById('iplay-check-decklist'),
+  loadSaved:     document.getElementById('iplay-load-saved'),
+  deckReport:    document.getElementById('iplay-decklist-report'),
   decisionPanel: document.getElementById('decision-panel'),
   waiting:       document.getElementById('decision-waiting'),
   body:          document.getElementById('decision-body'),
@@ -1609,6 +1622,73 @@ const elsI = {
 };
 
 elsI.form.addEventListener('submit', (ev) => { ev.preventDefault(); startInteractiveGame(); });
+
+// ---------------------------------------------------------------------
+// Forgetful Fish: format switch + shared-library decklist box
+// ---------------------------------------------------------------------
+
+function isFishFormat() {
+  return elsI.format.value === 'forgetful_fish';
+}
+
+function syncFormatControls() {
+  const fish = isFishFormat();
+  elsI.fishPanel.classList.toggle('hidden', !fish);
+  for (const el of elsI.form.querySelectorAll('.standard-only')) {
+    el.classList.toggle('hidden', fish);
+  }
+}
+
+// Flask's error pages are HTML; keep just the text of the message.
+function plainError(message) {
+  return String(message).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function renderDecklistReport(r) {
+  const el = elsI.deckReport;
+  el.replaceChildren();
+  const lines = [];
+  const ok = !r.unknown.length && !r.unreadable.length && !r.tutors.length
+    && r.total > 0;
+  lines.push([`${r.total} cards${r.is_default ? ' (saved list)' : ''}`
+    + (r.total === 80 ? '' : ' (a Forgetful Fish library has 80)'),
+    r.total === 80 ? 'ok' : 'warn']);
+  if (r.unknown.length) {
+    lines.push(['Unknown cards (not in the card data yet): '
+      + r.unknown.join(', '), 'bad']);
+  }
+  if (r.tutors.length) {
+    lines.push(['Tutors are not allowed: ' + r.tutors.join(', '), 'bad']);
+  }
+  if (r.unreadable.length) {
+    lines.push(['Unreadable lines: ' + r.unreadable.join(' | '), 'bad']);
+  }
+  if (ok) lines.push(['Ready to play.', 'ok']);
+  for (const [text, cls] of lines) {
+    const div = document.createElement('div');
+    div.className = 'decklist-line ' + cls;
+    div.textContent = text;
+    el.appendChild(div);
+  }
+}
+
+async function checkDecklist({ loadSaved = false } = {}) {
+  const decklist = loadSaved ? '' : elsI.decklist.value;
+  try {
+    const r = await postJSON('/api/decklist/check', { decklist });
+    if (r.is_default && typeof r.text === 'string') {
+      elsI.decklist.value = r.text;
+    }
+    renderDecklistReport(r);
+  } catch (e) {
+    elsI.deckReport.textContent = 'Error: ' + plainError(e.message);
+  }
+}
+
+elsI.format.addEventListener('change', syncFormatControls);
+elsI.checkDeck.addEventListener('click', () => checkDecklist());
+elsI.loadSaved.addEventListener('click', () => checkDecklist({ loadSaved: true }));
+syncFormatControls();
 
 // Space = pass priority, Enter = confirm (attackers / blockers).
 window.addEventListener('keydown', (ev) => {
@@ -1640,7 +1720,10 @@ async function startInteractiveGame() {
       c1, c2,
       human_player: humanPlayer,
       max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
+      format:       elsI.format.value,
+      show_bot_hand: elsI.botHand.value === 'shown',
     };
+    if (isFishFormat()) body.decklist = elsI.decklist.value;
     const data = await postJSON('/api/interactive/new', body);
     iplay = {
       sessionId:     data.session_id,
@@ -1653,7 +1736,7 @@ async function startInteractiveGame() {
     els.logPanel .classList.remove('hidden');
     schedulePoll();
   } catch (e) {
-    setStatus('Error: ' + e.message, 'loss');
+    setStatus('Error: ' + plainError(e.message), 'loss');
   } finally {
     elsI.form.querySelector('button').disabled = false;
   }
