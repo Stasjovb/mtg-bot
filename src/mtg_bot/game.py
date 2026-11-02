@@ -2128,7 +2128,10 @@ def effective_subtypes(
         (
             ce for ce in state.continuous_effects
             if ce.layer == 3
-            and ce.kind == "replace_basic_land_type"
+            # Forgetful Fish text changes (Mind Bend, Crystal Spray) reach
+            # the type line too (CR 612.1); a color-word change never
+            # matches a subtype.
+            and ce.kind in ("replace_basic_land_type", "fish_text_change")
             and ce.target_id == obj.id
         ),
         key=lambda ce: ce.timestamp,

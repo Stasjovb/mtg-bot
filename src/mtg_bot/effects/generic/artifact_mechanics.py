@@ -399,7 +399,10 @@ class ScheduleDelayedEffect(Effect):
     ) -> None:
         from mtg_bot.turn import Step
 
-        source = state.resolving_source
+        # An ability's source, or the resolving instant / sorcery itself
+        # (Portent: "Draw a card at the beginning of the next turn's
+        # upkeep." -- spells don't set ``resolving_source``).
+        source = state.resolving_source or state.resolving_spell
         if source is None:
             return
         if self.step == "upkeep":

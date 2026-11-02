@@ -20392,3 +20392,49 @@ is owned by the player who drew / cast it.
    redraw comes from a shuffled library either way).
 5. **The Rust engine does not support shared-zone formats.** Fish games are
    Python-engine only; the cross-engine bridge builds per-player zones.
+
+## Forgetful Fish cards (2026-11-02, `feature/fish-cards`)
+
+The user's 80-card Fish list: parser lines in `cards/parser/fish_cards.py`,
+effects in `effects/generic/fish_cards.py`. Text-changing effects (CR 612)
+are `"fish_text_change"` layer-3 entries read through
+`fish_cards.changed_word` by the abilities that print a land type or color
+word; they never touch the type line.
+
+1. **"Defending player" is the controller's opponent(s)**
+   (`fish_cards.DefendingPlayerControlsNoLandType.holds`). The attack filter
+   (`combat.eligible_attackers`) has no per-defender context, so with several
+   opponents Dandân may attack if ANY opponent controls an Island, and then
+   at any of them. *Failure mode:* multiplayer only (EDH later): Dandân could
+   attack a player without Islands. *Fix scope:* per-defender attack legality
+   (~half a day, with multiplayer combat). *Impact:* none in 1v1 Fish.
+2. **A spell's delayed trigger needs its card to still be findable**
+   (`artifact_mechanics.ScheduleDelayedEffect.resolve` now falls back to
+   `state.resolving_spell`; `turn._push_delayed_entries` skips an entry whose
+   `source_id` no longer resolves). CR 603.7 delayed triggers don't depend on
+   their source. *Failure mode:* Portent's "draw a card at the beginning of
+   the next turn's upkeep" is lost if the Portent card stops existing as that
+   object before the upkeep (`_find_object_by_id` can't find it). *Fix
+   scope:* let delayed entries carry their own LKI source (~1 h). *Impact:*
+   rare (Portent would have to leave the graveyard in the same turn).
+3. **Ray of Command's "When you lose control of the creature, tap it" taps
+   at once** (`fish_cards.apply_fish_card_checks`, called from
+   `turn.state_based_actions` and after `turn.run_cleanup_step`'s control
+   refresh) instead of putting a triggered ability on the stack (CR 603.2,
+   514.3a). *Failure mode:* nobody can respond to the tap; at cleanup no
+   priority round follows. *Fix scope:* push a synthetic trigger (~1 h).
+   *Impact:* negligible (responding to "tap it" almost never matters).
+4. **Text changes only reach the words the engine reads**
+   (`fish_cards.printed_text_words`): Dandân's two land-type abilities and
+   Dance of the Skywise's color. Other printed words (Lonely Sandbar /
+   Remote Isle's "Islandcycling", reminder text) have no hook, and the
+   choice is offered only among words the target has. *Failure mode:* a
+   Crystal Spray on a cycling land in play changes nothing (correct in
+   effect: cycling works from the hand only); a player can't pick a word
+   the text lacks (that changes nothing anyway). *Fix scope:* a word hook
+   per new card that prints a land type or color. *Impact:* none for the
+   user's list.
+5. **"Draws up to N" never offers more cards than the library holds**
+   (`fish_cards.EachPlayerDrawsUpTo`): CR allows choosing more and losing
+   on the empty-library draw (CR 704.5b). *Failure mode:* none worth
+   having. *Impact:* removes a pure blunder from the bots' choices.
