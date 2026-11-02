@@ -36,7 +36,7 @@ class CardsNamedInAllGraveyards(Formula):
 
     def value(self, state: "GameState", controller_id: int) -> int:
         return sum(
-            1 for p in state.players for c in p.graveyard
+            1 for g in state.distinct_graveyards() for c in g
             if c.printing.name == self.name
         )
 

@@ -74,7 +74,7 @@ class CardTypesInAllGraveyardsPT(PTFormula):
     def base_pt(self, state, obj):
         from mtg_bot.effects.card_types import count_card_types
 
-        n = count_card_types(c for pl in state.players for c in pl.graveyard)
+        n = count_card_types(c for g in state.distinct_graveyards() for c in g)
         return n, n + self.toughness_plus
 
 

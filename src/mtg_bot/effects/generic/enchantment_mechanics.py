@@ -464,8 +464,8 @@ def graveyard_creature_card_targets(state: "GameState") -> list[Target]:
     from a graveyard")."""
     return [
         (_GRAVEYARD_CREATURE, c.id)
-        for p in state.players
-        for c in p.graveyard
+        for g in state.distinct_graveyards()
+        for c in g
         if c.printing.is_creature
     ]
 

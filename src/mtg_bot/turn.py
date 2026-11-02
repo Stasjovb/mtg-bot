@@ -333,6 +333,9 @@ def draw_card(state: GameState, player_id: int) -> None:
         top = p.library.pop(0)
         top.zone = Zone.HAND
         p.hand.append(top)
+        if state.game_format.holder_owns_hand_cards:
+            # Forgetful Fish: the drawer owns the card it drew.
+            top.owner_id = top.controller_id = p.id
         p.cards_drawn_this_turn += 1
         # "Whenever you draw a card" / "whenever an opponent draws a
         # card" observers (CR 121.2: one event per card).
@@ -1896,6 +1899,13 @@ def state_based_actions(state: GameState) -> bool:
     cap converts a runaway into an early bailout instead of a hang.
     """
     any_changed = False
+    if state.game_format.holder_owns_hand_cards:
+        # Not an SBA: Forgetful Fish's "a card in a hand is owned by that
+        # hand's player", re-applied wherever SBAs are checked so a card
+        # that reached a hand by any route (not just a draw) is covered.
+        from mtg_bot.formats import apply_hand_ownership
+
+        apply_hand_ownership(state)
     note_life_losses(state)
     for _ in range(_SBA_MAX_PASSES):
         if not _state_based_actions_pass(state):

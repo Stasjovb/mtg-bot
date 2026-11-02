@@ -20334,3 +20334,61 @@ share one schema). It is in no other pool (`all` is unchanged).
    from every zone move out of a graveyard (~1 day). *Impact:* none on the
    cube, roto or EoE pools (the parser change claims no card there; their
    IR is byte-identical).
+
+## Forgetful Fish: shared library and graveyard (2026-11-02, `feature/fish-shared-zones`)
+
+`GameState.game_format` (`mtg_bot.formats`) defaults to `STANDARD`, which
+changes nothing. `FORGETFUL_FISH` makes every player's `library` /
+`graveyard` the same list object (player 0's): `simulate._apply_format_to_players`
+at setup, `game._clone_zones_sharing_first_player` in `GameState.clone`.
+House rules (the user's): free mulligan below 2 or above 5 lands, and a card
+is owned by the player who drew / cast it.
+
+1. **Loops over every player's graveyard / library see a shared zone once
+   per player** unless they walk `GameState.distinct_graveyards()` /
+   `distinct_libraries()`. Converted: the "in all graveyards" counts
+   (`roto_mana.CardsNamedInAllGraveyards`, `pt_formulas.CardTypesInAllGraveyardsPT`),
+   the any-graveyard reanimation pool (`reanimation.py`) and the
+   any-graveyard target lists (`actions.py` graveyard-land choice,
+   `creature_casting_ub.py`, `artifact_mechanics.py`, `cube_creatures_ub.py`,
+   `cube_creatures_wg.py`, `enchantment_mechanics.py`, `exile.py`,
+   `graveyard.py`, `roto_board.py`, `roto_zones._graveyard_card_targets`).
+   Not converted: id lookups (first match wins, harmless), per-player
+   snapshots/watchers (`roto_zones` exile-instead snapshot, `turn.py` void
+   graveyard movers, `cube_creatures_rmc.sweep_graveyard_watch`), and the
+   search/NN readers (`canonical_state`, `state_tokenizer`, parity
+   hashing), which encode the shared zone under both players.
+   `search/determinize.py` needs no change: it pools each player's hidden
+   hand cards with that player's library, and with one shared library the
+   opponent's pool is exactly "opponent's hand + the shared library" (the
+   library is permuted once per player, which is still a uniform shuffle).
+   *Failure mode:* in a Fish game only, a card whose effect walks "each
+   player's graveyard" can double-count or offer a target twice; the NN
+   input sees the shared zone twice. *Fix scope:* convert the rest to
+   `distinct_*` (~2 h); a shared-zone NN encoding belongs with Fish
+   training. *Impact:* none for standard
+   games (`distinct_*` returns one list per player there); Fish cards are
+   audited one by one as the decklist's rules land.
+2. **Card ownership is re-applied, not tracked at every move.** A drawn
+   card is owned by the drawer (`turn.draw_card`), and every card in a hand
+   is made its holder's at each `state_based_actions` call
+   (`formats.apply_hand_ownership`). Library and graveyard cards keep their
+   last owner (player 0 for never-drawn cards). *Failure mode:* a card that
+   reaches a hand by a non-draw route mid-resolution keeps its previous
+   owner until the next SBA check; anything reading the owner of a library
+   card sees player 0. *Fix scope:* an ownership hook on every hand entry
+   (~58 sites) if a Fish card ever needs it. *Impact:* none known: "owner's
+   library / graveyard" is the shared zone for both players.
+3. **Free mulligans are capped** at `simulate.MAX_FREE_MULLIGANS` (10) per
+   player; later mulligans count as London mulligans. The house rule has no
+   cap. *Failure mode:* an 11th consecutive free-eligible mulligan costs a
+   card. *Fix scope:* trivial (raise the cap). *Impact:* negligible (the
+   chance of 10 free-eligible hands in a row is tiny with a real list); the
+   cap only guarantees setup ends for an agent that always mulligans.
+4. **Mulligans are decided one player at a time** (the engine's existing
+   loop; CR 103.5 has players decide in turn order and mulligan together).
+   With a shared library, player 0's mulligan reshuffles the library before
+   player 1's redraws. *Impact:* none on outcomes' distribution (every
+   redraw comes from a shuffled library either way).
+5. **The Rust engine does not support shared-zone formats.** Fish games are
+   Python-engine only; the cross-engine bridge builds per-player zones.

@@ -807,8 +807,8 @@ class ReanimateTargetCreatureCardFromAGraveyard(Effect):
     ) -> list[Target]:
         return [
             ("graveyard_creature", c.id)
-            for p in state.players
-            for c in p.graveyard
+            for g in state.distinct_graveyards()
+            for c in g
             if c.printing.is_creature
         ]
 
