@@ -1654,7 +1654,7 @@ function renderDecklistReport(r) {
     + (r.total === 80 ? '' : ' (a Forgetful Fish library has 80)'),
     r.total === 80 ? 'ok' : 'warn']);
   if (r.unknown.length) {
-    lines.push(['Unknown cards (not in the card data yet): '
+    lines.push(['Not playable yet (rules still missing): '
       + r.unknown.join(', '), 'bad']);
   }
   if (r.tutors.length) {
@@ -1672,10 +1672,12 @@ function renderDecklistReport(r) {
   }
 }
 
-async function checkDecklist({ loadSaved = false } = {}) {
-  const decklist = loadSaved ? '' : elsI.decklist.value;
+async function checkDecklist({ loadSaved = false, placeholder = false } = {}) {
+  const decklist = loadSaved || placeholder ? '' : elsI.decklist.value;
+  const body = { decklist };
+  if (placeholder) body.which = 'placeholder';
   try {
-    const r = await postJSON('/api/decklist/check', { decklist });
+    const r = await postJSON('/api/decklist/check', body);
     if (r.is_default && typeof r.text === 'string') {
       elsI.decklist.value = r.text;
     }
@@ -1688,6 +1690,8 @@ async function checkDecklist({ loadSaved = false } = {}) {
 elsI.format.addEventListener('change', syncFormatControls);
 elsI.checkDeck.addEventListener('click', () => checkDecklist());
 elsI.loadSaved.addEventListener('click', () => checkDecklist({ loadSaved: true }));
+document.getElementById('iplay-load-placeholder').addEventListener(
+  'click', () => checkDecklist({ placeholder: true }));
 syncFormatControls();
 
 // Space = pass priority, Enter = confirm (attackers / blockers).

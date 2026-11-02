@@ -3,6 +3,7 @@ hand, and the human decisions Fish needs (mulligans, Brainstorm)."""
 
 from __future__ import annotations
 
+import html
 import threading
 import time
 
@@ -13,6 +14,7 @@ from mtg_bot.formats import FORGETFUL_FISH
 from mtg_bot.formats.forgetful_fish import (
     default_decklist_path,
     default_decklist_text,
+    placeholder_decklist_text,
 )
 from mtg_bot.interactive import InteractiveAgent, create_session
 from mtg_bot.serialize import serialize_state
@@ -43,7 +45,7 @@ def test_saved_list_is_the_placeholder_until_a_real_list_exists(tmp_path):
 
 
 def test_shipped_placeholder_is_a_playable_80_card_list():
-    report = decklist_report(default_decklist_text())
+    report = decklist_report(placeholder_decklist_text())
     assert report["total"] == 80
     assert report["unknown"] == []
     assert report["unreadable"] == []
@@ -60,7 +62,33 @@ def test_check_empty_list_returns_the_saved_list(client):
     data = r.get_json()
     assert data["is_default"] is True
     assert data["text"] == default_decklist_text()
-    assert data["total"] == 80
+    assert data["unreadable"] == [] and data["tutors"] == []
+
+
+def test_check_can_load_the_placeholder(client):
+    data = client.post(
+        "/api/decklist/check", json={"which": "placeholder"},
+    ).get_json()
+    assert data["is_default"] is True
+    assert data["text"] == placeholder_decklist_text()
+    assert data["total"] == 80 and data["unknown"] == []
+
+
+def test_saved_list_with_unplayable_cards_says_so(client):
+    unknown = decklist_report(default_decklist_text())["unknown"]
+    r = client.post("/api/interactive/new", json={"format": "forgetful_fish"})
+    if unknown:
+        assert r.status_code == 400
+        body = html.unescape(r.get_data(as_text=True))
+        assert "the saved list isn't playable yet" in body
+        assert unknown[0] in body
+    else:  # every card implemented: the saved list just plays
+        assert r.status_code == 200
+
+
+def test_watch_mode_rejects_an_unknown_list_choice(client):
+    r = client.get("/api/play?format=forgetful_fish&list=mine")
+    assert r.status_code == 400
 
 
 def test_check_reports_unknown_unreadable_and_tutors(client):
@@ -94,6 +122,7 @@ def _wait_pending(client, sid, timeout=10.0):
 def test_interactive_fish_game_hides_the_bot_hand(client):
     r = client.post("/api/interactive/new", json={
         "seed": 1, "human_player": 0, "format": "forgetful_fish",
+        "decklist": placeholder_decklist_text(),
     })
     assert r.status_code == 200
     data = r.get_json()
@@ -113,6 +142,7 @@ def test_interactive_fish_game_hides_the_bot_hand(client):
 def test_interactive_can_show_the_bot_hand(client):
     data = client.post("/api/interactive/new", json={
         "seed": 1, "human_player": 0, "format": "forgetful_fish",
+        "decklist": placeholder_decklist_text(),
         "show_bot_hand": True,
     }).get_json()
     s = _wait_pending(client, data["session_id"])
@@ -162,7 +192,7 @@ def test_standard_interactive_game_still_works(client):
 
 
 def test_watch_mode_plays_a_fish_game(client):
-    r = client.get("/api/play?format=forgetful_fish&seed=4&max_turns=8")
+    r = client.get("/api/play?format=forgetful_fish&list=placeholder&seed=4&max_turns=8")
     assert r.status_code == 200
     data = r.get_json()
     assert data["format"] == "forgetful_fish"

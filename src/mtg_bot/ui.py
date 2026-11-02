@@ -33,7 +33,10 @@ from mtg_bot.cards.pools import load_pool_cards
 from mtg_bot.cards.source import get_active_source
 from mtg_bot.formats import STANDARD, GameFormat, get_format
 from mtg_bot.formats.decklist import decklist_names, tutor_names
-from mtg_bot.formats.forgetful_fish import default_decklist_text
+from mtg_bot.formats.forgetful_fish import (
+    default_decklist_text,
+    placeholder_decklist_text,
+)
 from mtg_bot.game import GameState
 from mtg_bot.interactive import create_session, get_session
 from mtg_bot.recommend import recommend_from_snapshot, recommend_from_state
@@ -165,11 +168,18 @@ def _fish_library(text: Optional[str]) -> list[str]:
     """The shared library of a Fish game: ``text`` (a pasted list), or the
     saved list when it's empty. A list with unknown cards, unreadable lines
     or tutors (the user's Fish lists are tutor-free) is a 400."""
-    if not text or not text.strip():
+    saved = not text or not text.strip()
+    if saved:
         text = default_decklist_text()
     report = decklist_report(text)
     problems = []
-    if report["unknown"]:
+    if report["unknown"] and saved:
+        problems.append(
+            "the saved list isn't playable yet -- these cards still need "
+            "rules: " + ", ".join(report["unknown"])
+            + " (use 'Load placeholder list' to test meanwhile)"
+        )
+    elif report["unknown"]:
         problems.append("unknown cards: " + ", ".join(report["unknown"]))
     if report["unreadable"]:
         problems.append(
@@ -245,10 +255,18 @@ def create_app(
     def api_play():
         seed, max_turns, c1, c2 = _validate_play_args()
         game_format = _parse_format(request.args.get("format"))
-        # Forgetful Fish plays the saved shared library (the pasted-list
-        # box belongs to interactive games).
+        # Forgetful Fish plays the saved shared library, or the
+        # placeholder with ``list=placeholder`` (the pasted-list box
+        # belongs to interactive games).
+        which = request.args.get("list", "saved")
+        if which not in ("saved", "placeholder"):
+            abort(400, description="list must be 'saved' or 'placeholder'")
         decks = (
-            [_fish_library(None)] if game_format.shared_library else None
+            [_fish_library(
+                placeholder_decklist_text() if which == "placeholder"
+                else None,
+            )]
+            if game_format.shared_library else None
         )
         granularity = request.args.get("granularity", "step")
         if granularity not in ("step", "priority"):
@@ -324,7 +342,10 @@ def create_app(
         body = request.get_json(force=True, silent=True) or {}
         text = body.get("decklist") or ""
         is_default = not text.strip()
-        if is_default:
+        if body.get("which") == "placeholder":
+            text = placeholder_decklist_text()
+            is_default = True
+        elif is_default:
             text = default_decklist_text()
         report = decklist_report(text)
         report["is_default"] = is_default

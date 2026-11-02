@@ -40,3 +40,11 @@ def default_decklist_path(data_dir: Path = FISH_DATA_DIR) -> Path:
 
 def default_decklist_text(data_dir: Path = FISH_DATA_DIR) -> str:
     return default_decklist_path(data_dir).read_text(encoding="utf-8")
+
+
+def placeholder_decklist_text(data_dir: Path = FISH_DATA_DIR) -> str:
+    """The placeholder list: playable while the real list's cards are
+    still being implemented."""
+    return (data_dir / PLACEHOLDER_DECKLIST_PATH.name).read_text(
+        encoding="utf-8",
+    )

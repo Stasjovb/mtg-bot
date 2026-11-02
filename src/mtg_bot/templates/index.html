@@ -25,7 +25,13 @@
     <label>Format
       <select name="format">
         <option value="standard" selected>Standard (colors)</option>
-        <option value="forgetful_fish">Forgetful Fish (saved list)</option>
+        <option value="forgetful_fish">Forgetful Fish</option>
+      </select>
+    </label>
+    <label>Fish list
+      <select name="list">
+        <option value="saved" selected>saved</option>
+        <option value="placeholder">placeholder</option>
       </select>
     </label>
     <label>P0 color
@@ -114,6 +120,7 @@
       <div class="fish-actions">
         <button type="button" id="iplay-check-decklist">Check list</button>
         <button type="button" id="iplay-load-saved">Load saved list</button>
+        <button type="button" id="iplay-load-placeholder">Load placeholder list</button>
       </div>
       <div id="iplay-decklist-report" class="decklist-report muted"></div>
     </div>

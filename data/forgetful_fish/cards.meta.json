@@ -1,0 +1,12 @@
+{
+  "source": "name_list",
+  "name_list_path": "data/forgetful_fish/cards.sheet.json",
+  "cube_name": "Forgetful Fish (user's list)",
+  "list_entry_count": 22,
+  "scryfall_card_count": 22,
+  "custom_cards_without_scryfall": [],
+  "fetched_at": "2026-11-02T20:54:16.531183+00:00",
+  "pool_card_count": 22,
+  "includes_basic_lands": [],
+  "cubecobra_comparison": null
+}

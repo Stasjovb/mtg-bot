@@ -59,6 +59,13 @@ ROTO_POOL_FILES: tuple[str, ...] = ("cube_roto.json",) + CUSTOM_CARD_FILES
 # data/legacy_delver.sheet.json --no-basics --cube-name "Legacy Izzet Delver
 # (mtg-zero)" --out data/legacy_delver.json``). In no other pool.
 LEGACY_POOL_FILES: tuple[str, ...] = ("legacy_delver.json",)
+# The user's Forgetful Fish shared library (data/forgetful_fish/decklist.txt):
+# Scryfall records of its non-basic cards (regenerate via
+# ``scripts/fetch_cube.py --names data/forgetful_fish/cards.sheet.json
+# --no-basics --cube-name "Forgetful Fish (user's list)" --out
+# data/forgetful_fish/cards.json``). Pool ``fish`` = ``all`` + these, so
+# ``all`` (and every pinned card vocabulary) is unchanged.
+FISH_POOL_FILES: tuple[str, ...] = ("forgetful_fish/cards.json",)
 EOE_POOL_FILES: tuple[str, ...] = (
     "edge_of_eternities.json",
     "stellar_sights.json",
@@ -71,6 +78,7 @@ POOLS: dict[str, tuple[str, ...]] = {
     "eoe": EOE_POOL_FILES,
     "roto": ROTO_POOL_FILES,
     "legacy": LEGACY_POOL_FILES,
+    "fish": EOE_POOL_FILES + CUBE_POOL_FILES + ROTO_POOL_FILES + FISH_POOL_FILES,
 }
 DEFAULT_POOL = "all"
 # The pool the modeling campaign, deck pool, and self-play target.

@@ -61,7 +61,9 @@ def test_active_pool_name_reads_env(monkeypatch):
 def test_registry_shape():
     assert pools.TARGET_POOL == "cube"
     assert pools.DEFAULT_POOL == "all"
-    assert set(pools.POOLS) == {"all", "cube", "eoe", "roto", "legacy"}
+    assert set(pools.POOLS) == {"all", "cube", "eoe", "roto", "legacy", "fish"}
+    # Forgetful Fish: everything in ``all`` plus the user's Fish cards.
+    assert pools.POOLS["fish"] == pools.POOLS["all"] + pools.FISH_POOL_FILES
     assert pools.POOLS["all"] == (
         pools.EOE_POOL_FILES + pools.CUBE_POOL_FILES + pools.ROTO_POOL_FILES
     )
