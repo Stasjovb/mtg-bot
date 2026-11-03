@@ -586,6 +586,15 @@ class Surveil(Effect):
         return f"surveil {self.amount}"
 
 
+def _scry_phrase(looked: int, bottomed: int) -> str:
+    """The speech-bubble phrase for a scry (Forgetful Fish shows it)."""
+    if bottomed == 0:
+        return "scried to top"
+    if bottomed == looked:
+        return "scried to bottom"
+    return f"scried {bottomed} to bottom"
+
+
 @dataclass(frozen=True)
 class Scry(Effect):
     """Scry N (CR 701.18): controller looks at the top ``count`` cards of
@@ -660,11 +669,15 @@ class Scry(Effect):
                 p.library.append(c)
             for c in examined:
                 reveal_to(c, controller_id)
-            state.log.append(
-                f"P{controller_id} scries {n} ({len(bottom)} to the bottom)"
+            state.log.append_with_bubble(
+                f"P{controller_id} scries {n} ({len(bottom)} to the bottom)",
+                controller_id, _scry_phrase(n, len(bottom)),
             )
             return
-        state.log.append(f"P{controller_id} scries {n} (kept all on top)")
+        state.log.append_with_bubble(
+            f"P{controller_id} scries {n} (kept all on top)",
+            controller_id, "scried to top",
+        )
 
     def describe(self) -> str:
         return f"scry {self.amount}"

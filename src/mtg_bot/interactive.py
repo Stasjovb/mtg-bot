@@ -495,9 +495,21 @@ class InteractiveSession:
     _snapshot: Optional[dict] = field(default=None, repr=False)
     _is_over: bool = False
     _result: Optional[dict] = None
+    # Log length the speech bubbles were last counted against, and the
+    # bubbles of the latest step (``bubbles_since_last``).
+    _bubble_mark: int = 0
+    _bubbles_since: list = field(default_factory=list, repr=False)
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
+            log_len = len(snap.get("log") or [])
+            if log_len != self._bubble_mark:
+                self._bubbles_since = [
+                    b for b in snap.get("bubbles") or []
+                    if b["log_index"] >= self._bubble_mark
+                ]
+                self._bubble_mark = log_len
+            snap["bubbles_since_last"] = list(self._bubbles_since)
             self._snapshot = snap
 
     def mark_over(self, result: dict) -> None:

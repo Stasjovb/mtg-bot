@@ -3641,14 +3641,28 @@ class LogBuffer(list[str]):
     """
 
     enabled: bool = True
+    # Forgetful Fish games switch this on (simulate.setup_game): the shared
+    # actions a player should see as a speech bubble are recorded.
+    bubbles_enabled: bool = False
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.enabled = True
+        # (log index, player id, short phrase) per bubble, in log order.
+        self.bubbles: list[tuple[int, int, str]] = []
 
     def append(self, msg: str) -> None:  # type: ignore[override]
         if not self.enabled:
             return
+        list.append(self, msg)
+
+    def append_with_bubble(self, msg: str, player_id: int, phrase: str) -> None:
+        """Append ``msg``; when bubbles are on, also record ``phrase`` (e.g.
+        "scried to top") as ``player_id``'s speech bubble at this line."""
+        if not self.enabled:
+            return
+        if self.bubbles_enabled:
+            self.bubbles.append((len(self), player_id, phrase))
         list.append(self, msg)
 
 
@@ -4549,6 +4563,7 @@ class GameState:
 
         new_log = LogBuffer()
         new_log.enabled = self.log.enabled
+        new_log.bubbles_enabled = self.log.bubbles_enabled
 
         # ``random.Random()`` runs the C-level seed routine that draws
         # from os.urandom — ~5us on Windows. We're about to overwrite

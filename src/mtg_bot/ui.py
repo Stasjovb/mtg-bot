@@ -319,6 +319,10 @@ def create_app(
         def capture(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
             _redact_hands(snap)
+            snap["bubbles_since_last"] = [
+                b for b in snap.get("bubbles") or []
+                if b["log_index"] >= log_offset[0]
+            ]
             snap["log_since_last"] = list(snap["log"][log_offset[0]:])
             log_offset[0] = len(snap["log"])
             snapshots.append(snap)

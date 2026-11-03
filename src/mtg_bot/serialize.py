@@ -193,6 +193,12 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             for item in state.stack
         ],
         "log": list(state.log),
+        # Forgetful Fish speech bubbles: (log index, player, phrase) per
+        # shared action; empty in other formats.
+        "bubbles": [
+            {"log_index": i, "player_id": pid, "text": text}
+            for i, pid, text in getattr(state.log, "bubbles", [])
+        ],
         "winner_id": state.winner_id,
         "is_draw": state.is_draw,
         "is_over": state.is_over(),

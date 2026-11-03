@@ -264,6 +264,7 @@ def setup_game(
     state.rng.seed(seed)
     rng = random.Random(seed)
     state.game_format = game_format
+    state.log.bubbles_enabled = game_format.shared_library
 
     if game_format.shared_library:
         # Player 0 builds the shared library; the rest start empty and

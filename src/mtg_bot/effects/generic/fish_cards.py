@@ -255,12 +255,17 @@ class ReorderTargetPlayersTopCards(Effect):
             c.zone = Zone.LIBRARY
             target.library.insert(0, c)
             reveal_to(c, controller_id)
-        state.log.append(f"P{controller_id} reorders the top {n} card(s) of P{target.id}'s library")
+        state.log.append_with_bubble(
+            f"P{controller_id} reorders the top {n} card(s) of P{target.id}'s library",
+            controller_id, f"reordered top {n}",
+        )
         if self.may_shuffle and me.agent is not None and me.agent.choose_yes_no(
             state, controller_id, f"Have P{target.id} shuffle their library?",
         ):
             shuffle_library(state, target.id)
-            state.log.append(f"P{target.id} shuffles their library")
+            state.log.append_with_bubble(
+                f"P{target.id} shuffles their library", controller_id, "shuffled",
+            )
 
     def describe(self) -> str:
         tail = ". You may have that player shuffle" if self.may_shuffle else ""
