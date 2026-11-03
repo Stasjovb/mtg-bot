@@ -65,6 +65,9 @@ def test_home_page_offers_forgetful_fish_only(client):
     assert 'name="format" value="forgetful_fish"' in page
     assert 'id="iplay-format" value="forgetful_fish"' in page
     assert 'id="iplay-fish" class="fish-panel"' in page
+    # The shared graveyard / exile / log tabs (Fish games only).
+    assert 'id="fish-pane-graveyard"' in page and 'id="fish-pane-exile"' in page
+    assert 'data-fish-tab="log"' in page
 
 
 # ---------------------------------------------------------------------

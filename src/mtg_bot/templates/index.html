@@ -166,6 +166,21 @@
       </table>
     </div>
   </section>
+  <!-- Forgetful Fish: the shared graveyard, exile and the log as tabs
+       (shown in Fish games only; renderFishZones in app.js). -->
+  <section id="fish-tabs" class="fish-tabs hidden" aria-label="Graveyard, exile and log">
+    <div class="fish-tab-bar" role="tablist">
+      <button type="button" role="tab" class="fish-tab active" data-fish-tab="graveyard"
+              aria-selected="true">Graveyard <span id="fish-count-graveyard" class="fish-tab-count"></span></button>
+      <button type="button" role="tab" class="fish-tab" data-fish-tab="exile"
+              aria-selected="false">Exile <span id="fish-count-exile" class="fish-tab-count"></span></button>
+      <button type="button" role="tab" class="fish-tab" data-fish-tab="log"
+              aria-selected="false">Log</button>
+    </div>
+    <div id="fish-pane-graveyard" class="fish-pane" role="tabpanel"></div>
+    <div id="fish-pane-exile" class="fish-pane hidden" role="tabpanel"></div>
+    <div id="fish-pane-log" class="fish-pane hidden" role="tabpanel"></div>
+  </section>
   <aside id="log-panel" class="log-panel hidden" aria-label="Game log">
     <h2>Log</h2>
     <div id="log-body" class="log-body"></div>

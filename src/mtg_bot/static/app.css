@@ -406,6 +406,35 @@ body { display: grid; grid-template-columns: 1fr 460px;
              border-left: 1px solid var(--panel-edge);
              display: flex; flex-direction: column; overflow: hidden;
              min-height: 0; }
+/* Speech bubble over a player's panel: a shared action (scry, reorder,
+   shuffle) that the whole table can see. Shown for the step it happened in. */
+.speech-bubble { position: relative; align-self: flex-start; margin: 0.3em 0 0.5em;
+                 padding: 0.25em 0.6em; border-radius: 10px; background: #f3edd0;
+                 color: #1c1800; font-size: 0.8em; font-weight: 600; max-width: 100%; }
+.speech-bubble::after { content: ''; position: absolute; left: 1em; bottom: -6px;
+                        border: 6px solid transparent; border-bottom: 0;
+                        border-top-color: #f3edd0; }
+
+/* Forgetful Fish: graveyard / exile / log tabs in the right column, with a
+   wider column so the shared graveyard's cards read large. */
+body.fish-mode { grid-template-columns: 1fr minmax(360px, 600px); }
+.fish-tabs { flex: 1; display: flex; flex-direction: column; min-height: 0;
+             padding: 0.6em; overflow: hidden; }
+.fish-tab-bar { display: flex; gap: 0.2em; border-bottom: 1px solid var(--panel-edge);
+                margin-bottom: 0.5em; }
+.fish-tab { background: none; border: none; border-bottom: 2px solid transparent;
+            color: var(--muted); font: inherit; padding: 0.4em 0.8em; cursor: pointer; }
+.fish-tab:hover { color: var(--ink); }
+.fish-tab.active { color: var(--active-glow); border-bottom-color: var(--active-glow); }
+.fish-tab-count { font-size: 0.85em; }
+.fish-pane { flex: 1; min-height: 0; overflow-y: auto; }
+#fish-pane-log { display: flex; flex-direction: column; overflow: hidden; }
+#fish-pane-log .log-panel { flex: 1; padding: 0; }
+#fish-pane-log .log-panel h2 { display: none; }
+.fish-pane-title { color: var(--muted); font-size: 0.8em; text-transform: uppercase;
+                   letter-spacing: 0.08em; margin: 0.4em 0; }
+.fish-zone-cards { display: flex; flex-wrap: wrap; gap: 0.6em;
+                   --card-w: 140px; --card-h: 196px; }
 .log-panel { flex: 1; padding: 0.6em;
              display: flex; flex-direction: column; overflow: hidden;
              min-height: 0; }
@@ -548,6 +577,7 @@ body { display: grid; grid-template-columns: 1fr 460px;
      the graveyard label gets clipped. 2x2 lays them out cleanly. */
   .zones { grid-template-columns: repeat(2, 1fr); }
 
+  body.fish-mode { grid-template-columns: 1fr; }
   .right-col { grid-column: 1; grid-row: 5;
                border-left: none; border-top: 1px solid var(--panel-edge); }
   /* The 5-column Decision table is cramped on phone widths — let it

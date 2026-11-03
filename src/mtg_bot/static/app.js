@@ -10,6 +10,13 @@ const els = {
   board: document.getElementById('board'),
   logPanel: document.getElementById('log-panel'),
   logBody: document.getElementById('log-body'),
+  rightCol: document.querySelector('.right-col'),
+  fishTabs: document.getElementById('fish-tabs'),
+  fishCountGraveyard: document.getElementById('fish-count-graveyard'),
+  fishCountExile: document.getElementById('fish-count-exile'),
+  fishPaneGraveyard: document.getElementById('fish-pane-graveyard'),
+  fishPaneExile: document.getElementById('fish-pane-exile'),
+  fishPaneLog: document.getElementById('fish-pane-log'),
   rowP0: document.getElementById('row-p0'),
   rowP1: document.getElementById('row-p1'),
   rowStack: document.getElementById('row-stack'),
@@ -367,6 +374,7 @@ function renderSnapshot(summary, snap) {
   renderPlayer(els.rowP0, p0, snap, /* isTop */ false);
   renderStack(els.rowStack, snap);
   renderLog(els.logBody, snap);
+  renderFishZones(snap);
   renderPhaseTracker(snap);
   drawCombatArrows(snap);
   renderSearchPanel(snap);
@@ -966,6 +974,11 @@ function sidePanel(p, snap) {
   nameRow.appendChild(pname);
   side.appendChild(nameRow);
 
+  // Speech bubbles: the shared actions this player took in this step.
+  for (const b of (snap.bubbles_since_last || [])) {
+    if (b.player_id === p.id) side.appendChild(speechBubbleEl(b.text));
+  }
+
   const lifeLabel = document.createElement('div');
   lifeLabel.className = 'life-label';
   lifeLabel.textContent = 'life';
@@ -992,11 +1005,10 @@ function sidePanel(p, snap) {
     zoneBox('Hand', p.hand_size),
     zoneBox(libLabel, p.library_size),
     zoneBox(gyShared ? 'Shared graveyard' : 'Graveyard', p.graveyard_size,
-            p.graveyard_size > 0
-              ? () => openZoneModal(
-                  gyShared ? 'Shared graveyard' : `Player ${p.id} — Graveyard`,
-                  p.graveyard)
-              : null),
+            gyShared ? () => showFishTab('graveyard')
+              : (p.graveyard_size > 0
+                ? () => openZoneModal(`Player ${p.id} — Graveyard`, p.graveyard)
+                : null)),
   );
   side.appendChild(zones);
 
@@ -1005,7 +1017,8 @@ function sidePanel(p, snap) {
     row.className = 'zones';
     row.appendChild(zoneBox(
       'Exile', p.exile_size,
-      () => openZoneModal(`Player ${p.id} — Exile`, p.exile),
+      gyShared ? () => showFishTab('exile')
+        : () => openZoneModal(`Player ${p.id} — Exile`, p.exile),
     ));
     side.appendChild(row);
   }
@@ -1019,6 +1032,13 @@ function sidePanel(p, snap) {
   }
 
   return side;
+}
+
+function speechBubbleEl(text) {
+  const el = document.createElement('div');
+  el.className = 'speech-bubble';
+  el.textContent = text.charAt(0).toUpperCase() + text.slice(1);
+  return el;
 }
 
 function poisonEl(count) {
@@ -1113,6 +1133,73 @@ els.zoneModal.addEventListener('click', (ev) => {
   // Click on the dim backdrop (not the inner box) closes.
   if (ev.target === els.zoneModal) closeZoneModal();
 });
+
+// ---------------------------------------------------------------------------
+// Forgetful Fish: graveyard / exile / log tabs in the right column. The shared
+// graveyard is one list (both players' zones are the same list), so it is
+// shown once, large; exile is shown per player; the log moves into its tab.
+// Other formats keep the side panel as it was.
+// ---------------------------------------------------------------------------
+
+let fishTab = 'graveyard';
+
+function showFishTab(name) {
+  fishTab = name;
+  for (const btn of document.querySelectorAll('.fish-tab')) {
+    const on = btn.dataset.fishTab === name;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+  }
+  els.fishPaneGraveyard.classList.toggle('hidden', name !== 'graveyard');
+  els.fishPaneExile.classList.toggle('hidden', name !== 'exile');
+  els.fishPaneLog.classList.toggle('hidden', name !== 'log');
+}
+
+function fishCardsEl(cards) {
+  const wrap = document.createElement('div');
+  wrap.className = 'fish-zone-cards';
+  if (!cards || cards.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'zone-modal-empty';
+    empty.textContent = '(empty)';
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  cards.forEach((c) => wrap.appendChild(cardEl(c, { permanent: false })));
+  return wrap;
+}
+
+function renderFishZones(snap) {
+  const fish = Boolean(snap.shared_graveyard);
+  document.body.classList.toggle('fish-mode', fish);
+  els.fishTabs.classList.toggle('hidden', !fish);
+  // The log lives in the Log tab in Fish games and in the side panel otherwise.
+  const home = fish ? els.fishPaneLog : els.rightCol;
+  if (els.logPanel.parentElement !== home) home.appendChild(els.logPanel);
+  if (!fish) return;
+
+  // Shared graveyard: both players' lists are one list, so take player 0's.
+  const gy = (snap.players.find(p => p.id === 0) || snap.players[0]).graveyard;
+  els.fishCountGraveyard.textContent = `(${gy.length})`;
+  els.fishPaneGraveyard.replaceChildren(fishCardsEl(gy));
+
+  // Exile is per player: one labelled block each.
+  let exileCount = 0;
+  els.fishPaneExile.replaceChildren();
+  for (const p of snap.players) {
+    exileCount += p.exile.length;
+    const title = document.createElement('div');
+    title.className = 'fish-pane-title';
+    title.textContent = `Player ${p.id} — exile (${p.exile.length})`;
+    els.fishPaneExile.append(title, fishCardsEl(p.exile));
+  }
+  els.fishCountExile.textContent = `(${exileCount})`;
+  showFishTab(fishTab);
+}
+
+for (const btn of document.querySelectorAll('.fish-tab')) {
+  btn.addEventListener('click', () => showFishTab(btn.dataset.fishTab));
+}
 
 function battlefieldEl(p, isTop) {
   const bf = document.createElement('div');
