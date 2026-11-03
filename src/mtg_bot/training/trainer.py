@@ -31,6 +31,7 @@ params).
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -56,6 +57,22 @@ from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
 
 _log = logging.getLogger(__name__)
+
+CPU_THREADS_ENV = "MTG_BOT_TRAIN_CPU_THREADS"
+
+
+def structured_cpu_threads() -> int:
+    """Torch CPU threads for structured-trunk training: 1 (the pin's
+    default, chosen for the flat MLP), or ``$MTG_BOT_TRAIN_CPU_THREADS``
+    when set. A CPU-only host (no CUDA) trains the transformer trunk on
+    the CPU, where one thread leaves most cores idle."""
+    raw = os.environ.get(CPU_THREADS_ENV, "").strip()
+    if not raw:
+        return 1
+    n = int(raw)
+    if n < 1:
+        raise ValueError(f"{CPU_THREADS_ENV} must be >= 1; got {raw!r}")
+    return n
 
 
 def grouped_train_val_split(
@@ -1046,7 +1063,7 @@ def train_structured_model(
     if device is None:
         device = auto_device()
     if device == "cpu":
-        torch.set_num_threads(1)
+        torch.set_num_threads(structured_cpu_threads())
     device_obj = torch.device(device)
     torch.manual_seed(rng_seed)
 
