@@ -150,10 +150,6 @@
       <span id="scrub-counter" class="muted">0 / 0</span>
     </div>
   </div>
-
-  <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
-    <ol id="phase-list" class="phase-list"></ol>
-  </div>
 </div>
 
 <!-- Interactive play: decision panel (replaces the scrubber in play mode) -->
@@ -169,9 +165,25 @@
 
 <main id="board" class="board hidden" aria-label="Game board">
   <section class="player-row opponent" id="row-p1"></section>
-  <section class="stack-row" id="row-stack" aria-label="Stack"></section>
+  <!-- The turn's phases, between the two players. -->
+  <section class="middle-row" aria-label="Phases">
+    <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
+      <ol id="phase-list" class="phase-list"></ol>
+    </div>
+  </section>
   <section class="player-row you" id="row-p0"></section>
 </main>
+
+<!-- The stack: a window that pops up while the stack has items. Drag it
+     by its title bar; the position is remembered. Hovering an item marks
+     its targets (see showTargetMarks in app.js). -->
+<section id="stack-window" class="stack-window hidden" aria-label="Stack">
+  <header id="stack-window-header" class="stack-window-header" title="Drag to move">
+    <span class="stack-window-title">Stack</span>
+    <span id="stack-window-count" class="muted"></span>
+  </header>
+  <div class="stack-row" id="row-stack"></div>
+</section>
 
 <aside class="right-col" aria-label="Side panel">
   <section id="search-panel" class="search-panel hidden"
@@ -216,7 +228,12 @@
             refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#6fa8ff"/>
     </marker>
+    <marker id="arrow-head-target" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ff4d4d"/>
+    </marker>
   </defs>
+  <g id="target-marks"></g>
 </svg>
 
 <div id="card-preview" class="card-preview" hidden aria-hidden="true"></div>

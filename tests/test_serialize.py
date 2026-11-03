@@ -256,6 +256,22 @@ def test_serialize_stack_targets_resolve_stack_items():
     }
 
 
+def test_serialize_stack_index_targets_resolve_to_the_spell():
+    """The engine's spell target is ``("stack", index)`` (Memory Lapse,
+    counterspells, copies): name the spell at that index."""
+    state = _fresh_state()
+    victim_src = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=1, zone=Zone.STACK)
+    state.stack.append(StackItem(source=victim_src, controller_id=1))
+    counter_src = state.new_object(SYNTHETIC_CREATURES["Sapling"], owner_id=0, zone=Zone.STACK)
+    state.stack.append(StackItem(
+        source=counter_src, controller_id=0,
+        targets=(("stack", 0), ("stack", 7)),
+    ))
+    targets = serialize_state(state)["stack"][1]["targets"]
+    assert targets[0] == {"kind": "stack", "id": 0, "name": "Wild Bear"}
+    assert targets[1] == {"kind": "stack", "id": 7, "name": None}
+
+
 def test_serialize_permanent_blocked_by_is_list_of_ids():
     state = _fresh_state()
     attacker = state.new_object(SYNTHETIC_CREATURES["Wild Bear"], owner_id=0, zone=Zone.BATTLEFIELD)

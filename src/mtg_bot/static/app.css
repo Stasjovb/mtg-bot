@@ -344,6 +344,50 @@ body { display: grid; grid-template-columns: 1fr 460px;
                             font-size: 0.85em; max-width: 22em; }
 .stack-item.countered-spell { opacity: 0.55; }
 .stack-item.countered-spell .stack-item-name { text-decoration: line-through; }
+.stack-item.has-targets { cursor: crosshair; }
+.stack-item.has-targets:hover { border-color: #ff4d4d; }
+.stack-item .stack-top { color: var(--active-glow); font-size: 0.75em;
+                         text-transform: uppercase; letter-spacing: 0.06em;
+                         margin-left: 0.4em; }
+
+/* Phases: a centred strip between the two players. */
+.middle-row { display: flex; justify-content: center; min-width: 0; }
+.middle-row .phase-tracker { background: transparent; border: none;
+                             padding: 0.15em 0; max-width: 100%; }
+.middle-row .phase-list { justify-content: center; font-size: 0.8em; }
+
+/* The stack: a floating window (left by default), dragged by its title
+   bar; shown only while the stack has items. */
+.stack-window { position: fixed; left: 12px; top: 30vh; z-index: 50;
+                width: 300px; max-width: calc(100vw - 24px); max-height: 60vh;
+                display: flex; flex-direction: column;
+                background: var(--stack); border: 1px solid #6a52a0;
+                border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,0.55); }
+.stack-window-header { display: flex; justify-content: space-between;
+                       align-items: baseline; gap: 0.6em; padding: 0.35em 0.7em;
+                       background: #3a2b55; border-radius: 8px 8px 0 0;
+                       cursor: move; user-select: none; touch-action: none; }
+.stack-window-title { font-weight: 700; font-size: 0.8em;
+                      text-transform: uppercase; letter-spacing: 0.08em; }
+.stack-window-header .muted { font-size: 0.75em; }
+.stack-window .stack-row { flex-direction: column; flex-wrap: nowrap;
+                           overflow-y: auto; border: none; background: transparent;
+                           border-radius: 0 0 8px 8px; }
+.stack-window .stack-item { width: 100%; }
+
+/* Target marks drawn while a stack item is hovered: a crosshair on each
+   target; with two targets (from one to the other, e.g. a fight spell)
+   the first is green and the second red. */
+.target-mark circle, .target-mark line { fill: none; stroke-width: 2.5;
+                                         filter: drop-shadow(0 0 3px rgba(0,0,0,0.8)); }
+.target-mark .dot { fill: currentColor; stroke: none; }
+.target-mark.to   { stroke: #ff4d4d; color: #ff4d4d; }
+.target-mark.from { stroke: #4cd964; color: #4cd964; }
+.target-mark { animation: target-mark-pulse 1.1s ease-in-out infinite; }
+@keyframes target-mark-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.target-arrow { stroke: #ff4d4d; stroke-width: 3; fill: none; opacity: 0.9;
+                filter: drop-shadow(0 0 2px rgba(0,0,0,0.6)); }
+.target-arrow.lead { stroke: #4cd964; stroke-width: 2; stroke-dasharray: 6 5; }
 
 /* Poison counter badge in the side panel. Only shown when > 0. */
 .poison-row { display: flex; align-items: center; gap: 0.4em;
@@ -439,7 +483,7 @@ body { display: grid; grid-template-columns: 1fr 460px;
 /* ---- combat arrows ---- */
 
 .combat-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-                  pointer-events: none; z-index: 10; overflow: visible; }
+                  pointer-events: none; z-index: 60; overflow: visible; }
 .combat-arrow { stroke: #ff9852; stroke-width: 3; fill: none;
                 opacity: 0.85; filter: drop-shadow(0 0 2px rgba(0,0,0,0.5)); }
 .combat-arrow.block { stroke: #6fa8ff; }

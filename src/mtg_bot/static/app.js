@@ -1364,27 +1364,218 @@ function hidePreview() { els.preview.hidden = true; }
 
 function renderStack(root, snap) {
   root.replaceChildren();
-  if (!snap.stack || snap.stack.length === 0) {
+  clearTargetMarks();
+  const n = snap.stack ? snap.stack.length : 0;
+  // The stack window pops up while the stack has items.
+  const win = document.getElementById('stack-window');
+  if (win) {
+    win.classList.toggle('hidden', n === 0);
+    const count = document.getElementById('stack-window-count');
+    if (count) count.textContent = n ? `${n} · top first` : '';
+    if (n) placeStackWindow(win);
+  }
+  if (n === 0) {
     root.classList.add('empty');
     root.textContent = 'Stack is empty';
     return;
   }
   root.classList.remove('empty');
-  const label = document.createElement('span');
-  label.className = 'muted';
-  label.textContent = `Stack (${snap.stack.length}):`;
-  root.appendChild(label);
-  snap.stack.forEach((item, idx) => {
-    const el = stackItemEl(item);
+  // The last item is the top of the stack (it resolves first): list it first.
+  for (let idx = n - 1; idx >= 0; idx--) {
+    const el = stackItemEl(snap.stack[idx]);
     el.dataset.stackIdx = idx;
+    if (idx === n - 1) {
+      const top = document.createElement('span');
+      top.className = 'stack-top';
+      top.textContent = 'top';
+      const line1 = el.querySelector('.stack-item-text > div');
+      if (line1) line1.appendChild(top);
+    }
     root.appendChild(el);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stack window: drag by the title bar; the position is remembered per browser
+// ---------------------------------------------------------------------------
+
+const STACK_POS_KEY = 'mtgbot.stackWindowPos';
+
+function loadStackPos() {
+  try {
+    const p = JSON.parse(localStorage.getItem(STACK_POS_KEY));
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return p;
+  } catch (e) { /* storage unavailable: default position */ }
+  return null;
+}
+
+function saveStackPos(p) {
+  try { localStorage.setItem(STACK_POS_KEY, JSON.stringify(p)); } catch (e) { /* ignore */ }
+}
+
+// Keep at least the title bar on screen.
+function clampToViewport(win, x, y) {
+  const w = win.offsetWidth || 300;
+  return {
+    x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w)),
+    y: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - 40)),
+  };
+}
+
+function placeStackWindow(win) {
+  const p = loadStackPos();
+  if (!p) return;
+  const c = clampToViewport(win, p.x, p.y);
+  win.style.left = `${c.x}px`;
+  win.style.top = `${c.y}px`;
+}
+
+function initStackWindowDrag() {
+  const win = document.getElementById('stack-window');
+  const head = document.getElementById('stack-window-header');
+  if (!win || !head) return;
+  let drag = null;
+  head.addEventListener('pointerdown', (ev) => {
+    const r = win.getBoundingClientRect();
+    drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+    if (head.setPointerCapture) head.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+  head.addEventListener('pointermove', (ev) => {
+    if (!drag) return;
+    const c = clampToViewport(win, ev.clientX - drag.dx, ev.clientY - drag.dy);
+    win.style.left = `${c.x}px`;
+    win.style.top = `${c.y}px`;
+    clearTargetMarks();
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    saveStackPos({ x: parseFloat(win.style.left) || 0, y: parseFloat(win.style.top) || 0 });
+  };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+}
+initStackWindowDrag();
+
+// ---------------------------------------------------------------------------
+// Target marks: hovering a stack item puts a crosshair on each of its
+// targets. One target (or 3+): red crosshairs, arrows from the item. Two
+// targets (from one to the other, e.g. a fight spell): green crosshair on
+// the first, red on the second, an arrow between them and a dashed lead
+// from the item to the first.
+// ---------------------------------------------------------------------------
+
+function targetEl(tg) {
+  if (tg.kind === 'player') {
+    const row = document.getElementById(`row-p${tg.id}`);
+    return row && row.querySelector('.life');
+  }
+  // A spell target's id is its stack index (``("stack", i)``).
+  if (tg.kind === 'stack') {
+    return document.querySelector(`.stack-item[data-stack-idx="${tg.id}"]`);
+  }
+  return document.querySelector(`.battlefield .card[data-obj-id="${tg.id}"]`)
+      || document.querySelector(`.stack-item[data-obj-id="${tg.id}"]`)
+      || document.querySelector(`.card[data-obj-id="${tg.id}"]`);
+}
+
+function markRadius(r) { return Math.max(14, Math.min(34, r * 0.38)); }
+
+function centerOf(el) {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2,
+           r: markRadius(Math.min(r.width, r.height)) };
+}
+
+function clearTargetMarks() {
+  const g = document.getElementById('target-marks');
+  if (g) g.replaceChildren();
+}
+
+function crosshair(c, cls) {
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', `target-mark ${cls}`);
+  const ring = document.createElementNS(SVG_NS, 'circle');
+  ring.setAttribute('cx', c.x);
+  ring.setAttribute('cy', c.y);
+  ring.setAttribute('r', c.r);
+  g.appendChild(ring);
+  // Four ticks crossing the ring, and a dot in the middle.
+  [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([dx, dy]) => {
+    const t = document.createElementNS(SVG_NS, 'line');
+    t.setAttribute('x1', c.x + dx * c.r * 0.45);
+    t.setAttribute('y1', c.y + dy * c.r * 0.45);
+    t.setAttribute('x2', c.x + dx * c.r * 1.35);
+    t.setAttribute('y2', c.y + dy * c.r * 1.35);
+    g.appendChild(t);
+  });
+  const dot = document.createElementNS(SVG_NS, 'circle');
+  dot.setAttribute('class', 'dot');
+  dot.setAttribute('cx', c.x);
+  dot.setAttribute('cy', c.y);
+  dot.setAttribute('r', 2.5);
+  g.appendChild(dot);
+  return g;
+}
+
+// A line from ``from`` that stops at ``to``'s crosshair ring.
+function targetArrow(from, to, cls) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const stop = (to.r || 0) + 4;
+  const line = document.createElementNS(SVG_NS, 'line');
+  line.setAttribute('x1', from.x);
+  line.setAttribute('y1', from.y);
+  line.setAttribute('x2', to.x - (dx / len) * stop);
+  line.setAttribute('y2', to.y - (dy / len) * stop);
+  line.setAttribute('class', 'target-arrow' + (cls ? ` ${cls}` : ''));
+  if (!cls) line.setAttribute('marker-end', 'url(#arrow-head-target)');
+  return line;
+}
+
+// The point of ``rect`` closest to ``p`` (where an arrow leaves the item).
+function edgePoint(rect, p) {
+  return { x: Math.min(Math.max(p.x, rect.left), rect.right),
+           y: Math.min(Math.max(p.y, rect.top), rect.bottom) };
+}
+
+function showTargetMarks(item, itemEl) {
+  const g = document.getElementById('target-marks');
+  if (!g) return;
+  g.replaceChildren();
+  const marks = (item.targets || [])
+    .map(tg => targetEl(tg))
+    .filter(Boolean)
+    .map(centerOf);
+  if (marks.length === 0) return;
+  const src = itemEl.getBoundingClientRect();
+  if (marks.length === 2) {
+    const [from, to] = marks;
+    g.appendChild(targetArrow(edgePoint(src, from), from, 'lead'));
+    g.appendChild(targetArrow(from, to));
+    g.appendChild(crosshair(from, 'from'));
+    g.appendChild(crosshair(to, 'to'));
+    return;
+  }
+  marks.forEach(m => {
+    g.appendChild(targetArrow(edgePoint(src, m), m));
+    g.appendChild(crosshair(m, 'to'));
   });
 }
+window.addEventListener('scroll', clearTargetMarks, true);
 
 function stackItemEl(item) {
   const wrap = document.createElement('div');
   wrap.className = 'stack-item';
+  wrap.dataset.objId = item.id;
   if (item.countered) wrap.classList.add('countered-spell');
+  if (item.targets && item.targets.length > 0) {
+    wrap.classList.add('has-targets');
+    wrap.addEventListener('mouseenter', () => showTargetMarks(item, wrap));
+    wrap.addEventListener('mouseleave', clearTargetMarks);
+  }
 
   // Mini card image (or text fallback) — hover gives the same large preview
   // the battlefield cards use.

@@ -110,6 +110,13 @@ def _resolve_target(state: GameState, kind: str, tid: int) -> dict[str, Any]:
     can't be found (already left the battlefield, etc.)."""
     if kind == "player":
         return {"kind": kind, "id": tid, "name": f"Player {tid}"}
+    if kind == "stack":
+        # A spell target is ``("stack", index)`` (counterspells, copies).
+        name = (
+            state.stack[tid].source.printing.name
+            if 0 <= tid < len(state.stack) else None
+        )
+        return {"kind": kind, "id": tid, "name": name}
     for o in state.battlefield:
         if o.id == tid:
             return {"kind": kind, "id": tid, "name": o.printing.name}
