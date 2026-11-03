@@ -38,7 +38,8 @@ class GameFormat:
     # and on every draw.
     holder_owns_hand_cards: bool = False
     # ``(low, high)``: a mulligan is free (no card goes to the bottom)
-    # when the hand has fewer than ``low`` or more than ``high`` lands.
+    # when the hand has fewer than ``low`` or more than ``high`` lands,
+    # until the player takes a regular (London) mulligan.
     # ``None`` = the plain London mulligan.
     free_mulligan_land_bounds: Optional[tuple[int, int]] = None
 
@@ -46,9 +47,14 @@ class GameFormat:
     def shares_zones(self) -> bool:
         return self.shared_library or self.shared_graveyard
 
-    def is_free_mulligan(self, hand: Iterable["GameObject"]) -> bool:
-        """Whether mulliganing ``hand`` is free under this format."""
-        if self.free_mulligan_land_bounds is None:
+    def is_free_mulligan(
+        self, hand: Iterable["GameObject"], regular_mulligans_taken: int = 0,
+    ) -> bool:
+        """Whether mulliganing ``hand`` is free under this format. Never
+        after a regular mulligan (Wizards' Dandân rule: the free mulligan
+        "no longer applies once that player has taken a regular
+        mulligan")."""
+        if self.free_mulligan_land_bounds is None or regular_mulligans_taken:
             return False
         low, high = self.free_mulligan_land_bounds
         lands = sum(1 for c in hand if c.printing.is_land)

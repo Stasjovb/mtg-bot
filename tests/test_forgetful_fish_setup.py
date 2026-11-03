@@ -295,10 +295,31 @@ def test_only_hands_with_two_to_five_lands_cost_a_card(seed):
         agent.offers, agent.offers[1:],
     ):
         assert mulls_taken == paid
-        if 2 <= lands <= 5:
+        if paid or 2 <= lands <= 5:
             paid += 1  # a London mulligan: one more card to bottom
         assert next_mulls == paid
     assert len(state.players[0].hand) == 7 - paid
+
+
+def test_free_mulligan_ends_after_a_regular_mulligan():
+    # Wizards' Dandân rule: after a regular mulligan, even a hand with
+    # fewer than 2 or more than 5 lands costs a card. Mostly-land decks
+    # make such hands common; the scan must see at least one.
+    deck = ["Island"] * 60 + ["Brainstorm"] * 20
+    seen = 0
+    for seed in range(40):
+        agent = _RecordingMulligan(4)
+        setup_game(
+            [agent, RandomAgent()], decks=[deck], seed=seed,
+            game_format=FORGETFUL_FISH,
+        )
+        for (lands, mulls_taken), (_, next_mulls) in zip(
+            agent.offers, agent.offers[1:],
+        ):
+            if mulls_taken and not 2 <= lands <= 5:
+                assert next_mulls == mulls_taken + 1
+                seen += 1
+    assert seen
 
 
 def test_standard_mulligan_is_never_free():

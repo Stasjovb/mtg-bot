@@ -351,7 +351,7 @@ class InteractiveAgent(Agent):
 
     def choose_mulligan(self, state, player_id, hand, mulls_taken):
         lands = sum(1 for c in hand if c.printing.is_land)
-        free = state.game_format.is_free_mulligan(hand)
+        free = state.game_format.is_free_mulligan(hand, mulls_taken)
         cost = (
             "free" if free
             else f"you would put {mulls_taken + 1} card(s) on the bottom"

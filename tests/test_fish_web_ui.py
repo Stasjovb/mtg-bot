@@ -289,6 +289,30 @@ def test_choose_mulligan_says_whether_it_is_free(deck, free):
     assert hand[0].printing.name in prompts[0]
 
 
+def test_choose_mulligan_is_not_free_after_a_regular_mulligan():
+    # 7 lands would be free, but not after a regular mulligan.
+    agent = InteractiveAgent({})
+    state = setup_game(
+        [agent, RandomAgent()], decks=[["Island"] * 80], seed=0,
+        game_format=FORGETFUL_FISH, enable_mulligans=False,
+    )
+    hand = list(state.players[0].hand)
+    prompts = []
+
+    def run():
+        for _ in range(400):
+            p = agent.get_pending()
+            if p is not None:
+                prompts.append(p["prompt"])
+                agent.submit_response({"yes": False})
+                return
+            time.sleep(0.01)
+
+    threading.Thread(target=run, daemon=True).start()
+    assert agent.choose_mulligan(state, 0, hand, 1) is False
+    assert "7 lands; you would put 2 card(s) on the bottom" in prompts[0]
+
+
 def test_choose_bottom_validates_and_fills_picks():
     agent = InteractiveAgent({})
     state = _fish_state(agent)

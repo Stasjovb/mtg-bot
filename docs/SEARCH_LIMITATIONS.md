@@ -20341,8 +20341,9 @@ share one schema). It is in no other pool (`all` is unchanged).
 changes nothing. `FORGETFUL_FISH` makes every player's `library` /
 `graveyard` the same list object (player 0's): `simulate._apply_format_to_players`
 at setup, `game._clone_zones_sharing_first_player` in `GameState.clone`.
-House rules (the user's): free mulligan below 2 or above 5 lands, and a card
-is owned by the player who drew / cast it.
+House rules (the user's): free mulligan below 2 or above 5 lands, until the
+player's first regular mulligan (Wizards' Dandân rule, chosen 2026-11-03),
+and a card is owned by the player who drew / cast it.
 
 1. **Loops over every player's graveyard / library see a shared zone once
    per player** unless they walk `GameState.distinct_graveyards()` /
@@ -20380,7 +20381,7 @@ is owned by the player who drew / cast it.
    (~58 sites) if a Fish card ever needs it. *Impact:* none known: "owner's
    library / graveyard" is the shared zone for both players.
 3. **Free mulligans are capped** at `simulate.MAX_FREE_MULLIGANS` (10) per
-   player; later mulligans count as London mulligans. The house rule has no
+   player; later mulligans count as London mulligans. The rule itself has no
    cap. *Failure mode:* an 11th consecutive free-eligible mulligan costs a
    card. *Fix scope:* trivial (raise the cap). *Impact:* negligible (the
    chance of 10 free-eligible hands in a row is tiny with a real list); the

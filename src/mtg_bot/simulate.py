@@ -229,7 +229,8 @@ def setup_game(
     in a hand is owned by that hand's player
     (``formats.apply_hand_ownership``). A mulligan the format makes free
     (``GameFormat.is_free_mulligan``: Fish's fewer than 2 or more than 5
-    lands) doesn't count toward the cards bottomed; past
+    lands, until the player's first regular mulligan) doesn't count
+    toward the cards bottomed; past
     ``MAX_FREE_MULLIGANS`` free mulligans in a row, further mulligans
     count as usual so setup always ends.
     """
@@ -319,7 +320,7 @@ def setup_game(
                     break
                 free = (
                     free_mulls < MAX_FREE_MULLIGANS
-                    and game_format.is_free_mulligan(hand)
+                    and game_format.is_free_mulligan(hand, mulls_taken)
                 )
                 # Mulligan: shuffle hand back, redraw 7.
                 while p.hand:

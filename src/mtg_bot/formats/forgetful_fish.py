@@ -6,7 +6,9 @@ House rules used here (decided by the user, 2026-11-02):
   library (``setup_game(decks=[shared_list], game_format=FORGETFUL_FISH)``).
 - A mulligan is free (nothing goes to the bottom) when the hand has fewer
   than 2 or more than 5 lands; repeatable while that holds. Otherwise the
-  normal London mulligan.
+  normal London mulligan, and once a player has taken one, their free
+  mulligan no longer applies (Wizards' Dandân rule, the user's choice
+  on 2026-11-03).
 - A card is owned by the player who drew it / cast it: a card in a hand is
   owned by that hand's player, so a spell or permanent is owned by whoever
   cast or played it from their hand.

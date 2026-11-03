@@ -69,6 +69,14 @@ def test_fish_free_mulligan_outside_two_to_five_lands(n_lands, free):
     assert FORGETFUL_FISH.is_free_mulligan(_hand(n_lands)) is free
 
 
+@pytest.mark.parametrize("n_lands", [0, 1, 6, 7])
+@pytest.mark.parametrize("regular", [1, 2])
+def test_fish_free_mulligan_ends_after_a_regular_mulligan(n_lands, regular):
+    # Wizards' Dandân rule: no free mulligan once a regular one was taken.
+    assert FORGETFUL_FISH.is_free_mulligan(_hand(n_lands), regular) is False
+    assert FORGETFUL_FISH.is_free_mulligan(_hand(n_lands), 0) is True
+
+
 @pytest.mark.parametrize("n_lands", range(8))
 def test_standard_mulligans_are_never_free(n_lands):
     assert STANDARD.is_free_mulligan(_hand(n_lands)) is False
