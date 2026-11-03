@@ -171,6 +171,9 @@ class InteractiveAgent(Agent):
         self._pending: Optional[dict] = None
         self._response_event = threading.Event()
         self._raw_response: Any = None
+        # Numbers each decision (``pending["seq"]``) so a late answer to
+        # an earlier one can be told apart (``submit_response``).
+        self._seq = 0
         self.timed_out = False
 
     # ------------------------------------------------------------------
@@ -181,7 +184,8 @@ class InteractiveAgent(Agent):
         if self._state_callback is not None:
             self._state_callback(state)
         with self._lock:
-            self._pending = pending
+            self._seq += 1
+            self._pending = {**pending, "seq": self._seq}
             self._response_event.clear()
         if not self._response_event.wait(timeout=DECISION_TIMEOUT):
             self.timed_out = True
@@ -196,10 +200,22 @@ class InteractiveAgent(Agent):
         with self._lock:
             return dict(self._pending) if self._pending is not None else None
 
-    def submit_response(self, response: Any) -> None:
+    def submit_response(self, response: Any, seq: Optional[int] = None) -> bool:
+        """Answer the pending decision. With ``seq`` (the ``seq`` of the
+        decision the browser showed), an answer to an earlier decision is
+        dropped and ``False`` returned: a double click, or a click on a
+        board the browser had not refreshed yet, would otherwise answer
+        the NEXT question with the old one's option index (a land whose
+        enter trigger leaves only "Pass priority" then ended the game
+        with "choose_action idx 1 out of range 0..0")."""
         with self._lock:
+            if seq is not None and (
+                self._pending is None or self._pending.get("seq") != seq
+            ):
+                return False
             self._raw_response = response
         self._response_event.set()
+        return True
 
     # ------------------------------------------------------------------
     # Agent interface — all 16 decision methods
@@ -281,6 +297,20 @@ class InteractiveAgent(Agent):
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         objects = [_bf_opt(state, oid, self._n2id) for oid in legal_object_ids]
         resp = self._ask(state, {"type": "choose_sacrifice", "objects": objects})
+        return int(resp["id"])
+
+    def choose_permanent_to_return(self, state, player_id, legal_object_ids,
+                                   label="permanent"):
+        """"Return a <label> you control to its owner's hand" (the bounce
+        lands, e.g. Izzet Boilerworks: any land you control, itself
+        included): the same pick as ``choose_sacrifice``, worded as a
+        return."""
+        objects = [_bf_opt(state, oid, self._n2id) for oid in legal_object_ids]
+        resp = self._ask(state, {
+            "type": "choose_sacrifice",
+            "prompt": f"Choose a {label} you control to return to your hand",
+            "objects": objects,
+        })
         return int(resp["id"])
 
     def choose_mode(self, state, player_id, mode_descriptions):

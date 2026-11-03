@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from mtg_bot.actions import PassPriority
 from mtg_bot.agents import RandomAgent
 from mtg_bot.formats import FORGETFUL_FISH
 from mtg_bot.formats.forgetful_fish import (
@@ -311,6 +312,105 @@ def test_choose_mulligan_is_not_free_after_a_regular_mulligan():
     threading.Thread(target=run, daemon=True).start()
     assert agent.choose_mulligan(state, 0, hand, 1) is False
     assert "7 lands; you would put 2 card(s) on the bottom" in prompts[0]
+
+
+def _wait_agent_pending(agent, seq_after=0):
+    end = time.time() + 5
+    while time.time() < end:
+        p = agent.get_pending()
+        if p is not None and p["seq"] > seq_after:
+            return p
+        time.sleep(0.01)
+    raise AssertionError("no pending decision")
+
+
+def test_each_decision_carries_a_new_seq():
+    agent = InteractiveAgent({})
+    state = _fish_state(agent)
+    results = []
+
+    def run():
+        results.append(agent.choose_action(state, 0, [PassPriority()]))
+        results.append(agent.choose_action(state, 0, [PassPriority()]))
+
+    threading.Thread(target=run, daemon=True).start()
+    first = _wait_agent_pending(agent)
+    assert agent.submit_response({"idx": 0}, seq=first["seq"]) is True
+    second = _wait_agent_pending(agent, first["seq"])
+    assert second["seq"] == first["seq"] + 1
+    assert agent.submit_response({"idx": 0}, seq=second["seq"]) is True
+
+
+def test_an_answer_to_an_earlier_decision_is_dropped():
+    # The website crash: a second click on a just-played bounce land sent
+    # its option index (1) to the next decision, whose only option was
+    # "Pass priority" -> "choose_action idx 1 out of range 0..0".
+    agent = InteractiveAgent({})
+    state = _fish_state(agent)
+    results = []
+    threading.Thread(
+        target=lambda: results.append(agent.choose_action(state, 0, [PassPriority()])),
+        daemon=True,
+    ).start()
+    p = _wait_agent_pending(agent)
+    assert agent.submit_response({"idx": 1}, seq=p["seq"] - 1) is False
+    assert agent.get_pending()["seq"] == p["seq"]  # still waiting
+    assert agent.submit_response({"idx": 0}, seq=p["seq"]) is True
+    end = time.time() + 5
+    while not results and time.time() < end:
+        time.sleep(0.01)
+    assert results == [PassPriority()]
+
+
+def test_answer_without_seq_still_works_and_none_pending_rejects_seq():
+    agent = InteractiveAgent({})
+    assert agent.submit_response({"idx": 0}, seq=1) is False  # nothing pending
+    assert agent.submit_response({"idx": 0}) is True
+
+
+def test_action_endpoint_rejects_a_stale_answer(client):
+    session = create_session(
+        seed=0, colors=["U", "U"], human_player_id=0, n2id={},
+        enrich_fn=serialize_state, max_turns=3, decks=[FISH_LIKE],
+        game_format=FORGETFUL_FISH,
+    )
+    p = _wait_agent_pending(session.human_agent)  # the mulligan question
+    url = f"/api/interactive/action/{session.session_id}"
+    stale = client.post(url, json={"response": {"yes": True}, "seq": p["seq"] - 1})
+    assert stale.status_code == 409 and stale.get_json()["stale"] is True
+    assert session.human_agent.get_pending()["seq"] == p["seq"]
+    ok = client.post(url, json={"response": {"yes": False}, "seq": p["seq"]})
+    assert ok.status_code == 200
+
+
+@pytest.mark.parametrize("returned", ["Island", "Izzet Boilerworks"])
+def test_bounce_land_asks_which_land_to_return_not_to_sacrifice(returned):
+    # "Return a land you control": any of them, the bounce land itself
+    # included; the opponent's lands are not offered.
+    from tests._fish_helpers import make_state, place, printing
+
+    agent = InteractiveAgent({})
+    state = make_state(agent0=agent)
+    mine = {"Island": place(state, 0, "Island"),
+            "Izzet Boilerworks": place(state, 0, "Izzet Boilerworks")}
+    place(state, 1, "Island")
+    effect = printing("Izzet Boilerworks").triggered_abilities[0].effect
+    done = []
+    threading.Thread(
+        target=lambda: done.append(effect.resolve(state, 0)), daemon=True,
+    ).start()
+    p = _wait_agent_pending(agent)
+    assert p["type"] == "choose_sacrifice"
+    assert p["prompt"] == "Choose a land you control to return to your hand"
+    assert {o["id"] for o in p["objects"]} == {o.id for o in mine.values()}
+    agent.submit_response({"id": mine[returned].id}, seq=p["seq"])
+    end = time.time() + 5
+    while not done and time.time() < end:
+        time.sleep(0.01)
+    assert mine[returned] in state.player_by_id(0).hand
+    assert mine[returned] not in state.battlefield
+    other = next(o for n, o in mine.items() if n != returned)
+    assert other in state.battlefield
 
 
 def test_choose_bottom_validates_and_fills_picks():

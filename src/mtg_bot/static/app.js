@@ -1818,14 +1818,24 @@ function handleState(state) {
 // ---------------------------------------------------------------------------
 
 async function submitAction(response) {
-  if (!iplay) return;
+  // One answer per decision: a double click, or a click on a card whose
+  // board the next poll hasn't redrawn yet, must not answer the next
+  // decision with this one's option index.
+  if (!iplay || iplay.answered) return;
+  iplay.answered = true;
   closeDecisionModal();
   elsI.waiting.classList.remove('hidden');
   elsI.body   .classList.add('hidden');
   try {
-    await postJSON(`/api/interactive/action/${iplay.sessionId}`, { response });
+    await postJSON(`/api/interactive/action/${iplay.sessionId}`,
+                   { response, seq: iplay.pendingSeq });
   } catch (e) {
-    setStatus('Submit error: ' + e.message, 'loss');
+    // 409: the game had already moved past that decision; just re-poll.
+    // Any other failure: the decision is still open, so allow a retry.
+    if (!String(e.message).startsWith('409')) {
+      iplay.answered = false;
+      setStatus('Submit error: ' + e.message, 'loss');
+    }
   }
   schedulePoll();
 }
@@ -1836,6 +1846,16 @@ async function submitAction(response) {
 
 function renderDecision(pending) {
   const type = pending.type;
+  // ``seq`` numbers the decision (``InteractiveAgent.submit_response``).
+  // Already answered and the game hasn't taken the answer yet: wait.
+  if (pending.seq != null && pending.seq === iplay.pendingSeq && iplay.answered) {
+    elsI.waiting.classList.remove('hidden');
+    elsI.body   .classList.add('hidden');
+    schedulePoll();
+    return;
+  }
+  iplay.pendingSeq = pending.seq;
+  iplay.answered = false;
 
   // Auto-submit when there is only one possible choice — no point making the
   // player click through it (most common case: solo PassPriority).
@@ -1879,7 +1899,7 @@ function renderDecision(pending) {
     case 'declare_blockers':  renderDeclareBlockers(pending);  break;
     case 'choose_target':     renderChooseTarget(pending);    break;
     case 'choose_discard':    renderChooseDiscardBoard(pending);                                          break;
-    case 'choose_sacrifice':  renderChooseObj(pending, 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
+    case 'choose_sacrifice':  renderChooseObj(pending, pending.prompt || 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
     case 'choose_surveil':    renderChooseSurveil(pending);   break;
     case 'choose_mode':       renderChooseMode(pending);      break;
     case 'choose_modes':      renderChooseModes(pending);     break;

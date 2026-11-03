@@ -650,7 +650,12 @@ def create_app(
         body = request.get_json(force=True, silent=True) or {}
         if "response" not in body:
             abort(400, description="missing 'response' field")
-        session.human_agent.submit_response(body["response"])
+        # ``seq``: the decision the browser answered. An answer to an
+        # earlier decision is dropped (409) instead of answering this one.
+        if not session.human_agent.submit_response(
+            body["response"], seq=body.get("seq"),
+        ):
+            return jsonify({"ok": False, "stale": True}), 409
         return jsonify({"ok": True})
 
     @app.route("/api/card/<scryfall_id>")
