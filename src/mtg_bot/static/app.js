@@ -370,6 +370,30 @@ function renderSnapshot(summary, snap) {
   renderPhaseTracker(snap);
   drawCombatArrows(snap);
   renderSearchPanel(snap);
+  renderWinMeter(snap);
+}
+
+// Win meter, like a chess evaluation bar. Only snapshots of a reviewed
+// game carry ``win_meter`` (Watch games, the review of a played game);
+// live play never does, so the bar stays hidden there.
+function renderWinMeter(snap) {
+  const el = document.getElementById('win-meter');
+  if (!el) return;
+  const m = snap.win_meter;
+  if (!m) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  const p0 = Math.round(m.p0 * 100);
+  document.getElementById('win-meter-fill').style.height = `${p0}%`;
+  document.getElementById('win-meter-bottom').textContent = String(p0);
+  document.getElementById('win-meter-top').textContent = String(100 - p0);
+  el.setAttribute('aria-valuenow', String(p0));
+  el.title = m.source === 'result'
+    ? (p0 === 50 ? 'Result: draw' : `Result: Player ${p0 > 50 ? 0 : 1} won`)
+    : `Estimated chance to win: Player 0 (bottom) ${p0}%, Player 1 (top) ${100 - p0}%\n`
+      + 'Engine heuristic (life, board, cards, mana): a rough guide.';
 }
 
 // Toggle the decision-detail panel's body open/closed. Header + toggle
@@ -1937,6 +1961,22 @@ async function startInteractiveGame() {
   }
 }
 
+// Open the finished interactive game in the Watch viewer: step through
+// it with the scrubber, the win meter beside the board.
+async function reviewInteractiveGame() {
+  if (!iplay) return;
+  try {
+    const summary = await postJSON(`/api/interactive/review/${iplay.sessionId}`, {});
+    stopInteractiveGame();
+    switchMode(false);
+    await activateGame(summary, 0);
+    setStatus('Game review: step through your game; the bar left of the board '
+              + 'estimates who is winning (hover it for details).', 'muted');
+  } catch (e) {
+    setStatus('Review failed: ' + e.message, 'loss');
+  }
+}
+
 function stopInteractiveGame() {
   if (!iplay) return;
   clearTimeout(iplay.pollTimer);
@@ -1989,7 +2029,16 @@ function handleState(state) {
       );
     }
     elsI.waiting.classList.add('hidden');
-    elsI.body   .classList.add('hidden');
+    // Game over: offer the game review (scrubber + win meter).
+    elsI.prompt.textContent = 'Game over.';
+    elsI.options.replaceChildren();
+    const review = document.createElement('button');
+    review.type = 'button';
+    review.className = 'action-btn';
+    review.textContent = 'Review game (with win meter)';
+    review.addEventListener('click', reviewInteractiveGame);
+    elsI.options.appendChild(review);
+    elsI.body.classList.remove('hidden');
     return;
   }
 

@@ -32,6 +32,7 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
+from mtg_bot.win_meter import win_meter
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
@@ -495,10 +496,27 @@ class InteractiveSession:
     _snapshot: Optional[dict] = field(default=None, repr=False)
     _is_over: bool = False
     _result: Optional[dict] = None
+    # Every snapshot of the game, each with its win meter, for the game
+    # review once the game is over (``review_snapshots``). The live
+    # snapshot (``_snapshot``) never carries the meter.
+    _history: list = field(default_factory=list, repr=False)
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
             self._snapshot = snap
+
+    def record(self, snap: dict, state: GameState) -> None:
+        """Add ``snap`` (taken from ``state``) to the review history."""
+        entry = dict(snap)
+        entry["win_meter"] = win_meter(state)
+        with self._lock:
+            prev = len(self._history[-1]["log"]) if self._history else 0
+            entry["log_since_last"] = list(entry["log"][prev:])
+            self._history.append(entry)
+
+    def review_snapshots(self) -> list[dict]:
+        with self._lock:
+            return list(self._history)
 
     def mark_over(self, result: dict) -> None:
         with self._lock:
@@ -584,6 +602,11 @@ def create_session(
     )
     session_box.append(session)
 
+    def on_snapshot(s) -> None:
+        snap = enrich_fn(s)
+        session.update_snapshot(snap)
+        session.record(snap, s)
+
     def run() -> None:
         try:
             state = simulate_game(
@@ -593,13 +616,15 @@ def create_session(
                 game_format=game_format,
                 seed=seed,
                 max_turns=max_turns,
-                on_snapshot=lambda s: session.update_snapshot(enrich_fn(s)),
+                on_snapshot=on_snapshot,
                 # "priority" so the board updates after every applied action
                 # and around stack resolutions, not only at end of step —
                 # otherwise plays-during-a-step look like no-ops in the UI
                 # until the step ends.
                 snapshot_granularity="priority",
             )
+            # The review ends on the final position (the result).
+            session.record(enrich_fn(state), state)
             session.mark_over({
                 "winner_id": state.winner_id,
                 "is_draw": state.is_draw,

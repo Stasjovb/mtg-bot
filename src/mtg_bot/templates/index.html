@@ -164,6 +164,14 @@
 </div>
 
 <main id="board" class="board hidden" aria-label="Game board">
+  <!-- Win meter (game review only): the bottom player's estimated chance
+       to win fills from the bottom, like a chess evaluation bar. -->
+  <div id="win-meter" class="win-meter hidden" role="meter" aria-valuemin="0"
+       aria-valuemax="100" aria-label="Estimated chance to win">
+    <span id="win-meter-top" class="win-meter-label top"></span>
+    <div id="win-meter-fill" class="win-meter-fill"></div>
+    <span id="win-meter-bottom" class="win-meter-label bottom"></span>
+  </div>
   <section class="player-row opponent" id="row-p1"></section>
   <!-- The turn's phases, between the two players. -->
   <section class="middle-row" aria-label="Phases">

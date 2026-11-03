@@ -42,6 +42,7 @@ from mtg_bot.interactive import create_session, get_session
 from mtg_bot.recommend import recommend_from_snapshot, recommend_from_state
 from mtg_bot.serialize import serialize_state
 from mtg_bot.simulate import simulate_game
+from mtg_bot.win_meter import win_meter
 
 
 _GAME_CACHE_MAX = 20
@@ -319,6 +320,9 @@ def create_app(
         def capture(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
             _redact_hands(snap)
+            # Watch games are game review: each snapshot carries the win
+            # meter (never shown during interactive play).
+            snap["win_meter"] = win_meter(state)
             snap["log_since_last"] = list(snap["log"][log_offset[0]:])
             log_offset[0] = len(snap["log"])
             snapshots.append(snap)
@@ -615,6 +619,35 @@ def create_app(
         if session is None:
             abort(404, description="unknown session_id")
         return jsonify(session.get_state())
+
+    @app.route("/api/interactive/review/<session_id>", methods=["POST"])
+    def api_interactive_review(session_id: str):
+        """Game review of a finished interactive game: register its
+        recorded snapshots (each with the win meter) as a viewer game and
+        return the same summary shape as ``/api/play``, so the Watch
+        viewer's scrubber, log and win meter replay it. Only once the game
+        is over: the meter is never shown during play."""
+        session = get_session(session_id)
+        if session is None:
+            abort(404, description="unknown session_id")
+        if not session.is_over:
+            abort(400, description="the game is still going: review it when it is over")
+        snapshots = session.review_snapshots()
+        if not snapshots:
+            abort(400, description="this game recorded no snapshots")
+        game_id = uuid4().hex
+        cache.store(game_id, snapshots)
+        last = snapshots[-1]
+        return jsonify({
+            "game_id": game_id,
+            "snapshot_count": len(snapshots),
+            "turn_number": last["turn_number"],
+            "winner_id": last["winner_id"],
+            "is_draw": last["is_draw"],
+            "format": last.get("game_format"),
+            "human_player_id": session.human_player_id,
+            "review": True,
+        })
 
     @app.route("/api/interactive/action/<session_id>", methods=["POST"])
     def api_interactive_action(session_id: str):

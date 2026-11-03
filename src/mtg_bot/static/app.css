@@ -100,8 +100,29 @@ body { display: grid; grid-template-columns: 1fr 460px;
 /* ---- board ---- */
 
 .board { grid-column: 1; grid-row: 4; display: grid;
-         grid-template-rows: auto auto auto; gap: 0.5em; padding: 0.8em;
-         overflow: auto; align-content: start; }
+         grid-template-columns: auto minmax(0, 1fr);
+         grid-template-rows: auto auto auto; row-gap: 0.5em; column-gap: 0;
+         padding: 0.8em; overflow: auto; align-content: start; }
+.board > .player-row, .board > .middle-row { grid-column: 2; }
+
+/* Win meter (game review): a vertical bar left of the board, the bottom
+   player's (P0) chance filling from the bottom like a chess evaluation
+   bar; P1's share is the dark part above. */
+.win-meter { grid-column: 1; grid-row: 1 / span 3; position: relative;
+             width: 1.6em; margin-right: 0.6em; border-radius: 4px;
+             background: #2a2a38; border: 1px solid var(--panel-edge);
+             overflow: hidden; cursor: help; }
+.win-meter-fill { position: absolute; left: 0; right: 0; bottom: 0;
+                  height: 50%; background: #e8e8ef;
+                  transition: height 0.35s ease; }
+.win-meter::after { content: ""; position: absolute; left: 0; right: 0;
+                    top: 50%; border-top: 1px dashed rgba(212, 196, 106, 0.7); }
+/* ``difference`` keeps the numbers readable on either part of the bar. */
+.win-meter-label { position: absolute; left: 0; right: 0; z-index: 1;
+                   text-align: center; font: 700 0.62em/1 ui-monospace, monospace;
+                   color: #fff; mix-blend-mode: difference; }
+.win-meter-label.top { top: 0.4em; }
+.win-meter-label.bottom { bottom: 0.4em; }
 
 .player-row { display: grid; grid-template-columns: var(--side-panel-w) 1fr;
               gap: 0.6em; padding: 0.6em; background: var(--panel);
