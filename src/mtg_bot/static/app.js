@@ -1791,13 +1791,10 @@ const POLL_INTERVAL_MS = 250;
 const elsI = {
   form:          document.getElementById('iplay-form'),
   seed:          document.getElementById('iplay-seed'),
-  myColor:       document.getElementById('iplay-my-color'),
-  botColor:      document.getElementById('iplay-bot-color'),
   playerId:      document.getElementById('iplay-player-id'),
   maxTurns:      document.getElementById('iplay-max-turns'),
   format:        document.getElementById('iplay-format'),
   botHand:       document.getElementById('iplay-bot-hand'),
-  fishPanel:     document.getElementById('iplay-fish'),
   decklist:      document.getElementById('iplay-decklist'),
   checkDeck:     document.getElementById('iplay-check-decklist'),
   loadSaved:     document.getElementById('iplay-load-saved'),
@@ -1815,20 +1812,8 @@ const elsI = {
 elsI.form.addEventListener('submit', (ev) => { ev.preventDefault(); startInteractiveGame(); });
 
 // ---------------------------------------------------------------------
-// Forgetful Fish: format switch + shared-library decklist box
+// Forgetful Fish: the shared-library decklist box (Fish is the only format).
 // ---------------------------------------------------------------------
-
-function isFishFormat() {
-  return elsI.format.value === 'forgetful_fish';
-}
-
-function syncFormatControls() {
-  const fish = isFishFormat();
-  elsI.fishPanel.classList.toggle('hidden', !fish);
-  for (const el of elsI.form.querySelectorAll('.standard-only')) {
-    el.classList.toggle('hidden', fish);
-  }
-}
 
 // Flask's error pages are HTML; keep just the text of the message.
 function plainError(message) {
@@ -1878,12 +1863,10 @@ async function checkDecklist({ loadSaved = false, placeholder = false } = {}) {
   }
 }
 
-elsI.format.addEventListener('change', syncFormatControls);
 elsI.checkDeck.addEventListener('click', () => checkDecklist());
 elsI.loadSaved.addEventListener('click', () => checkDecklist({ loadSaved: true }));
 document.getElementById('iplay-load-placeholder').addEventListener(
   'click', () => checkDecklist({ placeholder: true }));
-syncFormatControls();
 
 // Space = pass priority, Enter = confirm (attackers / blockers).
 window.addEventListener('keydown', (ev) => {
@@ -1903,22 +1886,17 @@ window.addEventListener('keydown', (ev) => {
 async function startInteractiveGame() {
   stopInteractiveGame();
   const humanPlayer = parseInt(elsI.playerId.value, 10);
-  const myColor     = elsI.myColor.value;
-  const botColor    = elsI.botColor.value;
-  const c1 = humanPlayer === 0 ? myColor : botColor;
-  const c2 = humanPlayer === 1 ? myColor : botColor;
   setStatus('Starting game…', 'muted');
   elsI.form.querySelector('button').disabled = true;
   try {
     const body = {
       seed:         parseInt(elsI.seed.value, 10) || 0,
-      c1, c2,
       human_player: humanPlayer,
       max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
       format:       elsI.format.value,
       show_bot_hand: elsI.botHand.value === 'shown',
     };
-    if (isFishFormat()) body.decklist = elsI.decklist.value;
+    body.decklist = elsI.decklist.value;
     const data = await postJSON('/api/interactive/new', body);
     iplay = {
       sessionId:     data.session_id,

@@ -24,34 +24,11 @@
   <form id="play-form" class="play-form mode-panel" role="tabpanel"
         aria-labelledby="tab-watch" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
-    <label>Format
-      <select name="format">
-        <option value="standard" selected>Standard (colors)</option>
-        <option value="forgetful_fish">Forgetful Fish</option>
-      </select>
-    </label>
+    <input type="hidden" name="format" value="forgetful_fish">
     <label>Fish list
       <select name="list">
         <option value="saved" selected>saved</option>
         <option value="placeholder">placeholder</option>
-      </select>
-    </label>
-    <label>P0 color
-      <select name="c1">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R" selected>Red</option>
-        <option value="G">Green</option>
-      </select>
-    </label>
-    <label>P1 color
-      <select name="c2">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R">Red</option>
-        <option value="G" selected>Green</option>
       </select>
     </label>
     <label>Max turns <input type="number" name="max_turns" value="200" min="1"></label>
@@ -76,30 +53,7 @@
   <form id="iplay-form" class="play-form mode-panel hidden" role="tabpanel"
         aria-labelledby="tab-play" autocomplete="off">
     <label>Seed <input type="number" id="iplay-seed" value="0"></label>
-    <label>Format
-      <select id="iplay-format">
-        <option value="standard" selected>Standard (colors)</option>
-        <option value="forgetful_fish">Forgetful Fish (shared library)</option>
-      </select>
-    </label>
-    <label class="standard-only">Your color
-      <select id="iplay-my-color">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R" selected>Red</option>
-        <option value="G">Green</option>
-      </select>
-    </label>
-    <label class="standard-only">Bot color
-      <select id="iplay-bot-color">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R">Red</option>
-        <option value="G" selected>Green</option>
-      </select>
-    </label>
+    <input type="hidden" id="iplay-format" value="forgetful_fish">
     <label>You are
       <select id="iplay-player-id">
         <option value="0">Player 0 (goes first)</option>
@@ -114,7 +68,7 @@
       </select>
     </label>
     <button type="submit">Start game</button>
-    <div id="iplay-fish" class="fish-panel hidden">
+    <div id="iplay-fish" class="fish-panel">
       <label class="fish-decklist">Shared library (paste a list, or leave empty for the saved list)
         <textarea id="iplay-decklist" rows="8" spellcheck="false"
                   placeholder="10 Dandân&#10;4 Brainstorm&#10;30 Island&#10;..."></textarea>
@@ -128,7 +82,7 @@
     </div>
   </form>
 
-  <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>
+  <div id="status" class="status muted">Pick a seed, then run a game.</div>
 </header>
 
 <div id="bottom-controls" class="bottom-controls">

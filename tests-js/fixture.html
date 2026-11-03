@@ -9,8 +9,6 @@
   <h1 class="brand">MTG Bot</h1>
   <form id="play-form" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
-    <label>P0 <select name="c1"><option value="R" selected>R</option></select></label>
-    <label>P1 <select name="c2"><option value="G" selected>G</option></select></label>
     <label>Max turns <input type="number" name="max_turns" value="200"></label>
     <label>Detail <select name="granularity"><option value="step" selected>step</option></select></label>
     <label>Show hands <select name="reveal"><option value="all" selected>all</option></select></label>
@@ -118,8 +116,6 @@
 <button type="button" id="tab-play">Play</button>
 <form id="iplay-form" autocomplete="off">
   <input id="iplay-seed" type="number" value="0">
-  <select id="iplay-my-color"><option value="R" selected>R</option></select>
-  <select id="iplay-bot-color"><option value="G" selected>G</option></select>
   <select id="iplay-player-id"><option value="0" selected>0</option></select>
   <input id="iplay-max-turns" type="number" value="200">
 </form>

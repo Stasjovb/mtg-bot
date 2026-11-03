@@ -54,6 +54,20 @@ def test_shipped_placeholder_is_a_playable_80_card_list():
 
 
 # ---------------------------------------------------------------------
+# The website offers Forgetful Fish only (Standard is cut from the UI)
+# ---------------------------------------------------------------------
+
+def test_home_page_offers_forgetful_fish_only(client):
+    page = client.get("/").get_data(as_text=True)
+    assert "Standard (colors)" not in page
+    assert "standard-only" not in page
+    assert 'name="c1"' not in page and 'id="iplay-my-color"' not in page
+    assert 'name="format" value="forgetful_fish"' in page
+    assert 'id="iplay-format" value="forgetful_fish"' in page
+    assert 'id="iplay-fish" class="fish-panel"' in page
+
+
+# ---------------------------------------------------------------------
 # /api/decklist/check
 # ---------------------------------------------------------------------
 
