@@ -17,6 +17,8 @@
     <button type="button" id="tab-play" class="mode-tab" role="tab"
             aria-selected="false" aria-controls="panel-play">Play</button>
   </div>
+  <button type="button" id="feedback-open" class="feedback-open"
+          title="Report a problem or suggestion (saved with this game)">Feedback</button>
 
   <!-- Watch mode form -->
   <form id="play-form" class="play-form mode-panel" role="tabpanel"
@@ -240,6 +242,26 @@
     <div id="decision-modal-body" class="decision-modal-body"></div>
   </div>
 </div>
+
+<dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-title">
+  <h2 id="feedback-title">Feedback / report a problem</h2>
+  <p class="feedback-hint">Describe what happened. Add screenshots with the
+    button, or paste them here (Ctrl+V). The game you are looking at is
+    saved with your report.</p>
+  <textarea id="feedback-text" rows="6" maxlength="20000"
+            placeholder="What went wrong, or what should change?"></textarea>
+  <div class="feedback-row">
+    <label class="feedback-files">Add screenshots
+      <input type="file" id="feedback-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
+    </label>
+    <span id="feedback-thumbs" class="feedback-thumbs"></span>
+  </div>
+  <div class="feedback-row feedback-actions">
+    <span id="feedback-status" class="feedback-status" role="status"></span>
+    <button type="button" id="feedback-cancel">Close</button>
+    <button type="button" id="feedback-send">Send</button>
+  </div>
+</dialog>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

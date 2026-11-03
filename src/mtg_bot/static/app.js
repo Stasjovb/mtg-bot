@@ -2566,3 +2566,122 @@ async function postJSON(url, body) {
   }
   return r.json();
 }
+
+// ============================================================================
+// Feedback / report dialog (POST /api/feedback; mtg_bot.feedback)
+// ============================================================================
+
+const FEEDBACK_MAX_IMAGES = 6;
+const FEEDBACK_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const FEEDBACK_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+var feedbackImages = [];  // data URLs
+
+function feedbackContext() {
+  const playMode = tabPlay.classList.contains('active');
+  const ctx = { tab: playMode ? 'play' : 'watch' };
+  const form = playMode ? panelPlay : panelWatch;
+  const seed = form && form.elements.namedItem('seed');
+  if (seed && seed.value !== '') ctx.seed = parseInt(seed.value, 10) || 0;
+  const fmt = form && form.elements.namedItem('format');
+  if (fmt) ctx.format = fmt.value;
+  if (playMode && iplay) ctx.session_id = iplay.sessionId;
+  if (!playMode && game) {
+    ctx.game_id = game.gameId;
+    ctx.snapshot_idx = game.currentIdx || 0;
+  }
+  return ctx;
+}
+
+function feedbackStatus(text) {
+  document.getElementById('feedback-status').textContent = text;
+}
+
+function renderFeedbackThumbs() {
+  const box = document.getElementById('feedback-thumbs');
+  box.replaceChildren();
+  feedbackImages.forEach((url, i) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'feedback-thumb';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = `screenshot ${i + 1}`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = 'Remove';
+    del.addEventListener('click', () => {
+      feedbackImages.splice(i, 1);
+      renderFeedbackThumbs();
+    });
+    wrap.append(img, del);
+    box.appendChild(wrap);
+  });
+}
+
+function addFeedbackFile(file) {
+  if (!file || !FEEDBACK_TYPES.includes(file.type)) {
+    feedbackStatus('Only PNG, JPEG, GIF or WebP images.');
+    return;
+  }
+  if (file.size > FEEDBACK_MAX_IMAGE_BYTES) {
+    feedbackStatus('That image is larger than 5 MB.');
+    return;
+  }
+  if (feedbackImages.length >= FEEDBACK_MAX_IMAGES) {
+    feedbackStatus(`At most ${FEEDBACK_MAX_IMAGES} screenshots.`);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    feedbackImages.push(reader.result);
+    renderFeedbackThumbs();
+  };
+  reader.readAsDataURL(file);
+}
+
+function openFeedback() {
+  feedbackStatus('');
+  document.getElementById('feedback-dialog').showModal();
+  document.getElementById('feedback-text').focus();
+}
+
+async function sendFeedback() {
+  const text = document.getElementById('feedback-text').value;
+  if (!text.trim() && !feedbackImages.length) {
+    feedbackStatus('Write something or add a screenshot.');
+    return;
+  }
+  feedbackStatus('Sending...');
+  try {
+    const r = await postJSON('/api/feedback', {
+      text,
+      images: feedbackImages.map((data) => ({ data })),
+      context: feedbackContext(),
+    });
+    feedbackStatus(`Saved (${r.folder}). Thank you!`);
+    document.getElementById('feedback-text').value = '';
+    feedbackImages = [];
+    renderFeedbackThumbs();
+  } catch (e) {
+    feedbackStatus(`Not saved: ${e.message}`);
+  }
+}
+
+(function wireFeedback() {
+  const btn = document.getElementById('feedback-open');
+  if (!btn) return;
+  btn.addEventListener('click', openFeedback);
+  document.getElementById('feedback-send').addEventListener('click', sendFeedback);
+  document.getElementById('feedback-cancel').addEventListener('click',
+    () => document.getElementById('feedback-dialog').close());
+  document.getElementById('feedback-files').addEventListener('change', (ev) => {
+    Array.from(ev.target.files || []).forEach(addFeedbackFile);
+    ev.target.value = '';
+  });
+  document.getElementById('feedback-dialog').addEventListener('paste', (ev) => {
+    const items = (ev.clipboardData && ev.clipboardData.items) || [];
+    Array.from(items).forEach((it) => {
+      if (it.kind === 'file') addFeedbackFile(it.getAsFile());
+    });
+  });
+})();

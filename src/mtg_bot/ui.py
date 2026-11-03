@@ -225,6 +225,7 @@ def create_app(
     image_fetcher: Optional[Fetcher] = None,
     game_cache: Optional[GameCache] = None,
     replays_root: Optional[Path] = None,
+    feedback_root: Optional[Path] = None,
 ) -> Flask:
     """Build the Flask app.
 
@@ -246,6 +247,26 @@ def create_app(
     @app.route("/")
     def home():
         return render_template("index.html")
+
+    # Feedback / report button (``mtg_bot.feedback``).
+    from mtg_bot.feedback import default_root, register_feedback_routes
+
+    def _session_snapshot(session_id: str):
+        session = get_session(session_id)
+        return session.get_state().get("snapshot") if session is not None else None
+
+    def _game_snapshot(game_id: str, idx: int):
+        game = cache.get(game_id)
+        if game is None or not (0 <= idx < len(game.snapshots)):
+            return None
+        return game.snapshots[idx]
+
+    register_feedback_routes(
+        app,
+        root=lambda: Path(feedback_root).resolve() if feedback_root else default_root(),
+        session_snapshot=_session_snapshot,
+        game_snapshot=_game_snapshot,
+    )
 
     # ------------------------------------------------------------------
     # JSON API. Consumed by static/app.js.

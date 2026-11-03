@@ -787,3 +787,18 @@ body { display: grid; grid-template-columns: 1fr 460px;
 .decklist-line.ok { color: var(--win); }
 .decklist-line.warn { color: var(--active-glow); }
 .decklist-line.bad { color: var(--loss); }
+
+/* Feedback / report dialog (mtg_bot.feedback) */
+.feedback-open { margin-left: auto; }
+.feedback-dialog { max-width: 560px; width: calc(100% - 32px); border-radius: 8px;
+  border: 1px solid var(--muted); background: var(--bg); color: inherit; }
+.feedback-dialog textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.feedback-hint { color: var(--muted); font-size: 0.9em; }
+.feedback-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.feedback-actions { justify-content: flex-end; }
+.feedback-status { margin-right: auto; font-size: 0.9em; }
+.feedback-thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.feedback-thumb { position: relative; }
+.feedback-thumb img { height: 48px; border-radius: 4px; display: block; }
+.feedback-thumb button { position: absolute; top: -6px; right: -6px; padding: 0 5px;
+  border-radius: 50%; line-height: 1.2; }
