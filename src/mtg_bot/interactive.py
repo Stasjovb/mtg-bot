@@ -16,9 +16,11 @@ Public surface used by ui.py:
 
 from __future__ import annotations
 
+import random
 import secrets
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -33,6 +35,7 @@ from mtg_bot.actions import (
 from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
+from mtg_bot.game_records import GameRecorder
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
@@ -176,6 +179,9 @@ class InteractiveAgent(Agent):
         # an earlier one can be told apart (``submit_response``).
         self._seq = 0
         self.timed_out = False
+        # Called with (pending, response) for each answer that is accepted,
+        # before the game goes on (the game recorder uses it).
+        self.on_answer = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -215,6 +221,9 @@ class InteractiveAgent(Agent):
             ):
                 return False
             self._raw_response = response
+            answered = self._pending
+        if self.on_answer is not None and answered is not None:
+            self.on_answer(answered, response)
         self._response_event.set()
         return True
 
@@ -486,6 +495,13 @@ class InteractiveAgent(Agent):
 # Session
 # ---------------------------------------------------------------------------
 
+def _recording(recorder: GameRecorder, seat: int):
+    """An ``on_answer`` hook that keeps the answers of one seat."""
+    def keep(pending: dict, response: Any) -> None:
+        recorder.answer(seat, pending, response)
+    return keep
+
+
 def _viewer_snapshot(snap: dict, seat: int) -> dict:
     """``snap`` as seat ``seat`` may see it: the other player's hand is hidden
     (its size stays, so the page can draw face-down cards)."""
@@ -514,6 +530,8 @@ class InteractiveSession:
     # token its browser sends (token -> seat). Both are empty against the bot.
     seat_agents: dict = field(default_factory=dict, repr=False)
     seat_tokens: dict = field(default_factory=dict, repr=False)
+    # The game recorder when the players chose to record this game (else None).
+    recorder: Optional[GameRecorder] = field(default=None, repr=False)
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
@@ -565,6 +583,7 @@ class InteractiveSession:
                 "is_over": self._is_over,
                 "result": self._result,
                 "human_player_id": seat,
+                "recorded": self.recorder is not None,
             }
 
     @property
@@ -599,6 +618,8 @@ def create_session(
     game_format: GameFormat = STANDARD,
     opponent_human: bool = False,
     starting_player_idx: int = 0,
+    record: bool = False,
+    record_root: Optional[Path] = None,
 ) -> InteractiveSession:
     """Build a session, start the game thread, register it, and return it.
 
@@ -635,7 +656,8 @@ def create_session(
         }
         agents: list[Agent] = [seat_agents[0], seat_agents[1]]
     else:
-        bot_agent = RandomAgent()
+        # Seeded from the game seed, so a recorded game replays the same way.
+        bot_agent = RandomAgent(rng=random.Random(seed * 7 + 3))
         if human_player_id == 0:
             agents = [human_agent, bot_agent]
         else:
@@ -645,6 +667,20 @@ def create_session(
         {secrets.token_urlsafe(18): seat for seat in seat_agents}
         if opponent_human else {}
     )
+    recorder = None
+    if record:
+        recorder = GameRecorder(session_id, {
+            "format": game_format.name,
+            "seed": seed,
+            "max_turns": max_turns,
+            "colors": colors if decks is None else None,
+            "decks": decks,
+            "starting_player_idx": starting_player_idx,
+            "opponent": "human" if opponent_human else "bot",
+            "human_seats": sorted(seat_agents) if opponent_human else [human_player_id],
+        }, root=record_root)
+        for seat, agent in {human_player_id: human_agent, **seat_agents}.items():
+            agent.on_answer = _recording(recorder, seat)
     session = InteractiveSession(
         session_id=session_id,
         human_player_id=human_player_id,
@@ -652,6 +688,7 @@ def create_session(
         game_thread=threading.Thread(target=None, daemon=True),  # replaced below
         seat_agents=seat_agents,
         seat_tokens=seat_tokens,
+        recorder=recorder,
     )
     session_box.append(session)
 
@@ -672,15 +709,18 @@ def create_session(
                 snapshot_granularity="priority",
                 starting_player_idx=starting_player_idx,
             )
-            session.mark_over({
+            result = {
                 "winner_id": state.winner_id,
                 "is_draw": state.is_draw,
                 "turn_number": state.turn_number,
-            })
+            }
         except SessionTimeoutError:
-            session.mark_over({"timed_out": True})
+            result = {"timed_out": True}
         except Exception as exc:  # noqa: BLE001
-            session.mark_over({"error": str(exc)})
+            result = {"error": str(exc)}
+        session.mark_over(result)
+        if recorder is not None:
+            recorder.finish(result)
 
     t = threading.Thread(target=run, daemon=True, name=f"game-{session_id[:8]}")
     # Replace the placeholder thread

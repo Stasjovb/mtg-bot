@@ -604,6 +604,8 @@ def create_app(
             abort(400, description="max_turns must be >= 1")
 
         show_bot_hand = bool(body.get("show_bot_hand", False))
+        # Opt-in: a game is kept for training only when the player ticks the box.
+        record = bool(body.get("record", False))
 
         def enrich(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
@@ -628,6 +630,7 @@ def create_app(
             game_format=game_format,
             opponent_human=opponent_human,
             starting_player_idx=starting,
+            record=record,
         )
         payload = {
             "session_id": session.session_id,
@@ -636,6 +639,7 @@ def create_app(
             "seed": seed,
             "format": game_format.name,
             "starting_player_id": starting,
+            "recorded": record,
         }
         if opponent_human:
             # The creator's token plays their seat; the other seat's token is

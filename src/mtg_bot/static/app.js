@@ -1884,6 +1884,7 @@ const elsI = {
   shareBox:      document.getElementById('iplay-share'),
   shareLink:     document.getElementById('iplay-share-link'),
   shareCopy:     document.getElementById('iplay-share-copy'),
+  record:        document.getElementById('iplay-record'),
   maxTurns:      document.getElementById('iplay-max-turns'),
   format:        document.getElementById('iplay-format'),
   botHand:       document.getElementById('iplay-bot-hand'),
@@ -1991,11 +1992,24 @@ elsI.shareCopy.addEventListener('click', async () => {
 });
 
 // Opening a shared link (?join=<game>&token=<seat token>) takes that seat.
-function joinFromLink() {
+async function joinFromLink() {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get('join');
   const token = params.get('token');
   if (!sessionId || !token) return;
+  let state;
+  try {
+    state = await fetchJSON(`/api/interactive/state/${sessionId}?token=${encodeURIComponent(token)}`);
+  } catch (e) {
+    document.getElementById('tab-play').click();
+    setStatus('This game link is no longer valid', 'loss');
+    return;
+  }
+  // A recorded game asks the second player before they join.
+  if (state.recorded && !confirm('This game is recorded for training: your choices and the result are saved. Join?')) {
+    setStatus('Join cancelled', 'muted');
+    return;
+  }
   document.getElementById('tab-play').click();
   iplay = {
     sessionId,
@@ -2024,6 +2038,7 @@ async function startInteractiveGame() {
       human_player: elsI.playerId.value,
       starting_player: elsI.startingPlayer.value,
       opponent:     elsI.opponent.value,
+      record:       elsI.record.checked,
       max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
       format:       elsI.format.value,
       show_bot_hand: elsI.botHand.value === 'shown',
