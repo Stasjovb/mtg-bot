@@ -1879,6 +1879,11 @@ const elsI = {
   form:          document.getElementById('iplay-form'),
   seed:          document.getElementById('iplay-seed'),
   playerId:      document.getElementById('iplay-player-id'),
+  startingPlayer: document.getElementById('iplay-starting-player'),
+  opponent:      document.getElementById('iplay-opponent'),
+  shareBox:      document.getElementById('iplay-share'),
+  shareLink:     document.getElementById('iplay-share-link'),
+  shareCopy:     document.getElementById('iplay-share-copy'),
   maxTurns:      document.getElementById('iplay-max-turns'),
   format:        document.getElementById('iplay-format'),
   botHand:       document.getElementById('iplay-bot-hand'),
@@ -1970,15 +1975,55 @@ window.addEventListener('keydown', (ev) => {
   }
 });
 
+// The share link: the other player's seat, with its own token.
+function showShareLink(url) {
+  elsI.shareLink.value = url;
+  elsI.shareBox.classList.remove('hidden');
+}
+
+elsI.shareCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(elsI.shareLink.value);
+    elsI.shareCopy.textContent = 'Copied';
+  } catch (e) {
+    elsI.shareLink.select();
+  }
+});
+
+// Opening a shared link (?join=<game>&token=<seat token>) takes that seat.
+function joinFromLink() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get('join');
+  const token = params.get('token');
+  if (!sessionId || !token) return;
+  document.getElementById('tab-play').click();
+  iplay = {
+    sessionId,
+    humanPlayerId: null,
+    token,
+    pvp: true,
+    pollTimer: null,
+    lastPending: null,
+  };
+  elsI.decisionPanel.classList.remove('hidden');
+  els.board.classList.remove('hidden');
+  els.logPanel.classList.remove('hidden');
+  setStatus('Joined a game against another person', 'muted');
+  pollState();
+}
+
+joinFromLink();
+
 async function startInteractiveGame() {
   stopInteractiveGame();
-  const humanPlayer = parseInt(elsI.playerId.value, 10);
   setStatus('Starting game…', 'muted');
   elsI.form.querySelector('button').disabled = true;
   try {
     const body = {
       seed:         parseInt(elsI.seed.value, 10) || 0,
-      human_player: humanPlayer,
+      human_player: elsI.playerId.value,
+      starting_player: elsI.startingPlayer.value,
+      opponent:     elsI.opponent.value,
       max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
       format:       elsI.format.value,
       show_bot_hand: elsI.botHand.value === 'shown',
@@ -1988,9 +2033,12 @@ async function startInteractiveGame() {
     iplay = {
       sessionId:     data.session_id,
       humanPlayerId: data.human_player_id,
+      token:         data.token || null,
+      pvp:           Boolean(data.join_path),
       pollTimer:     null,
       lastPending:   null,
     };
+    if (data.join_path) showShareLink(location.origin + data.join_path);
     elsI.decisionPanel.classList.remove('hidden');
     els.board    .classList.remove('hidden');
     els.logPanel .classList.remove('hidden');
@@ -2018,7 +2066,8 @@ function schedulePoll() {
 async function pollState() {
   if (!iplay) return;
   try {
-    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}`);
+    const tokenQuery = iplay.token ? `?token=${encodeURIComponent(iplay.token)}` : '';
+    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}${tokenQuery}`);
     handleState(state);
   } catch (e) {
     setStatus('Poll error: ' + e.message, 'loss');
@@ -2028,6 +2077,8 @@ async function pollState() {
 
 function handleState(state) {
   if (!iplay) return;
+  // A joined seat learns which player it is from the server.
+  if (state.human_player_id != null) iplay.humanPlayerId = state.human_player_id;
 
   if (state.snapshot) {
     // Render the live board. We pass a minimal summary-like object since
@@ -2048,8 +2099,9 @@ function handleState(state) {
     else if (r.is_draw) setStatus(`Draw — ${r.turn_number} turns`, 'draw');
     else if (r.winner_id != null) {
       const youWon = r.winner_id === iplay.humanPlayerId;
+      const foe = iplay.pvp ? 'Opponent' : 'Bot';
       setStatus(
-        `${youWon ? 'You win' : 'Bot wins'} — turn ${r.turn_number}`,
+        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.turn_number}`,
         youWon ? 'win' : 'loss',
       );
     }
@@ -2084,7 +2136,7 @@ async function submitAction(response) {
   elsI.body   .classList.add('hidden');
   try {
     await postJSON(`/api/interactive/action/${iplay.sessionId}`,
-                   { response, seq: iplay.pendingSeq });
+                   { response, seq: iplay.pendingSeq, token: iplay.token });
   } catch (e) {
     // 409: the game had already moved past that decision; just re-poll.
     // Any other failure: the decision is still open, so allow a retry.

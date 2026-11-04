@@ -427,6 +427,11 @@ body.fish-mode { grid-template-columns: 1fr minmax(360px, 600px); }
 .fish-tab:hover { color: var(--ink); }
 .fish-tab.active { color: var(--active-glow); border-bottom-color: var(--active-glow); }
 .fish-tab-count { font-size: 0.85em; }
+
+/* Play form: the link to send the other player (a game against a person). */
+.share-box { display: flex; flex-wrap: wrap; gap: 0.4em; align-items: center;
+             margin: 0.5em 0; }
+.share-box input { flex: 1; min-width: 16em; font: inherit; }
 .fish-pane { flex: 1; min-height: 0; overflow-y: auto; }
 #fish-pane-log { display: flex; flex-direction: column; overflow: hidden; }
 #fish-pane-log .log-panel { flex: 1; padding: 0; }

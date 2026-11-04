@@ -25,6 +25,13 @@
         aria-labelledby="tab-watch" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
     <input type="hidden" name="format" value="forgetful_fish">
+    <label>Who goes first
+      <select name="starting_player">
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
+        <option value="1">Player 1</option>
+      </select>
+    </label>
     <label>Fish list
       <select name="list">
         <option value="saved" selected>saved</option>
@@ -56,8 +63,22 @@
     <input type="hidden" id="iplay-format" value="forgetful_fish">
     <label>You are
       <select id="iplay-player-id">
-        <option value="0">Player 0 (goes first)</option>
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
         <option value="1">Player 1</option>
+      </select>
+    </label>
+    <label>Who goes first
+      <select id="iplay-starting-player">
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
+        <option value="1">Player 1</option>
+      </select>
+    </label>
+    <label>Opponent
+      <select id="iplay-opponent">
+        <option value="bot" selected>the bot</option>
+        <option value="human">another person</option>
       </select>
     </label>
     <label>Max turns <input type="number" id="iplay-max-turns" value="300" min="1"></label>
@@ -68,6 +89,11 @@
       </select>
     </label>
     <button type="submit">Start game</button>
+    <div id="iplay-share" class="share-box hidden">
+      <span>Send this link to the other player. It opens their seat; keep it private.</span>
+      <input id="iplay-share-link" type="text" readonly>
+      <button type="button" id="iplay-share-copy">Copy link</button>
+    </div>
     <div id="iplay-fish" class="fish-panel">
       <label class="fish-decklist">Shared library (paste a list, or leave empty for the saved list)
         <textarea id="iplay-decklist" rows="8" spellcheck="false"
