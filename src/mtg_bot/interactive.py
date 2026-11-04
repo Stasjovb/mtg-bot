@@ -41,6 +41,12 @@ DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
 
 
+def bot_rng(seed: int) -> random.Random:
+    """The bot's random choices for a game with this seed. A recorded game
+    replays the same way because the live game and the replay both use it."""
+    return random.Random(seed * 7 + 3)
+
+
 class SessionTimeoutError(RuntimeError):
     pass
 
@@ -657,7 +663,7 @@ def create_session(
         agents: list[Agent] = [seat_agents[0], seat_agents[1]]
     else:
         # Seeded from the game seed, so a recorded game replays the same way.
-        bot_agent = RandomAgent(rng=random.Random(seed * 7 + 3))
+        bot_agent = RandomAgent(rng=bot_rng(seed))
         if human_player_id == 0:
             agents = [human_agent, bot_agent]
         else:

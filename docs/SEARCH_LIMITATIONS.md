@@ -20439,3 +20439,27 @@ word; they never touch the type line.
    (`fish_cards.EachPlayerDrawsUpTo`): CR allows choosing more and losing
    on the empty-library draw (CR 704.5b). *Failure mode:* none worth
    having. *Impact:* removes a pure blunder from the bots' choices.
+
+## Human games for training (2026-11-04, `feature/fish-recorder`)
+
+1. **Rows from human games carry no action-history tokens**
+   (`training/human_games._decision_rows`): the replay drives the engine
+   directly (`simulate_game` with the record's answers), so
+   `tokenize_state` gets `recent_actions=()`. The self-play generator
+   tracks the history through `MtgGameStateAdapter.apply`
+   (`search/engine_adapter.py`, `recent_actions`), and the network's
+   input has the last 32 actions. *Failure mode:* a human row looks, to
+   the network, like a game with no earlier actions; those rows teach a
+   distribution that the live net never sees in self-play. *Fix scope:*
+   replay the record through the adapter (`MtgGameStateAdapter.apply` per
+   decision) so the history is built the same way (~half a day; the
+   converter's replay loop changes, the rest stays). *Impact:* until fixed,
+   human rows are weaker training data than self-play rows; keep their
+   share of a shard small.
+2. **Only the human's `choose_action` answers become policy rows**
+   (`training/human_games._ReplayAgent._ask`). Other decisions (attackers,
+   blockers, targets, yes/no) keep their value rows (the outcome for both
+   viewers) but no policy target. *Failure mode:* the network learns move
+   choice only from priority decisions. *Fix scope:* map each decision
+   kind's answer to its encoded slot (~1 day). *Impact:* combat and target
+   choices of people are not imitated yet.
