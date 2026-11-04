@@ -721,6 +721,7 @@ def simulate_game(
     snapshot_granularity: SnapshotGranularity = "step",
     decks: Optional[list[list[str]]] = None,
     game_format: GameFormat = STANDARD,
+    starting_player_idx: int = 0,
 ) -> GameState:
     """Run a full game.
 
@@ -789,6 +790,7 @@ def simulate_game(
         ]
     state = setup_game(
         agents, decks=decks, seed=seed, game_format=game_format,
+        starting_player_idx=starting_player_idx,
     )
     if on_snapshot is not None:
         on_snapshot(state)

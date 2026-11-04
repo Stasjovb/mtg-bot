@@ -10,6 +10,7 @@ Then visit http://<tailscale-hostname-or-ip>:5002/ from any tailnet peer.
 from __future__ import annotations
 
 import argparse
+import random
 import subprocess
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
@@ -134,6 +135,21 @@ def _validate_play_args() -> tuple[int, int, str, str]:
     return seed, max_turns, c1, c2
 
 
+def _seat_choice(value, seed: int, salt: int) -> int:
+    """A seat (0 or 1) from a request value. ``"random"`` (or an empty value)
+    picks one from the seed, so the same request always gives the same game.
+    ``salt`` keeps the choices (who goes first, which seat is yours) apart."""
+    if value in (None, "", "random"):
+        return random.Random(seed * 4 + salt).randrange(2)
+    try:
+        seat = int(value)
+    except (TypeError, ValueError):
+        abort(400, description=f"seat must be 0, 1 or random, got {value!r}")
+    if seat not in (0, 1):
+        abort(400, description="seat must be 0, 1 or random")
+    return seat
+
+
 def _parse_format(name: Optional[str]) -> GameFormat:
     try:
         return get_format(name or STANDARD.name)
@@ -253,7 +269,11 @@ def create_app(
 
     def _session_snapshot(session_id: str):
         session = get_session(session_id)
-        return session.get_state().get("snapshot") if session is not None else None
+        if session is None or session.seat_tokens:
+            # A game against a person: the server copy holds both hands, and
+            # a report must not carry the other player's hidden hand.
+            return None
+        return session.get_state().get("snapshot")
 
     def _game_snapshot(game_id: str, idx: int):
         game = cache.get(game_id)
@@ -339,6 +359,9 @@ def create_app(
             seed=seed, max_turns=max_turns,
             on_snapshot=capture,
             snapshot_granularity=granularity,
+            starting_player_idx=_seat_choice(
+                request.args.get("starting_player", "0"), seed, salt=2,
+            ),
         )
         game_id = uuid4().hex
         cache.store(game_id, snapshots, engine_states)
@@ -570,9 +593,12 @@ def create_app(
             abort(400, description=f"c1 must be one of {list(COLORS)}")
         if c2 not in COLORS:
             abort(400, description=f"c2 must be one of {list(COLORS)}")
-        human_player = int(body.get("human_player", 0))
-        if human_player not in (0, 1):
-            abort(400, description="human_player must be 0 or 1")
+        human_player = _seat_choice(body.get("human_player", 0), seed, salt=1)
+        starting = _seat_choice(body.get("starting_player", 0), seed, salt=2)
+        opponent = body.get("opponent", "bot")
+        if opponent not in ("bot", "human"):
+            abort(400, description="opponent must be bot or human")
+        opponent_human = opponent == "human"
         max_turns = int(body.get("max_turns", 300))
         if max_turns < 1:
             abort(400, description="max_turns must be >= 1")
@@ -581,7 +607,9 @@ def create_app(
 
         def enrich(state):
             snap = _enrich_snapshot(serialize_state(state), name_to_id)
-            if not show_bot_hand:
+            # Against a person the view hides the other player's hand per
+            # viewer (interactive._viewer_snapshot), so nothing is stripped here.
+            if not show_bot_hand and not opponent_human:
                 # The bot's hand is hidden information; hand_size stays
                 # so the page draws face-down cards.
                 for p in snap["players"]:
@@ -598,14 +626,26 @@ def create_app(
             max_turns=max_turns,
             decks=decks,
             game_format=game_format,
+            opponent_human=opponent_human,
+            starting_player_idx=starting,
         )
-        return jsonify({
+        payload = {
             "session_id": session.session_id,
             "human_player_id": human_player,
             "colors": [c1, c2],
             "seed": seed,
             "format": game_format.name,
-        })
+            "starting_player_id": starting,
+        }
+        if opponent_human:
+            # The creator's token plays their seat; the other seat's token is
+            # the one the second player's link carries.
+            tokens = session.tokens_by_seat()
+            join_token = tokens[1 - human_player]
+            payload["token"] = tokens[human_player]
+            payload["join_token"] = join_token
+            payload["join_path"] = f"/?join={session.session_id}&token={join_token}"
+        return jsonify(payload)
 
     @app.route("/api/interactive/state/<session_id>")
     def api_interactive_state(session_id: str):
@@ -618,7 +658,10 @@ def create_app(
         session = get_session(session_id)
         if session is None:
             abort(404, description="unknown session_id")
-        return jsonify(session.get_state())
+        try:
+            return jsonify(session.get_state(request.args.get("token")))
+        except PermissionError as exc:
+            abort(403, description=str(exc))
 
     @app.route("/api/interactive/action/<session_id>", methods=["POST"])
     def api_interactive_action(session_id: str):
@@ -656,9 +699,11 @@ def create_app(
             abort(400, description="missing 'response' field")
         # ``seq``: the decision the browser answered. An answer to an
         # earlier decision is dropped (409) instead of answering this one.
-        if not session.human_agent.submit_response(
-            body["response"], seq=body.get("seq"),
-        ):
+        try:
+            agent = session.agent_for(body.get("token"))
+        except PermissionError as exc:
+            abort(403, description=str(exc))
+        if not agent.submit_response(body["response"], seq=body.get("seq")):
             return jsonify({"ok": False, "stale": True}), 409
         return jsonify({"ok": True})
 

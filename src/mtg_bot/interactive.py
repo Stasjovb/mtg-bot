@@ -16,6 +16,7 @@ Public surface used by ui.py:
 
 from __future__ import annotations
 
+import secrets
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -485,6 +486,16 @@ class InteractiveAgent(Agent):
 # Session
 # ---------------------------------------------------------------------------
 
+def _viewer_snapshot(snap: dict, seat: int) -> dict:
+    """``snap`` as seat ``seat`` may see it: the other player's hand is hidden
+    (its size stays, so the page can draw face-down cards)."""
+    players = [
+        p if p.get("id") == seat else {**p, "hand": []}
+        for p in snap.get("players", [])
+    ]
+    return {**snap, "players": players}
+
+
 @dataclass
 class InteractiveSession:
     session_id: str
@@ -499,6 +510,10 @@ class InteractiveSession:
     # bubbles of the latest step (``bubbles_since_last``).
     _bubble_mark: int = 0
     _bubbles_since: list = field(default_factory=list, repr=False)
+    # A game against another person: the agent of each seat, and the secret
+    # token its browser sends (token -> seat). Both are empty against the bot.
+    seat_agents: dict = field(default_factory=dict, repr=False)
+    seat_tokens: dict = field(default_factory=dict, repr=False)
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
@@ -517,14 +532,39 @@ class InteractiveSession:
             self._is_over = True
             self._result = result
 
-    def get_state(self) -> dict:
+    def tokens_by_seat(self) -> dict[int, str]:
+        return {seat: token for token, seat in self.seat_tokens.items()}
+
+    def seat_for(self, token: Optional[str]) -> int:
+        """The seat a browser plays. Against the bot there are no tokens and
+        the human seat plays; against a person the token names the seat.
+        Raises PermissionError for a missing or unknown token."""
+        if not self.seat_tokens:
+            return self.human_player_id
+        seat = self.seat_tokens.get(token or "")
+        if seat is None:
+            raise PermissionError("unknown or missing player token")
+        return seat
+
+    def agent_for(self, token: Optional[str]) -> InteractiveAgent:
+        """The decision agent of the seat ``token`` plays."""
+        return self.seat_agents.get(self.seat_for(token), self.human_agent)
+
+    def get_state(self, token: Optional[str] = None) -> dict:
+        """The board and pending decision as the viewer of ``token`` sees
+        them. Against a person, the other player's hand is hidden."""
+        seat = self.seat_for(token)
+        agent = self.agent_for(token)
         with self._lock:
+            snap = self._snapshot
+            if self.seat_tokens and snap is not None:
+                snap = _viewer_snapshot(snap, seat)
             return {
-                "snapshot": self._snapshot,
-                "pending": self.human_agent.get_pending(),
+                "snapshot": snap,
+                "pending": agent.get_pending(),
                 "is_over": self._is_over,
                 "result": self._result,
-                "human_player_id": self.human_player_id,
+                "human_player_id": seat,
             }
 
     @property
@@ -557,6 +597,8 @@ def create_session(
     max_turns: int = 300,
     decks: Optional[list[list[str]]] = None,
     game_format: GameFormat = STANDARD,
+    opponent_human: bool = False,
+    starting_player_idx: int = 0,
 ) -> InteractiveSession:
     """Build a session, start the game thread, register it, and return it.
 
@@ -568,6 +610,9 @@ def create_session(
     already has ``name_to_id`` in scope).
 
     ``human_player_id`` is 0 or 1; the other player gets a ``RandomAgent``.
+    With ``opponent_human`` the other seat is a second person: it gets its
+    own agent and each seat gets a secret token (``session.tokens_by_seat``).
+    ``starting_player_idx`` is the seat that takes the first turn.
     """
     from mtg_bot.simulate import simulate_game
 
@@ -581,18 +626,32 @@ def create_session(
             session_box[0].update_snapshot(enrich_fn(state))
 
     human_agent = InteractiveAgent(n2id, state_callback=_refresh_snapshot)
-    bot_agent = RandomAgent()
-
-    if human_player_id == 0:
-        agents: list[Agent] = [human_agent, bot_agent]
+    seat_agents: dict[int, InteractiveAgent] = {}
+    if opponent_human:
+        other_agent = InteractiveAgent(n2id, state_callback=_refresh_snapshot)
+        seat_agents = {
+            human_player_id: human_agent,
+            1 - human_player_id: other_agent,
+        }
+        agents: list[Agent] = [seat_agents[0], seat_agents[1]]
     else:
-        agents = [bot_agent, human_agent]
+        bot_agent = RandomAgent()
+        if human_player_id == 0:
+            agents = [human_agent, bot_agent]
+        else:
+            agents = [bot_agent, human_agent]
 
+    seat_tokens = (
+        {secrets.token_urlsafe(18): seat for seat in seat_agents}
+        if opponent_human else {}
+    )
     session = InteractiveSession(
         session_id=session_id,
         human_player_id=human_player_id,
         human_agent=human_agent,
         game_thread=threading.Thread(target=None, daemon=True),  # replaced below
+        seat_agents=seat_agents,
+        seat_tokens=seat_tokens,
     )
     session_box.append(session)
 
@@ -611,6 +670,7 @@ def create_session(
                 # otherwise plays-during-a-step look like no-ops in the UI
                 # until the step ends.
                 snapshot_granularity="priority",
+                starting_player_idx=starting_player_idx,
             )
             session.mark_over({
                 "winner_id": state.winner_id,
