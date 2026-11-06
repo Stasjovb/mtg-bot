@@ -62,13 +62,13 @@ CPU_THREADS_ENV = "MTG_BOT_TRAIN_CPU_THREADS"
 
 
 def structured_cpu_threads() -> int:
-    """Torch CPU threads for structured-trunk training: 1 (the pin's
-    default, chosen for the flat MLP), or ``$MTG_BOT_TRAIN_CPU_THREADS``
-    when set. A CPU-only host (no CUDA) trains the transformer trunk on
-    the CPU, where one thread leaves most cores idle."""
+    """Torch CPU threads for structured-trunk training: ``$MTG_BOT_TRAIN_CPU_THREADS``
+    when set, else up to 8 of this machine's cores. One thread trained the
+    structured trunk about 3x slower than eight on this PC (2026-11-06:
+    6.1 s vs 1.8 s per step), and the night loop never set the variable."""
     raw = os.environ.get(CPU_THREADS_ENV, "").strip()
     if not raw:
-        return 1
+        return min(8, os.cpu_count() or 1)
     n = int(raw)
     if n < 1:
         raise ValueError(f"{CPU_THREADS_ENV} must be >= 1; got {raw!r}")

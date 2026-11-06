@@ -93,9 +93,12 @@ def test_deadline_after(fl, start, until, expected):
 
 def test_structured_cpu_threads_default_and_override(monkeypatch):
     monkeypatch.delenv(trainer.CPU_THREADS_ENV, raising=False)
-    assert trainer.structured_cpu_threads() == 1
-    monkeypatch.setenv(trainer.CPU_THREADS_ENV, "8")
+    monkeypatch.setattr("os.cpu_count", lambda: 3)
+    assert trainer.structured_cpu_threads() == 3
+    monkeypatch.setattr("os.cpu_count", lambda: 64)
     assert trainer.structured_cpu_threads() == 8
+    monkeypatch.setenv(trainer.CPU_THREADS_ENV, "2")
+    assert trainer.structured_cpu_threads() == 2
     monkeypatch.setenv(trainer.CPU_THREADS_ENV, "0")
     with pytest.raises(ValueError, match="must be >= 1"):
         trainer.structured_cpu_threads()
