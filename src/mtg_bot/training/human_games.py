@@ -130,6 +130,9 @@ def replay_record(record: dict, n2id: dict) -> tuple[list[dict], Optional[int]]:
         seed=seed,
         max_turns=int(record["max_turns"]),
         starting_player_idx=int(record["starting_player_idx"]),
+        # The live game runs with this setting too; a different one could
+        # change what the replay asks, so the replay must match it.
+        snapshot_granularity="priority",
     )
     winner = state.winner_id
     recorded = record.get("result", {})

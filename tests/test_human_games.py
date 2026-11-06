@@ -65,7 +65,7 @@ def played():
     agents = [_ScriptedPerson(0, log), RandomAgent(rng=bot_rng(SEED))]
     state = simulate_game(
         agents=agents, colors=["G", "R"], seed=SEED, max_turns=MAX_TURNS,
-        starting_player_idx=0,
+        starting_player_idx=0, snapshot_granularity="priority",
     )
     record = {
         "version": RECORD_VERSION,
