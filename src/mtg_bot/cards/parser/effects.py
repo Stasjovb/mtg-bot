@@ -3625,7 +3625,13 @@ def _parse_effect(phrase: str) -> Effect | None:
     # Karn, the Great Creator.
     from mtg_bot.cards.parser.roto_layers import parse_roto_layer_effect
 
-    return parse_roto_layer_effect(phrase)
+    eff = parse_roto_layer_effect(phrase)
+    if eff is not None:
+        return eff
+    # Forgetful Fish shapes (pool ``fish``) -- the last fallback.
+    from mtg_bot.cards.parser.fish_cards import parse_fish_effect
+
+    return parse_fish_effect(phrase)
 
 
 def _parse_effect_legacy(phrase: str) -> Effect | None:

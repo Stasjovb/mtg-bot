@@ -399,7 +399,10 @@ class ScheduleDelayedEffect(Effect):
     ) -> None:
         from mtg_bot.turn import Step
 
-        source = state.resolving_source
+        # An ability's source, or the resolving instant / sorcery itself
+        # (Portent: "Draw a card at the beginning of the next turn's
+        # upkeep." -- spells don't set ``resolving_source``).
+        source = state.resolving_source or state.resolving_spell
         if source is None:
             return
         if self.step == "upkeep":
@@ -807,8 +810,8 @@ class ReanimateTargetCreatureCardFromAGraveyard(Effect):
     ) -> list[Target]:
         return [
             ("graveyard_creature", c.id)
-            for p in state.players
-            for c in p.graveyard
+            for g in state.distinct_graveyards()
+            for c in g
             if c.printing.is_creature
         ]
 

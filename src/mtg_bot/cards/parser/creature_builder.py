@@ -895,6 +895,15 @@ def _build_creature_printing(card: dict) -> CardPrinting | None:
             triggers.extend(legacy_line.triggers)
             ub_fields.update(legacy_line.fields)
             continue
+        # Forgetful Fish creatures (Dandân: an attack restriction and a
+        # state trigger keyed to a land type; ``fish_cards``).
+        from mtg_bot.cards.parser.fish_cards import parse_fish_creature_line
+        from mtg_bot.cards.parser.roto_board import merge_board_fields
+
+        fish_fields = parse_fish_creature_line(line, card["name"])
+        if fish_fields is not None:
+            merge_board_fields(wg_fields, fish_fields)
+            continue
         ub_line = parse_ub_creature_line(
             _substitute_self_name(line, card["name"]), card["name"],
         )

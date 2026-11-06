@@ -11,6 +11,7 @@ from mtg_bot.cards import CardPrinting
 from mtg_bot.effects.modifiers import (
     active_static_abilities as _active_static_abilities_impl,
 )
+from mtg_bot.formats.base import STANDARD, GameFormat
 
 if TYPE_CHECKING:
     from mtg_bot.agents import Agent
@@ -2127,7 +2128,10 @@ def effective_subtypes(
         (
             ce for ce in state.continuous_effects
             if ce.layer == 3
-            and ce.kind == "replace_basic_land_type"
+            # Forgetful Fish text changes (Mind Bend, Crystal Spray) reach
+            # the type line too (CR 612.1); a color-word change never
+            # matches a subtype.
+            and ce.kind in ("replace_basic_land_type", "fish_text_change")
             and ce.target_id == obj.id
         ),
         key=lambda ce: ce.timestamp,
@@ -3576,6 +3580,53 @@ class ManaCoin:
 _clone_mana_coin = _make_shallow_cloner(ManaCoin)
 
 
+def _cow_share(src: list) -> tuple["_CowList", "_CowList"]:
+    """Copy-on-write split of one zone list, the same split
+    ``GameState.clone`` does inline for each player's library /
+    graveyard / exile: promote ``src`` to a ``_CowList`` if needed and
+    return ``(src_side, clone_side)``, both members of one share group."""
+    if not isinstance(src, _CowList):
+        src = _CowList(src)
+    clone_side = _CowList._new_uninitialized(src)
+    clone_side._clone_each = _clone_game_object
+    clone_side._owned = False
+    if src._owned:
+        group = [src, clone_side]
+        src._owned = False
+        src._clone_each = _clone_game_object
+        src._share_group = group
+    else:
+        group = src._share_group
+        group.append(clone_side)
+    clone_side._share_group = group
+    return src, clone_side
+
+
+def _clone_zones_sharing_first_player(
+    first_src: "Player",
+    first_new: "Player",
+    p: "Player",
+    np: "Player",
+    fmt: GameFormat,
+) -> None:
+    """``GameState.clone`` for a non-first player of a shared-zone format:
+    a shared zone is player 0's list object on both sides. The source is
+    re-aliased too (cloning player 0 may just have promoted its list to a
+    ``_CowList``), so each state keeps exactly one shared zone. Unshared
+    zones get the usual per-player copy-on-write split."""
+    if fmt.shared_library:
+        p.library = first_src.library
+        np.library = first_new.library
+    else:
+        p.library, np.library = _cow_share(p.library)
+    if fmt.shared_graveyard:
+        p.graveyard = first_src.graveyard
+        np.graveyard = first_new.graveyard
+    else:
+        p.graveyard, np.graveyard = _cow_share(p.graveyard)
+    p.exile, np.exile = _cow_share(p.exile)
+
+
 class LogBuffer(list[str]):
     """A list[str] with a global silent-mode switch.
 
@@ -3590,14 +3641,28 @@ class LogBuffer(list[str]):
     """
 
     enabled: bool = True
+    # Forgetful Fish games switch this on (simulate.setup_game): the shared
+    # actions a player should see as a speech bubble are recorded.
+    bubbles_enabled: bool = False
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.enabled = True
+        # (log index, player id, short phrase) per bubble, in log order.
+        self.bubbles: list[tuple[int, int, str]] = []
 
     def append(self, msg: str) -> None:  # type: ignore[override]
         if not self.enabled:
             return
+        list.append(self, msg)
+
+    def append_with_bubble(self, msg: str, player_id: int, phrase: str) -> None:
+        """Append ``msg``; when bubbles are on, also record ``phrase`` (e.g.
+        "scried to top") as ``player_id``'s speech bubble at this line."""
+        if not self.enabled:
+            return
+        if self.bubbles_enabled:
+            self.bubbles.append((len(self), player_id, phrase))
         list.append(self, msg)
 
 
@@ -3916,6 +3981,12 @@ class GameState:
     # skip the battlefield scan for such sources -- no object of this
     # game can be one (copies copy a printing already in the game).
     layered_statics_possible: bool = True
+    # Format-level rules (``mtg_bot.formats``). ``STANDARD`` unless the
+    # game was set up for another format: Forgetful Fish shares one
+    # library and one graveyard between the players (every player's
+    # ``library`` / ``graveyard`` is player 0's list object). Frozen, so
+    # clones share it.
+    game_format: GameFormat = STANDARD
     # Layered-walk memoization. Bumped by ``_invalidate_layered_cache``
     # whenever ``continuous_effects`` mutates. Cache entries store
     # ``(version_at_compute, result)``; on lookup, an entry whose
@@ -3954,6 +4025,21 @@ class GameState:
             if p.id == player_id:
                 return i
         raise KeyError(f"no player with id={player_id}")
+
+    def distinct_libraries(self) -> list[list[GameObject]]:
+        """Every library in the game once: each player's, or the one
+        shared library (``GameFormat.shared_library``). Walk this, not
+        ``p.library for p in players``, when a shared zone must not be
+        counted twice."""
+        if self.game_format.shared_library:
+            return [self.players[0].library] if self.players else []
+        return [p.library for p in self.players]
+
+    def distinct_graveyards(self) -> list[list[GameObject]]:
+        """Every graveyard in the game once (see ``distinct_libraries``)."""
+        if self.game_format.shared_graveyard:
+            return [self.players[0].graveyard] if self.players else []
+        return [p.graveyard for p in self.players]
 
     def new_object(
         self, printing: CardPrinting, owner_id: int, zone: Zone
@@ -4328,8 +4414,25 @@ class GameState:
         # mutated post-creation in the engine, so the same fast path
         # applies.
         new_players: list[Player] = []
+        shares_zones = self.game_format.shares_zones
         for p in self.players:
             np = _clone_player(p)
+            if shares_zones and new_players:
+                # Shared-zone format (Forgetful Fish): this player's
+                # shared zones are player 0's, cloned just above.
+                _clone_zones_sharing_first_player(
+                    self.players[0], new_players[0], p, np,
+                    self.game_format,
+                )
+                new_hand = []
+                for o in p.hand:
+                    new_o = _clone_game_object(o)
+                    id_map[o.id] = new_o
+                    new_hand.append(new_o)
+                np.hand = new_hand
+                np.mana_pool = [_clone_mana_coin(c) for c in p.mana_pool]
+                new_players.append(np)
+                continue
             # Library / graveyard / exile use a copy-on-write list
             # (see ``_CowList``). Both the source's list and the
             # clone's start out pointing at the same GameObject
@@ -4460,6 +4563,7 @@ class GameState:
 
         new_log = LogBuffer()
         new_log.enabled = self.log.enabled
+        new_log.bubbles_enabled = self.log.bubbles_enabled
 
         # ``random.Random()`` runs the C-level seed routine that draws
         # from os.urandom — ~5us on Windows. We're about to overwrite
@@ -4586,6 +4690,7 @@ class GameState:
         new_state.p2_zone_watch = self.p2_zone_watch
         new_state.turn_ending = self.turn_ending
         new_state.layered_statics_possible = self.layered_statics_possible
+        new_state.game_format = self.game_format
         # Layered-walk memo cache is per-state and intentionally NOT
         # shared with the source: the cache gets repopulated lazily
         # on the new state's next walk. Same-shape default the

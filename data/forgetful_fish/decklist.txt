@@ -1,0 +1,24 @@
+# The user's Forgetful Fish shared library (80 cards), 2026-11-02.
+4 Accumulated Knowledge (A25) 40
+2 Brainstorm (5ED) 76
+2 Crystal Spray (INV) 50
+2 Dance of the Skywise (DTK) 50
+10 Dandân (5ED) 79
+2 Diminishing Returns (EMA) 46
+2 Halimar Depths (C20) 280
+20 Island (ELD) 255
+2 Izzet Boilerworks (C19) 252
+2 Lonely Sandbar (C20) 287
+8 Memory Lapse (MIR) 74
+2 Metamorphose (SCG) 40
+2 Mind Bend (10E) 93
+2 Mystic Retrieval (UMA) 66
+2 Portent (CST) 90
+2 Predict (C18) 98
+2 Ray of Command (DDM) 29
+2 Remote Isle (C14) 309
+2 Supplant Form (FRF) 54
+2 Svyelunite Temple (6ED) 329
+2 Temple of Epiphany (CLB) 923
+2 Unsubstantiate (EMN) 79
+2 Vision Charm (VIS) 49

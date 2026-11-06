@@ -210,7 +210,8 @@ def apply_copy_on_entry(
     types = pr.enters_as_copy_types
     if pr.enters_as_copy_zone == "graveyard":
         candidates = [
-            ("graveyard_card", c.id) for p in state.players for c in p.graveyard
+            ("graveyard_card", c.id)
+            for g in state.distinct_graveyards() for c in g
             if any(t in c.printing.card_types for t in types)
         ]
         by_id = {c.id: c for p in state.players for c in p.graveyard}

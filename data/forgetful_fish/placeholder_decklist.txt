@@ -1,0 +1,10 @@
+# PLACEHOLDER shared library for testing the Forgetful Fish engine and UI.
+# NOT the real Forgetful Fish list: only cards the engine already plays.
+# Replace with the real 80-card list (data/forgetful_fish/decklist.txt)
+# once it is available.
+40 Island
+8 Brainstorm
+8 Memory Lapse
+8 Counterspell
+8 Ponder
+8 Snapcaster Mage

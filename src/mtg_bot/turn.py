@@ -333,6 +333,9 @@ def draw_card(state: GameState, player_id: int) -> None:
         top = p.library.pop(0)
         top.zone = Zone.HAND
         p.hand.append(top)
+        if state.game_format.holder_owns_hand_cards:
+            # Forgetful Fish: the drawer owns the card it drew.
+            top.owner_id = top.controller_id = p.id
         p.cards_drawn_this_turn += 1
         # "Whenever you draw a card" / "whenever an opponent draws a
         # card" observers (CR 121.2: one event per card).
@@ -1741,6 +1744,10 @@ def run_cleanup_step(state: GameState) -> None:
         )
         if not any_remaining:
             obj.controller_id_before_any_aura_swap = None
+    # Ray of Command's "When you lose control of the creature, tap it."
+    from mtg_bot.effects.generic.fish_cards import apply_fish_card_checks
+
+    apply_fish_card_checks(state)
     # Layer-4 ``add_type "creature"`` cache rebuild: when an
     # ApplyEffect-rewritten ``BecomeType`` entry expired above, the
     # cached ``permanent_is_creature`` flag is stale. The registry is
@@ -1896,7 +1903,21 @@ def state_based_actions(state: GameState) -> bool:
     cap converts a runaway into an early bailout instead of a hang.
     """
     any_changed = False
+    if state.game_format.holder_owns_hand_cards:
+        # Not an SBA: Forgetful Fish's "a card in a hand is owned by that
+        # hand's player", re-applied wherever SBAs are checked so a card
+        # that reached a hand by any route (not just a draw) is covered.
+        from mtg_bot.formats import apply_hand_ownership
+
+        apply_hand_ownership(state)
     note_life_losses(state)
+    if state.continuous_effects:
+        # Forgetful Fish cards: Ray of Command's lose-control tap, text
+        # changes ending with their object (``fish_cards``).
+        from mtg_bot.effects.generic.fish_cards import apply_fish_card_checks
+
+        if apply_fish_card_checks(state):
+            any_changed = True
     for _ in range(_SBA_MAX_PASSES):
         if not _state_based_actions_pass(state):
             break

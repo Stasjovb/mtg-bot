@@ -284,21 +284,30 @@ class CounterTargetStackObjectFiltered(CounterTargetStackObject):
 
 @dataclass(frozen=True)
 class ReturnTargetSpellOrPermanentToHand(Effect):
-    """"Return target spell or permanent to its owner's hand." (Venser,
-    Shaper Savant). A spell leaves the stack without being countered (an
-    uncounterable spell can be returned); a spell copy ceases to exist;
-    a flashback spell is exiled (``move_spell_off_stack``)."""
+    """"Return target spell or <permanent> to its owner's hand." (Venser,
+    Shaper Savant: "permanent"; Unsubstantiate: "creature" --
+    ``permanent_filter``, default every permanent). A spell leaves the
+    stack without being countered (an uncounterable spell can be
+    returned); a spell copy ceases to exist; a flashback spell is exiled
+    (``move_spell_off_stack``). A permanent that no longer matches the
+    filter on resolution is an illegal target (CR 608.2b)."""
+
+    permanent_filter: "ObjectPredicate | None" = None
+    noun: str = "permanent"
 
     def requires_target(self) -> bool:
         return True
 
-    def legal_targets(self, state, controller_id):
+    def _filter(self):
         from mtg_bot.effects.value_predicates import IsPermanent
 
+        return self.permanent_filter or IsPermanent()
+
+    def legal_targets(self, state, controller_id):
         out: list[Target] = [
             ("stack", i) for i, item in _spell_items(state)
         ]
-        out.extend(self._enumerate_for_filter(state, controller_id, IsPermanent()))
+        out.extend(self._enumerate_for_filter(state, controller_id, self._filter()))
         return out
 
     def resolve(self, state, controller_id, targets=()):
@@ -317,12 +326,12 @@ class ReturnTargetSpellOrPermanentToHand(Effect):
             move_spell_off_stack(state, item.source, destination="hand")
             return
         obj = next((o for o in state.battlefield if o.id == tid), None)
-        if obj is None:
+        if obj is None or not self._filter().test(obj, state):
             return
         move_off_battlefield(state, obj, destination="hand")
 
     def describe(self) -> str:
-        return "return target spell or permanent to its owner's hand"
+        return f"return target spell or {self.noun} to its owner's hand"
 
 
 @dataclass(frozen=True)

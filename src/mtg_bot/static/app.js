@@ -10,6 +10,13 @@ const els = {
   board: document.getElementById('board'),
   logPanel: document.getElementById('log-panel'),
   logBody: document.getElementById('log-body'),
+  rightCol: document.querySelector('.right-col'),
+  fishTabs: document.getElementById('fish-tabs'),
+  fishCountGraveyard: document.getElementById('fish-count-graveyard'),
+  fishCountExile: document.getElementById('fish-count-exile'),
+  fishPaneGraveyard: document.getElementById('fish-pane-graveyard'),
+  fishPaneExile: document.getElementById('fish-pane-exile'),
+  fishPaneLog: document.getElementById('fish-pane-log'),
   rowP0: document.getElementById('row-p0'),
   rowP1: document.getElementById('row-p1'),
   rowStack: document.getElementById('row-stack'),
@@ -338,8 +345,8 @@ function findPrevTurnIdx() {
   return i;
 }
 
-async function fetchJSON(url) {
-  const r = await fetch(url);
+async function fetchJSON(url, headers = {}) {
+  const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
@@ -367,6 +374,7 @@ function renderSnapshot(summary, snap) {
   renderPlayer(els.rowP0, p0, snap, /* isTop */ false);
   renderStack(els.rowStack, snap);
   renderLog(els.logBody, snap);
+  renderFishZones(snap);
   renderPhaseTracker(snap);
   drawCombatArrows(snap);
   renderSearchPanel(snap);
@@ -966,6 +974,11 @@ function sidePanel(p, snap) {
   nameRow.appendChild(pname);
   side.appendChild(nameRow);
 
+  // Speech bubbles: the shared actions this player took in this step.
+  for (const b of (snap.bubbles_since_last || [])) {
+    if (b.player_id === p.id) side.appendChild(speechBubbleEl(b.text));
+  }
+
   const lifeLabel = document.createElement('div');
   lifeLabel.className = 'life-label';
   lifeLabel.textContent = 'life';
@@ -984,13 +997,18 @@ function sidePanel(p, snap) {
   zones.className = 'zones';
   // Library is hidden info — don't make it clickable. Graveyard is public,
   // and Exile is public; both open a modal listing the actual cards.
+  // Forgetful Fish: both players' library / graveyard are one shared
+  // zone (the snapshot repeats it per player), so label it as shared.
+  const libLabel = snap && snap.shared_library ? 'Shared library' : 'Library';
+  const gyShared = Boolean(snap && snap.shared_graveyard);
   zones.append(
     zoneBox('Hand', p.hand_size),
-    zoneBox('Library', p.library_size),
-    zoneBox('Graveyard', p.graveyard_size,
-            p.graveyard_size > 0
-              ? () => openZoneModal(`Player ${p.id} — Graveyard`, p.graveyard)
-              : null),
+    zoneBox(libLabel, p.library_size),
+    zoneBox(gyShared ? 'Shared graveyard' : 'Graveyard', p.graveyard_size,
+            gyShared ? () => showFishTab('graveyard')
+              : (p.graveyard_size > 0
+                ? () => openZoneModal(`Player ${p.id} — Graveyard`, p.graveyard)
+                : null)),
   );
   side.appendChild(zones);
 
@@ -999,7 +1017,8 @@ function sidePanel(p, snap) {
     row.className = 'zones';
     row.appendChild(zoneBox(
       'Exile', p.exile_size,
-      () => openZoneModal(`Player ${p.id} — Exile`, p.exile),
+      gyShared ? () => showFishTab('exile')
+        : () => openZoneModal(`Player ${p.id} — Exile`, p.exile),
     ));
     side.appendChild(row);
   }
@@ -1013,6 +1032,13 @@ function sidePanel(p, snap) {
   }
 
   return side;
+}
+
+function speechBubbleEl(text) {
+  const el = document.createElement('div');
+  el.className = 'speech-bubble';
+  el.textContent = text.charAt(0).toUpperCase() + text.slice(1);
+  return el;
 }
 
 function poisonEl(count) {
@@ -1107,6 +1133,73 @@ els.zoneModal.addEventListener('click', (ev) => {
   // Click on the dim backdrop (not the inner box) closes.
   if (ev.target === els.zoneModal) closeZoneModal();
 });
+
+// ---------------------------------------------------------------------------
+// Forgetful Fish: graveyard / exile / log tabs in the right column. The shared
+// graveyard is one list (both players' zones are the same list), so it is
+// shown once, large; exile is shown per player; the log moves into its tab.
+// Other formats keep the side panel as it was.
+// ---------------------------------------------------------------------------
+
+let fishTab = 'graveyard';
+
+function showFishTab(name) {
+  fishTab = name;
+  for (const btn of document.querySelectorAll('.fish-tab')) {
+    const on = btn.dataset.fishTab === name;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+  }
+  els.fishPaneGraveyard.classList.toggle('hidden', name !== 'graveyard');
+  els.fishPaneExile.classList.toggle('hidden', name !== 'exile');
+  els.fishPaneLog.classList.toggle('hidden', name !== 'log');
+}
+
+function fishCardsEl(cards) {
+  const wrap = document.createElement('div');
+  wrap.className = 'fish-zone-cards';
+  if (!cards || cards.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'zone-modal-empty';
+    empty.textContent = '(empty)';
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  cards.forEach((c) => wrap.appendChild(cardEl(c, { permanent: false })));
+  return wrap;
+}
+
+function renderFishZones(snap) {
+  const fish = Boolean(snap.shared_graveyard);
+  document.body.classList.toggle('fish-mode', fish);
+  els.fishTabs.classList.toggle('hidden', !fish);
+  // The log lives in the Log tab in Fish games and in the side panel otherwise.
+  const home = fish ? els.fishPaneLog : els.rightCol;
+  if (els.logPanel.parentElement !== home) home.appendChild(els.logPanel);
+  if (!fish) return;
+
+  // Shared graveyard: both players' lists are one list, so take player 0's.
+  const gy = (snap.players.find(p => p.id === 0) || snap.players[0]).graveyard;
+  els.fishCountGraveyard.textContent = `(${gy.length})`;
+  els.fishPaneGraveyard.replaceChildren(fishCardsEl(gy));
+
+  // Exile is per player: one labelled block each.
+  let exileCount = 0;
+  els.fishPaneExile.replaceChildren();
+  for (const p of snap.players) {
+    exileCount += p.exile.length;
+    const title = document.createElement('div');
+    title.className = 'fish-pane-title';
+    title.textContent = `Player ${p.id} — exile (${p.exile.length})`;
+    els.fishPaneExile.append(title, fishCardsEl(p.exile));
+  }
+  els.fishCountExile.textContent = `(${exileCount})`;
+  showFishTab(fishTab);
+}
+
+for (const btn of document.querySelectorAll('.fish-tab')) {
+  btn.addEventListener('click', () => showFishTab(btn.dataset.fishTab));
+}
 
 function battlefieldEl(p, isTop) {
   const bf = document.createElement('div');
@@ -1358,27 +1451,218 @@ function hidePreview() { els.preview.hidden = true; }
 
 function renderStack(root, snap) {
   root.replaceChildren();
-  if (!snap.stack || snap.stack.length === 0) {
+  clearTargetMarks();
+  const n = snap.stack ? snap.stack.length : 0;
+  // The stack window pops up while the stack has items.
+  const win = document.getElementById('stack-window');
+  if (win) {
+    win.classList.toggle('hidden', n === 0);
+    const count = document.getElementById('stack-window-count');
+    if (count) count.textContent = n ? `${n} · top first` : '';
+    if (n) placeStackWindow(win);
+  }
+  if (n === 0) {
     root.classList.add('empty');
     root.textContent = 'Stack is empty';
     return;
   }
   root.classList.remove('empty');
-  const label = document.createElement('span');
-  label.className = 'muted';
-  label.textContent = `Stack (${snap.stack.length}):`;
-  root.appendChild(label);
-  snap.stack.forEach((item, idx) => {
-    const el = stackItemEl(item);
+  // The last item is the top of the stack (it resolves first): list it first.
+  for (let idx = n - 1; idx >= 0; idx--) {
+    const el = stackItemEl(snap.stack[idx]);
     el.dataset.stackIdx = idx;
+    if (idx === n - 1) {
+      const top = document.createElement('span');
+      top.className = 'stack-top';
+      top.textContent = 'top';
+      const line1 = el.querySelector('.stack-item-text > div');
+      if (line1) line1.appendChild(top);
+    }
     root.appendChild(el);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stack window: drag by the title bar; the position is remembered per browser
+// ---------------------------------------------------------------------------
+
+const STACK_POS_KEY = 'mtgbot.stackWindowPos';
+
+function loadStackPos() {
+  try {
+    const p = JSON.parse(localStorage.getItem(STACK_POS_KEY));
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return p;
+  } catch (e) { /* storage unavailable: default position */ }
+  return null;
+}
+
+function saveStackPos(p) {
+  try { localStorage.setItem(STACK_POS_KEY, JSON.stringify(p)); } catch (e) { /* ignore */ }
+}
+
+// Keep at least the title bar on screen.
+function clampToViewport(win, x, y) {
+  const w = win.offsetWidth || 300;
+  return {
+    x: Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w)),
+    y: Math.min(Math.max(0, y), Math.max(0, window.innerHeight - 40)),
+  };
+}
+
+function placeStackWindow(win) {
+  const p = loadStackPos();
+  if (!p) return;
+  const c = clampToViewport(win, p.x, p.y);
+  win.style.left = `${c.x}px`;
+  win.style.top = `${c.y}px`;
+}
+
+function initStackWindowDrag() {
+  const win = document.getElementById('stack-window');
+  const head = document.getElementById('stack-window-header');
+  if (!win || !head) return;
+  let drag = null;
+  head.addEventListener('pointerdown', (ev) => {
+    const r = win.getBoundingClientRect();
+    drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+    if (head.setPointerCapture) head.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+  head.addEventListener('pointermove', (ev) => {
+    if (!drag) return;
+    const c = clampToViewport(win, ev.clientX - drag.dx, ev.clientY - drag.dy);
+    win.style.left = `${c.x}px`;
+    win.style.top = `${c.y}px`;
+    clearTargetMarks();
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    saveStackPos({ x: parseFloat(win.style.left) || 0, y: parseFloat(win.style.top) || 0 });
+  };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+}
+initStackWindowDrag();
+
+// ---------------------------------------------------------------------------
+// Target marks: hovering a stack item puts a crosshair on each of its
+// targets. One target (or 3+): red crosshairs, arrows from the item. Two
+// targets (from one to the other, e.g. a fight spell): green crosshair on
+// the first, red on the second, an arrow between them and a dashed lead
+// from the item to the first.
+// ---------------------------------------------------------------------------
+
+function targetEl(tg) {
+  if (tg.kind === 'player') {
+    const row = document.getElementById(`row-p${tg.id}`);
+    return row && row.querySelector('.life');
+  }
+  // A spell target's id is its stack index (``("stack", i)``).
+  if (tg.kind === 'stack') {
+    return document.querySelector(`.stack-item[data-stack-idx="${tg.id}"]`);
+  }
+  return document.querySelector(`.battlefield .card[data-obj-id="${tg.id}"]`)
+      || document.querySelector(`.stack-item[data-obj-id="${tg.id}"]`)
+      || document.querySelector(`.card[data-obj-id="${tg.id}"]`);
+}
+
+function markRadius(r) { return Math.max(14, Math.min(34, r * 0.38)); }
+
+function centerOf(el) {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2,
+           r: markRadius(Math.min(r.width, r.height)) };
+}
+
+function clearTargetMarks() {
+  const g = document.getElementById('target-marks');
+  if (g) g.replaceChildren();
+}
+
+function crosshair(c, cls) {
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', `target-mark ${cls}`);
+  const ring = document.createElementNS(SVG_NS, 'circle');
+  ring.setAttribute('cx', c.x);
+  ring.setAttribute('cy', c.y);
+  ring.setAttribute('r', c.r);
+  g.appendChild(ring);
+  // Four ticks crossing the ring, and a dot in the middle.
+  [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([dx, dy]) => {
+    const t = document.createElementNS(SVG_NS, 'line');
+    t.setAttribute('x1', c.x + dx * c.r * 0.45);
+    t.setAttribute('y1', c.y + dy * c.r * 0.45);
+    t.setAttribute('x2', c.x + dx * c.r * 1.35);
+    t.setAttribute('y2', c.y + dy * c.r * 1.35);
+    g.appendChild(t);
+  });
+  const dot = document.createElementNS(SVG_NS, 'circle');
+  dot.setAttribute('class', 'dot');
+  dot.setAttribute('cx', c.x);
+  dot.setAttribute('cy', c.y);
+  dot.setAttribute('r', 2.5);
+  g.appendChild(dot);
+  return g;
+}
+
+// A line from ``from`` that stops at ``to``'s crosshair ring.
+function targetArrow(from, to, cls) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const stop = (to.r || 0) + 4;
+  const line = document.createElementNS(SVG_NS, 'line');
+  line.setAttribute('x1', from.x);
+  line.setAttribute('y1', from.y);
+  line.setAttribute('x2', to.x - (dx / len) * stop);
+  line.setAttribute('y2', to.y - (dy / len) * stop);
+  line.setAttribute('class', 'target-arrow' + (cls ? ` ${cls}` : ''));
+  if (!cls) line.setAttribute('marker-end', 'url(#arrow-head-target)');
+  return line;
+}
+
+// The point of ``rect`` closest to ``p`` (where an arrow leaves the item).
+function edgePoint(rect, p) {
+  return { x: Math.min(Math.max(p.x, rect.left), rect.right),
+           y: Math.min(Math.max(p.y, rect.top), rect.bottom) };
+}
+
+function showTargetMarks(item, itemEl) {
+  const g = document.getElementById('target-marks');
+  if (!g) return;
+  g.replaceChildren();
+  const marks = (item.targets || [])
+    .map(tg => targetEl(tg))
+    .filter(Boolean)
+    .map(centerOf);
+  if (marks.length === 0) return;
+  const src = itemEl.getBoundingClientRect();
+  if (marks.length === 2) {
+    const [from, to] = marks;
+    g.appendChild(targetArrow(edgePoint(src, from), from, 'lead'));
+    g.appendChild(targetArrow(from, to));
+    g.appendChild(crosshair(from, 'from'));
+    g.appendChild(crosshair(to, 'to'));
+    return;
+  }
+  marks.forEach(m => {
+    g.appendChild(targetArrow(edgePoint(src, m), m));
+    g.appendChild(crosshair(m, 'to'));
   });
 }
+window.addEventListener('scroll', clearTargetMarks, true);
 
 function stackItemEl(item) {
   const wrap = document.createElement('div');
   wrap.className = 'stack-item';
+  wrap.dataset.objId = item.id;
   if (item.countered) wrap.classList.add('countered-spell');
+  if (item.targets && item.targets.length > 0) {
+    wrap.classList.add('has-targets');
+    wrap.addEventListener('mouseenter', () => showTargetMarks(item, wrap));
+    wrap.addEventListener('mouseleave', clearTargetMarks);
+  }
 
   // Mini card image (or text fallback) — hover gives the same large preview
   // the battlefield cards use.
@@ -1594,10 +1878,20 @@ const POLL_INTERVAL_MS = 250;
 const elsI = {
   form:          document.getElementById('iplay-form'),
   seed:          document.getElementById('iplay-seed'),
-  myColor:       document.getElementById('iplay-my-color'),
-  botColor:      document.getElementById('iplay-bot-color'),
   playerId:      document.getElementById('iplay-player-id'),
+  startingPlayer: document.getElementById('iplay-starting-player'),
+  opponent:      document.getElementById('iplay-opponent'),
+  shareBox:      document.getElementById('iplay-share'),
+  shareLink:     document.getElementById('iplay-share-link'),
+  shareCopy:     document.getElementById('iplay-share-copy'),
+  record:        document.getElementById('iplay-record'),
   maxTurns:      document.getElementById('iplay-max-turns'),
+  format:        document.getElementById('iplay-format'),
+  botHand:       document.getElementById('iplay-bot-hand'),
+  decklist:      document.getElementById('iplay-decklist'),
+  checkDeck:     document.getElementById('iplay-check-decklist'),
+  loadSaved:     document.getElementById('iplay-load-saved'),
+  deckReport:    document.getElementById('iplay-decklist-report'),
   decisionPanel: document.getElementById('decision-panel'),
   waiting:       document.getElementById('decision-waiting'),
   body:          document.getElementById('decision-body'),
@@ -1609,6 +1903,63 @@ const elsI = {
 };
 
 elsI.form.addEventListener('submit', (ev) => { ev.preventDefault(); startInteractiveGame(); });
+
+// ---------------------------------------------------------------------
+// Forgetful Fish: the shared-library decklist box (Fish is the only format).
+// ---------------------------------------------------------------------
+
+// Flask's error pages are HTML; keep just the text of the message.
+function plainError(message) {
+  return String(message).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function renderDecklistReport(r) {
+  const el = elsI.deckReport;
+  el.replaceChildren();
+  const lines = [];
+  const ok = !r.unknown.length && !r.unreadable.length && !r.tutors.length
+    && r.total > 0;
+  lines.push([`${r.total} cards${r.is_default ? ' (saved list)' : ''}`
+    + (r.total === 80 ? '' : ' (a Forgetful Fish library has 80)'),
+    r.total === 80 ? 'ok' : 'warn']);
+  if (r.unknown.length) {
+    lines.push(['Not playable yet (rules still missing): '
+      + r.unknown.join(', '), 'bad']);
+  }
+  if (r.tutors.length) {
+    lines.push(['Tutors are not allowed: ' + r.tutors.join(', '), 'bad']);
+  }
+  if (r.unreadable.length) {
+    lines.push(['Unreadable lines: ' + r.unreadable.join(' | '), 'bad']);
+  }
+  if (ok) lines.push(['Ready to play.', 'ok']);
+  for (const [text, cls] of lines) {
+    const div = document.createElement('div');
+    div.className = 'decklist-line ' + cls;
+    div.textContent = text;
+    el.appendChild(div);
+  }
+}
+
+async function checkDecklist({ loadSaved = false, placeholder = false } = {}) {
+  const decklist = loadSaved || placeholder ? '' : elsI.decklist.value;
+  const body = { decklist };
+  if (placeholder) body.which = 'placeholder';
+  try {
+    const r = await postJSON('/api/decklist/check', body);
+    if (r.is_default && typeof r.text === 'string') {
+      elsI.decklist.value = r.text;
+    }
+    renderDecklistReport(r);
+  } catch (e) {
+    elsI.deckReport.textContent = 'Error: ' + plainError(e.message);
+  }
+}
+
+elsI.checkDeck.addEventListener('click', () => checkDecklist());
+elsI.loadSaved.addEventListener('click', () => checkDecklist({ loadSaved: true }));
+document.getElementById('iplay-load-placeholder').addEventListener(
+  'click', () => checkDecklist({ placeholder: true }));
 
 // Space = pass priority, Enter = confirm (attackers / blockers).
 window.addEventListener('keydown', (ev) => {
@@ -1625,35 +1976,91 @@ window.addEventListener('keydown', (ev) => {
   }
 });
 
+// The share link: the other player's seat, with its own token.
+function showShareLink(url) {
+  elsI.shareLink.value = url;
+  elsI.shareBox.classList.remove('hidden');
+}
+
+elsI.shareCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(elsI.shareLink.value);
+    elsI.shareCopy.textContent = 'Copied';
+  } catch (e) {
+    elsI.shareLink.select();
+  }
+});
+
+// Opening a shared link (?join=<game>#token=<seat token>) takes that seat.
+// The token sits in the fragment, which browsers never send to the server.
+async function joinFromLink() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get('join');
+  const token = new URLSearchParams(window.location.hash.slice(1)).get('token');
+  if (!sessionId || !token) return;
+  let state;
+  try {
+    state = await fetchJSON(`/api/interactive/state/${sessionId}`, { 'X-Seat-Token': token });
+  } catch (e) {
+    document.getElementById('tab-play').click();
+    setStatus('This game link is no longer valid', 'loss');
+    return;
+  }
+  // A recorded game asks the second player before they join.
+  if (state.recorded && !confirm('This game is recorded for training: your choices and the result are saved. Join?')) {
+    setStatus('Join cancelled', 'muted');
+    return;
+  }
+  document.getElementById('tab-play').click();
+  iplay = {
+    sessionId,
+    humanPlayerId: null,
+    token,
+    pvp: true,
+    pollTimer: null,
+    lastPending: null,
+  };
+  elsI.decisionPanel.classList.remove('hidden');
+  els.board.classList.remove('hidden');
+  els.logPanel.classList.remove('hidden');
+  setStatus('Joined a game against another person', 'muted');
+  pollState();
+}
+
+joinFromLink();
+
 async function startInteractiveGame() {
   stopInteractiveGame();
-  const humanPlayer = parseInt(elsI.playerId.value, 10);
-  const myColor     = elsI.myColor.value;
-  const botColor    = elsI.botColor.value;
-  const c1 = humanPlayer === 0 ? myColor : botColor;
-  const c2 = humanPlayer === 1 ? myColor : botColor;
   setStatus('Starting game…', 'muted');
   elsI.form.querySelector('button').disabled = true;
   try {
     const body = {
       seed:         parseInt(elsI.seed.value, 10) || 0,
-      c1, c2,
-      human_player: humanPlayer,
+      human_player: elsI.playerId.value,
+      starting_player: elsI.startingPlayer.value,
+      opponent:     elsI.opponent.value,
+      record:       elsI.record.checked,
       max_turns:    parseInt(elsI.maxTurns.value, 10) || 300,
+      format:       elsI.format.value,
+      show_bot_hand: elsI.botHand.value === 'shown',
     };
+    body.decklist = elsI.decklist.value;
     const data = await postJSON('/api/interactive/new', body);
     iplay = {
       sessionId:     data.session_id,
       humanPlayerId: data.human_player_id,
+      token:         data.token || null,
+      pvp:           Boolean(data.join_path),
       pollTimer:     null,
       lastPending:   null,
     };
+    if (data.join_path) showShareLink(location.origin + data.join_path);
     elsI.decisionPanel.classList.remove('hidden');
     els.board    .classList.remove('hidden');
     els.logPanel .classList.remove('hidden');
     schedulePoll();
   } catch (e) {
-    setStatus('Error: ' + e.message, 'loss');
+    setStatus('Error: ' + plainError(e.message), 'loss');
   } finally {
     elsI.form.querySelector('button').disabled = false;
   }
@@ -1675,7 +2082,8 @@ function schedulePoll() {
 async function pollState() {
   if (!iplay) return;
   try {
-    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}`);
+    const headers = iplay.token ? { 'X-Seat-Token': iplay.token } : {};
+    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}`, headers);
     handleState(state);
   } catch (e) {
     setStatus('Poll error: ' + e.message, 'loss');
@@ -1685,6 +2093,8 @@ async function pollState() {
 
 function handleState(state) {
   if (!iplay) return;
+  // A joined seat learns which player it is from the server.
+  if (state.human_player_id != null) iplay.humanPlayerId = state.human_player_id;
 
   if (state.snapshot) {
     // Render the live board. We pass a minimal summary-like object since
@@ -1705,8 +2115,9 @@ function handleState(state) {
     else if (r.is_draw) setStatus(`Draw — ${r.turn_number} turns`, 'draw');
     else if (r.winner_id != null) {
       const youWon = r.winner_id === iplay.humanPlayerId;
+      const foe = iplay.pvp ? 'Opponent' : 'Bot';
       setStatus(
-        `${youWon ? 'You win' : 'Bot wins'} — turn ${r.turn_number}`,
+        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.turn_number}`,
         youWon ? 'win' : 'loss',
       );
     }
@@ -1731,14 +2142,24 @@ function handleState(state) {
 // ---------------------------------------------------------------------------
 
 async function submitAction(response) {
-  if (!iplay) return;
+  // One answer per decision: a double click, or a click on a card whose
+  // board the next poll hasn't redrawn yet, must not answer the next
+  // decision with this one's option index.
+  if (!iplay || iplay.answered) return;
+  iplay.answered = true;
   closeDecisionModal();
   elsI.waiting.classList.remove('hidden');
   elsI.body   .classList.add('hidden');
   try {
-    await postJSON(`/api/interactive/action/${iplay.sessionId}`, { response });
+    await postJSON(`/api/interactive/action/${iplay.sessionId}`,
+                   { response, seq: iplay.pendingSeq, token: iplay.token });
   } catch (e) {
-    setStatus('Submit error: ' + e.message, 'loss');
+    // 409: the game had already moved past that decision; just re-poll.
+    // Any other failure: the decision is still open, so allow a retry.
+    if (!String(e.message).startsWith('409')) {
+      iplay.answered = false;
+      setStatus('Submit error: ' + e.message, 'loss');
+    }
   }
   schedulePoll();
 }
@@ -1749,6 +2170,16 @@ async function submitAction(response) {
 
 function renderDecision(pending) {
   const type = pending.type;
+  // ``seq`` numbers the decision (``InteractiveAgent.submit_response``).
+  // Already answered and the game hasn't taken the answer yet: wait.
+  if (pending.seq != null && pending.seq === iplay.pendingSeq && iplay.answered) {
+    elsI.waiting.classList.remove('hidden');
+    elsI.body   .classList.add('hidden');
+    schedulePoll();
+    return;
+  }
+  iplay.pendingSeq = pending.seq;
+  iplay.answered = false;
 
   // Auto-submit when there is only one possible choice — no point making the
   // player click through it (most common case: solo PassPriority).
@@ -1792,7 +2223,7 @@ function renderDecision(pending) {
     case 'declare_blockers':  renderDeclareBlockers(pending);  break;
     case 'choose_target':     renderChooseTarget(pending);    break;
     case 'choose_discard':    renderChooseDiscardBoard(pending);                                          break;
-    case 'choose_sacrifice':  renderChooseObj(pending, 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
+    case 'choose_sacrifice':  renderChooseObj(pending, pending.prompt || 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
     case 'choose_surveil':    renderChooseSurveil(pending);   break;
     case 'choose_mode':       renderChooseMode(pending);      break;
     case 'choose_modes':      renderChooseModes(pending);     break;
@@ -2479,3 +2910,122 @@ async function postJSON(url, body) {
   }
   return r.json();
 }
+
+// ============================================================================
+// Feedback / report dialog (POST /api/feedback; mtg_bot.feedback)
+// ============================================================================
+
+const FEEDBACK_MAX_IMAGES = 6;
+const FEEDBACK_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const FEEDBACK_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+var feedbackImages = [];  // data URLs
+
+function feedbackContext() {
+  const playMode = tabPlay.classList.contains('active');
+  const ctx = { tab: playMode ? 'play' : 'watch' };
+  const form = playMode ? panelPlay : panelWatch;
+  const seed = form && form.elements.namedItem('seed');
+  if (seed && seed.value !== '') ctx.seed = parseInt(seed.value, 10) || 0;
+  const fmt = form && form.elements.namedItem('format');
+  if (fmt) ctx.format = fmt.value;
+  if (playMode && iplay) ctx.session_id = iplay.sessionId;
+  if (!playMode && game) {
+    ctx.game_id = game.gameId;
+    ctx.snapshot_idx = game.currentIdx || 0;
+  }
+  return ctx;
+}
+
+function feedbackStatus(text) {
+  document.getElementById('feedback-status').textContent = text;
+}
+
+function renderFeedbackThumbs() {
+  const box = document.getElementById('feedback-thumbs');
+  box.replaceChildren();
+  feedbackImages.forEach((url, i) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'feedback-thumb';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = `screenshot ${i + 1}`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = 'Remove';
+    del.addEventListener('click', () => {
+      feedbackImages.splice(i, 1);
+      renderFeedbackThumbs();
+    });
+    wrap.append(img, del);
+    box.appendChild(wrap);
+  });
+}
+
+function addFeedbackFile(file) {
+  if (!file || !FEEDBACK_TYPES.includes(file.type)) {
+    feedbackStatus('Only PNG, JPEG, GIF or WebP images.');
+    return;
+  }
+  if (file.size > FEEDBACK_MAX_IMAGE_BYTES) {
+    feedbackStatus('That image is larger than 5 MB.');
+    return;
+  }
+  if (feedbackImages.length >= FEEDBACK_MAX_IMAGES) {
+    feedbackStatus(`At most ${FEEDBACK_MAX_IMAGES} screenshots.`);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    feedbackImages.push(reader.result);
+    renderFeedbackThumbs();
+  };
+  reader.readAsDataURL(file);
+}
+
+function openFeedback() {
+  feedbackStatus('');
+  document.getElementById('feedback-dialog').showModal();
+  document.getElementById('feedback-text').focus();
+}
+
+async function sendFeedback() {
+  const text = document.getElementById('feedback-text').value;
+  if (!text.trim() && !feedbackImages.length) {
+    feedbackStatus('Write something or add a screenshot.');
+    return;
+  }
+  feedbackStatus('Sending...');
+  try {
+    const r = await postJSON('/api/feedback', {
+      text,
+      images: feedbackImages.map((data) => ({ data })),
+      context: feedbackContext(),
+    });
+    feedbackStatus(`Saved (${r.folder}). Thank you!`);
+    document.getElementById('feedback-text').value = '';
+    feedbackImages = [];
+    renderFeedbackThumbs();
+  } catch (e) {
+    feedbackStatus(`Not saved: ${e.message}`);
+  }
+}
+
+(function wireFeedback() {
+  const btn = document.getElementById('feedback-open');
+  if (!btn) return;
+  btn.addEventListener('click', openFeedback);
+  document.getElementById('feedback-send').addEventListener('click', sendFeedback);
+  document.getElementById('feedback-cancel').addEventListener('click',
+    () => document.getElementById('feedback-dialog').close());
+  document.getElementById('feedback-files').addEventListener('change', (ev) => {
+    Array.from(ev.target.files || []).forEach(addFeedbackFile);
+    ev.target.value = '';
+  });
+  document.getElementById('feedback-dialog').addEventListener('paste', (ev) => {
+    const items = (ev.clipboardData && ev.clipboardData.items) || [];
+    Array.from(items).forEach((it) => {
+      if (it.kind === 'file') addFeedbackFile(it.getAsFile());
+    });
+  });
+})();

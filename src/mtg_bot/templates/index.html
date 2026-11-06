@@ -17,27 +17,25 @@
     <button type="button" id="tab-play" class="mode-tab" role="tab"
             aria-selected="false" aria-controls="panel-play">Play</button>
   </div>
+  <button type="button" id="feedback-open" class="feedback-open"
+          title="Report a problem or suggestion (saved with this game)">Feedback</button>
 
   <!-- Watch mode form -->
   <form id="play-form" class="play-form mode-panel" role="tabpanel"
         aria-labelledby="tab-watch" autocomplete="off">
     <label>Seed <input type="number" name="seed" value="0"></label>
-    <label>P0 color
-      <select name="c1">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R" selected>Red</option>
-        <option value="G">Green</option>
+    <input type="hidden" name="format" value="forgetful_fish">
+    <label>Who goes first
+      <select name="starting_player">
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
+        <option value="1">Player 1</option>
       </select>
     </label>
-    <label>P1 color
-      <select name="c2">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R">Red</option>
-        <option value="G" selected>Green</option>
+    <label>Fish list
+      <select name="list">
+        <option value="saved" selected>saved</option>
+        <option value="placeholder">placeholder</option>
       </select>
     </label>
     <label>Max turns <input type="number" name="max_turns" value="200" min="1"></label>
@@ -62,35 +60,59 @@
   <form id="iplay-form" class="play-form mode-panel hidden" role="tabpanel"
         aria-labelledby="tab-play" autocomplete="off">
     <label>Seed <input type="number" id="iplay-seed" value="0"></label>
-    <label>Your color
-      <select id="iplay-my-color">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R" selected>Red</option>
-        <option value="G">Green</option>
-      </select>
-    </label>
-    <label>Bot color
-      <select id="iplay-bot-color">
-        <option value="W">White</option>
-        <option value="U">Blue</option>
-        <option value="B">Black</option>
-        <option value="R">Red</option>
-        <option value="G" selected>Green</option>
-      </select>
-    </label>
+    <input type="hidden" id="iplay-format" value="forgetful_fish">
     <label>You are
       <select id="iplay-player-id">
-        <option value="0">Player 0 (goes first)</option>
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
         <option value="1">Player 1</option>
       </select>
     </label>
+    <label>Who goes first
+      <select id="iplay-starting-player">
+        <option value="random" selected>random</option>
+        <option value="0">Player 0</option>
+        <option value="1">Player 1</option>
+      </select>
+    </label>
+    <label>Opponent
+      <select id="iplay-opponent">
+        <option value="bot" selected>the bot</option>
+        <option value="human">another person</option>
+      </select>
+    </label>
     <label>Max turns <input type="number" id="iplay-max-turns" value="300" min="1"></label>
+    <label>Bot's hand
+      <select id="iplay-bot-hand">
+        <option value="hidden" selected>hidden</option>
+        <option value="shown">shown</option>
+      </select>
+    </label>
+    <label class="record-toggle">
+      <input type="checkbox" id="iplay-record">
+      Record this game for training (your choices and the result are saved on this PC)
+    </label>
     <button type="submit">Start game</button>
+    <div id="iplay-share" class="share-box hidden">
+      <span>Send this link to the other player. It opens their seat; keep it private.</span>
+      <input id="iplay-share-link" type="text" readonly>
+      <button type="button" id="iplay-share-copy">Copy link</button>
+    </div>
+    <div id="iplay-fish" class="fish-panel">
+      <label class="fish-decklist">Shared library (paste a list, or leave empty for the saved list)
+        <textarea id="iplay-decklist" rows="8" spellcheck="false"
+                  placeholder="10 Dandân&#10;4 Brainstorm&#10;30 Island&#10;..."></textarea>
+      </label>
+      <div class="fish-actions">
+        <button type="button" id="iplay-check-decklist">Check list</button>
+        <button type="button" id="iplay-load-saved">Load saved list</button>
+        <button type="button" id="iplay-load-placeholder">Load placeholder list</button>
+      </div>
+      <div id="iplay-decklist-report" class="decklist-report muted"></div>
+    </div>
   </form>
 
-  <div id="status" class="status muted">Pick a seed and colors, then run a game.</div>
+  <div id="status" class="status muted">Pick a seed, then run a game.</div>
 </header>
 
 <div id="bottom-controls" class="bottom-controls">
@@ -112,10 +134,6 @@
       <span id="scrub-counter" class="muted">0 / 0</span>
     </div>
   </div>
-
-  <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
-    <ol id="phase-list" class="phase-list"></ol>
-  </div>
 </div>
 
 <!-- Interactive play: decision panel (replaces the scrubber in play mode) -->
@@ -131,9 +149,25 @@
 
 <main id="board" class="board hidden" aria-label="Game board">
   <section class="player-row opponent" id="row-p1"></section>
-  <section class="stack-row" id="row-stack" aria-label="Stack"></section>
+  <!-- The turn's phases, between the two players. -->
+  <section class="middle-row" aria-label="Phases">
+    <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
+      <ol id="phase-list" class="phase-list"></ol>
+    </div>
+  </section>
   <section class="player-row you" id="row-p0"></section>
 </main>
+
+<!-- The stack: a window that pops up while the stack has items. Drag it
+     by its title bar; the position is remembered. Hovering an item marks
+     its targets (see showTargetMarks in app.js). -->
+<section id="stack-window" class="stack-window hidden" aria-label="Stack">
+  <header id="stack-window-header" class="stack-window-header" title="Drag to move">
+    <span class="stack-window-title">Stack</span>
+    <span id="stack-window-count" class="muted"></span>
+  </header>
+  <div class="stack-row" id="row-stack"></div>
+</section>
 
 <aside class="right-col" aria-label="Side panel">
   <section id="search-panel" class="search-panel hidden"
@@ -162,6 +196,21 @@
       </table>
     </div>
   </section>
+  <!-- Forgetful Fish: the shared graveyard, exile and the log as tabs
+       (shown in Fish games only; renderFishZones in app.js). -->
+  <section id="fish-tabs" class="fish-tabs hidden" aria-label="Graveyard, exile and log">
+    <div class="fish-tab-bar" role="tablist">
+      <button type="button" role="tab" class="fish-tab active" data-fish-tab="graveyard"
+              aria-selected="true">Graveyard <span id="fish-count-graveyard" class="fish-tab-count"></span></button>
+      <button type="button" role="tab" class="fish-tab" data-fish-tab="exile"
+              aria-selected="false">Exile <span id="fish-count-exile" class="fish-tab-count"></span></button>
+      <button type="button" role="tab" class="fish-tab" data-fish-tab="log"
+              aria-selected="false">Log</button>
+    </div>
+    <div id="fish-pane-graveyard" class="fish-pane" role="tabpanel"></div>
+    <div id="fish-pane-exile" class="fish-pane hidden" role="tabpanel"></div>
+    <div id="fish-pane-log" class="fish-pane hidden" role="tabpanel"></div>
+  </section>
   <aside id="log-panel" class="log-panel hidden" aria-label="Game log">
     <h2>Log</h2>
     <div id="log-body" class="log-body"></div>
@@ -178,7 +227,12 @@
             refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,6 L9,3 z" fill="#6fa8ff"/>
     </marker>
+    <marker id="arrow-head-target" markerWidth="10" markerHeight="10"
+            refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ff4d4d"/>
+    </marker>
   </defs>
+  <g id="target-marks"></g>
 </svg>
 
 <div id="card-preview" class="card-preview" hidden aria-hidden="true"></div>
@@ -204,6 +258,26 @@
     <div id="decision-modal-body" class="decision-modal-body"></div>
   </div>
 </div>
+
+<dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-title">
+  <h2 id="feedback-title">Feedback / report a problem</h2>
+  <p class="feedback-hint">Describe what happened. Add screenshots with the
+    button, or paste them here (Ctrl+V). The game you are looking at is
+    saved with your report.</p>
+  <textarea id="feedback-text" rows="6" maxlength="20000"
+            placeholder="What went wrong, or what should change?"></textarea>
+  <div class="feedback-row">
+    <label class="feedback-files">Add screenshots
+      <input type="file" id="feedback-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
+    </label>
+    <span id="feedback-thumbs" class="feedback-thumbs"></span>
+  </div>
+  <div class="feedback-row feedback-actions">
+    <span id="feedback-status" class="feedback-status" role="status"></span>
+    <button type="button" id="feedback-cancel">Close</button>
+    <button type="button" id="feedback-send">Send</button>
+  </div>
+</dialog>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

@@ -131,7 +131,7 @@ class ReturnCardFromGraveyardToBattlefield(Effect):
 
     def _candidates(self, state: "GameState", controller_id: int) -> list:
         if self.source == "target_any_graveyard":
-            pool = [c for p in state.players for c in p.graveyard]
+            pool = [c for g in state.distinct_graveyards() for c in g]
         else:
             pool = list(state.player_by_id(controller_id).graveyard)
         return [c for c in pool if self.card_filter.matches_card(state, c)]

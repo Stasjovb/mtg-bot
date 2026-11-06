@@ -79,6 +79,9 @@ class Deck:
     splash_colors: Optional[str] = None
     total_games: int = 0
     total_wins: int = 0
+    # ``mtg_bot.formats`` name; ``None`` = the normal two-deck game.
+    # "forgetful_fish": one shared library (``formats.setup_args_for_decks``).
+    game_format: Optional[str] = None
 
     @property
     def card_count(self) -> int:
@@ -108,6 +111,7 @@ class Deck:
             splash_colors=d.get("splash_colors"),
             total_games=int(d.get("total_games", 0)),
             total_wins=int(d.get("total_wins", 0)),
+            game_format=d.get("game_format"),
         )
 
 

@@ -27,6 +27,7 @@ from mtg_bot.conspiracies import (
     begin_game_with_conspiracies,
     reveal_hands_after_mulligans,
 )
+from mtg_bot.formats import STANDARD, GameFormat, apply_hand_ownership
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
 from mtg_bot.opening_hand import (
@@ -84,6 +85,27 @@ def _build_player_from_names(
     return p
 
 
+# Free mulligans per player before further mulligans count as usual: a
+# safety cap so an agent that always mulligans a free hand still ends
+# setup (see docs/SEARCH_LIMITATIONS.md, "Forgetful Fish").
+MAX_FREE_MULLIGANS = 10
+
+
+def _apply_format_to_players(state: GameState) -> None:
+    """Format-level player setup: starting life, and for a shared-zone
+    format every player's shared zone becomes player 0's list object."""
+    fmt = state.game_format
+    if fmt.starting_life != STANDARD.starting_life:
+        for p in state.players:
+            p.life = p.starting_life = fmt.starting_life
+    first = state.players[0]
+    for p in state.players[1:]:
+        if fmt.shared_library:
+            p.library = first.library
+        if fmt.shared_graveyard:
+            p.graveyard = first.graveyard
+
+
 def _game_has_layered_statics(state: GameState) -> bool:
     """Whether a card of this game (in a library, hand or command zone at
     setup, or outside the game) synthesizes layer-4 / layer-5 effects or
@@ -116,6 +138,7 @@ def setup_game(
     starting_player_idx: int = 0,
     sideboards: Optional[list[list[str]]] = None,
     minimum_deck_size: Optional[int] = None,
+    game_format: GameFormat = STANDARD,
 ) -> GameState:
     """Build a fresh game state.
 
@@ -195,8 +218,29 @@ def setup_game(
     with ``enable_mulligans=False``) and before the opening-hand actions:
     the opponent's hand becomes known to the Wizard's controller
     (``conspiracies.reveal_hands_after_mulligans``).
+
+    Formats
+    -------
+    ``game_format`` (``mtg_bot.formats``; default ``STANDARD``, the
+    game described above) sets format-level rules. A shared-library
+    format (``FORGETFUL_FISH``) takes ONE decklist in ``decks`` -- the
+    shared library -- and every player's ``library`` / ``graveyard`` is
+    that one list object; its cards start owned by player 0 and a card
+    in a hand is owned by that hand's player
+    (``formats.apply_hand_ownership``). A mulligan the format makes free
+    (``GameFormat.is_free_mulligan``: Fish's fewer than 2 or more than 5
+    lands, until the player's first regular mulligan) doesn't count
+    toward the cards bottomed; past
+    ``MAX_FREE_MULLIGANS`` free mulligans in a row, further mulligans
+    count as usual so setup always ends.
     """
-    if len(decks) != len(agents):
+    expected_decks = 1 if game_format.shared_library else len(agents)
+    if len(decks) != expected_decks:
+        if game_format.shared_library:
+            raise ValueError(
+                f"format {game_format.name!r} shares one library: pass "
+                f"exactly one decklist, got {len(decks)}"
+            )
         raise ValueError(
             f"decks length {len(decks)} != agents length {len(agents)}"
         )
@@ -219,10 +263,17 @@ def setup_game(
     # even if future engine work draws from state.rng during setup.
     state.rng.seed(seed)
     rng = random.Random(seed)
+    state.game_format = game_format
+    state.log.bubbles_enabled = game_format.shared_library
 
+    if game_format.shared_library:
+        # Player 0 builds the shared library; the rest start empty and
+        # are pointed at player 0's zones just below.
+        decks = [decks[0]] + [[] for _ in agents[1:]]
     for i, (agent, deck) in enumerate(zip(agents, decks)):
         p = _build_player_from_names(state, i, list(deck), agent)
         state.players.append(p)
+    _apply_format_to_players(state)
     if sideboards is not None:
         from mtg_bot.roto_turns import sideboard_printings
 
@@ -234,10 +285,16 @@ def setup_game(
         state, starting_player_idx, rng, minimum_deck_size,
     )
 
-    for p in state.players:
-        rng.shuffle(p.library)
-        for _ in range(7):
-            draw_card(state, p.id)
+    if game_format.shared_library:
+        rng.shuffle(state.players[0].library)
+        for p in state.players:
+            for _ in range(7):
+                draw_card(state, p.id)
+    else:
+        for p in state.players:
+            rng.shuffle(p.library)
+            for _ in range(7):
+                draw_card(state, p.id)
 
     if enable_mulligans:
         # Each player decides independently. Per-player loop:
@@ -247,6 +304,7 @@ def setup_game(
         # whole setup phase is deterministic in ``seed``.
         for p, agent in zip(state.players, agents):
             mulls_taken = 0
+            free_mulls = 0
             while True:
                 hand = list(p.hand)
                 if mulls_taken >= max_mulligans:
@@ -261,6 +319,10 @@ def setup_game(
                     state, p.id, hand, mulls_taken,
                 ):
                     break
+                free = (
+                    free_mulls < MAX_FREE_MULLIGANS
+                    and game_format.is_free_mulligan(hand, mulls_taken)
+                )
                 # Mulligan: shuffle hand back, redraw 7.
                 while p.hand:
                     card = p.hand.pop()
@@ -269,7 +331,11 @@ def setup_game(
                 rng.shuffle(p.library)
                 for _ in range(7):
                     draw_card(state, p.id)
-                mulls_taken += 1
+                if free:
+                    free_mulls += 1
+                    state.log.append(f"P{p.id} takes a free mulligan")
+                else:
+                    mulls_taken += 1
             # Kept — bottom ``mulls_taken`` cards.
             if mulls_taken > 0:
                 hand = list(p.hand)
@@ -312,6 +378,7 @@ def setup_game(
                     # which pops index 0).
                     p.library.append(card)
 
+    apply_hand_ownership(state)
     # Mulligans are over (every player kept and bottomed): Meddling
     # Wizard's reveal, then the opening-hand actions (CR 103.6).
     reveal_hands_after_mulligans(state, starting_player_idx)
@@ -653,13 +720,17 @@ def simulate_game(
     on_snapshot: Optional[SnapshotCallback] = None,
     snapshot_granularity: SnapshotGranularity = "step",
     decks: Optional[list[list[str]]] = None,
+    game_format: GameFormat = STANDARD,
+    starting_player_idx: int = 0,
 ) -> GameState:
     """Run a full game.
 
     Provide each player's library via either ``decks`` (production
     path — explicit decklists) or ``colors`` (playground path —
     each color is materialized into a default deck on the fly via
-    ``_default_deck_for_color``).
+    ``_default_deck_for_color``). A shared-library ``game_format``
+    (Forgetful Fish) takes one decklist, the shared library, for a
+    two-player game unless ``agents`` names the seats.
 
     When neither is provided, falls back to the legacy ``["G", "R"]``
     default so single-line "just play a game" callers (``__main__``,
@@ -690,7 +761,9 @@ def simulate_game(
     )
     if decks is None and colors is None:
         colors = ["G", "R"]
-    if decks is not None:
+    if decks is not None and game_format.shared_library:
+        n_seats = len(agents) if agents is not None else 2
+    elif decks is not None:
         n_seats = len(decks)
     else:
         assert colors is not None
@@ -715,7 +788,10 @@ def simulate_game(
             _default_deck_for_color(c, seed=rng.randint(0, 10**9))
             for c in colors  # type: ignore[arg-type]
         ]
-    state = setup_game(agents, decks=decks, seed=seed)
+    state = setup_game(
+        agents, decks=decks, seed=seed, game_format=game_format,
+        starting_player_idx=starting_player_idx,
+    )
     if on_snapshot is not None:
         on_snapshot(state)
     while not state.is_over() and state.turn_number <= max_turns:

@@ -774,18 +774,29 @@ def _counter_then_controller(phrase: str) -> Effect | None:
     return CounterSpellThenControllerEffect(counter=counter, rider=rider)
 
 
+_RETURN_SPELL_OR_PERMANENT_RE = re.compile(
+    r"^return target spell or (?P<noun>permanent|creature) to its owner's hand$"
+)
+
+
 def _return_spell_or_permanent(phrase: str) -> Effect | None:
-    """``return target spell or permanent to its owner's hand`` (Venser,
-    Shaper Savant). Literal: only card in the pool with this shape (the
-    nonland / opponent-only sibling is ``card_flow_grammar``'s); broader
-    grammar deferred until a second example exists."""
-    if phrase != "return target spell or permanent to its owner's hand":
+    """``return target spell or <permanent|creature> to its owner's
+    hand`` (Venser, Shaper Savant; Unsubstantiate). The nonland /
+    opponent-only sibling is ``card_flow_grammar``'s."""
+    m = _RETURN_SPELL_OR_PERMANENT_RE.match(phrase)
+    if m is None:
         return None
     from mtg_bot.effects.generic.roto_stack import (
         ReturnTargetSpellOrPermanentToHand,
     )
 
-    return ReturnTargetSpellOrPermanentToHand()
+    if m.group("noun") == "permanent":
+        return ReturnTargetSpellOrPermanentToHand()
+    from mtg_bot.effects.object_predicates import IsCreature
+
+    return ReturnTargetSpellOrPermanentToHand(
+        permanent_filter=IsCreature(), noun="creature",
+    )
 
 
 def _exile_spell_plotted(phrase: str) -> Effect | None:

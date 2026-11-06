@@ -20334,3 +20334,132 @@ share one schema). It is in no other pool (`all` is unchanged).
    from every zone move out of a graveyard (~1 day). *Impact:* none on the
    cube, roto or EoE pools (the parser change claims no card there; their
    IR is byte-identical).
+
+## Forgetful Fish: shared library and graveyard (2026-11-02, `feature/fish-shared-zones`)
+
+`GameState.game_format` (`mtg_bot.formats`) defaults to `STANDARD`, which
+changes nothing. `FORGETFUL_FISH` makes every player's `library` /
+`graveyard` the same list object (player 0's): `simulate._apply_format_to_players`
+at setup, `game._clone_zones_sharing_first_player` in `GameState.clone`.
+House rules (the user's): free mulligan below 2 or above 5 lands, until the
+player's first regular mulligan (Wizards' Dandân rule, chosen 2026-11-03),
+and a card is owned by the player who drew / cast it.
+
+1. **Loops over every player's graveyard / library see a shared zone once
+   per player** unless they walk `GameState.distinct_graveyards()` /
+   `distinct_libraries()`. Converted: the "in all graveyards" counts
+   (`roto_mana.CardsNamedInAllGraveyards`, `pt_formulas.CardTypesInAllGraveyardsPT`),
+   the any-graveyard reanimation pool (`reanimation.py`) and the
+   any-graveyard target lists (`actions.py` graveyard-land choice,
+   `creature_casting_ub.py`, `artifact_mechanics.py`, `cube_creatures_ub.py`,
+   `cube_creatures_wg.py`, `enchantment_mechanics.py`, `exile.py`,
+   `graveyard.py`, `roto_board.py`, `roto_zones._graveyard_card_targets`).
+   Not converted: id lookups (first match wins, harmless), per-player
+   snapshots/watchers (`roto_zones` exile-instead snapshot, `turn.py` void
+   graveyard movers, `cube_creatures_rmc.sweep_graveyard_watch`), and the
+   search/NN readers (`canonical_state`, `state_tokenizer`, parity
+   hashing), which encode the shared zone under both players.
+   `search/determinize.py` needs no change: it pools each player's hidden
+   hand cards with that player's library, and with one shared library the
+   opponent's pool is exactly "opponent's hand + the shared library" (the
+   library is permuted once per player, which is still a uniform shuffle).
+   *Failure mode:* in a Fish game only, a card whose effect walks "each
+   player's graveyard" can double-count or offer a target twice; the NN
+   input sees the shared zone twice. *Fix scope:* convert the rest to
+   `distinct_*` (~2 h); a shared-zone NN encoding belongs with Fish
+   training. *Impact:* none for standard
+   games (`distinct_*` returns one list per player there); Fish cards are
+   audited one by one as the decklist's rules land.
+2. **Card ownership is re-applied, not tracked at every move.** A drawn
+   card is owned by the drawer (`turn.draw_card`), and every card in a hand
+   is made its holder's at each `state_based_actions` call
+   (`formats.apply_hand_ownership`). Library and graveyard cards keep their
+   last owner (player 0 for never-drawn cards). *Failure mode:* a card that
+   reaches a hand by a non-draw route mid-resolution keeps its previous
+   owner until the next SBA check; anything reading the owner of a library
+   card sees player 0. *Fix scope:* an ownership hook on every hand entry
+   (~58 sites) if a Fish card ever needs it. *Impact:* none known: "owner's
+   library / graveyard" is the shared zone for both players.
+3. **Free mulligans are capped** at `simulate.MAX_FREE_MULLIGANS` (10) per
+   player; later mulligans count as London mulligans. The rule itself has no
+   cap. *Failure mode:* an 11th consecutive free-eligible mulligan costs a
+   card. *Fix scope:* trivial (raise the cap). *Impact:* negligible (the
+   chance of 10 free-eligible hands in a row is tiny with a real list); the
+   cap only guarantees setup ends for an agent that always mulligans.
+4. **Mulligans are decided one player at a time** (the engine's existing
+   loop; CR 103.5 has players decide in turn order and mulligan together).
+   With a shared library, player 0's mulligan reshuffles the library before
+   player 1's redraws. *Impact:* none on outcomes' distribution (every
+   redraw comes from a shuffled library either way).
+5. **The Rust engine does not support shared-zone formats.** Fish games are
+   Python-engine only; the cross-engine bridge builds per-player zones.
+
+## Forgetful Fish cards (2026-11-02, `feature/fish-cards`)
+
+The user's 80-card Fish list: parser lines in `cards/parser/fish_cards.py`,
+effects in `effects/generic/fish_cards.py`. Text-changing effects (CR 612)
+are `"fish_text_change"` layer-3 entries read through
+`fish_cards.changed_word` by the abilities that print a land type or color
+word; they never touch the type line.
+
+1. **"Defending player" is the controller's opponent(s)**
+   (`fish_cards.DefendingPlayerControlsNoLandType.holds`). The attack filter
+   (`combat.eligible_attackers`) has no per-defender context, so with several
+   opponents Dandân may attack if ANY opponent controls an Island, and then
+   at any of them. *Failure mode:* multiplayer only (EDH later): Dandân could
+   attack a player without Islands. *Fix scope:* per-defender attack legality
+   (~half a day, with multiplayer combat). *Impact:* none in 1v1 Fish.
+2. **A spell's delayed trigger needs its card to still be findable**
+   (`artifact_mechanics.ScheduleDelayedEffect.resolve` now falls back to
+   `state.resolving_spell`; `turn._push_delayed_entries` skips an entry whose
+   `source_id` no longer resolves). CR 603.7 delayed triggers don't depend on
+   their source. *Failure mode:* Portent's "draw a card at the beginning of
+   the next turn's upkeep" is lost if the Portent card stops existing as that
+   object before the upkeep (`_find_object_by_id` can't find it). *Fix
+   scope:* let delayed entries carry their own LKI source (~1 h). *Impact:*
+   rare (Portent would have to leave the graveyard in the same turn).
+3. **Ray of Command's "When you lose control of the creature, tap it" taps
+   at once** (`fish_cards.apply_fish_card_checks`, called from
+   `turn.state_based_actions` and after `turn.run_cleanup_step`'s control
+   refresh) instead of putting a triggered ability on the stack (CR 603.2,
+   514.3a). *Failure mode:* nobody can respond to the tap; at cleanup no
+   priority round follows. *Fix scope:* push a synthetic trigger (~1 h).
+   *Impact:* negligible (responding to "tap it" almost never matters).
+4. **Text changes only reach the words the engine reads**
+   (`fish_cards.printed_text_words`): Dandân's two land-type abilities and
+   Dance of the Skywise's color. Other printed words (Lonely Sandbar /
+   Remote Isle's "Islandcycling", reminder text) have no hook, and the
+   choice is offered only among words the target has. *Failure mode:* a
+   Crystal Spray on a cycling land in play changes nothing (correct in
+   effect: cycling works from the hand only); a player can't pick a word
+   the text lacks (that changes nothing anyway). *Fix scope:* a word hook
+   per new card that prints a land type or color. *Impact:* none for the
+   user's list.
+5. **"Draws up to N" never offers more cards than the library holds**
+   (`fish_cards.EachPlayerDrawsUpTo`): CR allows choosing more and losing
+   on the empty-library draw (CR 704.5b). *Failure mode:* none worth
+   having. *Impact:* removes a pure blunder from the bots' choices.
+
+## Human games for training (2026-11-04, `feature/fish-recorder`)
+
+1. **Rows from human games carry no action-history tokens**
+   (`training/human_games._decision_rows`): the replay drives the engine
+   directly (`simulate_game` with the record's answers), so
+   `tokenize_state` gets `recent_actions=()`. The self-play generator
+   tracks the history through `MtgGameStateAdapter.apply`
+   (`search/engine_adapter.py`, `recent_actions`), and the network's
+   input has the last 32 actions. *Failure mode:* a human row looks, to
+   the network, like a game with no earlier actions; those rows teach a
+   distribution that the live net never sees in self-play. *Fix scope:*
+   replay the record through the adapter (`MtgGameStateAdapter.apply` per
+   decision) so the history is built the same way (~half a day; the
+   converter's replay loop changes, the rest stays). *Impact:* until fixed,
+   human rows are weaker training data than self-play rows; keep their
+   share of a shard small.
+2. **Only the human's `choose_action` answers become policy rows**
+   (`training/human_games._ReplayAgent._ask`). Other decisions (attackers,
+   blockers, targets, yes/no) keep their value rows (the outcome for both
+   viewers) but no policy target. *Failure mode:* the network learns move
+   choice only from priority decisions. *Fix scope:* map each decision
+   kind's answer to its encoded slot (~1 day). *Impact:* combat and target
+   choices of people are not imitated yet.

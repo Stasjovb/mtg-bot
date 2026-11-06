@@ -16,8 +16,11 @@ Public surface used by ui.py:
 
 from __future__ import annotations
 
+import random
+import secrets
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -30,10 +33,18 @@ from mtg_bot.actions import (
     PlayLand,
 )
 from mtg_bot.agents import Agent, RandomAgent
+from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
+from mtg_bot.game_records import GameRecorder
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
+
+
+def bot_rng(seed: int) -> random.Random:
+    """The bot's random choices for a game with this seed. A recorded game
+    replays the same way because the live game and the replay both use it."""
+    return random.Random(seed * 7 + 3)
 
 
 class SessionTimeoutError(RuntimeError):
@@ -170,7 +181,13 @@ class InteractiveAgent(Agent):
         self._pending: Optional[dict] = None
         self._response_event = threading.Event()
         self._raw_response: Any = None
+        # Numbers each decision (``pending["seq"]``) so a late answer to
+        # an earlier one can be told apart (``submit_response``).
+        self._seq = 0
         self.timed_out = False
+        # Called with (pending, response) for each answer that is accepted,
+        # before the game goes on (the game recorder uses it).
+        self.on_answer = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -180,7 +197,8 @@ class InteractiveAgent(Agent):
         if self._state_callback is not None:
             self._state_callback(state)
         with self._lock:
-            self._pending = pending
+            self._seq += 1
+            self._pending = {**pending, "seq": self._seq}
             self._response_event.clear()
         if not self._response_event.wait(timeout=DECISION_TIMEOUT):
             self.timed_out = True
@@ -195,10 +213,25 @@ class InteractiveAgent(Agent):
         with self._lock:
             return dict(self._pending) if self._pending is not None else None
 
-    def submit_response(self, response: Any) -> None:
+    def submit_response(self, response: Any, seq: Optional[int] = None) -> bool:
+        """Answer the pending decision. With ``seq`` (the ``seq`` of the
+        decision the browser showed), an answer to an earlier decision is
+        dropped and ``False`` returned: a double click, or a click on a
+        board the browser had not refreshed yet, would otherwise answer
+        the NEXT question with the old one's option index (a land whose
+        enter trigger leaves only "Pass priority" then ended the game
+        with "choose_action idx 1 out of range 0..0")."""
         with self._lock:
+            if seq is not None and (
+                self._pending is None or self._pending.get("seq") != seq
+            ):
+                return False
             self._raw_response = response
+            answered = self._pending
+        if self.on_answer is not None and answered is not None:
+            self.on_answer(answered, response)
         self._response_event.set()
+        return True
 
     # ------------------------------------------------------------------
     # Agent interface — all 16 decision methods
@@ -282,6 +315,20 @@ class InteractiveAgent(Agent):
         resp = self._ask(state, {"type": "choose_sacrifice", "objects": objects})
         return int(resp["id"])
 
+    def choose_permanent_to_return(self, state, player_id, legal_object_ids,
+                                   label="permanent"):
+        """"Return a <label> you control to its owner's hand" (the bounce
+        lands, e.g. Izzet Boilerworks: any land you control, itself
+        included): the same pick as ``choose_sacrifice``, worded as a
+        return."""
+        objects = [_bf_opt(state, oid, self._n2id) for oid in legal_object_ids]
+        resp = self._ask(state, {
+            "type": "choose_sacrifice",
+            "prompt": f"Choose a {label} you control to return to your hand",
+            "objects": objects,
+        })
+        return int(resp["id"])
+
     def choose_mode(self, state, player_id, mode_descriptions):
         modes = [{"idx": i, "description": d} for i, d in enumerate(mode_descriptions)]
         resp = self._ask(state, {"type": "choose_mode", "modes": modes})
@@ -329,6 +376,61 @@ class InteractiveAgent(Agent):
         if resp.get("decline"):
             return None
         return int(resp["id"])
+
+    def choose_card_from_hand(self, state, player_id, option_ids):
+        if not option_ids:
+            return None
+        cards = [_card_opt(state, cid, self._n2id) for cid in option_ids]
+        source = state.resolving_spell or state.resolving_source
+        prompt = "Choose a card from your hand"
+        if source is not None:
+            prompt = f"{source.printing.name}: {prompt[0].lower()}{prompt[1:]}"
+        resp = self._ask(state, {
+            "type": "choose_card",
+            "prompt": prompt,
+            "cards": cards,
+            "can_decline": True,
+        })
+        if resp.get("decline"):
+            return None
+        return int(resp["id"])
+
+    def choose_mulligan(self, state, player_id, hand, mulls_taken):
+        lands = sum(1 for c in hand if c.printing.is_land)
+        free = state.game_format.is_free_mulligan(hand, mulls_taken)
+        cost = (
+            "free" if free
+            else f"you would put {mulls_taken + 1} card(s) on the bottom"
+        )
+        names = ", ".join(c.printing.name for c in hand)
+        resp = self._ask(state, {
+            "type": "choose_yes_no",
+            "prompt": (
+                f"Mulligan this hand ({lands} lands; {cost})? {names}"
+            ),
+        })
+        return bool(resp.get("yes", False))
+
+    def choose_bottom(self, state, player_id, hand, n):
+        cards = [_card_opt(state, c.id, self._n2id) for c in hand]
+        resp = self._ask(state, {
+            "type": "choose_multi_ids",
+            "prompt": f"Choose {n} card(s) to put on the bottom of the library",
+            "objects": cards,
+            "can_decline": False,
+        })
+        hand_ids = [c.id for c in hand]
+        picked = [
+            i for i in dict.fromkeys(int(x) for x in resp.get("ids", []))
+            if i in hand_ids
+        ][:n]
+        # Too few picks: fill from the end of the hand so setup can go on.
+        for cid in reversed(hand_ids):
+            if len(picked) >= n:
+                break
+            if cid not in picked:
+                picked.append(cid)
+        return picked
 
     def choose_x(self, state, player_id, card_name, upper_bound):
         resp = self._ask(state, {
@@ -399,6 +501,23 @@ class InteractiveAgent(Agent):
 # Session
 # ---------------------------------------------------------------------------
 
+def _recording(recorder: GameRecorder, seat: int):
+    """An ``on_answer`` hook that keeps the answers of one seat."""
+    def keep(pending: dict, response: Any) -> None:
+        recorder.answer(seat, pending, response)
+    return keep
+
+
+def _viewer_snapshot(snap: dict, seat: int) -> dict:
+    """``snap`` as seat ``seat`` may see it: the other player's hand is hidden
+    (its size stays, so the page can draw face-down cards)."""
+    players = [
+        p if p.get("id") == seat else {**p, "hand": []}
+        for p in snap.get("players", [])
+    ]
+    return {**snap, "players": players}
+
+
 @dataclass
 class InteractiveSession:
     session_id: str
@@ -409,9 +528,27 @@ class InteractiveSession:
     _snapshot: Optional[dict] = field(default=None, repr=False)
     _is_over: bool = False
     _result: Optional[dict] = None
+    # Log length the speech bubbles were last counted against, and the
+    # bubbles of the latest step (``bubbles_since_last``).
+    _bubble_mark: int = 0
+    _bubbles_since: list = field(default_factory=list, repr=False)
+    # A game against another person: the agent of each seat, and the secret
+    # token its browser sends (token -> seat). Both are empty against the bot.
+    seat_agents: dict = field(default_factory=dict, repr=False)
+    seat_tokens: dict = field(default_factory=dict, repr=False)
+    # The game recorder when the players chose to record this game (else None).
+    recorder: Optional[GameRecorder] = field(default=None, repr=False)
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
+            log_len = len(snap.get("log") or [])
+            if log_len != self._bubble_mark:
+                self._bubbles_since = [
+                    b for b in snap.get("bubbles") or []
+                    if b["log_index"] >= self._bubble_mark
+                ]
+                self._bubble_mark = log_len
+            snap["bubbles_since_last"] = list(self._bubbles_since)
             self._snapshot = snap
 
     def mark_over(self, result: dict) -> None:
@@ -419,14 +556,40 @@ class InteractiveSession:
             self._is_over = True
             self._result = result
 
-    def get_state(self) -> dict:
+    def tokens_by_seat(self) -> dict[int, str]:
+        return {seat: token for token, seat in self.seat_tokens.items()}
+
+    def seat_for(self, token: Optional[str]) -> int:
+        """The seat a browser plays. Against the bot there are no tokens and
+        the human seat plays; against a person the token names the seat.
+        Raises PermissionError for a missing or unknown token."""
+        if not self.seat_tokens:
+            return self.human_player_id
+        seat = self.seat_tokens.get(token or "")
+        if seat is None:
+            raise PermissionError("unknown or missing player token")
+        return seat
+
+    def agent_for(self, token: Optional[str]) -> InteractiveAgent:
+        """The decision agent of the seat ``token`` plays."""
+        return self.seat_agents.get(self.seat_for(token), self.human_agent)
+
+    def get_state(self, token: Optional[str] = None) -> dict:
+        """The board and pending decision as the viewer of ``token`` sees
+        them. Against a person, the other player's hand is hidden."""
+        seat = self.seat_for(token)
+        agent = self.agent_for(token)
         with self._lock:
+            snap = self._snapshot
+            if self.seat_tokens and snap is not None:
+                snap = _viewer_snapshot(snap, seat)
             return {
-                "snapshot": self._snapshot,
-                "pending": self.human_agent.get_pending(),
+                "snapshot": snap,
+                "pending": agent.get_pending(),
                 "is_over": self._is_over,
                 "result": self._result,
-                "human_player_id": self.human_player_id,
+                "human_player_id": seat,
+                "recorded": self.recorder is not None,
             }
 
     @property
@@ -457,14 +620,26 @@ def create_session(
     n2id: dict[str, str],
     enrich_fn,
     max_turns: int = 300,
+    decks: Optional[list[list[str]]] = None,
+    game_format: GameFormat = STANDARD,
+    opponent_human: bool = False,
+    starting_player_idx: int = 0,
+    record: bool = False,
+    record_root: Optional[Path] = None,
 ) -> InteractiveSession:
     """Build a session, start the game thread, register it, and return it.
+
+    ``decks`` (explicit decklists) replaces ``colors``' generated decks;
+    a shared-library ``game_format`` (Forgetful Fish) takes one list.
 
     ``enrich_fn(snap_dict) -> dict`` is called for each snapshot to
     annotate card dicts with scryfall_ids (closure from create_app that
     already has ``name_to_id`` in scope).
 
     ``human_player_id`` is 0 or 1; the other player gets a ``RandomAgent``.
+    With ``opponent_human`` the other seat is a second person: it gets its
+    own agent and each seat gets a secret token (``session.tokens_by_seat``).
+    ``starting_player_idx`` is the seat that takes the first turn.
     """
     from mtg_bot.simulate import simulate_game
 
@@ -478,18 +653,48 @@ def create_session(
             session_box[0].update_snapshot(enrich_fn(state))
 
     human_agent = InteractiveAgent(n2id, state_callback=_refresh_snapshot)
-    bot_agent = RandomAgent()
-
-    if human_player_id == 0:
-        agents: list[Agent] = [human_agent, bot_agent]
+    seat_agents: dict[int, InteractiveAgent] = {}
+    if opponent_human:
+        other_agent = InteractiveAgent(n2id, state_callback=_refresh_snapshot)
+        seat_agents = {
+            human_player_id: human_agent,
+            1 - human_player_id: other_agent,
+        }
+        agents: list[Agent] = [seat_agents[0], seat_agents[1]]
     else:
-        agents = [bot_agent, human_agent]
+        # Seeded from the game seed, so a recorded game replays the same way.
+        bot_agent = RandomAgent(rng=bot_rng(seed))
+        if human_player_id == 0:
+            agents = [human_agent, bot_agent]
+        else:
+            agents = [bot_agent, human_agent]
 
+    seat_tokens = (
+        {secrets.token_urlsafe(18): seat for seat in seat_agents}
+        if opponent_human else {}
+    )
+    recorder = None
+    if record:
+        recorder = GameRecorder(session_id, {
+            "format": game_format.name,
+            "seed": seed,
+            "max_turns": max_turns,
+            "colors": colors if decks is None else None,
+            "decks": decks,
+            "starting_player_idx": starting_player_idx,
+            "opponent": "human" if opponent_human else "bot",
+            "human_seats": sorted(seat_agents) if opponent_human else [human_player_id],
+        }, root=record_root)
+        for seat, agent in {human_player_id: human_agent, **seat_agents}.items():
+            agent.on_answer = _recording(recorder, seat)
     session = InteractiveSession(
         session_id=session_id,
         human_player_id=human_player_id,
         human_agent=human_agent,
         game_thread=threading.Thread(target=None, daemon=True),  # replaced below
+        seat_agents=seat_agents,
+        seat_tokens=seat_tokens,
+        recorder=recorder,
     )
     session_box.append(session)
 
@@ -497,7 +702,9 @@ def create_session(
         try:
             state = simulate_game(
                 agents=agents,
-                colors=colors,
+                colors=colors if decks is None else None,
+                decks=decks,
+                game_format=game_format,
                 seed=seed,
                 max_turns=max_turns,
                 on_snapshot=lambda s: session.update_snapshot(enrich_fn(s)),
@@ -506,16 +713,20 @@ def create_session(
                 # otherwise plays-during-a-step look like no-ops in the UI
                 # until the step ends.
                 snapshot_granularity="priority",
+                starting_player_idx=starting_player_idx,
             )
-            session.mark_over({
+            result = {
                 "winner_id": state.winner_id,
                 "is_draw": state.is_draw,
                 "turn_number": state.turn_number,
-            })
+            }
         except SessionTimeoutError:
-            session.mark_over({"timed_out": True})
+            result = {"timed_out": True}
         except Exception as exc:  # noqa: BLE001
-            session.mark_over({"error": str(exc)})
+            result = {"error": str(exc)}
+        session.mark_over(result)
+        if recorder is not None:
+            recorder.finish(result)
 
     t = threading.Thread(target=run, daemon=True, name=f"game-{session_id[:8]}")
     # Replace the placeholder thread

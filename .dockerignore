@@ -1,0 +1,24 @@
+# Keep the image small: only what the website needs (src and data/ for the
+# Fish card pool), no local data, training output, tests or secrets.
+.git
+.venv*
+**/__pycache__
+*.pyc
+feedback
+fish-data
+replays
+training_progress
+training_data*
+trained_weights*
+iterate_data*
+data/card_images
+data/17lands
+data/cube
+tests
+tests-js
+tests_rust
+rust
+docs
+scripts
+node_modules
+.env
