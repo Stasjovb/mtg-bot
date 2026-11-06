@@ -73,6 +73,16 @@
       </table>
     </div>
   </section>
+  <section id="fish-tabs" class="fish-tabs hidden">
+    <div class="fish-tab-bar">
+      <button type="button" class="fish-tab active" data-fish-tab="graveyard">Graveyard <span id="fish-count-graveyard"></span></button>
+      <button type="button" class="fish-tab" data-fish-tab="exile">Exile <span id="fish-count-exile"></span></button>
+      <button type="button" class="fish-tab" data-fish-tab="log">Log</button>
+    </div>
+    <div id="fish-pane-graveyard" class="fish-pane"></div>
+    <div id="fish-pane-exile" class="fish-pane hidden"></div>
+    <div id="fish-pane-log" class="fish-pane hidden"></div>
+  </section>
   <aside id="log-panel" class="log-panel hidden">
     <h2>Log</h2>
     <div id="log-body" class="log-body"></div>
@@ -116,8 +126,26 @@
 <button type="button" id="tab-play">Play</button>
 <form id="iplay-form" autocomplete="off">
   <input id="iplay-seed" type="number" value="0">
-  <select id="iplay-player-id"><option value="0" selected>0</option></select>
+  <input type="hidden" id="iplay-format" value="forgetful_fish">
+  <select id="iplay-player-id">
+    <option value="random" selected>random</option><option value="0">0</option><option value="1">1</option>
+  </select>
+  <select id="iplay-starting-player">
+    <option value="random" selected>random</option><option value="0">0</option><option value="1">1</option>
+  </select>
+  <select id="iplay-opponent"><option value="bot" selected>bot</option><option value="human">human</option></select>
   <input id="iplay-max-turns" type="number" value="200">
+  <select id="iplay-bot-hand"><option value="hidden" selected>hidden</option><option value="shown">shown</option></select>
+  <input type="checkbox" id="iplay-record">
+  <textarea id="iplay-decklist"></textarea>
+  <button type="button" id="iplay-check-decklist">Check list</button>
+  <button type="button" id="iplay-load-saved">Load saved list</button>
+  <button type="button" id="iplay-load-placeholder">Load placeholder list</button>
+  <div id="iplay-decklist-report"></div>
+  <div id="iplay-share" class="share-box hidden">
+    <input id="iplay-share-link" type="text" readonly>
+    <button type="button" id="iplay-share-copy">Copy link</button>
+  </div>
 </form>
 
 <!-- Interactive-play decision panel + modal. Same null-guard rationale. -->
@@ -132,3 +160,14 @@
   <span id="decision-modal-title"></span>
   <div id="decision-modal-body"></div>
 </div>
+
+<!-- Feedback dialog (the Feedback button and its form). -->
+<button type="button" id="feedback-open">Feedback</button>
+<dialog id="feedback-dialog">
+  <textarea id="feedback-text"></textarea>
+  <input type="file" id="feedback-files" multiple>
+  <div id="feedback-thumbs"></div>
+  <span id="feedback-status"></span>
+  <button type="button" id="feedback-send">Send</button>
+  <button type="button" id="feedback-cancel">Cancel</button>
+</dialog>
