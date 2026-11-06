@@ -345,8 +345,8 @@ function findPrevTurnIdx() {
   return i;
 }
 
-async function fetchJSON(url) {
-  const r = await fetch(url);
+async function fetchJSON(url, headers = {}) {
+  const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
@@ -1991,15 +1991,16 @@ elsI.shareCopy.addEventListener('click', async () => {
   }
 });
 
-// Opening a shared link (?join=<game>&token=<seat token>) takes that seat.
+// Opening a shared link (?join=<game>#token=<seat token>) takes that seat.
+// The token sits in the fragment, which browsers never send to the server.
 async function joinFromLink() {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get('join');
-  const token = params.get('token');
+  const token = new URLSearchParams(window.location.hash.slice(1)).get('token');
   if (!sessionId || !token) return;
   let state;
   try {
-    state = await fetchJSON(`/api/interactive/state/${sessionId}?token=${encodeURIComponent(token)}`);
+    state = await fetchJSON(`/api/interactive/state/${sessionId}`, { 'X-Seat-Token': token });
   } catch (e) {
     document.getElementById('tab-play').click();
     setStatus('This game link is no longer valid', 'loss');
@@ -2081,8 +2082,8 @@ function schedulePoll() {
 async function pollState() {
   if (!iplay) return;
   try {
-    const tokenQuery = iplay.token ? `?token=${encodeURIComponent(iplay.token)}` : '';
-    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}${tokenQuery}`);
+    const headers = iplay.token ? { 'X-Seat-Token': iplay.token } : {};
+    const state = await fetchJSON(`/api/interactive/state/${iplay.sessionId}`, headers);
     handleState(state);
   } catch (e) {
     setStatus('Poll error: ' + e.message, 'loss');

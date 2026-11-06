@@ -648,7 +648,8 @@ def create_app(
             join_token = tokens[1 - human_player]
             payload["token"] = tokens[human_player]
             payload["join_token"] = join_token
-            payload["join_path"] = f"/?join={session.session_id}&token={join_token}"
+            # The token is in the fragment: browsers do not send it to the server.
+            payload["join_path"] = f"/?join={session.session_id}#token={join_token}"
         return jsonify(payload)
 
     @app.route("/api/interactive/state/<session_id>")
@@ -663,7 +664,8 @@ def create_app(
         if session is None:
             abort(404, description="unknown session_id")
         try:
-            return jsonify(session.get_state(request.args.get("token")))
+            # The seat's token is a header, so it stays out of the URL and logs.
+            return jsonify(session.get_state(request.headers.get("X-Seat-Token")))
         except PermissionError as exc:
             abort(403, description=str(exc))
 

@@ -102,11 +102,13 @@ def test_watch_game_starts_with_the_chosen_player(client):
 def test_a_game_against_a_person_gives_each_seat_a_token_and_a_join_link(client):
     data = _new_pvp(client, human_player=0)
     assert data["token"] != data["join_token"]
+    # The token is in the fragment, so the server never sees it in the URL.
     assert data["join_path"] == (
-        f"/?join={data['session_id']}&token={data['join_token']}"
+        f"/?join={data['session_id']}#token={data['join_token']}"
     )
     joined = client.get(
-        f"/api/interactive/state/{data['session_id']}?token={data['join_token']}",
+        f"/api/interactive/state/{data['session_id']}",
+        headers={"X-Seat-Token": data["join_token"]},
     )
     assert joined.status_code == 200
     assert joined.get_json()["human_player_id"] == 1
@@ -115,7 +117,8 @@ def test_a_game_against_a_person_gives_each_seat_a_token_and_a_join_link(client)
 def test_missing_or_wrong_token_is_refused(client):
     sid = _new_pvp(client)["session_id"]
     assert client.get(f"/api/interactive/state/{sid}").status_code == 403
-    assert client.get(f"/api/interactive/state/{sid}?token=nope").status_code == 403
+    wrong = client.get(f"/api/interactive/state/{sid}", headers={"X-Seat-Token": "nope"})
+    assert wrong.status_code == 403
     r = client.post(f"/api/interactive/action/{sid}", json={"response": {"idx": 0}})
     assert r.status_code == 403
 
@@ -125,7 +128,9 @@ def test_each_seat_sees_only_its_own_hand(client):
     sid = data["session_id"]
 
     def snapshot_for(token):
-        state = client.get(f"/api/interactive/state/{sid}?token={token}").get_json()
+        state = client.get(
+            f"/api/interactive/state/{sid}", headers={"X-Seat-Token": token},
+        ).get_json()
         return state["snapshot"]
 
     def started():
