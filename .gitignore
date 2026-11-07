@@ -38,6 +38,9 @@ Thumbs.db
 .env
 .env.local
 
+# Website accounts (salted password hashes; never commit)
+accounts/
+
 # Scryfall card image cache (regenerate via scripts/fetch_card_images.py)
 data/card_images/
 

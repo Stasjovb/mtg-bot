@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forgetful Fish - {{ 'Create an account' if mode == 'register' else 'Log in' }}</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --fg: #1d1d1f; --card: #ffffff; --line: #d6d2c8;
+    --accent: #2d6a4f; --err: #b00020;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16181a; --fg: #eceae4; --card: #22262a; --line: #3b4147;
+      --accent: #6fbf8f; --err: #ff8a8a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181a; --fg: #eceae4; --card: #22262a; --line: #3b4147;
+    --accent: #6fbf8f; --err: #ff8a8a;
+  }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    padding: 16px; box-sizing: border-box; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main {
+    width: 100%; max-width: 360px; box-sizing: border-box; padding: 24px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 12px; }
+  label { display: block; margin: 14px 0 4px; font-size: 0.9rem; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 10px; font-size: 1rem;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+  }
+  button {
+    width: 100%; margin-top: 18px; padding: 11px; font-size: 1rem; border: 0;
+    border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer;
+  }
+  .error { color: var(--err); margin: 14px 0 0; }
+  .hint { margin: 6px 0 0; font-size: 0.8rem; opacity: 0.75; }
+  .switch { margin: 18px 0 0; font-size: 0.9rem; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ 'Create an account' if mode == 'register' else 'Log in' }}</h1>
+  <form method="post" action="{{ '/register' if mode == 'register' else '/login' }}">
+    <label for="username">User name</label>
+    <input id="username" name="username" value="{{ username }}" required
+           maxlength="24" autocomplete="username"
+           {% if mode == 'register' %}minlength="3" pattern="[A-Za-z0-9_\-]+"{% endif %}>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required maxlength="200"
+           autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}"
+           {% if mode == 'register' %}minlength="8"{% endif %}>
+    {% if mode == 'register' %}
+    <label for="invite_code">Invite code</label>
+    <input id="invite_code" name="invite_code" type="password" required autocomplete="off">
+    <p class="hint">Ask the person who runs the site for the invite code.</p>
+    {% endif %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <button type="submit">{{ 'Create account' if mode == 'register' else 'Log in' }}</button>
+  </form>
+  <p class="switch">
+    {% if mode == 'register' %}
+      Already have an account? <a href="/login">Log in</a>
+    {% else %}
+      New here? <a href="/register">Create an account</a>
+    {% endif %}
+  </p>
+</main>
+</body>
+</html>

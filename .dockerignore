@@ -5,6 +5,7 @@
 **/__pycache__
 *.pyc
 feedback
+accounts
 fish-data
 replays
 training_progress

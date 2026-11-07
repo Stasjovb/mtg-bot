@@ -1,11 +1,11 @@
 # Putting the Forgetful Fish website online
 
-**Status: nothing is deployed, and the site is not public.** Two decisions are
-yours before it goes live:
+**Status:** running from this PC behind a Cloudflare tunnel (section 4). No other
+host is chosen. Two decisions are yours:
 
 1. **Where it runs.** The options are below, with their trade-offs.
-2. **Public, or private behind a password.** Set `MTG_BOT_ACCESS_PASSWORD` to
-   keep it private.
+2. **Who may get in.** Set `MTG_BOT_INVITE_CODE` so people need an account
+   (section 2b). Without it the site is open to anyone who can reach it.
 
 ## 1. Check it on this PC first
 
@@ -27,10 +27,30 @@ The server reads these environment variables. Empty values count as unset.
 | `MTG_BOT_CARD_POOL` | Card pool. Keep `fish`. | `fish` |
 | `MTG_BOT_FEEDBACK_DIR` | Where Feedback reports and `REVIEW_LIST.md` are written. Use a folder that survives restarts. | `feedback/` in the working folder |
 | `MTG_BOT_REPLAYS_ROOT` | Folder the replay list reads. | `replays/` in the working folder |
-| `MTG_BOT_SECRET_KEY` | Flask secret key. Nothing uses sessions yet. Set a long random value. | random per start |
-| `MTG_BOT_ACCESS_PASSWORD` | When set, every page asks for this password (any user name). When unset, anyone who can reach the site can use it. | unset (open) |
+| `MTG_BOT_SECRET_KEY` | Flask secret key, which signs the log-in cookies. Set a long random value so log-ins survive restarts. | random per start |
+| `MTG_BOT_INVITE_CODE` | When set, the site has accounts (section 2b) and every page needs a log-in. The code people type to register. | unset (no accounts) |
+| `MTG_BOT_ACCOUNTS_FILE` | The accounts file. Put it on the `/data` volume. | `accounts/accounts.json` in the working folder |
+| `MTG_BOT_ACCESS_PASSWORD` | Without accounts: every page asks for this password (any user name). Ignored when `MTG_BOT_INVITE_CODE` is set. | unset (open) |
 
-The health check is `/healthz`. It never asks for the password.
+The health check is `/healthz`. It never asks for the password or a log-in.
+
+### 2b. Accounts
+
+With `MTG_BOT_INVITE_CODE` set:
+
+- Every page and API route needs a log-in. Visitors land on `/login`.
+- People create an account at `/register` with a user name (3-24 letters,
+  digits, `_` or `-`), a password (8-200 characters) and the invite code. You
+  give them the invite code yourself; it is the only way to register.
+- Passwords are stored only as salted scrypt hashes. The accounts file also
+  holds user names and creation times, so keep it out of git.
+- A log-in lasts 30 days. `/logout` ends it.
+- Limits, in memory and reset on restart: 8 failed log-ins for one user name
+  within 15 minutes lock that name for the rest of the window; 20 wrong invite
+  codes within 15 minutes stop all registrations for the same window.
+- There is no password reset and no e-mail. To remove an account, stop the
+  server, delete its entry in the accounts file, and start the server again.
+  The person can then register again with the same user name.
 
 ## 3. Run it with Docker
 
@@ -46,7 +66,8 @@ Run it. Keep the `/data` volume: feedback and replays live there.
 docker run -d --restart unless-stopped -p 8080:8080 \
   -v fish-data:/data \
   -e MTG_BOT_SECRET_KEY="a-long-random-value" \
-  -e MTG_BOT_ACCESS_PASSWORD="the-password-for-your-friends" \
+  -e MTG_BOT_INVITE_CODE="the-invite-code-for-your-friends" \
+  -e MTG_BOT_ACCOUNTS_FILE=/data/accounts.json \
   fish-website
 ```
 
@@ -68,8 +89,9 @@ so choose at least 1 GB. We have not tested several games at once.
 
 ## 5. HTTPS
 
-Basic authentication sends the password with every request. Only use
-`MTG_BOT_ACCESS_PASSWORD` behind HTTPS. A VPS with Caddy gets HTTPS
+Log-ins send the password (and the invite code, at registration) with every
+request. Only run the site behind HTTPS, with `MTG_BOT_INVITE_CODE` or
+`MTG_BOT_ACCESS_PASSWORD`. A VPS with Caddy gets HTTPS
 automatically; a tunnel provides it too. Plain HTTP on the internet would
 expose the password.
 
@@ -92,7 +114,8 @@ volume keeps feedback and replays across restarts.
   20,000 characters), but there is no total cap and no rate limit.
 - **Card images come from Scryfall** at run time, so the host needs outbound
   internet.
-- **One shared password**, no accounts.
+- **Accounts are local.** The accounts file is the only store: no password
+  reset, no e-mail, no admin screen.
 
 ## What is verified
 
@@ -100,5 +123,8 @@ volume keeps feedback and replays across restarts.
   `requirements-web.txt`. `/healthz` answered, a feedback report was saved and
   added to `REVIEW_LIST.md`, and a full replay game was served.
 - The web app does not load torch. `tests/test_web_server.py` checks this.
+- Accounts: `tests/test_accounts.py` (registration, log-in, invite code,
+  throttles, failed saves) and `tests/test_web_server_accounts.py` (the log-in
+  gate, the log-in, register and log-out pages).
 - **Not verified yet:** `docker build` (Docker is not installed on this PC).
   Build it on a machine with Docker before you rely on it.

@@ -10,6 +10,7 @@
 
 <header class="top-bar">
   <h1 class="brand">MTG Bot</h1>
+  {% if session.get('user') %}<a class="logout-link" href="/logout">Log out ({{ session['user'] }})</a>{% endif %}
 
   <div class="mode-tabs" role="tablist">
     <button type="button" id="tab-watch" class="mode-tab active" role="tab"
