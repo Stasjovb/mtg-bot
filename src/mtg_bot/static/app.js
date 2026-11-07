@@ -239,9 +239,16 @@ async function goTo(idx) {
   if (game.playing && idx >= game.snapshotCount - 1) stopPlay();
 }
 
+// The round a snapshot belongs to (mtg_bot.round_numbers): both players' turns
+// share one number. Older snapshots without round_number fall back to the
+// same rule.
+function roundOf(snap) {
+  return snap.round_number ?? Math.ceil(snap.turn_number / 2);
+}
+
 function scrubLabelFor(snap) {
   const step = snap.step || 'setup';
-  return `Turn ${snap.turn_number} · ${step}`;
+  return `Turn ${roundOf(snap)} · ${step}`;
 }
 
 function togglePlay() {
@@ -361,9 +368,9 @@ function setButton(enabled) {
 }
 
 function renderSnapshot(summary, snap) {
-  if (snap.is_draw) setStatus(`Draw — ${snap.turn_number} turns`, 'draw');
-  else if (snap.is_over && snap.winner_id !== null) setStatus(`Player ${snap.winner_id} wins — turn ${snap.turn_number}`, 'win');
-  else setStatus(`Turn ${snap.turn_number} · ${snap.step || '-'}`, 'muted');
+  if (snap.is_draw) setStatus(`Draw — ${roundOf(snap)} rounds`, 'draw');
+  else if (snap.is_over && snap.winner_id !== null) setStatus(`Player ${snap.winner_id} wins — turn ${roundOf(snap)}`, 'win');
+  else setStatus(`Turn ${roundOf(snap)} · ${snap.step || '-'}`, 'muted');
 
   els.board.classList.remove('hidden');
   els.logPanel.classList.remove('hidden');
@@ -2112,12 +2119,12 @@ function handleState(state) {
     const r = state.result || {};
     if (r.timed_out) setStatus('Game timed out', 'loss');
     else if (r.error)  setStatus('Game error: ' + r.error, 'loss');
-    else if (r.is_draw) setStatus(`Draw — ${r.turn_number} turns`, 'draw');
+    else if (r.is_draw) setStatus(`Draw — ${r.round_number} rounds`, 'draw');
     else if (r.winner_id != null) {
       const youWon = r.winner_id === iplay.humanPlayerId;
       const foe = iplay.pvp ? 'Opponent' : 'Bot';
       setStatus(
-        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.turn_number}`,
+        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.round_number}`,
         youWon ? 'win' : 'loss',
       );
     }

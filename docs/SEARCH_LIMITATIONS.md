@@ -56,6 +56,27 @@ and so we have a clear record of WHY each shortcut was taken.
 
 ---
 
+## Display round numbers (`round_numbers.py`, NOT a rules divergence)
+
+What the player sees (status line, scrubber, log turn headers, result text)
+numbers a *round*: both players' turns share one number, so the starting
+player's first turn and the other player's first turn are both "Turn 1".
+The engine's `turn_number` still counts every player's turn (per-turn
+bookkeeping depends on it).
+
+- Location: `src/mtg_bot/round_numbers.py` (`round_of`), used in
+  `serialize.py` (`round_number`), `simulate.py` (log headers),
+  `interactive.py` (result), `static/app.js` (`roundOf`).
+- Shortcut: the round is derived from the parity of `turn_number`. An extra
+  turn (one player taking two in a row) shifts the pairing; the displayed
+  round then runs one behind until the next pair.
+- Failure mode: display only; no game decision reads the round number.
+- Fix scope: a round counter in the engine that advances when both players
+  have had a turn, plus the same per-turn checks moved onto it. Large.
+- Impact: none on play; affects only labels.
+
+---
+
 ## 1. Combat damage assignment is ordered (outdated CR)
 
 **Location**: `src/mtg_bot/combat.py:_resolve_damage_step` (around line 419).

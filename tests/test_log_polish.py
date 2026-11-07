@@ -90,3 +90,31 @@ def test_run_turn_logs_start_of_turn_marker():
     for marker in turn_markers:
         assert ": P" in marker
         assert marker.endswith(" ---")
+
+
+def test_turn_markers_show_the_round_so_both_first_turns_are_turn_1():
+    """The log numbers the round (mtg_bot.round_numbers): the starting
+    player's first turn and the other player's first turn are both
+    ``Turn 1``, and the next pair is ``Turn 2``."""
+    from mtg_bot.simulate import simulate_game
+    from mtg_bot.agents import RandomAgent
+    import random
+
+    state = simulate_game(
+        agents=[
+            RandomAgent(rng=random.Random(0)),
+            RandomAgent(rng=random.Random(1)),
+        ],
+        decks=simple_test_decklists(),
+        seed=0,
+        max_turns=4,
+    )
+    numbers = [
+        int(line.split()[2].rstrip(":"))
+        for line in state.log if line.startswith("--- Turn ")
+    ]
+    assert len(numbers) >= 2
+    assert numbers[0] == 1
+    assert numbers[1] == 1
+    if len(numbers) >= 3:
+        assert numbers[2] == 2
