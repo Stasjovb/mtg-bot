@@ -1929,8 +1929,8 @@ def _offer_echoing_deeps_copy(
 
     candidates: list[tuple[str, int]] = [
         ("graveyard_land_card", c.id)
-        for pp in state.players
-        for c in pp.graveyard
+        for g in state.distinct_graveyards()
+        for c in g
         if c.printing.is_land
     ]
     if not candidates:

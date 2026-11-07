@@ -36,7 +36,7 @@ class CardsNamedInAllGraveyards(Formula):
 
     def value(self, state: "GameState", controller_id: int) -> int:
         return sum(
-            1 for p in state.players for c in p.graveyard
+            1 for g in state.distinct_graveyards() for c in g
             if c.printing.name == self.name
         )
 
@@ -176,9 +176,16 @@ class ReturnPermanentYouControlToHand(Effect):
         chosen = options[0]
         agent = state.player_by_id(controller_id).agent
         if agent is not None and len(options) > 1:
-            pick = agent.choose_sacrifice(
-                state, controller_id, [o.id for o in options],
-            )
+            # An agent that words the choice (the website's human player:
+            # "return a land", not "sacrifice") offers
+            # ``choose_permanent_to_return``; every other agent answers the
+            # generic hook.
+            ids = [o.id for o in options]
+            choose_return = getattr(agent, "choose_permanent_to_return", None)
+            if choose_return is not None:
+                pick = choose_return(state, controller_id, ids, self.label)
+            else:
+                pick = agent.choose_sacrifice(state, controller_id, ids)
             chosen = next((o for o in options if o.id == pick), options[0])
         state.log.append(
             f"P{controller_id} returns {chosen.printing.name} to hand"

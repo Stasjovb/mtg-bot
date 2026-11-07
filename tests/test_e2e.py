@@ -898,8 +898,7 @@ def test_server_error_surfaces_in_status_line(page):
 # trigger that decision naturally.
 
 
-def _start_play_game(page, *, seed=0, my_color="R", bot_color="G",
-                     human=0, max_turns=300):
+def _start_play_game(page, *, seed=0, human=0, max_turns=300):
     """Switch to Play tab, configure, and start an interactive game.
     Returns once iplay is non-null, the board is rendered, AND the
     auto-submit chain has settled on a stable pending decision (so the
@@ -909,8 +908,6 @@ def _start_play_game(page, *, seed=0, my_color="R", bot_color="G",
     each empty-stack priority window early in turn 1."""
     page.click("#tab-play")
     page.fill("#iplay-seed", str(seed))
-    page.select_option("#iplay-my-color", my_color)
-    page.select_option("#iplay-bot-color", bot_color)
     page.select_option("#iplay-player-id", str(human))
     page.fill("#iplay-max-turns", str(max_turns))
     page.click("#iplay-form button[type='submit']")

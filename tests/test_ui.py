@@ -79,11 +79,12 @@ def test_index_returns_200(client):
     assert resp.status_code == 200
 
 
-def test_index_has_form_and_color_options(client):
+def test_index_has_form_without_color_options(client):
+    # Forgetful Fish is the only format on the site, so there are no
+    # colour pickers any more (the colours were Standard-only).
     html = client.get("/").get_data(as_text=True)
     assert "<form" in html
-    for color in ["W", "U", "B", "R", "G"]:
-        assert f'value="{color}"' in html
+    assert 'name="c1"' not in html and 'name="c2"' not in html
 
 
 def test_index_references_static_assets(client):

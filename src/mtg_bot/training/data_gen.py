@@ -1110,12 +1110,16 @@ def _generate_one_game_data(
     deck_p0, deck_p1 = _sample_decks_for_game(
         deck_pool, game_idx, base_seed,
     )
+    from mtg_bot.formats import setup_args_for_decks
+
+    game_decks, game_format = setup_args_for_decks(deck_p0, deck_p1)
     engine = setup_game(
         [
             RandomAgent(rng=random.Random(engine_seed + 1)),
             RandomAgent(rng=random.Random(engine_seed + 2)),
         ],
-        decks=[deck_p0.cards, deck_p1.cards],
+        decks=game_decks,
+        game_format=game_format,
         seed=engine_seed,
         # Alternate the starting seat. Passed into setup (not patched
         # afterwards) so opening-hand actions -- Gemstone Caverns is

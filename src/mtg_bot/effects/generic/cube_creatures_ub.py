@@ -816,7 +816,10 @@ class ExileUpToOneTargetGraveyardCardWithSource(Effect):
         return (0, 1)
 
     def legal_targets(self, state, controller_id):
-        return [("card_in_graveyard", c.id) for p in state.players for c in p.graveyard]
+        return [
+            ("card_in_graveyard", c.id)
+            for g in state.distinct_graveyards() for c in g
+        ]
 
     def resolve(
         self, state: "GameState", controller_id: int,

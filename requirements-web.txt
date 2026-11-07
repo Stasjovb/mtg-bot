@@ -1,0 +1,6 @@
+# What the Forgetful Fish website needs to run (the Docker image installs this).
+# Deliberately without torch: the website never imports it (see
+# tests/test_web_server.py), and torch alone is a multi-gigabyte download.
+flask>=3.0
+numpy>=1.26
+waitress>=3.0

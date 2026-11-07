@@ -110,6 +110,13 @@ def _resolve_target(state: GameState, kind: str, tid: int) -> dict[str, Any]:
     can't be found (already left the battlefield, etc.)."""
     if kind == "player":
         return {"kind": kind, "id": tid, "name": f"Player {tid}"}
+    if kind == "stack":
+        # A spell target is ``("stack", index)`` (counterspells, copies).
+        name = (
+            state.stack[tid].source.printing.name
+            if 0 <= tid < len(state.stack) else None
+        )
+        return {"kind": kind, "id": tid, "name": name}
     for o in state.battlefield:
         if o.id == tid:
             return {"kind": kind, "id": tid, "name": o.printing.name}
@@ -160,6 +167,11 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
         "void_active": is_void_active(state),
         "permanent_left_battlefield_this_turn": state.permanent_left_battlefield_this_turn,
         "spell_warped_this_turn": state.spell_warped_this_turn,
+        # Forgetful Fish: every player's library / graveyard entry above
+        # is the same shared zone; the UI shows it once.
+        "game_format": state.game_format.name,
+        "shared_library": state.game_format.shared_library,
+        "shared_graveyard": state.game_format.shared_graveyard,
         "players": players,
         "stack": [
             {
@@ -181,6 +193,12 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
             for item in state.stack
         ],
         "log": list(state.log),
+        # Forgetful Fish speech bubbles: (log index, player, phrase) per
+        # shared action; empty in other formats.
+        "bubbles": [
+            {"log_index": i, "player_id": pid, "text": text}
+            for i, pid, text in getattr(state.log, "bubbles", [])
+        ],
         "winner_id": state.winner_id,
         "is_draw": state.is_draw,
         "is_over": state.is_over(),

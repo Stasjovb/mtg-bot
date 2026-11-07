@@ -745,7 +745,9 @@ class ShuffleYourLibrary(Effect):
             state.log.append(f"P{controller_id} declines to shuffle")
             return
         shuffle_library(state, controller_id)
-        state.log.append(f"P{controller_id} shuffles their library")
+        state.log.append_with_bubble(
+            f"P{controller_id} shuffles their library", controller_id, "shuffled",
+        )
 
     def describe(self) -> str:
         return "you may shuffle" if self.optional else "shuffle"
