@@ -2787,7 +2787,10 @@ function renderChooseModes(pending) {
 // ---------------------------------------------------------------------------
 
 function renderChooseYesNo(pending) {
-  openDecisionModal('Choose', () => {
+  // A mulligan question (the engine sends ``mulligan``) is answered with
+  // Keep, or with the mulligan itself: "Free mulligan", or "Go to N".
+  const m = pending.mulligan;
+  openDecisionModal(m ? 'Mulligan?' : 'Choose', () => {
     const body = elsI.modalBody;
     body.replaceChildren();
     const p = document.createElement('p');
@@ -2796,15 +2799,27 @@ function renderChooseYesNo(pending) {
     body.appendChild(p);
     const row = document.createElement('div');
     row.className = 'decision-yes-no';
-    const y = document.createElement('button');
-    y.type = 'button'; y.className = 'decision-yes';
-    y.textContent = 'Yes';
-    y.addEventListener('click', () => submitAction({ yes: true }));
-    const n = document.createElement('button');
-    n.type = 'button'; n.className = 'decision-no';
-    n.textContent = 'No';
-    n.addEventListener('click', () => submitAction({ yes: false }));
-    row.append(y, n);
+    if (m) {
+      const keep = document.createElement('button');
+      keep.type = 'button'; keep.className = 'decision-yes';
+      keep.textContent = 'Keep';
+      keep.addEventListener('click', () => submitAction({ yes: false }));
+      const mull = document.createElement('button');
+      mull.type = 'button'; mull.className = 'decision-no';
+      mull.textContent = m.free ? 'Free mulligan' : `Go to ${m.to_hand}`;
+      mull.addEventListener('click', () => submitAction({ yes: true }));
+      row.append(keep, mull);
+    } else {
+      const y = document.createElement('button');
+      y.type = 'button'; y.className = 'decision-yes';
+      y.textContent = 'Yes';
+      y.addEventListener('click', () => submitAction({ yes: true }));
+      const n = document.createElement('button');
+      n.type = 'button'; n.className = 'decision-no';
+      n.textContent = 'No';
+      n.addEventListener('click', () => submitAction({ yes: false }));
+      row.append(y, n);
+    }
     body.appendChild(row);
   });
 }

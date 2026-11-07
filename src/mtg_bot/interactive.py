@@ -409,16 +409,19 @@ class InteractiveAgent(Agent):
     def choose_mulligan(self, state, player_id, hand, mulls_taken):
         lands = sum(1 for c in hand if c.printing.is_land)
         free = state.game_format.is_free_mulligan(hand, mulls_taken)
-        cost = (
-            "free" if free
-            else f"you would put {mulls_taken + 1} card(s) on the bottom"
-        )
+        # A London mulligan puts one card on the bottom per mulligan taken,
+        # this one included; a free mulligan puts none (the hand stays at 7).
+        bottom = 0 if free else mulls_taken + 1
+        cost = "free" if free else f"you would put {bottom} card(s) on the bottom"
         names = ", ".join(c.printing.name for c in hand)
         resp = self._ask(state, {
             "type": "choose_yes_no",
             "prompt": (
                 f"Mulligan this hand ({lands} lands; {cost})? {names}"
             ),
+            # What the answers mean, for the buttons: Keep, Free mulligan, or
+            # Go to N (N = 7 minus the cards put on the bottom).
+            "mulligan": {"free": free, "bottom": bottom, "to_hand": 7 - bottom},
         })
         return bool(resp.get("yes", False))
 
