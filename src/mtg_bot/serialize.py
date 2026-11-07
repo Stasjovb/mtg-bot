@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mtg_bot.round_numbers import round_of
 from mtg_bot.game import (
     GameObject,
     GameState,
@@ -161,6 +162,7 @@ def serialize_state(state: GameState, reveal_hands: bool = True) -> dict[str, An
 
     return {
         "turn_number": state.turn_number,
+        "round_number": round_of(state.turn_number),
         "active_player_idx": state.active_player_idx,
         "priority_player_idx": state.priority_player_idx,
         "step": state.step.value if state.step is not None else None,

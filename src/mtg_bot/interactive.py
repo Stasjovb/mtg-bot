@@ -36,6 +36,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
 from mtg_bot.game_records import GameRecorder
+from mtg_bot.round_numbers import round_of
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
@@ -754,6 +755,7 @@ def create_session(
                 "winner_id": state.winner_id,
                 "is_draw": state.is_draw,
                 "turn_number": state.turn_number,
+                "round_number": round_of(state.turn_number),
             }
         except SessionTimeoutError:
             result = {"timed_out": True}

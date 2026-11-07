@@ -30,6 +30,7 @@ from mtg_bot.conspiracies import (
 from mtg_bot.formats import STANDARD, GameFormat, apply_hand_ownership
 from mtg_bot.game import GameState, Player, Zone
 from mtg_bot.legal import legal_actions
+from mtg_bot.round_numbers import round_of
 from mtg_bot.opening_hand import (
     apply_mulligan_window_actions,
     apply_opening_hand_actions,
@@ -662,7 +663,7 @@ def run_turn(
     ``priority_on_snapshot`` (if set) fires additionally at priority
     boundaries inside each step's priority loop."""
     state.log.append(
-        f"--- Turn {state.turn_number}: P{state.active_player_idx} ---"
+        f"--- Turn {round_of(state.turn_number)}: P{state.active_player_idx} ---"
     )
     step: "Step | None" = STEP_ORDER[0]
     while step is not None:
@@ -797,7 +798,7 @@ def simulate_game(
     while not state.is_over() and state.turn_number <= max_turns:
         if verbose:
             print(
-                f"--- Turn {state.turn_number}, Player {state.active_player_idx} "
+                f"--- Turn {round_of(state.turn_number)}, Player {state.active_player_idx} "
                 f"(life: {[p.life for p in state.players]}, "
                 f"bf: {len(state.battlefield)}) ---"
             )
