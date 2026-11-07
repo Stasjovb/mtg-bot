@@ -154,6 +154,14 @@
   <section class="middle-row" aria-label="Phases">
     <div id="phase-tracker" class="phase-tracker hidden" aria-label="Phase tracker">
       <ol id="phase-list" class="phase-list"></ol>
+      <!-- Right-click the phases: yield toggle and clear stops. -->
+      <div id="phase-menu" class="phase-menu hidden" role="menu" aria-label="Phase options">
+        <button type="button" id="phase-menu-yield" role="menuitemcheckbox" aria-checked="true">
+          <span class="phase-menu-box" aria-hidden="true"></span>
+          Yield when I have no available actions
+        </button>
+        <button type="button" id="phase-menu-clear" role="menuitem">Clear all stops</button>
+      </div>
     </div>
   </section>
   <section class="player-row you" id="row-p0"></section>

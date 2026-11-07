@@ -41,6 +41,9 @@ const els = {
   zoneModalClose: document.getElementById('zone-modal-close'),
   phaseTracker: document.getElementById('phase-tracker'),
   phaseList: document.getElementById('phase-list'),
+  phaseMenu: document.getElementById('phase-menu'),
+  phaseMenuYield: document.getElementById('phase-menu-yield'),
+  phaseMenuClear: document.getElementById('phase-menu-clear'),
   searchPanel: document.getElementById('search-panel'),
   searchToggle: document.getElementById('search-toggle'),
   searchBody: document.getElementById('search-body'),
@@ -239,9 +242,16 @@ async function goTo(idx) {
   if (game.playing && idx >= game.snapshotCount - 1) stopPlay();
 }
 
+// The round a snapshot belongs to (mtg_bot.round_numbers): both players' turns
+// share one number. Older snapshots without round_number fall back to the
+// same rule.
+function roundOf(snap) {
+  return snap.round_number ?? Math.ceil(snap.turn_number / 2);
+}
+
 function scrubLabelFor(snap) {
   const step = snap.step || 'setup';
-  return `Turn ${snap.turn_number} · ${step}`;
+  return `Turn ${roundOf(snap)} · ${step}`;
 }
 
 function togglePlay() {
@@ -361,9 +371,9 @@ function setButton(enabled) {
 }
 
 function renderSnapshot(summary, snap) {
-  if (snap.is_draw) setStatus(`Draw — ${snap.turn_number} turns`, 'draw');
-  else if (snap.is_over && snap.winner_id !== null) setStatus(`Player ${snap.winner_id} wins — turn ${snap.turn_number}`, 'win');
-  else setStatus(`Turn ${snap.turn_number} · ${snap.step || '-'}`, 'muted');
+  if (snap.is_draw) setStatus(`Draw — ${roundOf(snap)} rounds`, 'draw');
+  else if (snap.is_over && snap.winner_id !== null) setStatus(`Player ${snap.winner_id} wins — turn ${roundOf(snap)}`, 'win');
+  else setStatus(`Turn ${roundOf(snap)} · ${snap.step || '-'}`, 'muted');
 
   els.board.classList.remove('hidden');
   els.logPanel.classList.remove('hidden');
@@ -375,6 +385,7 @@ function renderSnapshot(summary, snap) {
   renderStack(els.rowStack, snap);
   renderLog(els.logBody, snap);
   renderFishZones(snap);
+  els.phaseTracker.classList.remove('hidden');
   renderPhaseTracker(snap);
   drawCombatArrows(snap);
   renderSearchPanel(snap);
@@ -859,8 +870,62 @@ function actionsEqual(a, b) {
   }
 }
 
-function renderPhaseTracker(snap) {
-  const cur = snap.step;  // string or null
+// ---------------------------------------------------------------------------
+// The phase bar: stops and yield (play mode). Both are per viewer and kept in
+// localStorage; if storage is unavailable they last only for this page.
+// ---------------------------------------------------------------------------
+
+const PHASE_STOPS_KEY = 'fish.phaseStops';
+const YIELD_KEY = 'fish.yieldNoActions';
+const TRAIL_STEP_MS = 120;   // time per phase in the "phases passed" animation
+const TRAIL_MAX_STEPS = 40;  // the last this-many phases are animated
+
+function loadPhaseStops() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PHASE_STOPS_KEY) || '[]');
+    return new Set(Array.isArray(raw) ? raw.filter(s => typeof s === 'string') : []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function savePhaseStops() {
+  try { localStorage.setItem(PHASE_STOPS_KEY, JSON.stringify([...phaseStops])); }
+  catch (e) { /* storage unavailable: the stops last for this page only */ }
+}
+
+function loadYieldNoActions() {
+  try {
+    const raw = localStorage.getItem(YIELD_KEY);
+    return raw == null ? true : raw === '1';  // on by default: the old behaviour
+  } catch (e) {
+    return true;
+  }
+}
+
+function saveYieldNoActions(on) {
+  try { localStorage.setItem(YIELD_KEY, on ? '1' : '0'); }
+  catch (e) { /* storage unavailable: the setting lasts for this page only */ }
+}
+
+let phaseStops = loadPhaseStops();     // the phases the game always stops at
+let yieldNoActions = loadYieldNoActions();
+let lastPhaseSnap = null;              // the snapshot the phase bar last drew
+let phaseAnimTimer = null;             // the running "phases passed" animation
+
+// Yield: a lone Pass is answered for the player, unless this phase is a stop
+// or the yield option is off (then every priority is shown).
+function shouldYieldHere() {
+  if (!yieldNoActions) return false;
+  const step = lastPhaseSnap ? lastPhaseSnap.step : null;
+  return !(step && phaseStops.has(step));
+}
+
+function renderPhaseTracker(snap, shownStep) {
+  // ``shownStep`` (the animation) highlights another phase; the stops and the
+  // last real snapshot are unchanged by it.
+  if (shownStep === undefined) lastPhaseSnap = snap;
+  const cur = shownStep === undefined ? snap.step : shownStep;  // string or null
   const curIdx = PHASE_STEPS.findIndex(s => s.key === cur);
   els.phaseList.replaceChildren();
   PHASE_STEPS.forEach((step, i) => {
@@ -871,11 +936,89 @@ function renderPhaseTracker(snap) {
       if (i === curIdx) li.classList.add('current');
       else if (i < curIdx) li.classList.add('past');
     }
+    const stop = phaseStops.has(step.key);
+    if (stop) li.classList.add('stop');
+    li.dataset.step = step.key;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-pressed', String(stop));
+    li.tabIndex = 0;
     li.textContent = step.label;
-    li.title = step.key;
+    li.title = stop
+      ? `${step.key}: stop here (click to remove the stop)`
+      : `${step.key}: click to stop here`;
     els.phaseList.appendChild(li);
   });
 }
+
+// Show the phases the game passed since the last decision a human answered,
+// one after another, then the real current phase.
+function animatePhaseTrail(trail) {
+  clearTimeout(phaseAnimTimer);
+  const steps = trail.slice(-TRAIL_MAX_STEPS).map(t => t.step);
+  let i = 0;
+  const tick = () => {
+    if (i >= steps.length) {
+      phaseAnimTimer = null;
+      if (lastPhaseSnap) renderPhaseTracker(lastPhaseSnap);
+      return;
+    }
+    renderPhaseTracker(lastPhaseSnap, steps[i]);
+    i += 1;
+    phaseAnimTimer = setTimeout(tick, TRAIL_STEP_MS);
+  };
+  tick();
+}
+
+function togglePhaseStop(step) {
+  if (phaseStops.has(step)) phaseStops.delete(step);
+  else phaseStops.add(step);
+  savePhaseStops();
+  if (lastPhaseSnap) renderPhaseTracker(lastPhaseSnap);
+}
+
+function openPhaseMenu(x, y) {
+  els.phaseMenuYield.setAttribute('aria-checked', String(yieldNoActions));
+  els.phaseMenu.style.left = `${x}px`;
+  els.phaseMenu.style.top = `${y}px`;
+  els.phaseMenu.classList.remove('hidden');
+}
+
+function closePhaseMenu() {
+  els.phaseMenu.classList.add('hidden');
+}
+
+els.phaseList.addEventListener('click', (ev) => {
+  const li = ev.target.closest('.phase-step');
+  if (li) togglePhaseStop(li.dataset.step);
+});
+els.phaseList.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const li = ev.target.closest('.phase-step');
+  if (!li) return;
+  ev.preventDefault();
+  togglePhaseStop(li.dataset.step);
+});
+els.phaseTracker.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  openPhaseMenu(ev.clientX, ev.clientY);
+});
+els.phaseMenuYield.addEventListener('click', () => {
+  yieldNoActions = !yieldNoActions;
+  saveYieldNoActions(yieldNoActions);
+  els.phaseMenuYield.setAttribute('aria-checked', String(yieldNoActions));
+});
+els.phaseMenuClear.addEventListener('click', () => {
+  phaseStops.clear();
+  savePhaseStops();
+  if (lastPhaseSnap) renderPhaseTracker(lastPhaseSnap);
+  closePhaseMenu();
+});
+document.addEventListener('click', (ev) => {
+  if (!els.phaseMenu.contains(ev.target)) closePhaseMenu();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closePhaseMenu();
+});
 
 function drawCombatArrows(snap) {
   const svg = els.combatOverlay;
@@ -1858,10 +2001,9 @@ function switchMode(toPlay) {
   tabPlay .setAttribute('aria-selected', String( playMode));
   panelWatch.classList.toggle('hidden',  playMode);
   panelPlay .classList.toggle('hidden', !playMode);
-  // Hide the watch scrubber/phase-tracker when entering play mode
+  // Hide the watch scrubber when entering play mode (the phase bar stays)
   if (playMode) {
     els.scrubber    .classList.add('hidden');
-    els.phaseTracker.classList.add('hidden');
   }
 }
 
@@ -2112,12 +2254,12 @@ function handleState(state) {
     const r = state.result || {};
     if (r.timed_out) setStatus('Game timed out', 'loss');
     else if (r.error)  setStatus('Game error: ' + r.error, 'loss');
-    else if (r.is_draw) setStatus(`Draw — ${r.turn_number} turns`, 'draw');
+    else if (r.is_draw) setStatus(`Draw — ${r.round_number} rounds`, 'draw');
     else if (r.winner_id != null) {
       const youWon = r.winner_id === iplay.humanPlayerId;
       const foe = iplay.pvp ? 'Opponent' : 'Bot';
       setStatus(
-        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.turn_number}`,
+        `${youWon ? 'You win' : `${foe} wins`} — turn ${r.round_number}`,
         youWon ? 'win' : 'loss',
       );
     }
@@ -2129,7 +2271,7 @@ function handleState(state) {
   if (state.pending) {
     elsI.waiting.classList.add('hidden');
     elsI.body   .classList.remove('hidden');
-    renderDecision(state.pending);
+    renderDecision(state.pending, state.trail || []);
   } else {
     elsI.body   .classList.add('hidden');
     elsI.waiting.classList.remove('hidden');
@@ -2141,7 +2283,7 @@ function handleState(state) {
 // Submit a response to the current pending decision
 // ---------------------------------------------------------------------------
 
-async function submitAction(response) {
+async function submitAction(response, options = {}) {
   // One answer per decision: a double click, or a click on a card whose
   // board the next poll hasn't redrawn yet, must not answer the next
   // decision with this one's option index.
@@ -2152,7 +2294,7 @@ async function submitAction(response) {
   elsI.body   .classList.add('hidden');
   try {
     await postJSON(`/api/interactive/action/${iplay.sessionId}`,
-                   { response, seq: iplay.pendingSeq, token: iplay.token });
+                   { response, seq: iplay.pendingSeq, token: iplay.token, auto: !!options.auto });
   } catch (e) {
     // 409: the game had already moved past that decision; just re-poll.
     // Any other failure: the decision is still open, so allow a retry.
@@ -2168,7 +2310,7 @@ async function submitAction(response) {
 // Decision rendering — top-level dispatcher
 // ---------------------------------------------------------------------------
 
-function renderDecision(pending) {
+function renderDecision(pending, trail = []) {
   const type = pending.type;
   // ``seq`` numbers the decision (``InteractiveAgent.submit_response``).
   // Already answered and the game hasn't taken the answer yet: wait.
@@ -2181,9 +2323,21 @@ function renderDecision(pending) {
   iplay.pendingSeq = pending.seq;
   iplay.answered = false;
 
-  // Auto-submit when there is only one possible choice — no point making the
-  // player click through it (most common case: solo PassPriority).
-  if (type === 'choose_action' && pending.options.length === 1) {
+  // A lone Pass is the common case. It is answered for the player (yield)
+  // unless this phase is a stop or yield is off; then it is shown, with the
+  // phases passed since the last human answer animated first.
+  const solePass = type === 'choose_action' && pending.options.length === 1
+    && pending.options[0].type === 'pass';
+  const autoPass = solePass && shouldYieldHere();
+  if (trail.length && !autoPass && iplay.animatedSeq !== pending.seq) {
+    iplay.animatedSeq = pending.seq;
+    animatePhaseTrail(trail);
+  }
+  if (autoPass) {
+    submitAction({ idx: 0 }, { auto: true }); return;
+  }
+  // Any other single choice is still answered for the player, as before.
+  if (type === 'choose_action' && pending.options.length === 1 && !solePass) {
     submitAction({ idx: 0 }); return;
   }
   if (type === 'choose_target' && pending.options.length === 1 && !pending.can_decline) {

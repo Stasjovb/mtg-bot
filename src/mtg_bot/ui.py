@@ -709,7 +709,9 @@ def create_app(
             agent = session.agent_for(body.get("token"))
         except PermissionError as exc:
             abort(403, description=str(exc))
-        if not agent.submit_response(body["response"], seq=body.get("seq")):
+        if not agent.submit_response(
+            body["response"], seq=body.get("seq"), keep_trail=bool(body.get("auto")),
+        ):
             return jsonify({"ok": False, "stale": True}), 409
         return jsonify({"ok": True})
 

@@ -36,6 +36,7 @@ from mtg_bot.agents import Agent, RandomAgent
 from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
 from mtg_bot.game_records import GameRecorder
+from mtg_bot.round_numbers import round_of
 
 DECISION_TIMEOUT = 600  # 10 minutes of inactivity kills the game thread
 _SESSION_LIMIT = 20     # evict oldest sessions when exceeded
@@ -188,6 +189,9 @@ class InteractiveAgent(Agent):
         # Called with (pending, response) for each answer that is accepted,
         # before the game goes on (the game recorder uses it).
         self.on_answer = None
+        # Called (with no arguments) after an accepted answer: the session
+        # starts a new list of the steps passed (``InteractiveSession.get_state``).
+        self.on_answered = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -213,7 +217,9 @@ class InteractiveAgent(Agent):
         with self._lock:
             return dict(self._pending) if self._pending is not None else None
 
-    def submit_response(self, response: Any, seq: Optional[int] = None) -> bool:
+    def submit_response(
+        self, response: Any, seq: Optional[int] = None, *, keep_trail: bool = False,
+    ) -> bool:
         """Answer the pending decision. With ``seq`` (the ``seq`` of the
         decision the browser showed), an answer to an earlier decision is
         dropped and ``False`` returned: a double click, or a click on a
@@ -230,6 +236,11 @@ class InteractiveAgent(Agent):
             answered = self._pending
         if self.on_answer is not None and answered is not None:
             self.on_answer(answered, response)
+        # An automatic pass (the page yields when there is nothing to do)
+        # keeps the steps passed, so the page can show the phases between
+        # the human's own decisions.
+        if self.on_answered is not None and not keep_trail:
+            self.on_answered()
         self._response_event.set()
         return True
 
@@ -538,6 +549,13 @@ class InteractiveSession:
     seat_tokens: dict = field(default_factory=dict, repr=False)
     # The game recorder when the players chose to record this game (else None).
     recorder: Optional[GameRecorder] = field(default=None, repr=False)
+    # The steps the game went through since the last answer, in order: the
+    # page shows the phases passed between two decisions (``get_state``).
+    _trail: list = field(default_factory=list, repr=False)
+    _trail_last: Optional[tuple] = field(default=None, repr=False)
+
+    # The most steps kept in the trail (a long run without a decision).
+    TRAIL_LIMIT = 200
 
     def update_snapshot(self, snap: dict) -> None:
         with self._lock:
@@ -550,6 +568,21 @@ class InteractiveSession:
                 self._bubble_mark = log_len
             snap["bubbles_since_last"] = list(self._bubbles_since)
             self._snapshot = snap
+            step = snap.get("step")
+            key = (snap.get("turn_number"), step)
+            if step is not None and key != self._trail_last:
+                self._trail.append({
+                    "turn_number": snap.get("turn_number"),
+                    "step": step,
+                    "active_player_idx": snap.get("active_player_idx"),
+                })
+                del self._trail[:-self.TRAIL_LIMIT]
+                self._trail_last = key
+
+    def clear_trail(self) -> None:
+        """A decision was answered: the steps from now on are the next trail."""
+        with self._lock:
+            self._trail = []
 
     def mark_over(self, result: dict) -> None:
         with self._lock:
@@ -590,6 +623,7 @@ class InteractiveSession:
                 "result": self._result,
                 "human_player_id": seat,
                 "recorded": self.recorder is not None,
+                "trail": list(self._trail),
             }
 
     @property
@@ -697,6 +731,8 @@ def create_session(
         recorder=recorder,
     )
     session_box.append(session)
+    for agent in {human_player_id: human_agent, **seat_agents}.values():
+        agent.on_answered = session.clear_trail
 
     def run() -> None:
         try:
@@ -719,6 +755,7 @@ def create_session(
                 "winner_id": state.winner_id,
                 "is_draw": state.is_draw,
                 "turn_number": state.turn_number,
+                "round_number": round_of(state.turn_number),
             }
         except SessionTimeoutError:
             result = {"timed_out": True}
