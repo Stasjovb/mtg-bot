@@ -1014,27 +1014,32 @@ els.phaseList.addEventListener('keydown', (ev) => {
   ev.preventDefault();
   togglePhaseStop(li.dataset.step);
 });
-els.phaseTracker.addEventListener('contextmenu', (ev) => {
-  ev.preventDefault();
-  openPhaseMenu(ev.clientX, ev.clientY);
-});
-els.phaseMenuYield.addEventListener('click', () => {
-  yieldNoActions = !yieldNoActions;
-  saveYieldNoActions(yieldNoActions);
-  els.phaseMenuYield.setAttribute('aria-checked', String(yieldNoActions));
-});
-els.phaseMenuClear.addEventListener('click', () => {
-  phaseStops.clear();
-  savePhaseStops();
-  if (lastPhaseSnap) renderPhaseTracker(lastPhaseSnap);
-  closePhaseMenu();
-});
-document.addEventListener('click', (ev) => {
-  if (!els.phaseMenu.contains(ev.target)) closePhaseMenu();
-});
-document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') closePhaseMenu();
-});
+// The right-click menu is optional: a page that was rendered before the menu
+// existed (a server that has not been restarted since an update) must still
+// get the rest of this script, including the tab handlers below.
+if (els.phaseMenu && els.phaseMenuYield && els.phaseMenuClear) {
+  els.phaseTracker.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    openPhaseMenu(ev.clientX, ev.clientY);
+  });
+  els.phaseMenuYield.addEventListener('click', () => {
+    yieldNoActions = !yieldNoActions;
+    saveYieldNoActions(yieldNoActions);
+    els.phaseMenuYield.setAttribute('aria-checked', String(yieldNoActions));
+  });
+  els.phaseMenuClear.addEventListener('click', () => {
+    phaseStops.clear();
+    savePhaseStops();
+    if (lastPhaseSnap) renderPhaseTracker(lastPhaseSnap);
+    closePhaseMenu();
+  });
+  document.addEventListener('click', (ev) => {
+    if (!els.phaseMenu.contains(ev.target)) closePhaseMenu();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') closePhaseMenu();
+  });
+}
 
 function drawCombatArrows(snap) {
   const svg = els.combatOverlay;
