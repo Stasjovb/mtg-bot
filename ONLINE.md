@@ -107,6 +107,14 @@ you tick `[x]` in your copy of `REVIEW_LIST.md`.
 Pull the new commit, rebuild the image, and restart the container. The `/data`
 volume keeps feedback and replays across restarts.
 
+**Always restart after an update, even without rebuilding.** The server keeps
+the HTML pages it rendered when it started, but it reads the JavaScript and CSS
+from disk on every request. After a `git merge` or `git pull` on a running
+server, the page and the script can come from different versions and the Play
+tab can stop responding. On the home PC: stop the server's Python process and
+start it again with the same command as before. The Cloudflare tunnel can keep
+running; its address does not change when only the server restarts.
+
 ## 8. Known limits
 
 - **One process only.** Games live in memory.
