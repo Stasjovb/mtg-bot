@@ -111,6 +111,11 @@ class GameCache:
         return len(self._games)
 
 
+def _random_seed() -> int:
+    """A fresh game seed: a new shuffle, opening hands and bot choices."""
+    return random.SystemRandom().randrange(2**31)
+
+
 def _parse_int_arg(name: str, default: int) -> int:
     raw = request.args.get(name)
     if raw is None or raw == "":
@@ -122,7 +127,8 @@ def _parse_int_arg(name: str, default: int) -> int:
 
 
 def _validate_play_args() -> tuple[int, int, str, str]:
-    seed = _parse_int_arg("seed", 0)
+    # A blank or missing seed is a random one (the page shows the seed used).
+    seed = _parse_int_arg("seed", 0) if request.args.get("seed", "").strip() else _random_seed()
     max_turns = _parse_int_arg("max_turns", 300)
     c1 = request.args.get("c1", "G")
     c2 = request.args.get("c2", "R")
@@ -586,7 +592,8 @@ def create_app(
             [_fish_library(body.get("decklist"))]
             if game_format.shared_library else None
         )
-        seed = int(body.get("seed", 0))
+        raw_seed = body.get("seed")
+        seed = _random_seed() if raw_seed in (None, "") else int(raw_seed)
         c1 = body.get("c1", "G")
         c2 = body.get("c2", "R")
         if c1 not in COLORS:
