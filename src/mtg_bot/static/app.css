@@ -141,7 +141,7 @@ body { display: grid; grid-template-columns: 1fr 460px;
 .side-panel .pname { font-weight: 600; color: var(--accent); font-size: 1em; }
 .side-panel .pname.winner { color: var(--win); }
 .side-panel .pname.loser  { color: var(--loss); }
-.life { font-size: 2.8em; font-weight: 700; text-align: center; line-height: 1;
+.life { font-size: 3.4em; font-weight: 700; text-align: center; line-height: 1;
         padding: 0.08em 0; }
 .life.low  { color: var(--loss); }
 .life.high { color: var(--win); }
@@ -667,6 +667,10 @@ body.fish-mode { grid-template-columns: 1fr minmax(360px, 600px); }
 .action-btn-station     { background: #2a3a3a; }
 .action-btn-pass        { background: var(--bg); color: var(--muted);
                           margin-left: auto; border: 1px solid var(--panel-edge); }
+/* Pass chains (Next stop, End turn) are brighter than the plain pass. */
+.action-btn-chain { background: #2a3550; color: var(--ink);
+                    border: 1px solid #3d4f78; margin-left: 0; }
+.action-btn-chain:hover { filter: brightness(1.25); }
 
 /* Decision modal (reuses .zone-modal styles + overrides) */
 .decision-modal-inner { max-width: 560px; }
@@ -758,6 +762,9 @@ body.fish-mode { grid-template-columns: 1fr minmax(360px, 600px); }
   outline-width: 3px;
   filter: brightness(1.15);
 }
+/* Play: a larger hand, and the cards you can play lift out of it (Arena style). */
+.hand { --card-w: 150px; --card-h: 210px; }
+.hand .card.actionable { transform: translateY(-10px); }
 @keyframes actionable-pulse {
   0%, 100% { box-shadow: 0 0 8px rgba(212, 196, 106, 0.4); }
   50%      { box-shadow: 0 0 16px rgba(212, 196, 106, 0.75); }

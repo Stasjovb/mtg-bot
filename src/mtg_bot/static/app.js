@@ -913,12 +913,28 @@ let yieldNoActions = loadYieldNoActions();
 let lastPhaseSnap = null;              // the snapshot the phase bar last drew
 let phaseAnimTimer = null;             // the running "phases passed" animation
 
+// Pass modes, set by the buttons next to a decision. "stop" passes until the
+// next stop phase; "turn" passes until the active player changes (End turn).
+// Either ends at a stop, when the other player's turn starts, or at the first
+// decision with a real choice.
+let passMode = null;          // null | 'stop' | 'turn'
+let passModeActive = null;    // the active player when End turn was pressed
+
 // Yield: a lone Pass is answered for the player, unless this phase is a stop
-// or the yield option is off (then every priority is shown).
+// or the yield option is off (then every priority is shown). A pass mode
+// overrides the yield option, but never a stop.
 function shouldYieldHere() {
-  if (!yieldNoActions) return false;
-  const step = lastPhaseSnap ? lastPhaseSnap.step : null;
-  return !(step && phaseStops.has(step));
+  const snap = lastPhaseSnap;
+  const atStop = !!(snap && snap.step && phaseStops.has(snap.step));
+  if (passMode) {
+    if (atStop) { passMode = null; return false; }
+    if (passMode === 'turn' && snap && snap.active_player_idx !== passModeActive) {
+      passMode = null;
+      return false;
+    }
+    return true;
+  }
+  return yieldNoActions && !atStop;
 }
 
 function renderPhaseTracker(snap, shownStep) {
@@ -2328,6 +2344,8 @@ function renderDecision(pending, trail = []) {
   // phases passed since the last human answer animated first.
   const solePass = type === 'choose_action' && pending.options.length === 1
     && pending.options[0].type === 'pass';
+  // A decision with a real choice ends a pass mode: the player is asked.
+  if (passMode && !solePass) passMode = null;
   const autoPass = solePass && shouldYieldHere();
   if (trail.length && !autoPass && iplay.animatedSeq !== pending.seq) {
     iplay.animatedSeq = pending.seq;
@@ -2439,8 +2457,35 @@ function renderChooseAction(pending) {
     passBtn.type = 'button';
     passBtn.className = 'action-btn action-btn-pass';
     passBtn.textContent = 'Pass priority (Space)';
-    passBtn.addEventListener('click', () => submitAction({ idx: passOpt.idx }));
+    passBtn.addEventListener('click', () => {
+      passMode = null;
+      submitAction({ idx: passOpt.idx });
+    });
     elsI.options.appendChild(passBtn);
+
+    // MTGO-style pass chains: pass until the next stop, or until the turn ends.
+    const stopBtn = document.createElement('button');
+    stopBtn.type = 'button';
+    stopBtn.className = 'action-btn action-btn-pass action-btn-chain';
+    stopBtn.textContent = 'Next stop';
+    stopBtn.title = 'Pass until the next phase you have stopped at, or until you have a choice';
+    stopBtn.addEventListener('click', () => {
+      passMode = 'stop';
+      submitAction({ idx: passOpt.idx });
+    });
+    elsI.options.appendChild(stopBtn);
+
+    const turnBtn = document.createElement('button');
+    turnBtn.type = 'button';
+    turnBtn.className = 'action-btn action-btn-pass action-btn-chain';
+    turnBtn.textContent = 'End turn';
+    turnBtn.title = "Pass until the other player's turn starts, or until you have a choice";
+    turnBtn.addEventListener('click', () => {
+      passMode = 'turn';
+      passModeActive = lastPhaseSnap ? lastPhaseSnap.active_player_idx : null;
+      submitAction({ idx: passOpt.idx });
+    });
+    elsI.options.appendChild(turnBtn);
   }
 
   // Highlight clickable cards in hand.
