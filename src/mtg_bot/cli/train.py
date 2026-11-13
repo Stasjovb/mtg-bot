@@ -1228,8 +1228,10 @@ def main(argv=None) -> None:
     # ``runs.label`` column carries the registry version label
     # (e.g. ``v10``) so the UI can still group successive train
     # attempts of the same version together; ``run_id`` is the unique
-    # timestamped form so the UNIQUE constraint never collides.
-    with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
+    # timestamped form so the UNIQUE constraint never collides. The staging
+    # folder lives under the registry root, not the system Temp folder, which
+    # other tools clean up while a long training run is still writing to it.
+    with tempfile.TemporaryDirectory(prefix="stage_", dir=args.registry_root) as tmp, _lifecycle.run_lifecycle(
         run_id=train_run_id,
         kind="training",
         config=train_config,
@@ -1777,7 +1779,7 @@ def _main_structured(args, parser) -> None:
         )
 
     try:
-      with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
+      with tempfile.TemporaryDirectory(prefix="stage_", dir=args.registry_root) as tmp, _lifecycle.run_lifecycle(
         run_id=train_run_id,
         kind="training",
         config=train_config,
