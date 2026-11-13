@@ -24,7 +24,7 @@
   <!-- Watch mode form -->
   <form id="play-form" class="play-form mode-panel" role="tabpanel"
         aria-labelledby="tab-watch" autocomplete="off">
-    <label>Seed <input type="number" name="seed" value="0"></label>
+    <label>Seed <input type="number" name="seed" value="" placeholder="random"></label>
     <input type="hidden" name="format" value="forgetful_fish">
     <label>Who goes first
       <select name="starting_player">
@@ -60,7 +60,7 @@
   <!-- Play mode form -->
   <form id="iplay-form" class="play-form mode-panel hidden" role="tabpanel"
         aria-labelledby="tab-play" autocomplete="off">
-    <label>Seed <input type="number" id="iplay-seed" value="0"></label>
+    <label>Seed <input type="number" id="iplay-seed" value="" placeholder="random"></label>
     <input type="hidden" id="iplay-format" value="forgetful_fish">
     <label>You are
       <select id="iplay-player-id">

@@ -2198,7 +2198,7 @@ async function startInteractiveGame() {
   elsI.form.querySelector('button').disabled = true;
   try {
     const body = {
-      seed:         parseInt(elsI.seed.value, 10) || 0,
+      seed:         elsI.seed.value.trim() === '' ? null : parseInt(elsI.seed.value, 10),
       human_player: elsI.playerId.value,
       starting_player: elsI.startingPlayer.value,
       opponent:     elsI.opponent.value,
@@ -2209,6 +2209,8 @@ async function startInteractiveGame() {
     };
     body.decklist = elsI.decklist.value;
     const data = await postJSON('/api/interactive/new', body);
+    // Show the seed the game used, so it can be typed again to replay it.
+    if (data.seed != null) elsI.seed.value = String(data.seed);
     iplay = {
       sessionId:     data.session_id,
       humanPlayerId: data.human_player_id,
