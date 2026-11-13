@@ -208,6 +208,18 @@ def cmd_train(args) -> int:
     ]
     if args.window_files:
         cmd += ["--window-recent-files", str(args.window_files)]
+    # Early stopping and the regularisation options (the trainer's own defaults
+    # apply when an option is left out).
+    cmd += ["--early-stop-patience", str(getattr(args, "early_stop_patience", 3))]
+    for flag, attr in (
+        ("--lr", "lr"),
+        ("--dropout", "dropout"),
+        ("--weight-decay", "weight_decay"),
+        ("--value-target", "value_target"),
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            cmd += [flag, str(value)]
     env = dict(os.environ)
     if args.threads:
         env["MTG_BOT_TRAIN_CPU_THREADS"] = str(args.threads)
@@ -353,6 +365,14 @@ def main(argv=None) -> int:
                    help="train on the N newest data files only")
     t.add_argument("--threads", type=int, default=None,
                    help="torch CPU threads (MTG_BOT_TRAIN_CPU_THREADS)")
+    t.add_argument("--early-stop-patience", type=int, default=3,
+                   help="stop after this many epochs without a better holdout value loss")
+    t.add_argument("--lr", type=float, default=None, help="learning rate (trainer default)")
+    t.add_argument("--dropout", type=float, default=None, help="dropout (trainer default)")
+    t.add_argument("--weight-decay", type=float, default=None,
+                   help="AdamW weight decay (trainer default)")
+    t.add_argument("--value-target", default=None,
+                   help="what the value head learns: outcome (default) or root")
     lp = sub.add_parser("loop", help="rounds of gen -> train -> eval -> promote")
     lp.add_argument("--rounds", type=int, default=1)
     lp.add_argument("--until", default=None, metavar="HH:MM",
