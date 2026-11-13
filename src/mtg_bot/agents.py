@@ -64,6 +64,17 @@ class Agent:
         graveyard, False = leave it on top of the library."""
         raise NotImplementedError
 
+    def choose_scry(
+        self,
+        state: "GameState",
+        player_id: int,
+        top_card_id: int,
+    ) -> bool:
+        """When scrying, decide for the top card: True = put it on the bottom
+        of the library, False = keep it on top. Defaults to the surveil
+        decision, which has the same shape."""
+        return self.choose_surveil(state, player_id, top_card_id)
+
     def choose_sacrifice(
         self,
         state: "GameState",
