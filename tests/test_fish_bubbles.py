@@ -24,6 +24,9 @@ class _ChooseBottom:
     def choose_surveil(self, state, pid, card_id):
         return card_id in self.ids
 
+    def choose_scry(self, state, pid, card_id):
+        return card_id in self.ids
+
 
 # ---------------------------------------------------------------------------
 # The log buffer

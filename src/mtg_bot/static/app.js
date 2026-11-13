@@ -2404,6 +2404,7 @@ function renderDecision(pending, trail = []) {
     case 'choose_discard':    renderChooseDiscardBoard(pending);                                          break;
     case 'choose_sacrifice':  renderChooseObj(pending, pending.prompt || 'Choose a permanent to sacrifice', (id) => submitAction({ id })); break;
     case 'choose_surveil':    renderChooseSurveil(pending);   break;
+    case 'choose_scry':       renderChooseScry(pending);      break;
     case 'choose_mode':       renderChooseMode(pending);      break;
     case 'choose_modes':      renderChooseModes(pending);     break;
     case 'choose_yes_no':     renderChooseYesNo(pending);     break;
@@ -2750,6 +2751,32 @@ function renderChooseTarget(pending) {
 // ---------------------------------------------------------------------------
 // choose_surveil
 // ---------------------------------------------------------------------------
+
+// Scry 1: the card goes on the bottom of the library or stays on top. (Surveil
+// has its own prompt: the graveyard or the top.)
+function renderChooseScry(pending) {
+  openDecisionModal('Scry', () => {
+    const body = elsI.modalBody;
+    body.replaceChildren();
+    const card = pending.card || {};
+    const info = document.createElement('p');
+    info.className = 'decision-hint';
+    info.textContent = `Top of library: ${card.name || '(unknown)'}`;
+    body.appendChild(info);
+    const row = document.createElement('div');
+    row.className = 'decision-yes-no';
+    const btnTop = document.createElement('button');
+    btnTop.type = 'button'; btnTop.className = 'decision-yes';
+    btnTop.textContent = 'Keep on top';
+    btnTop.addEventListener('click', () => submitAction({ bottom: false }));
+    const btnBottom = document.createElement('button');
+    btnBottom.type = 'button'; btnBottom.className = 'decision-no';
+    btnBottom.textContent = 'Put on bottom';
+    btnBottom.addEventListener('click', () => submitAction({ bottom: true }));
+    row.append(btnTop, btnBottom);
+    body.appendChild(row);
+  });
+}
 
 function renderChooseSurveil(pending) {
   openDecisionModal('Surveil', () => {

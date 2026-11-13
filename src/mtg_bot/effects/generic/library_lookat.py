@@ -661,7 +661,7 @@ class Scry(Effect):
             bottom = [
                 c for c in examined
                 if p.agent is not None
-                and p.agent.choose_surveil(state, p.id, c.id)
+                and p.agent.choose_scry(state, p.id, c.id)
             ]
             for c in bottom:
                 p.library.remove(c)

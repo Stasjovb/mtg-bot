@@ -321,6 +321,12 @@ class InteractiveAgent(Agent):
         resp = self._ask(state, {"type": "choose_surveil", "card": card})
         return bool(resp.get("mill", False))
 
+    def choose_scry(self, state, player_id, top_card_id):
+        """Scry 1 (CR 701.18): True = put the card on the bottom of the library."""
+        card = _card_opt(state, top_card_id, self._n2id)
+        resp = self._ask(state, {"type": "choose_scry", "card": card})
+        return bool(resp.get("bottom", False))
+
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         objects = [_bf_opt(state, oid, self._n2id) for oid in legal_object_ids]
         resp = self._ask(state, {"type": "choose_sacrifice", "objects": objects})

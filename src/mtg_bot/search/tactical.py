@@ -73,6 +73,10 @@ class DefaultTacticalAgent(Agent):
         # what the top card is worth.
         return False
 
+    def choose_scry(self, state, player_id, top_card_id):
+        # False = keep on top, as for surveil: the safer default.
+        return False
+
     def choose_sacrifice(self, state, player_id, legal_object_ids):
         return legal_object_ids[0] if legal_object_ids else 0
 
