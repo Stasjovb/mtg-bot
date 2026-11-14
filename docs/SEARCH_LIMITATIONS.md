@@ -20482,13 +20482,16 @@ a `RandomAgent` whose casts of three Fish cards are narrowed by
    to responses (an instant that changes the controller's lands before
    resolution). *Failure mode:* the cast fizzles or does nothing: a card
    lost. *Fix scope:* one-ply lookahead (~1 day). *Impact:* rare.
-3. **Vision Charm is never cast by the bot** (`fish_bot.NEVER_CAST`). Its
-   Island -> X mode turns every Island, so it sacrifices every Dandân, the
-   bot's own included, and the mode is chosen on resolution
-   (`fish_cards.LandsOfChosenTypeBecomeBasicTypeUEOT`), where the bot cannot
-   tell which choice it is making. *Failure mode:* the bot holds the card; a
-   human can still cast it. *Fix scope:* a kill-only rule for that mode
-   choice (~2 h). *Impact:* the bot loses a sweep it would have made.
+3. **Vision Charm is cast only to sacrifice Dandân, and only in its land-type
+   mode** (`fish_bot._vision_charm_kills`, `choose_mode`). Its Island -> X
+   mode turns every Island, so it sacrifices every Dandân, the bot's own
+   included. The bot casts it when the opponent has more Dandân, or when the
+   bot's are all tapped while an opponent's is not (the user's rule). It
+   never picks the mill or artifact mode; those are left to the learning
+   loop. *Failure mode:* the bot never mills or phases out an artifact; a
+   human can still do either. *Fix scope:* the learning loop chooses the mode
+   (part of the NN work). *Impact:* the bot gives up the mill value it would
+   sometimes get.
 4. **"Misses a land drop" is read as "no land in hand", and "fewer than 8"
    counts lands in play** (`fish_bot._accumulated_knowledge_ok`). The bot
    does not count a land the draw might find. *Failure mode:* the bot casts
