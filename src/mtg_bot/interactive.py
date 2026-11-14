@@ -6,7 +6,8 @@ serialising the available options to a dict that the Flask polling endpoint
 returns to the browser.  When the browser POSTs a response the agent is
 unblocked, applies the human choice, and the game thread continues until
 the next decision point (which may be the bot's turn, resolved instantly by
-RandomAgent, or another human decision).
+the bot, a ``FishBotAgent`` (RandomAgent with the Fish card rules), or another
+human decision).
 
 Public surface used by ui.py:
   - ``create_session(...)`` — factory that starts the game thread
@@ -32,7 +33,8 @@ from mtg_bot.actions import (
     PassPriority,
     PlayLand,
 )
-from mtg_bot.agents import Agent, RandomAgent
+from mtg_bot.agents import Agent
+from mtg_bot.fish_bot import FishBotAgent
 from mtg_bot.formats import STANDARD, GameFormat
 from mtg_bot.game import GameState, effective_activated_abilities
 from mtg_bot.game_records import GameRecorder
@@ -679,7 +681,7 @@ def create_session(
     annotate card dicts with scryfall_ids (closure from create_app that
     already has ``name_to_id`` in scope).
 
-    ``human_player_id`` is 0 or 1; the other player gets a ``RandomAgent``.
+    ``human_player_id`` is 0 or 1; the other player gets a ``FishBotAgent``.
     With ``opponent_human`` the other seat is a second person: it gets its
     own agent and each seat gets a secret token (``session.tokens_by_seat``).
     ``starting_player_idx`` is the seat that takes the first turn.
@@ -706,7 +708,7 @@ def create_session(
         agents: list[Agent] = [seat_agents[0], seat_agents[1]]
     else:
         # Seeded from the game seed, so a recorded game replays the same way.
-        bot_agent = RandomAgent(rng=bot_rng(seed))
+        bot_agent = FishBotAgent(rng=bot_rng(seed))
         if human_player_id == 0:
             agents = [human_agent, bot_agent]
         else:
