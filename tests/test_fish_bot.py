@@ -13,7 +13,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.fish_bot import FishBotAgent
 from mtg_bot.game import Zone
 
-from tests._fish_helpers import lands, make_state, place, resolve_all
+from tests._fish_helpers import lands, make_state, place, printing, resolve_all
 
 # Options of Mind Bend on a Dandân (its only word is "Island"): the basic
 # types other than Island, in the order the effect lists them.
@@ -187,14 +187,81 @@ def test_accumulated_knowledge_draws_two_or_more_with_one_in_a_graveyard():
 # Vision Charm and the rest
 # ---------------------------------------------------------------------------
 
-def test_vision_charm_is_never_cast_by_the_bot():
+def _vision_charm_offer(state, bot, *, mine=(), theirs=()):
+    """Offer Vision Charm with the given Dandân states (True = tapped) for
+    each side; return whether the bot offers the cast."""
+    lands(state, 0, "Island", 1)
+    spell = place(state, 0, "Vision Charm", Zone.HAND)
+    for tapped in mine:
+        place(state, 0, "Dandân", tapped=tapped)
+    for tapped in theirs:
+        place(state, 1, "Dandân", tapped=tapped)
+    cast = CastSpell(spell.id)
+    return bot.choose_action(state, 0, [cast, PassPriority()]) == cast
+
+
+def test_vision_charm_is_cast_when_the_opponent_has_more_dandans():
+    bot = _bot()
+    assert _vision_charm_offer(make_state(agent0=bot), bot, theirs=[False])
+
+
+def test_vision_charm_waits_when_the_dandan_counts_are_level():
+    bot = _bot()
+    assert not _vision_charm_offer(
+        make_state(agent0=bot), bot, mine=[False], theirs=[False],
+    )
+
+
+def test_vision_charm_is_cast_when_ours_are_tapped_and_theirs_are_not():
+    bot = _bot()
+    assert _vision_charm_offer(
+        make_state(agent0=bot), bot, mine=[True], theirs=[False],
+    )
+
+
+def test_vision_charm_waits_when_both_sides_are_tapped():
+    bot = _bot()
+    assert not _vision_charm_offer(
+        make_state(agent0=bot), bot, mine=[True], theirs=[True],
+    )
+
+
+def test_vision_charm_waits_without_any_dandan():
+    bot = _bot()
+    assert not _vision_charm_offer(make_state(agent0=bot), bot)
+
+
+def test_vision_charm_is_cast_in_its_land_type_mode():
+    bot = _bot()
+    state = make_state(agent0=bot)
+    modes = [m.describe() for m in printing("Vision Charm").spell_effect.modes]
+    spell = place(state, 0, "Vision Charm", Zone.HAND)
+    place(state, 1, "Dandân")
+    cast = CastSpell(spell.id)
+    assert bot.choose_action(state, 0, [cast, PassPriority()]) == cast
+    land_mode = next(i for i, text in enumerate(modes) if "land type" in text)
+    assert bot.choose_mode(state, 0, modes) == land_mode
+    # At resolution the bot names Island -> one basic type.
+    options = ["Forest -> Plains", "Island -> Plains", "Island -> Swamp"]
+    assert bot.choose_mode(state, 0, options) == 1
+    # Nothing left to name: RandomAgent's choice.
+    assert 0 <= bot.choose_mode(state, 0, ["a", "b"]) < 2
+
+
+def test_vision_charm_cast_by_the_bot_sacrifices_every_dandan():
     bot = _bot()
     state = make_state(agent0=bot)
     lands(state, 0, "Island", 1)
     spell = place(state, 0, "Vision Charm", Zone.HAND)
-    place(state, 1, "Dandân")
+    mine = place(state, 0, "Dandân")
+    theirs = [place(state, 1, "Dandân"), place(state, 1, "Dandân")]
+    place(state, 1, "Island")
     cast = CastSpell(spell.id)
-    assert bot.choose_action(state, 0, [cast, PassPriority()]) == PassPriority()
+    assert bot.choose_action(state, 0, [cast, PassPriority()]) == cast
+    apply_action(state, 0, cast)
+    resolve_all(state)
+    assert mine not in state.battlefield
+    assert all(t not in state.battlefield for t in theirs)
 
 
 def test_other_cards_are_left_to_random_choice():
