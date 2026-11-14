@@ -20461,6 +20461,41 @@ word; they never touch the type line.
    on the empty-library draw (CR 704.5b). *Failure mode:* none worth
    having. *Impact:* removes a pure blunder from the bots' choices.
 
+## Forgetful Fish website bot (2026-11-14, `feature/fish-bot-rules`)
+
+The website's bot (`interactive.create_session`) is `fish_bot.FishBotAgent`:
+a `RandomAgent` whose casts of three Fish cards are narrowed by
+`_rule_allows`. With no rule firing it draws exactly as `RandomAgent` does
+(the same rng calls). Its own rules text: `src/mtg_bot/fish_bot.py`.
+
+1. **Mind Bend and Crystal Spray are cast only to kill an opponent's
+   Dandân** (`fish_bot.FishBotAgent.choose_action`, `choose_target`,
+   `choose_mode`). The target is that Dandân, and the new land type is one
+   its controller controls none of. *Why OK:* the user's rule ("op Dandân
+   gooien want die maakt ze dood"); the sacrifice is a state trigger (CR
+   603.8). *Failure mode:* the bot never uses these cards for their other
+   effects (a text change on a land or a spell). *Fix scope:* a value rule
+   for those uses (~half a day). *Impact:* a weaker bot in those positions;
+   no rules error.
+2. **The kill is checked on the board at the moment of the cast**
+   (`fish_bot._kill_type`, `_killable_dandans`). The bot does not look ahead
+   to responses (an instant that changes the controller's lands before
+   resolution). *Failure mode:* the cast fizzles or does nothing: a card
+   lost. *Fix scope:* one-ply lookahead (~1 day). *Impact:* rare.
+3. **Vision Charm is never cast by the bot** (`fish_bot.NEVER_CAST`). Its
+   Island -> X mode turns every Island, so it sacrifices every Dandân, the
+   bot's own included, and the mode is chosen on resolution
+   (`fish_cards.LandsOfChosenTypeBecomeBasicTypeUEOT`), where the bot cannot
+   tell which choice it is making. *Failure mode:* the bot holds the card; a
+   human can still cast it. *Fix scope:* a kill-only rule for that mode
+   choice (~2 h). *Impact:* the bot loses a sweep it would have made.
+4. **"Misses a land drop" is read as "no land in hand", and "fewer than 8"
+   counts lands in play** (`fish_bot._accumulated_knowledge_ok`). The bot
+   does not count a land the draw might find. *Failure mode:* the bot casts
+   AK for one card when a land drop was not really at risk, or holds it
+   when it was. *Fix scope:* the user's exact reading (minutes). *Impact:*
+   small.
+
 ## Human games for training (2026-11-04, `feature/fish-recorder`)
 
 1. **Rows from human games carry no action-history tokens**
